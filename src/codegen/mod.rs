@@ -129,6 +129,12 @@ enum ExpectedFixedByteSource {
     LoadedBytes { var_id: usize, size_offset: usize, width: usize },
 }
 
+#[derive(Debug, Clone, Copy)]
+enum SourcePointer {
+    LoadedStackPointer { var_id: usize, offset: usize },
+    StackAddress { offset: usize },
+}
+
 fn fixed_scalar_width(ty: &IrType, fixed_size: Option<usize>) -> Option<usize> {
     match (ty, fixed_size) {
         (IrType::Bool | IrType::U8, Some(1)) => Some(1),
@@ -2630,13 +2636,13 @@ impl CodeGenerator {
         self.emit_sp_addi("t4", output_buffer_offset);
         match source {
             ExpectedFixedByteSource::SchemaField(source) => {
-                self.emit(format!("ld t5, {}(sp)", source.obj_var_id * 8));
-                for byte_index in 0..width {
-                    self.emit(format!("lbu t0, {}(t4)", output_field_offset + byte_index));
-                    self.emit(format!("lbu t1, {}(t5)", source.layout.offset + byte_index));
-                    self.emit("sub t2, t0, t1");
-                    self.emit(format!("bnez t2, {}", mismatch_label));
-                }
+                self.emit_loaded_fixed_bytes_helper_call(
+                    output_buffer_offset,
+                    output_field_offset,
+                    SourcePointer::LoadedStackPointer { var_id: source.obj_var_id, offset: source.layout.offset },
+                    width,
+                    &mismatch_label,
+                );
             }
             ExpectedFixedByteSource::Const(bytes) => {
                 for (byte_index, byte) in bytes.iter().take(width).enumerate() {
@@ -2647,25 +2653,50 @@ impl CodeGenerator {
                 }
             }
             ExpectedFixedByteSource::StackSlot { var_id, .. } => {
-                self.emit_sp_addi("t5", var_id * 8);
-                for byte_index in 0..width {
-                    self.emit(format!("lbu t0, {}(t4)", output_field_offset + byte_index));
-                    self.emit(format!("lbu t1, {}(t5)", byte_index));
-                    self.emit("sub t2, t0, t1");
-                    self.emit(format!("bnez t2, {}", mismatch_label));
-                }
+                self.emit_loaded_fixed_bytes_helper_call(
+                    output_buffer_offset,
+                    output_field_offset,
+                    SourcePointer::StackAddress { offset: var_id * 8 },
+                    width,
+                    &mismatch_label,
+                );
             }
             ExpectedFixedByteSource::ParamBytes { var_id, .. } | ExpectedFixedByteSource::LoadedBytes { var_id, .. } => {
-                self.emit(format!("ld t5, {}(sp)", var_id * 8));
-                for byte_index in 0..width {
-                    self.emit(format!("lbu t0, {}(t4)", output_field_offset + byte_index));
-                    self.emit(format!("lbu t1, {}(t5)", byte_index));
-                    self.emit("sub t2, t0, t1");
-                    self.emit(format!("bnez t2, {}", mismatch_label));
-                }
+                self.emit_loaded_fixed_bytes_helper_call(
+                    output_buffer_offset,
+                    output_field_offset,
+                    SourcePointer::LoadedStackPointer { var_id: *var_id, offset: 0 },
+                    width,
+                    &mismatch_label,
+                );
             }
         }
         self.emit_fixed_byte_mismatch_fail(&mismatch_label, fail_code);
+    }
+
+    fn emit_loaded_fixed_bytes_helper_call(
+        &mut self,
+        output_buffer_offset: usize,
+        output_field_offset: usize,
+        source: SourcePointer,
+        width: usize,
+        mismatch_label: &str,
+    ) {
+        self.emit_sp_addi("a0", output_buffer_offset + output_field_offset);
+        match source {
+            SourcePointer::LoadedStackPointer { var_id, offset } => {
+                self.emit(format!("ld a1, {}(sp)", var_id * 8));
+                if offset != 0 {
+                    self.emit_large_addi("a1", "a1", offset as i64);
+                }
+            }
+            SourcePointer::StackAddress { offset } => {
+                self.emit_sp_addi("a1", offset);
+            }
+        }
+        self.emit(format!("li a2, {}", width));
+        self.emit("call __cellscript_memcmp_fixed");
+        self.emit(format!("bnez a0, {}", mismatch_label));
     }
 
     fn emit_loaded_field_bytes_equals_expected(
@@ -4533,6 +4564,7 @@ impl CodeGenerator {
 
     fn generate_runtime_support(&mut self) {
         self.emit_section(".text");
+        self.emit_runtime_memcmp_fixed();
         self.emit_runtime_header_field_u64(
             "__env_current_daa_score",
             "daa_score",
@@ -4568,6 +4600,31 @@ impl CodeGenerator {
             self.options.target_profile == TargetProfile::Ckb,
             "ckb::input_since is rejected outside the ckb target profile",
         );
+    }
+
+    fn emit_runtime_memcmp_fixed(&mut self) {
+        self.emit_global("__cellscript_memcmp_fixed");
+        self.emit_label("__cellscript_memcmp_fixed");
+        self.emit("# cellscript abi: fixed-byte helper compares a0/a1 for a2 bytes; returns a0=0 when equal");
+        let loop_label = ".L__cellscript_memcmp_fixed_loop";
+        let mismatch_label = ".L__cellscript_memcmp_fixed_mismatch";
+        let equal_label = ".L__cellscript_memcmp_fixed_equal";
+        self.emit(format!("beqz a2, {}", equal_label));
+        self.emit_label(loop_label);
+        self.emit("lbu t0, 0(a0)");
+        self.emit("lbu t1, 0(a1)");
+        self.emit("sub t2, t0, t1");
+        self.emit(format!("bnez t2, {}", mismatch_label));
+        self.emit("addi a0, a0, 1");
+        self.emit("addi a1, a1, 1");
+        self.emit("addi a2, a2, -1");
+        self.emit(format!("bnez a2, {}", loop_label));
+        self.emit_label(equal_label);
+        self.emit("li a0, 0");
+        self.emit("ret");
+        self.emit_label(mismatch_label);
+        self.emit("li a0, 1");
+        self.emit("ret");
     }
 
     fn emit_runtime_header_field_u64(&mut self, symbol: &str, field_name: &str, field_id: u64, enabled: bool, disabled_reason: &str) {
