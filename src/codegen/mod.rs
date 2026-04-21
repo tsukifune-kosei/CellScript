@@ -5138,6 +5138,37 @@ struct SectionLayout {
     rodata_base: u64,
 }
 
+impl SectionLayout {
+    fn for_text_user_size(text_user_size: usize) -> Self {
+        let rodata_offset = align_up(START_TRAMPOLINE_SIZE + text_user_size, 8);
+        Self {
+            text_base: ELF_BASE_ADDR,
+            text_user_base: ELF_BASE_ADDR + START_TRAMPOLINE_SIZE as u64,
+            rodata_base: ELF_BASE_ADDR + rodata_offset as u64,
+        }
+    }
+
+    fn rodata_offset(&self) -> Result<usize> {
+        usize::try_from(self.rodata_base - self.text_base)
+            .map_err(|_| CompileError::new("ELF rodata offset does not fit usize", crate::error::Span::default()))
+    }
+}
+
+#[derive(Debug)]
+struct MachineLayoutPlan {
+    parsed: ParsedAssembly,
+    layout: SectionLayout,
+    metrics: BackendLayoutMetrics,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct BackendLayoutMetrics {
+    text_size: usize,
+    rodata_size: usize,
+    relaxed_branch_count: usize,
+    max_cond_branch_abs_distance: u64,
+}
+
 #[derive(Debug, Clone)]
 enum Instruction {
     Addi { rd: u8, rs1: u8, imm: i64 },
@@ -5217,26 +5248,16 @@ fn assembly_with_external_call_stubs(lines: &[String]) -> Option<Vec<String>> {
 }
 
 fn assemble_elf_internal(lines: &[String]) -> Result<Vec<u8>> {
-    let preliminary = ParsedAssembly::from_lines_with_branch_mode(lines, BranchSizeMode::Conservative)?;
-    let text_user_size = preliminary.section_size(SectionKind::Text);
-    let rodata_offset = align_up(START_TRAMPOLINE_SIZE + text_user_size, 8);
-    let layout = SectionLayout {
-        text_base: ELF_BASE_ADDR,
-        text_user_base: ELF_BASE_ADDR + START_TRAMPOLINE_SIZE as u64,
-        rodata_base: ELF_BASE_ADDR + rodata_offset as u64,
-    };
-    let parsed = ParsedAssembly::from_lines_relaxed(lines, &layout)?;
+    let plan = MachineLayoutPlan::build(lines)?;
+    let parsed = &plan.parsed;
+    let layout = plan.layout;
+    let _layout_control_metrics = (plan.metrics.relaxed_branch_count, plan.metrics.max_cond_branch_abs_distance);
     let entry_label = parsed.entry_label.as_deref().ok_or_else(|| {
         CompileError::new("ELF target requires at least one action or lock entry point", crate::error::Span::default())
     })?;
-    let text_user_size = parsed.section_size(SectionKind::Text);
-    let rodata_size = parsed.section_size(SectionKind::Rodata);
-    let rodata_offset = align_up(START_TRAMPOLINE_SIZE + text_user_size, 8);
-    let layout = SectionLayout {
-        text_base: ELF_BASE_ADDR,
-        text_user_base: ELF_BASE_ADDR + START_TRAMPOLINE_SIZE as u64,
-        rodata_base: ELF_BASE_ADDR + rodata_offset as u64,
-    };
+    let text_user_size = plan.metrics.text_size;
+    let rodata_size = plan.metrics.rodata_size;
+    let rodata_offset = layout.rodata_offset()?;
 
     let mut text_bytes = Vec::with_capacity(START_TRAMPOLINE_SIZE + text_user_size);
     if entry_requires_explicit_parameter_abi(lines, entry_label) {
@@ -5674,6 +5695,59 @@ impl ParsedAssembly {
         }
 
         Ok(())
+    }
+}
+
+impl MachineLayoutPlan {
+    fn build(lines: &[String]) -> Result<Self> {
+        let preliminary = ParsedAssembly::from_lines_with_branch_mode(lines, BranchSizeMode::Conservative)?;
+        let preliminary_layout = SectionLayout::for_text_user_size(preliminary.section_size(SectionKind::Text));
+        let parsed = ParsedAssembly::from_lines_relaxed(lines, &preliminary_layout)?;
+        let layout = SectionLayout::for_text_user_size(parsed.section_size(SectionKind::Text));
+        let metrics = parsed.layout_metrics(&layout)?;
+        Ok(Self { parsed, layout, metrics })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TextOpLayout {
+    op_index: usize,
+    offset: usize,
+    size: usize,
+}
+
+fn text_op_layouts(parsed: &ParsedAssembly) -> Vec<TextOpLayout> {
+    let mut offset = 0usize;
+    let mut layouts = Vec::with_capacity(parsed.text_ops.len());
+    for (op_index, op) in parsed.text_ops.iter().enumerate() {
+        let size = op_size(op, offset, SectionKind::Text, op_index, BranchSizeMode::Exact(&parsed.relaxed_text_branches));
+        layouts.push(TextOpLayout { op_index, offset, size });
+        offset += size;
+    }
+    layouts
+}
+
+impl ParsedAssembly {
+    fn layout_metrics(&self, layout: &SectionLayout) -> Result<BackendLayoutMetrics> {
+        let text_op_layouts = text_op_layouts(self);
+        let text_size = text_op_layouts.iter().map(|op| op.size).sum();
+        let mut max_cond_branch_abs_distance = 0u64;
+        for op_layout in text_op_layouts {
+            let AsmOp::Instruction(inst @ (Instruction::Beqz { .. } | Instruction::Bnez { .. })) = &self.text_ops[op_layout.op_index]
+            else {
+                continue;
+            };
+            let pc = layout.text_user_base + op_layout.offset as u64;
+            let target = branch_target(inst, self, layout)?;
+            let distance = relative_offset(pc, target)?.unsigned_abs();
+            max_cond_branch_abs_distance = max_cond_branch_abs_distance.max(distance);
+        }
+        Ok(BackendLayoutMetrics {
+            text_size,
+            rodata_size: self.section_size(SectionKind::Rodata),
+            relaxed_branch_count: self.relaxed_text_branches.len(),
+            max_cond_branch_abs_distance,
+        })
     }
 }
 
@@ -6333,6 +6407,31 @@ mod tests {
 
         let elf = assemble_elf_internal(&lines).expect("internal assembler should relax long conditional branches");
         assert!(elf.starts_with(b"\x7fELF"));
+    }
+
+    #[test]
+    fn machine_layout_plan_reports_branch_relaxation_metrics() {
+        let mut lines = vec![
+            ".section .text".to_string(),
+            ".global entry".to_string(),
+            "entry:".to_string(),
+            "li a0, 0".to_string(),
+            "beqz a0, far_target".to_string(),
+        ];
+        for _ in 0..1500 {
+            lines.push("addi t0, t0, 0".to_string());
+        }
+        lines.push("far_target:".to_string());
+        lines.push("ret".to_string());
+
+        let plan = MachineLayoutPlan::build(&lines).expect("machine layout plan");
+        assert_eq!(plan.metrics.relaxed_branch_count, 1);
+        assert!(
+            plan.metrics.max_cond_branch_abs_distance > 4096,
+            "synthetic branch should exceed RV64 B-type range: {:?}",
+            plan.metrics
+        );
+        assert_eq!(plan.metrics.text_size, plan.parsed.section_size(SectionKind::Text));
     }
 
     #[test]

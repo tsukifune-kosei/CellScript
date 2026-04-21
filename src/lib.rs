@@ -9923,21 +9923,21 @@ action issue(amount: u64) -> Token {
 }
 "#;
 
-    const CREATE_UNSUPPORTED_FIXED_BYTE_OUTPUT_PROGRAM: &str = r#"
+    const CREATE_UNSUPPORTED_DYNAMIC_OUTPUT_PROGRAM: &str = r#"
 module test
 
 resource Fingerprint {
     digest: Hash,
 }
 
-fn make_digest() -> Hash {
-    return Hash::zero()
+fn pass_digest(digest: Hash) -> Hash {
+    return digest
 }
 
-action issue() -> Fingerprint {
-    let digest = make_digest()
+action issue(digest: Hash) -> Fingerprint {
+    let dynamic_digest = pass_digest(digest)
     let token = create Fingerprint {
-        digest: digest
+        digest: dynamic_digest
     }
     return token
 }
@@ -12911,7 +12911,7 @@ action activate(ticket: Ticket) -> Ticket {
 
     #[test]
     fn incomplete_create_output_verification_exposes_transaction_blocker() {
-        let result = compile(CREATE_UNSUPPORTED_FIXED_BYTE_OUTPUT_PROGRAM, CompileOptions::default()).unwrap();
+        let result = compile(CREATE_UNSUPPORTED_DYNAMIC_OUTPUT_PROGRAM, CompileOptions::default()).unwrap();
         let action = result.metadata.actions.iter().find(|action| action.name == "issue").expect("issue action");
 
         assert!(

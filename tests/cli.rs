@@ -1336,14 +1336,14 @@ resource Fingerprint {
     digest: Hash,
 }
 
-fn make_digest() -> Hash {
-    return Hash::zero()
+fn pass_digest(digest: Hash) -> Hash {
+    return digest
 }
 
-action issue() -> Fingerprint {
-    let digest = make_digest()
+action issue(digest: Hash) -> Fingerprint {
+    let dynamic_digest = pass_digest(digest)
     let token = create Fingerprint {
-        digest: digest
+        digest: dynamic_digest
     }
     return token
 }
