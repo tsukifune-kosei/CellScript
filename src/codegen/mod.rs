@@ -5159,6 +5159,7 @@ struct MachineLayoutPlan {
     parsed: ParsedAssembly,
     layout: SectionLayout,
     cfg: MachineCfg,
+    order: MachineLayoutOrder,
     metrics: BackendLayoutMetrics,
 }
 
@@ -5176,6 +5177,8 @@ struct BackendLayoutMetrics {
     labeled_machine_block_count: usize,
     machine_cfg_edge_count: usize,
     unreachable_machine_block_count: usize,
+    layout_order_block_count: usize,
+    layout_order_text_size: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -5271,8 +5274,11 @@ fn assemble_elf_internal(lines: &[String]) -> Result<Vec<u8>> {
         plan.metrics.labeled_machine_block_count,
         plan.metrics.machine_cfg_edge_count,
         plan.metrics.unreachable_machine_block_count,
+        plan.metrics.layout_order_block_count,
+        plan.metrics.layout_order_text_size,
         plan.cfg.blocks.len(),
         plan.cfg.edges.len(),
+        plan.order.block_order.len(),
     );
     let entry_label = parsed.entry_label.as_deref().ok_or_else(|| {
         CompileError::new("ELF target requires at least one action or lock entry point", crate::error::Span::default())
@@ -5728,8 +5734,9 @@ impl MachineLayoutPlan {
         let layout = SectionLayout::for_text_user_size(parsed.section_size(SectionKind::Text));
         let cfg = machine_cfg(&parsed)?;
         let coverage = validate_machine_block_coverage(&parsed, &cfg)?;
-        let metrics = parsed.layout_metrics(&layout, &cfg, coverage)?;
-        Ok(Self { parsed, layout, cfg, metrics })
+        let order = machine_layout_order(&cfg)?;
+        let metrics = parsed.layout_metrics(&layout, &cfg, &order, coverage)?;
+        Ok(Self { parsed, layout, cfg, order, metrics })
     }
 }
 
@@ -5760,6 +5767,11 @@ struct MachineCfg {
 struct MachineBlockCoverage {
     executable_text_op_count: usize,
     covered_text_op_count: usize,
+}
+
+#[derive(Debug, Clone)]
+struct MachineLayoutOrder {
+    block_order: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5901,6 +5913,39 @@ fn validate_machine_block_coverage(parsed: &ParsedAssembly, cfg: &MachineCfg) ->
     Ok(MachineBlockCoverage { executable_text_op_count, covered_text_op_count: covered.len() })
 }
 
+fn machine_layout_order(cfg: &MachineCfg) -> Result<MachineLayoutOrder> {
+    let block_order = (0..cfg.blocks.len()).collect::<Vec<_>>();
+    validate_machine_layout_order(cfg, &block_order)?;
+    Ok(MachineLayoutOrder { block_order })
+}
+
+fn validate_machine_layout_order(cfg: &MachineCfg, block_order: &[usize]) -> Result<()> {
+    if block_order.len() != cfg.blocks.len() {
+        return Err(CompileError::new(
+            format!("machine layout order contains {} blocks but CFG contains {}", block_order.len(), cfg.blocks.len()),
+            crate::error::Span::default(),
+        ));
+    }
+
+    let mut seen = BTreeSet::new();
+    for &block_index in block_order {
+        if block_index >= cfg.blocks.len() {
+            return Err(CompileError::new(
+                format!("machine layout order references missing block {}", block_index),
+                crate::error::Span::default(),
+            ));
+        }
+        if !seen.insert(block_index) {
+            return Err(CompileError::new(
+                format!("machine layout order repeats block {}", block_index),
+                crate::error::Span::default(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn machine_label_to_block(parsed: &ParsedAssembly, blocks: &[MachineBlock]) -> HashMap<String, usize> {
     let mut label_to_block = HashMap::new();
     for (label, symbol) in &parsed.symbols {
@@ -5973,6 +6018,7 @@ impl ParsedAssembly {
         &self,
         layout: &SectionLayout,
         machine_cfg: &MachineCfg,
+        machine_order: &MachineLayoutOrder,
         coverage: MachineBlockCoverage,
     ) -> Result<BackendLayoutMetrics> {
         let text_op_layouts = text_op_layouts(self);
@@ -5995,6 +6041,13 @@ impl ParsedAssembly {
         let labeled_machine_block_count = machine_cfg.blocks.iter().filter(|block| block.label.is_some()).count();
         let machine_cfg_edge_count = machine_cfg.edges.len();
         let unreachable_machine_block_count = unreachable_machine_block_count(machine_cfg);
+        let layout_order_block_count = machine_order.block_order.len();
+        let layout_order_text_size = machine_order
+            .block_order
+            .iter()
+            .filter_map(|block_index| machine_cfg.blocks.get(*block_index))
+            .map(|block| block.byte_size)
+            .sum();
         let _covered_text_ops = machine_cfg.blocks.iter().map(|block| block.op_end.saturating_sub(block.op_start)).sum::<usize>();
         let _first_block_byte_start = machine_cfg.blocks.first().map(|block| block.byte_start).unwrap_or_default();
         Ok(BackendLayoutMetrics {
@@ -6010,6 +6063,8 @@ impl ParsedAssembly {
             labeled_machine_block_count,
             machine_cfg_edge_count,
             unreachable_machine_block_count,
+            layout_order_block_count,
+            layout_order_text_size,
         })
     }
 }
@@ -6697,6 +6752,8 @@ mod tests {
         assert_eq!(plan.metrics.text_size, plan.parsed.section_size(SectionKind::Text));
         assert_eq!(plan.metrics.covered_text_op_count, plan.metrics.executable_text_op_count);
         assert!(plan.metrics.executable_text_op_count > 1500, "synthetic text ops should be visible: {:?}", plan.metrics);
+        assert_eq!(plan.metrics.layout_order_block_count, plan.metrics.machine_block_count);
+        assert_eq!(plan.metrics.layout_order_text_size, plan.metrics.text_size);
         assert_eq!(plan.metrics.conditional_branch_block_count, 1);
         assert!(plan.metrics.machine_cfg_edge_count >= 2, "far branch CFG edges should be visible: {:?}", plan.metrics);
         assert_eq!(plan.metrics.unreachable_machine_block_count, 0);
@@ -6733,8 +6790,10 @@ mod tests {
         assert_eq!(blocks[2].terminator, MachineTerminator::Return);
 
         assert_eq!(cfg.blocks.len(), 3);
+        assert_eq!(plan.order.block_order, vec![0, 1, 2]);
         assert_eq!(plan.metrics.executable_text_op_count, 5);
         assert_eq!(plan.metrics.covered_text_op_count, 5);
+        assert_eq!(plan.metrics.layout_order_block_count, 3);
         assert_eq!(
             cfg.edges,
             vec![
@@ -6744,6 +6803,27 @@ mod tests {
             ]
         );
         assert_eq!(unreachable_machine_block_count(cfg), 0);
+    }
+
+    #[test]
+    fn machine_layout_order_rejects_missing_duplicate_or_unknown_blocks() {
+        let lines = vec![
+            ".section .text".to_string(),
+            ".global entry".to_string(),
+            "entry:".to_string(),
+            "li a0, 0".to_string(),
+            "beqz a0, done".to_string(),
+            "li a0, 1".to_string(),
+            "j done".to_string(),
+            "done:".to_string(),
+            "ret".to_string(),
+        ];
+
+        let plan = MachineLayoutPlan::build(&lines).expect("machine layout plan");
+        assert!(validate_machine_layout_order(&plan.cfg, &[0, 1]).is_err());
+        assert!(validate_machine_layout_order(&plan.cfg, &[0, 1, 1]).is_err());
+        assert!(validate_machine_layout_order(&plan.cfg, &[0, 1, 3]).is_err());
+        validate_machine_layout_order(&plan.cfg, &[2, 0, 1]).expect("permuted layout order should be valid");
     }
 
     #[test]
