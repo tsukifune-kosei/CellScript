@@ -5008,6 +5008,11 @@ pub fn generate(ir: &IrModule, options: &CodegenOptions, format: ArtifactFormat)
     generator.generate(ir, format)
 }
 
+pub fn analyze_backend_shape(assembly: &str) -> Result<BackendShapeMetrics> {
+    let lines = assembly.lines().map(str::to_string).collect::<Vec<_>>();
+    MachineLayoutPlan::build(&lines).map(|plan| plan.metrics.into())
+}
+
 fn first_entrypoint(ir: &IrModule) -> Option<(&str, &[IrParam])> {
     for item in &ir.items {
         if let IrItem::Action(action) = item {
@@ -5179,6 +5184,45 @@ struct BackendLayoutMetrics {
     unreachable_machine_block_count: usize,
     layout_order_block_count: usize,
     layout_order_text_size: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BackendShapeMetrics {
+    pub text_size: usize,
+    pub rodata_size: usize,
+    pub executable_text_op_count: usize,
+    pub covered_text_op_count: usize,
+    pub relaxed_branch_count: usize,
+    pub max_cond_branch_abs_distance: u64,
+    pub machine_block_count: usize,
+    pub max_machine_block_size: usize,
+    pub conditional_branch_block_count: usize,
+    pub labeled_machine_block_count: usize,
+    pub machine_cfg_edge_count: usize,
+    pub unreachable_machine_block_count: usize,
+    pub layout_order_block_count: usize,
+    pub layout_order_text_size: usize,
+}
+
+impl From<BackendLayoutMetrics> for BackendShapeMetrics {
+    fn from(metrics: BackendLayoutMetrics) -> Self {
+        Self {
+            text_size: metrics.text_size,
+            rodata_size: metrics.rodata_size,
+            executable_text_op_count: metrics.executable_text_op_count,
+            covered_text_op_count: metrics.covered_text_op_count,
+            relaxed_branch_count: metrics.relaxed_branch_count,
+            max_cond_branch_abs_distance: metrics.max_cond_branch_abs_distance,
+            machine_block_count: metrics.machine_block_count,
+            max_machine_block_size: metrics.max_machine_block_size,
+            conditional_branch_block_count: metrics.conditional_branch_block_count,
+            labeled_machine_block_count: metrics.labeled_machine_block_count,
+            machine_cfg_edge_count: metrics.machine_cfg_edge_count,
+            unreachable_machine_block_count: metrics.unreachable_machine_block_count,
+            layout_order_block_count: metrics.layout_order_block_count,
+            layout_order_text_size: metrics.layout_order_text_size,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

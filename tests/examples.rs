@@ -1,5 +1,5 @@
 use camino::Utf8PathBuf;
-use cellscript::{compile_file, ArtifactFormat, CompileOptions, PoolPrimitiveMetadata};
+use cellscript::{codegen::analyze_backend_shape, compile_file, ArtifactFormat, CompileOptions, PoolPrimitiveMetadata};
 
 const BUNDLED_EXAMPLES: [&str; 7] =
     ["amm_pool.cell", "launch.cell", "multisig.cell", "nft.cell", "timelock.cell", "token.cell", "vesting.cell"];
@@ -15,13 +15,97 @@ const BUNDLED_EXAMPLE_ELF_SIZE_BUDGETS: [(&str, usize); 7] = [
 ];
 
 const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
-    ("amm_pool.cell", AssemblyShapeBudget { max_lines: 9_000, max_fail_handlers: 32, max_shared_epilogues: 8 }),
-    ("launch.cell", AssemblyShapeBudget { max_lines: 5_000, max_fail_handlers: 16, max_shared_epilogues: 4 }),
-    ("multisig.cell", AssemblyShapeBudget { max_lines: 7_800, max_fail_handlers: 64, max_shared_epilogues: 20 }),
-    ("nft.cell", AssemblyShapeBudget { max_lines: 10_000, max_fail_handlers: 64, max_shared_epilogues: 18 }),
-    ("timelock.cell", AssemblyShapeBudget { max_lines: 7_000, max_fail_handlers: 60, max_shared_epilogues: 22 }),
-    ("token.cell", AssemblyShapeBudget { max_lines: 2_800, max_fail_handlers: 24, max_shared_epilogues: 6 }),
-    ("vesting.cell", AssemblyShapeBudget { max_lines: 4_400, max_fail_handlers: 28, max_shared_epilogues: 6 }),
+    (
+        "amm_pool.cell",
+        AssemblyShapeBudget {
+            max_lines: 9_000,
+            max_fail_handlers: 32,
+            max_shared_epilogues: 8,
+            max_text_bytes: 56 * 1024,
+            max_relaxed_branches: 128,
+            max_cond_branch_abs_distance: 1024 * 1024,
+            max_machine_blocks: 9_000,
+            max_cfg_edges: 18_000,
+        },
+    ),
+    (
+        "launch.cell",
+        AssemblyShapeBudget {
+            max_lines: 5_000,
+            max_fail_handlers: 16,
+            max_shared_epilogues: 4,
+            max_text_bytes: 48 * 1024,
+            max_relaxed_branches: 128,
+            max_cond_branch_abs_distance: 1024 * 1024,
+            max_machine_blocks: 5_000,
+            max_cfg_edges: 10_000,
+        },
+    ),
+    (
+        "multisig.cell",
+        AssemblyShapeBudget {
+            max_lines: 7_800,
+            max_fail_handlers: 64,
+            max_shared_epilogues: 20,
+            max_text_bytes: 40 * 1024,
+            max_relaxed_branches: 128,
+            max_cond_branch_abs_distance: 1024 * 1024,
+            max_machine_blocks: 7_800,
+            max_cfg_edges: 15_600,
+        },
+    ),
+    (
+        "nft.cell",
+        AssemblyShapeBudget {
+            max_lines: 10_000,
+            max_fail_handlers: 64,
+            max_shared_epilogues: 18,
+            max_text_bytes: 64 * 1024,
+            max_relaxed_branches: 128,
+            max_cond_branch_abs_distance: 1024 * 1024,
+            max_machine_blocks: 10_000,
+            max_cfg_edges: 20_000,
+        },
+    ),
+    (
+        "timelock.cell",
+        AssemblyShapeBudget {
+            max_lines: 7_000,
+            max_fail_handlers: 60,
+            max_shared_epilogues: 22,
+            max_text_bytes: 40 * 1024,
+            max_relaxed_branches: 128,
+            max_cond_branch_abs_distance: 1024 * 1024,
+            max_machine_blocks: 7_000,
+            max_cfg_edges: 14_000,
+        },
+    ),
+    (
+        "token.cell",
+        AssemblyShapeBudget {
+            max_lines: 2_800,
+            max_fail_handlers: 24,
+            max_shared_epilogues: 6,
+            max_text_bytes: 24 * 1024,
+            max_relaxed_branches: 64,
+            max_cond_branch_abs_distance: 1024 * 1024,
+            max_machine_blocks: 2_800,
+            max_cfg_edges: 5_600,
+        },
+    ),
+    (
+        "vesting.cell",
+        AssemblyShapeBudget {
+            max_lines: 4_400,
+            max_fail_handlers: 28,
+            max_shared_epilogues: 6,
+            max_text_bytes: 36 * 1024,
+            max_relaxed_branches: 64,
+            max_cond_branch_abs_distance: 1024 * 1024,
+            max_machine_blocks: 4_400,
+            max_cfg_edges: 8_800,
+        },
+    ),
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -29,6 +113,11 @@ struct AssemblyShapeBudget {
     max_lines: usize,
     max_fail_handlers: usize,
     max_shared_epilogues: usize,
+    max_text_bytes: usize,
+    max_relaxed_branches: usize,
+    max_cond_branch_abs_distance: u64,
+    max_machine_blocks: usize,
+    max_cfg_edges: usize,
 }
 
 fn example_path(name: &str) -> Utf8PathBuf {
@@ -380,6 +469,8 @@ fn bundled_examples_stay_within_backend_shape_budgets() {
         let line_count = assembly.lines().count();
         let fail_handlers = count_lines_with_prefix_and_contains(assembly, ".L", "_fail_");
         let shared_epilogues = count_lines_with_prefix_and_contains(assembly, ".L", "_epilogue:");
+        let backend_shape =
+            analyze_backend_shape(assembly).unwrap_or_else(|e| panic!("{} backend shape analysis failed: {}", example, e));
 
         assert!(
             line_count <= budget.max_lines,
@@ -401,6 +492,61 @@ fn bundled_examples_stay_within_backend_shape_budgets() {
             example,
             shared_epilogues,
             budget.max_shared_epilogues
+        );
+        assert_eq!(
+            backend_shape.covered_text_op_count, backend_shape.executable_text_op_count,
+            "{} machine-block coverage should cover every executable text op exactly once: {:?}",
+            example, backend_shape
+        );
+        assert_eq!(
+            backend_shape.layout_order_block_count, backend_shape.machine_block_count,
+            "{} layout order should include every machine block: {:?}",
+            example, backend_shape
+        );
+        assert_eq!(
+            backend_shape.layout_order_text_size, backend_shape.text_size,
+            "{} planned layout size should match text size: {:?}",
+            example, backend_shape
+        );
+        assert!(
+            backend_shape.text_size <= budget.max_text_bytes,
+            "{} text section grew past its backend shape budget: {} > {} bytes ({:?})",
+            example,
+            backend_shape.text_size,
+            budget.max_text_bytes,
+            backend_shape
+        );
+        assert!(
+            backend_shape.relaxed_branch_count <= budget.max_relaxed_branches,
+            "{} emitted too many relaxed conditional branches: {} > {} ({:?})",
+            example,
+            backend_shape.relaxed_branch_count,
+            budget.max_relaxed_branches,
+            backend_shape
+        );
+        assert!(
+            backend_shape.max_cond_branch_abs_distance <= budget.max_cond_branch_abs_distance,
+            "{} conditional branch displacement grew past its backend budget: {} > {} ({:?})",
+            example,
+            backend_shape.max_cond_branch_abs_distance,
+            budget.max_cond_branch_abs_distance,
+            backend_shape
+        );
+        assert!(
+            backend_shape.machine_block_count <= budget.max_machine_blocks,
+            "{} machine block count grew past its backend shape budget: {} > {} ({:?})",
+            example,
+            backend_shape.machine_block_count,
+            budget.max_machine_blocks,
+            backend_shape
+        );
+        assert!(
+            backend_shape.machine_cfg_edge_count <= budget.max_cfg_edges,
+            "{} CFG edge count grew past its backend shape budget: {} > {} ({:?})",
+            example,
+            backend_shape.machine_cfg_edge_count,
+            budget.max_cfg_edges,
+            backend_shape
         );
         assert_eq!(
             count_lines_containing(assembly, "__cellscript_memcmp_fixed:"),
