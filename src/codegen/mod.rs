@@ -5117,7 +5117,7 @@ enum SectionKind {
 
 #[derive(Debug, Clone)]
 enum AsmOp {
-    Label,
+    Label(String),
     Instruction(Instruction),
     Word(u32),
     Byte(u8),
@@ -5167,6 +5167,10 @@ struct BackendLayoutMetrics {
     rodata_size: usize,
     relaxed_branch_count: usize,
     max_cond_branch_abs_distance: u64,
+    machine_block_count: usize,
+    max_machine_block_size: usize,
+    conditional_branch_block_count: usize,
+    labeled_machine_block_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -5251,7 +5255,14 @@ fn assemble_elf_internal(lines: &[String]) -> Result<Vec<u8>> {
     let plan = MachineLayoutPlan::build(lines)?;
     let parsed = &plan.parsed;
     let layout = plan.layout;
-    let _layout_control_metrics = (plan.metrics.relaxed_branch_count, plan.metrics.max_cond_branch_abs_distance);
+    let _layout_control_metrics = (
+        plan.metrics.relaxed_branch_count,
+        plan.metrics.max_cond_branch_abs_distance,
+        plan.metrics.machine_block_count,
+        plan.metrics.max_machine_block_size,
+        plan.metrics.conditional_branch_block_count,
+        plan.metrics.labeled_machine_block_count,
+    );
     let entry_label = parsed.entry_label.as_deref().ok_or_else(|| {
         CompileError::new("ELF target requires at least one action or lock entry point", crate::error::Span::default())
     })?;
@@ -5606,7 +5617,7 @@ impl ParsedAssembly {
                         entry_label = Some(label.clone());
                     }
                 }
-                ops.push(AsmOp::Label);
+                ops.push(AsmOp::Label(label));
                 continue;
             }
 
@@ -5672,7 +5683,7 @@ impl ParsedAssembly {
 
         for (op_index, op) in ops.iter().enumerate() {
             match op {
-                AsmOp::Label => {}
+                AsmOp::Label(_) => {}
                 AsmOp::Word(word) => out.extend_from_slice(&word.to_le_bytes()),
                 AsmOp::Byte(byte) => out.push(*byte),
                 AsmOp::Ascii(bytes) => out.extend_from_slice(bytes),
@@ -5716,6 +5727,25 @@ struct TextOpLayout {
     size: usize,
 }
 
+#[derive(Debug, Clone)]
+struct MachineBlock {
+    label: Option<String>,
+    op_start: usize,
+    op_end: usize,
+    byte_start: usize,
+    byte_size: usize,
+    terminator: MachineTerminator,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MachineTerminator {
+    Fallthrough,
+    Jump { target: String },
+    ConditionalBranch { target: String },
+    Return,
+    Ecall,
+}
+
 fn text_op_layouts(parsed: &ParsedAssembly) -> Vec<TextOpLayout> {
     let mut offset = 0usize;
     let mut layouts = Vec::with_capacity(parsed.text_ops.len());
@@ -5725,6 +5755,68 @@ fn text_op_layouts(parsed: &ParsedAssembly) -> Vec<TextOpLayout> {
         offset += size;
     }
     layouts
+}
+
+fn machine_blocks(parsed: &ParsedAssembly) -> Vec<MachineBlock> {
+    let layouts = text_op_layouts(parsed);
+    let mut blocks = Vec::new();
+    let mut block_start = 0usize;
+    let mut block_label = None;
+
+    for (op_index, op) in parsed.text_ops.iter().enumerate() {
+        if let AsmOp::Label(label) = op {
+            if block_has_executable_ops(&parsed.text_ops[block_start..op_index]) {
+                blocks.push(build_machine_block(parsed, &layouts, block_start, op_index, block_label.take()));
+                block_start = op_index;
+            }
+            if block_label.is_none() {
+                block_label = Some(label.clone());
+            }
+            continue;
+        }
+
+        if instruction_terminator(op).is_some() {
+            blocks.push(build_machine_block(parsed, &layouts, block_start, op_index + 1, block_label.take()));
+            block_start = op_index + 1;
+        }
+    }
+
+    if block_start < parsed.text_ops.len() && block_has_executable_ops(&parsed.text_ops[block_start..]) {
+        blocks.push(build_machine_block(parsed, &layouts, block_start, parsed.text_ops.len(), block_label));
+    }
+
+    blocks
+}
+
+fn block_has_executable_ops(ops: &[AsmOp]) -> bool {
+    ops.iter().any(|op| !matches!(op, AsmOp::Label(_)))
+}
+
+fn build_machine_block(
+    parsed: &ParsedAssembly,
+    layouts: &[TextOpLayout],
+    op_start: usize,
+    op_end: usize,
+    label: Option<String>,
+) -> MachineBlock {
+    let byte_start = layouts.get(op_start).map(|layout| layout.offset).unwrap_or(0);
+    let byte_end =
+        op_end.checked_sub(1).and_then(|last| layouts.get(last).map(|layout| layout.offset + layout.size)).unwrap_or(byte_start);
+    let terminator =
+        parsed.text_ops[op_start..op_end].iter().rev().find_map(instruction_terminator).unwrap_or(MachineTerminator::Fallthrough);
+    MachineBlock { label, op_start, op_end, byte_start, byte_size: byte_end.saturating_sub(byte_start), terminator }
+}
+
+fn instruction_terminator(op: &AsmOp) -> Option<MachineTerminator> {
+    match op {
+        AsmOp::Instruction(Instruction::Jump { label }) => Some(MachineTerminator::Jump { target: label.clone() }),
+        AsmOp::Instruction(Instruction::Beqz { label, .. } | Instruction::Bnez { label, .. }) => {
+            Some(MachineTerminator::ConditionalBranch { target: label.clone() })
+        }
+        AsmOp::Instruction(Instruction::Ret) => Some(MachineTerminator::Return),
+        AsmOp::Instruction(Instruction::Ecall) => Some(MachineTerminator::Ecall),
+        _ => None,
+    }
 }
 
 impl ParsedAssembly {
@@ -5742,11 +5834,23 @@ impl ParsedAssembly {
             let distance = relative_offset(pc, target)?.unsigned_abs();
             max_cond_branch_abs_distance = max_cond_branch_abs_distance.max(distance);
         }
+        let machine_blocks = machine_blocks(self);
+        let machine_block_count = machine_blocks.len();
+        let max_machine_block_size = machine_blocks.iter().map(|block| block.byte_size).max().unwrap_or_default();
+        let conditional_branch_block_count =
+            machine_blocks.iter().filter(|block| matches!(block.terminator, MachineTerminator::ConditionalBranch { .. })).count();
+        let labeled_machine_block_count = machine_blocks.iter().filter(|block| block.label.is_some()).count();
+        let _covered_text_ops = machine_blocks.iter().map(|block| block.op_end.saturating_sub(block.op_start)).sum::<usize>();
+        let _first_block_byte_start = machine_blocks.first().map(|block| block.byte_start).unwrap_or_default();
         Ok(BackendLayoutMetrics {
             text_size,
             rodata_size: self.section_size(SectionKind::Rodata),
             relaxed_branch_count: self.relaxed_text_branches.len(),
             max_cond_branch_abs_distance,
+            machine_block_count,
+            max_machine_block_size,
+            conditional_branch_block_count,
+            labeled_machine_block_count,
         })
     }
 }
@@ -6042,7 +6146,7 @@ fn encode_call_sequence(out: &mut Vec<u8>, pc: u64, target: u64) -> Result<()> {
 
 fn op_size(op: &AsmOp, current_offset: usize, section: SectionKind, op_index: usize, branch_size_mode: BranchSizeMode<'_>) -> usize {
     match op {
-        AsmOp::Label => 0,
+        AsmOp::Label(_) => 0,
         AsmOp::Instruction(Instruction::Li { imm, .. }) => li_sequence_size(*imm),
         AsmOp::Instruction(Instruction::La { .. }) => 8,
         AsmOp::Instruction(Instruction::Call { .. }) => 8,
@@ -6432,6 +6536,37 @@ mod tests {
             plan.metrics
         );
         assert_eq!(plan.metrics.text_size, plan.parsed.section_size(SectionKind::Text));
+        assert_eq!(plan.metrics.conditional_branch_block_count, 1);
+        assert!(plan.metrics.machine_block_count >= 2, "far branch should produce multiple machine blocks: {:?}", plan.metrics);
+        assert!(
+            plan.metrics.max_machine_block_size > 4096,
+            "large fallthrough block should be visible in layout metrics: {:?}",
+            plan.metrics
+        );
+    }
+
+    #[test]
+    fn machine_layout_plan_builds_explicit_machine_blocks() {
+        let lines = vec![
+            ".section .text".to_string(),
+            ".global entry".to_string(),
+            "entry:".to_string(),
+            "li a0, 0".to_string(),
+            "beqz a0, done".to_string(),
+            "li a0, 1".to_string(),
+            "j done".to_string(),
+            "done:".to_string(),
+            "ret".to_string(),
+        ];
+
+        let plan = MachineLayoutPlan::build(&lines).expect("machine layout plan");
+        let blocks = machine_blocks(&plan.parsed);
+        assert_eq!(blocks.len(), 3, "expected entry, fallthrough, and done blocks: {:?}", blocks);
+        assert_eq!(blocks[0].label.as_deref(), Some("entry"));
+        assert_eq!(blocks[0].terminator, MachineTerminator::ConditionalBranch { target: "done".to_string() });
+        assert_eq!(blocks[1].terminator, MachineTerminator::Jump { target: "done".to_string() });
+        assert_eq!(blocks[2].label.as_deref(), Some("done"));
+        assert_eq!(blocks[2].terminator, MachineTerminator::Return);
     }
 
     #[test]
