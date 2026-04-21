@@ -5166,6 +5166,8 @@ struct MachineLayoutPlan {
 struct BackendLayoutMetrics {
     text_size: usize,
     rodata_size: usize,
+    executable_text_op_count: usize,
+    covered_text_op_count: usize,
     relaxed_branch_count: usize,
     max_cond_branch_abs_distance: u64,
     machine_block_count: usize,
@@ -5259,6 +5261,8 @@ fn assemble_elf_internal(lines: &[String]) -> Result<Vec<u8>> {
     let parsed = &plan.parsed;
     let layout = plan.layout;
     let _layout_control_metrics = (
+        plan.metrics.executable_text_op_count,
+        plan.metrics.covered_text_op_count,
         plan.metrics.relaxed_branch_count,
         plan.metrics.max_cond_branch_abs_distance,
         plan.metrics.machine_block_count,
@@ -5723,7 +5727,8 @@ impl MachineLayoutPlan {
         let parsed = ParsedAssembly::from_lines_relaxed(lines, &preliminary_layout)?;
         let layout = SectionLayout::for_text_user_size(parsed.section_size(SectionKind::Text));
         let cfg = machine_cfg(&parsed)?;
-        let metrics = parsed.layout_metrics(&layout, &cfg)?;
+        let coverage = validate_machine_block_coverage(&parsed, &cfg)?;
+        let metrics = parsed.layout_metrics(&layout, &cfg, coverage)?;
         Ok(Self { parsed, layout, cfg, metrics })
     }
 }
@@ -5749,6 +5754,12 @@ struct MachineBlock {
 struct MachineCfg {
     blocks: Vec<MachineBlock>,
     edges: Vec<MachineCfgEdge>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct MachineBlockCoverage {
+    executable_text_op_count: usize,
+    covered_text_op_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5853,6 +5864,43 @@ fn machine_cfg(parsed: &ParsedAssembly) -> Result<MachineCfg> {
     Ok(MachineCfg { blocks, edges })
 }
 
+fn validate_machine_block_coverage(parsed: &ParsedAssembly, cfg: &MachineCfg) -> Result<MachineBlockCoverage> {
+    let executable_text_op_count = parsed.text_ops.iter().filter(|op| !matches!(op, AsmOp::Label(_))).count();
+    let mut covered = BTreeSet::new();
+
+    for block in &cfg.blocks {
+        if block.op_start >= block.op_end || block.op_end > parsed.text_ops.len() {
+            return Err(CompileError::new(
+                format!("machine block has invalid op range {}..{}", block.op_start, block.op_end),
+                crate::error::Span::default(),
+            ));
+        }
+        if !block_has_executable_ops(&parsed.text_ops[block.op_start..block.op_end]) {
+            return Err(CompileError::new("machine block contains no executable instructions", crate::error::Span::default()));
+        }
+        for op_index in block.op_start..block.op_end {
+            if matches!(parsed.text_ops[op_index], AsmOp::Label(_)) {
+                continue;
+            }
+            if !covered.insert(op_index) {
+                return Err(CompileError::new(
+                    format!("machine block coverage overlaps text op {}", op_index),
+                    crate::error::Span::default(),
+                ));
+            }
+        }
+    }
+
+    if covered.len() != executable_text_op_count {
+        return Err(CompileError::new(
+            format!("machine blocks cover {} executable text ops but assembly contains {}", covered.len(), executable_text_op_count),
+            crate::error::Span::default(),
+        ));
+    }
+
+    Ok(MachineBlockCoverage { executable_text_op_count, covered_text_op_count: covered.len() })
+}
+
 fn machine_label_to_block(parsed: &ParsedAssembly, blocks: &[MachineBlock]) -> HashMap<String, usize> {
     let mut label_to_block = HashMap::new();
     for (label, symbol) in &parsed.symbols {
@@ -5921,7 +5969,12 @@ fn instruction_terminator(op: &AsmOp) -> Option<MachineTerminator> {
 }
 
 impl ParsedAssembly {
-    fn layout_metrics(&self, layout: &SectionLayout, machine_cfg: &MachineCfg) -> Result<BackendLayoutMetrics> {
+    fn layout_metrics(
+        &self,
+        layout: &SectionLayout,
+        machine_cfg: &MachineCfg,
+        coverage: MachineBlockCoverage,
+    ) -> Result<BackendLayoutMetrics> {
         let text_op_layouts = text_op_layouts(self);
         let text_size = text_op_layouts.iter().map(|op| op.size).sum();
         let mut max_cond_branch_abs_distance = 0u64;
@@ -5947,6 +6000,8 @@ impl ParsedAssembly {
         Ok(BackendLayoutMetrics {
             text_size,
             rodata_size: self.section_size(SectionKind::Rodata),
+            executable_text_op_count: coverage.executable_text_op_count,
+            covered_text_op_count: coverage.covered_text_op_count,
             relaxed_branch_count: self.relaxed_text_branches.len(),
             max_cond_branch_abs_distance,
             machine_block_count,
@@ -6640,6 +6695,8 @@ mod tests {
             plan.metrics
         );
         assert_eq!(plan.metrics.text_size, plan.parsed.section_size(SectionKind::Text));
+        assert_eq!(plan.metrics.covered_text_op_count, plan.metrics.executable_text_op_count);
+        assert!(plan.metrics.executable_text_op_count > 1500, "synthetic text ops should be visible: {:?}", plan.metrics);
         assert_eq!(plan.metrics.conditional_branch_block_count, 1);
         assert!(plan.metrics.machine_cfg_edge_count >= 2, "far branch CFG edges should be visible: {:?}", plan.metrics);
         assert_eq!(plan.metrics.unreachable_machine_block_count, 0);
@@ -6676,6 +6733,8 @@ mod tests {
         assert_eq!(blocks[2].terminator, MachineTerminator::Return);
 
         assert_eq!(cfg.blocks.len(), 3);
+        assert_eq!(plan.metrics.executable_text_op_count, 5);
+        assert_eq!(plan.metrics.covered_text_op_count, 5);
         assert_eq!(
             cfg.edges,
             vec![
