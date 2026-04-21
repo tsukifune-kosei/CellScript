@@ -55,5 +55,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cellscript-backend-shape-report
-          if-no-files-found: warn
+          if-no-files-found: error
           path: /tmp/cellscript-backend-shape/
