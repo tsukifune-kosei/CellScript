@@ -1283,8 +1283,7 @@ impl CodeGenerator {
         } else {
             self.emit("# cellscript abi: output field verification incomplete for this create pattern");
             self.emit("# cellscript abi: fail closed because the output state is not fully verified");
-            self.emit("li a0, 5");
-            self.emit_epilogue();
+            self.emit_fail(5);
             return Ok(());
         }
 
@@ -1294,8 +1293,7 @@ impl CodeGenerator {
             }
             self.emit("# cellscript abi: output lock verification incomplete for this create pattern");
             self.emit("# cellscript abi: fail closed because the output lock is not fully verified");
-            self.emit("li a0, 10");
-            self.emit_epilogue();
+            self.emit_fail(10);
         }
 
         Ok(())
@@ -1868,23 +1866,23 @@ impl CodeGenerator {
     }
 
     fn emit_loaded_schema_bounds_check(&mut self, size_offset: usize, required_size: usize, context: &str) {
-        let ok_label = self.fresh_label("schema_bounds_ok");
         self.emit(format!("# cellscript abi: bounds check {} required={}", context, required_size));
-        self.emit_stack_ld("t1", size_offset);
-        self.emit(format!("li t2, {}", required_size));
-        self.emit("slt t1, t1, t2");
-        self.emit(format!("beqz t1, {}", ok_label));
+        let ok_label = self.fresh_label("schema_bounds_ok");
+        self.emit_stack_ld("a0", size_offset);
+        self.emit(format!("li a1, {}", required_size));
+        self.emit("call __cellscript_require_min_size");
+        self.emit(format!("beqz a0, {}", ok_label));
         self.emit_fail(2);
         self.emit_label(&ok_label);
     }
 
     fn emit_loaded_schema_exact_size_check(&mut self, size_offset: usize, expected_size: usize, context: &str) {
-        let ok_label = self.fresh_label("schema_size_ok");
         self.emit(format!("# cellscript abi: exact size check {} expected={}", context, expected_size));
-        self.emit_stack_ld("t1", size_offset);
-        self.emit(format!("li t2, {}", expected_size));
-        self.emit("sub t1, t1, t2");
-        self.emit(format!("beqz t1, {}", ok_label));
+        let ok_label = self.fresh_label("schema_size_ok");
+        self.emit_stack_ld("a0", size_offset);
+        self.emit(format!("li a1, {}", expected_size));
+        self.emit("call __cellscript_require_exact_size");
+        self.emit(format!("beqz a0, {}", ok_label));
         self.emit_fail(4);
         self.emit_label(&ok_label);
     }
@@ -2024,8 +2022,7 @@ impl CodeGenerator {
         self.emit(format!("li t1, {}", 66));
         self.emit("sub t2, t0, t1");
         self.emit(format!("beqz t2, {}", hash_type_from_witness_label));
-        self.emit("li a0, 17");
-        self.emit_epilogue();
+        self.emit_fail(17);
         self.emit_label(&hash_type_from_witness_label);
         self.emit_sp_addi("t4", buffer_offset);
         self.emit("lbu t3, 65(t4)");
@@ -2065,8 +2062,7 @@ impl CodeGenerator {
         self.emit("ecall");
         let ok_label = self.fresh_label("claim_signature_ok");
         self.emit(format!("beqz a0, {}", ok_label));
-        self.emit("li a0, 19");
-        self.emit_epilogue();
+        self.emit_fail(19);
         self.emit_label(&ok_label);
     }
 
@@ -2128,8 +2124,7 @@ impl CodeGenerator {
             self.emit("sub t2, t0, t1");
             self.emit(format!("bnez t2, {}", distinct_label));
         }
-        self.emit("li a0, 22");
-        self.emit_epilogue();
+        self.emit_fail(22);
         self.emit_label(&distinct_label);
     }
 
@@ -2173,8 +2168,7 @@ impl CodeGenerator {
         self.emit(format!("li t0, {}", CKB_ITEM_MISSING));
         self.emit("sub t1, a0, t0");
         self.emit(format!("beqz t1, {}", next_label));
-        self.emit("li a0, 16");
-        self.emit_epilogue();
+        self.emit_fail(16);
 
         self.emit_label(&type_hash_label);
         self.emit_loaded_schema_exact_size_check(output_size_offset, 32, "destroy output type hash");
@@ -2190,8 +2184,7 @@ impl CodeGenerator {
             self.emit("sub t2, t0, t1");
             self.emit(format!("bnez t2, {}", next_label));
         }
-        self.emit("li a0, 16");
-        self.emit_epilogue();
+        self.emit_fail(16);
 
         self.emit_label(&next_label);
         self.emit("addi t6, t6, 1");
@@ -3088,8 +3081,7 @@ impl CodeGenerator {
                 self.emit(format!("# cellscript abi: expected expression u64 {:?}", op));
                 let Some(temp_offset) = self.runtime_expr_temp_offset(depth) else {
                     self.emit("# cellscript abi: fail closed because expression verifier temp stack is exhausted");
-                    self.emit("li a0, 15");
-                    self.emit_epilogue();
+                    self.emit_fail(15);
                     return;
                 };
                 self.emit_prelude_u64_value_source_to_t1_at_depth(left, depth + 1);
@@ -3108,8 +3100,7 @@ impl CodeGenerator {
                 self.emit("# cellscript abi: expected expression u64 min");
                 let Some(temp_offset) = self.runtime_expr_temp_offset(depth) else {
                     self.emit("# cellscript abi: fail closed because expression verifier temp stack is exhausted");
-                    self.emit("li a0, 15");
-                    self.emit_epilogue();
+                    self.emit_fail(15);
                     return;
                 };
                 self.emit_prelude_u64_value_source_to_t1_at_depth(left, depth + 1);
@@ -3263,8 +3254,7 @@ impl CodeGenerator {
         self.emit(format!("li t3, {}", state_count));
         self.emit("sltu t2, t0, t3");
         self.emit(format!("bnez t2, {}", old_range_ok_label));
-        self.emit("li a0, 9");
-        self.emit_epilogue();
+        self.emit_fail(9);
         self.emit_label(&old_range_ok_label);
 
         self.emit_sp_addi("t4", output_buffer_offset);
@@ -3273,16 +3263,14 @@ impl CodeGenerator {
         self.emit("sub t2, t1, t0");
         let ok_label = self.fresh_label("lifecycle_transition_ok");
         self.emit(format!("beqz t2, {}", ok_label));
-        self.emit("li a0, 7");
-        self.emit_epilogue();
+        self.emit_fail(7);
         self.emit_label(&ok_label);
 
         let range_ok_label = self.fresh_label("lifecycle_state_range_ok");
         self.emit(format!("li t3, {}", state_count));
         self.emit("sltu t2, t1, t3");
         self.emit(format!("bnez t2, {}", range_ok_label));
-        self.emit("li a0, 8");
-        self.emit_epilogue();
+        self.emit_fail(8);
         self.emit_label(&range_ok_label);
     }
 
@@ -3329,8 +3317,7 @@ impl CodeGenerator {
         self.emit("sub t2, t0, t3");
         let input_ok_label = self.fresh_label("settle_input_final_state_ok");
         self.emit(format!("beqz t2, {}", input_ok_label));
-        self.emit("li a0, 20");
-        self.emit_epilogue();
+        self.emit_fail(20);
         self.emit_label(&input_ok_label);
 
         self.emit_sp_addi("t4", output_buffer_offset);
@@ -3338,8 +3325,7 @@ impl CodeGenerator {
         self.emit("sub t2, t1, t3");
         let output_ok_label = self.fresh_label("settle_output_final_state_ok");
         self.emit(format!("beqz t2, {}", output_ok_label));
-        self.emit("li a0, 21");
-        self.emit_epilogue();
+        self.emit_fail(21);
         self.emit_label(&output_ok_label);
     }
 
@@ -3590,8 +3576,7 @@ impl CodeGenerator {
             // Final fallback: emit a fail-closed trap with specific error code
             self.emit(format!("# binary {:?} over fixed-byte operands (unresolved)", op));
             self.emit("# cellscript abi: fail closed because fixed-byte operand sources are not available");
-            self.emit("li a0, 18");
-            self.emit_epilogue();
+            self.emit_fail(18);
             return Ok(());
         }
 
@@ -3672,8 +3657,7 @@ impl CodeGenerator {
 
         self.emit(format!("# field access .{} (unresolved)", field));
         self.emit("# cellscript abi: fail closed because field offset is not computable from available type layout");
-        self.emit("li a0, 16");
-        self.emit_epilogue();
+        self.emit_fail(16);
         Ok(())
     }
 
@@ -3811,8 +3795,7 @@ impl CodeGenerator {
 
         self.emit("# index access (unresolved)");
         self.emit("# cellscript abi: fail closed because element layout is not statically computable");
-        self.emit("li a0, 17");
-        self.emit_epilogue();
+        self.emit_fail(17);
         Ok(())
     }
 
@@ -3895,8 +3878,7 @@ impl CodeGenerator {
         self.emit(format!("li t2, {}", len));
         self.emit("slt t3, t1, t2");
         self.emit(format!("bnez t3, {}", bounds_ok));
-        self.emit("li a0, 2");
-        self.emit_epilogue();
+        self.emit_fail(2);
         self.emit_label(&bounds_ok);
 
         // Compute offset = index * element_width
@@ -3926,8 +3908,7 @@ impl CodeGenerator {
             self.emit_stack_ld("t0", size_offset);
         } else {
             self.emit("# cellscript abi: fail closed because dynamic length is not available");
-            self.emit("li a0, 19");
-            self.emit_epilogue();
+            self.emit_fail(19);
             return Ok(());
         }
         self.emit(format!("sd t0, {}(sp)", dest.id * 8));
@@ -4001,8 +3982,7 @@ impl CodeGenerator {
 
         self.emit("# type_hash (unresolved)");
         self.emit("# cellscript abi: fail closed because type_hash source cell cannot be determined");
-        self.emit("li a0, 20");
-        self.emit_epilogue();
+        self.emit_fail(20);
         Ok(())
     }
 
@@ -4080,8 +4060,7 @@ impl CodeGenerator {
         // needed in the verifier path – the prelude already verified the output.
         self.emit("# cellscript abi: collection push is not needed for verifier execution");
         self.emit("# cellscript abi: if this path is reached, the source program uses dynamic collections");
-        self.emit("li a0, 21");
-        self.emit_epilogue();
+        self.emit_fail(21);
         Ok(())
     }
 
@@ -4091,8 +4070,7 @@ impl CodeGenerator {
         self.emit_symbolic_operand_comment("slice", slice);
         self.emit("# cellscript abi: collection extend is not needed for verifier execution");
         self.emit("# cellscript abi: if this path is reached, the source program uses dynamic collections");
-        self.emit("li a0, 21");
-        self.emit_epilogue();
+        self.emit_fail(21);
         Ok(())
     }
 
@@ -4331,8 +4309,7 @@ impl CodeGenerator {
             "# cellscript abi: call {} param {} requires ABI arg{} beyond register call lowering",
             func, label, abi_index
         ));
-        self.emit("li a0, 25");
-        self.emit_epilogue();
+        self.emit_fail(25);
         None
     }
 
@@ -4415,8 +4392,7 @@ impl CodeGenerator {
         // Non-Var consume: this should not happen in valid IR, but fail with
         // a specific error code instead of blocking ELF emission.
         self.emit("# cellscript abi: fail closed because consume operand is not a variable");
-        self.emit("li a0, 22");
-        self.emit_epilogue();
+        self.emit_fail(22);
         Ok(())
     }
 
@@ -4459,8 +4435,7 @@ impl CodeGenerator {
             return Ok(());
         }
         self.emit("# cellscript abi: fail closed because transfer output relation is unknown");
-        self.emit("li a0, 23");
-        self.emit_epilogue();
+        self.emit_fail(23);
         Ok(())
     }
 
@@ -4474,8 +4449,7 @@ impl CodeGenerator {
         }
         // Non-Var destroy: this should not happen in valid IR, fail with specific error.
         self.emit("# cellscript abi: fail closed because destroy operand is not a variable");
-        self.emit("li a0, 22");
-        self.emit_epilogue();
+        self.emit_fail(22);
         Ok(())
     }
 
@@ -4524,8 +4498,7 @@ impl CodeGenerator {
             return Ok(());
         }
         self.emit("# cellscript abi: fail closed because claim output relation is unknown");
-        self.emit("li a0, 23");
-        self.emit_epilogue();
+        self.emit_fail(23);
         Ok(())
     }
 
@@ -4545,8 +4518,7 @@ impl CodeGenerator {
             return Ok(());
         }
         self.emit("# cellscript abi: fail closed because settle output relation is unknown");
-        self.emit("li a0, 23");
-        self.emit_epilogue();
+        self.emit_fail(23);
         Ok(())
     }
 
@@ -4565,6 +4537,7 @@ impl CodeGenerator {
     fn generate_runtime_support(&mut self) {
         self.emit_section(".text");
         self.emit_runtime_memcmp_fixed();
+        self.emit_runtime_size_guards();
         self.emit_runtime_header_field_u64(
             "__env_current_daa_score",
             "daa_score",
@@ -4624,6 +4597,20 @@ impl CodeGenerator {
         self.emit("ret");
         self.emit_label(mismatch_label);
         self.emit("li a0, 1");
+        self.emit("ret");
+    }
+
+    fn emit_runtime_size_guards(&mut self) {
+        self.emit_global("__cellscript_require_min_size");
+        self.emit_label("__cellscript_require_min_size");
+        self.emit("# cellscript abi: returns a0=0 when actual size a0 is at least required size a1");
+        self.emit("slt a0, a0, a1");
+        self.emit("ret");
+
+        self.emit_global("__cellscript_require_exact_size");
+        self.emit_label("__cellscript_require_exact_size");
+        self.emit("# cellscript abi: returns a0=0 when actual size a0 equals expected size a1");
+        self.emit("sub a0, a0, a1");
         self.emit("ret");
     }
 
