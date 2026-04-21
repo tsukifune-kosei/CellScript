@@ -5614,6 +5614,7 @@ struct ParsedAssembly {
     text_size: usize,
     rodata_size: usize,
     symbols: HashMap<String, SymbolDef>,
+    global_text_labels: BTreeSet<String>,
     entry_label: Option<String>,
     relaxed_text_branches: BTreeSet<usize>,
 }
@@ -5637,6 +5638,7 @@ impl ParsedAssembly {
         let mut rodata_ops = Vec::new();
         let mut symbols = HashMap::new();
         let mut globals = BTreeSet::new();
+        let mut global_text_labels = BTreeSet::new();
         let mut entry_label = None;
         let mut fallback_entry = None;
 
@@ -5673,6 +5675,7 @@ impl ParsedAssembly {
                     return Err(CompileError::new(format!("duplicate assembly label '{}'", label), crate::error::Span::default()));
                 }
                 if current_section == SectionKind::Text && globals.contains(&label) {
+                    global_text_labels.insert(label.clone());
                     if fallback_entry.is_none() {
                         fallback_entry = Some(label.clone());
                     }
@@ -5695,6 +5698,7 @@ impl ParsedAssembly {
             text_size,
             rodata_size,
             symbols,
+            global_text_labels,
             entry_label: entry_label.or(fallback_entry),
             relaxed_text_branches: branch_size_mode.relaxed_text_branches().cloned().unwrap_or_default(),
         })
@@ -5850,7 +5854,6 @@ enum MachineTerminator {
     Jump { target: String },
     ConditionalBranch { target: String },
     Return,
-    Ecall,
 }
 
 fn text_op_layouts(parsed: &ParsedAssembly) -> Vec<TextOpLayout> {
@@ -5924,7 +5927,7 @@ fn machine_cfg(parsed: &ParsedAssembly) -> Result<MachineCfg> {
                     edges.push(MachineCfgEdge { from: index, to: index + 1, kind: MachineCfgEdgeKind::ConditionalFallthrough });
                 }
             }
-            MachineTerminator::Return | MachineTerminator::Ecall => {}
+            MachineTerminator::Return => {}
         }
     }
 
@@ -6031,12 +6034,17 @@ fn machine_cfg_target_block(target: &str, label_to_block: &HashMap<String, usize
     })
 }
 
-fn unreachable_machine_block_count(cfg: &MachineCfg) -> usize {
+fn unreachable_machine_block_count(parsed: &ParsedAssembly, cfg: &MachineCfg) -> usize {
     if cfg.blocks.is_empty() {
         return 0;
     }
+    let label_to_block = machine_label_to_block(parsed, &cfg.blocks);
+    let mut roots = parsed.global_text_labels.iter().filter_map(|label| label_to_block.get(label).copied()).collect::<Vec<_>>();
+    if roots.is_empty() {
+        roots.push(0);
+    }
     let mut reachable = BTreeSet::new();
-    let mut stack = vec![0usize];
+    let mut stack = roots;
     while let Some(block) = stack.pop() {
         if !reachable.insert(block) {
             continue;
@@ -6074,7 +6082,6 @@ fn instruction_terminator(op: &AsmOp) -> Option<MachineTerminator> {
             Some(MachineTerminator::ConditionalBranch { target: label.clone() })
         }
         AsmOp::Instruction(Instruction::Ret) => Some(MachineTerminator::Return),
-        AsmOp::Instruction(Instruction::Ecall) => Some(MachineTerminator::Ecall),
         _ => None,
     }
 }
@@ -6106,7 +6113,7 @@ impl ParsedAssembly {
             machine_cfg.blocks.iter().filter(|block| matches!(block.terminator, MachineTerminator::ConditionalBranch { .. })).count();
         let labeled_machine_block_count = machine_cfg.blocks.iter().filter(|block| block.label.is_some()).count();
         let machine_cfg_edge_count = machine_cfg.edges.len();
-        let unreachable_machine_block_count = unreachable_machine_block_count(machine_cfg);
+        let unreachable_machine_block_count = unreachable_machine_block_count(self, machine_cfg);
         let layout_order_block_count = machine_order.block_order.len();
         let layout_order_text_size = machine_order.text_size;
         let _covered_text_ops = machine_cfg.blocks.iter().map(|block| block.op_end.saturating_sub(block.op_start)).sum::<usize>();
@@ -6877,7 +6884,7 @@ mod tests {
                 MachineCfgEdge { from: 1, to: 2, kind: MachineCfgEdgeKind::Jump },
             ]
         );
-        assert_eq!(unreachable_machine_block_count(cfg), 0);
+        assert_eq!(unreachable_machine_block_count(&plan.parsed, cfg), 0);
     }
 
     #[test]

@@ -25,7 +25,9 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_relaxed_branches: 128,
             max_cond_branch_abs_distance: 1024 * 1024,
             max_machine_blocks: 9_000,
+            max_machine_block_bytes: 16 * 1024,
             max_cfg_edges: 18_000,
+            max_unreachable_machine_blocks: 512,
         },
     ),
     (
@@ -38,7 +40,9 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_relaxed_branches: 128,
             max_cond_branch_abs_distance: 1024 * 1024,
             max_machine_blocks: 5_000,
+            max_machine_block_bytes: 16 * 1024,
             max_cfg_edges: 10_000,
+            max_unreachable_machine_blocks: 512,
         },
     ),
     (
@@ -51,7 +55,9 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_relaxed_branches: 128,
             max_cond_branch_abs_distance: 1024 * 1024,
             max_machine_blocks: 7_800,
+            max_machine_block_bytes: 16 * 1024,
             max_cfg_edges: 15_600,
+            max_unreachable_machine_blocks: 512,
         },
     ),
     (
@@ -64,7 +70,9 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_relaxed_branches: 128,
             max_cond_branch_abs_distance: 1024 * 1024,
             max_machine_blocks: 10_000,
+            max_machine_block_bytes: 16 * 1024,
             max_cfg_edges: 20_000,
+            max_unreachable_machine_blocks: 512,
         },
     ),
     (
@@ -77,7 +85,9 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_relaxed_branches: 128,
             max_cond_branch_abs_distance: 1024 * 1024,
             max_machine_blocks: 7_000,
+            max_machine_block_bytes: 16 * 1024,
             max_cfg_edges: 14_000,
+            max_unreachable_machine_blocks: 512,
         },
     ),
     (
@@ -90,7 +100,9 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_relaxed_branches: 64,
             max_cond_branch_abs_distance: 1024 * 1024,
             max_machine_blocks: 2_800,
+            max_machine_block_bytes: 8 * 1024,
             max_cfg_edges: 5_600,
+            max_unreachable_machine_blocks: 512,
         },
     ),
     (
@@ -103,7 +115,9 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_relaxed_branches: 64,
             max_cond_branch_abs_distance: 1024 * 1024,
             max_machine_blocks: 4_400,
+            max_machine_block_bytes: 8 * 1024,
             max_cfg_edges: 8_800,
+            max_unreachable_machine_blocks: 512,
         },
     ),
 ];
@@ -117,7 +131,9 @@ struct AssemblyShapeBudget {
     max_relaxed_branches: usize,
     max_cond_branch_abs_distance: u64,
     max_machine_blocks: usize,
+    max_machine_block_bytes: usize,
     max_cfg_edges: usize,
+    max_unreachable_machine_blocks: usize,
 }
 
 fn example_path(name: &str) -> Utf8PathBuf {
@@ -541,11 +557,27 @@ fn bundled_examples_stay_within_backend_shape_budgets() {
             backend_shape
         );
         assert!(
+            backend_shape.max_machine_block_size <= budget.max_machine_block_bytes,
+            "{} machine block size grew past its backend shape budget: {} > {} bytes ({:?})",
+            example,
+            backend_shape.max_machine_block_size,
+            budget.max_machine_block_bytes,
+            backend_shape
+        );
+        assert!(
             backend_shape.machine_cfg_edge_count <= budget.max_cfg_edges,
             "{} CFG edge count grew past its backend shape budget: {} > {} ({:?})",
             example,
             backend_shape.machine_cfg_edge_count,
             budget.max_cfg_edges,
+            backend_shape
+        );
+        assert!(
+            backend_shape.unreachable_machine_block_count <= budget.max_unreachable_machine_blocks,
+            "{} unreachable machine block count grew past its backend shape budget: {} > {} ({:?})",
+            example,
+            backend_shape.unreachable_machine_block_count,
+            budget.max_unreachable_machine_blocks,
             backend_shape
         );
         assert_eq!(
