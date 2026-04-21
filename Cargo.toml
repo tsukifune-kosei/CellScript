@@ -2,6 +2,7 @@
 name = "cellscript"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.85.0"
 authors = ["CellScript Core Team"]
 description = "CellScript compiler for CKB and Spora blockchain"
 license = "MIT"

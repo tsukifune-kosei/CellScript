@@ -6,3 +6,4 @@
 - Added a regression test proving unused global exports are still counted as unreachable from the entry root.
 - Removed obsolete `global_text_labels` parser storage after entry-root reachability replaced global-root reachability.
 - Rebased bundled-example unreachable-block budgets on the stricter entry-root metric while keeping call-edge and CFG shape budgets enforced.
+- Declared Rust 1.85.0 as the standalone crate MSRV so CI and users run with Cargo support for Edition 2024 dependencies.

@@ -26,8 +26,8 @@ jobs:
 
       - name: Install Rust toolchain
         run: |
-          rustup toolchain install 1.82.0 --profile minimal --component rustfmt
-          rustup default 1.82.0
+          rustup toolchain install 1.85.0 --profile minimal --component rustfmt
+          rustup default 1.85.0
           rustc --version
           cargo --version
 
