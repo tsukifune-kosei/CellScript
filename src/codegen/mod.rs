@@ -2260,15 +2260,14 @@ impl CodeGenerator {
                 "# cellscript abi: verify mutate preserved field {}.{} Input#{} == Output#{} offset={} size={}",
                 pattern.ty, field, pattern.input_index, pattern.output_index, layout.offset, width
             ));
+            let mismatch_label = self.fresh_label("mutate_preserved_byte_mismatch");
             for byte_index in 0..width {
                 self.emit(format!("lbu t0, {}(t4)", layout.offset + byte_index));
                 self.emit(format!("lbu t1, {}(t5)", layout.offset + byte_index));
                 self.emit("sub t2, t0, t1");
-                let ok_label = self.fresh_label("mutate_preserved_byte_ok");
-                self.emit(format!("beqz t2, {}", ok_label));
-                self.emit_fail(13);
-                self.emit_label(&ok_label);
+                self.emit(format!("bnez t2, {}", mismatch_label));
             }
+            self.emit_fixed_byte_mismatch_fail(&mismatch_label, 13);
         }
     }
 
@@ -2655,50 +2654,47 @@ impl CodeGenerator {
                     "# cellscript abi: expected bytes field {}.{} offset={} size={}",
                     source.type_name, source.field, source.layout.offset, width
                 ));
+                let mismatch_label = self.fresh_label("output_byte_mismatch");
                 self.emit_sp_addi("t4", buffer_offset);
                 self.emit(format!("ld t5, {}(sp)", source.obj_var_id * 8));
                 for byte_index in 0..width {
                     self.emit(format!("lbu t0, {}(t4)", layout.offset + byte_index));
                     self.emit(format!("lbu t1, {}(t5)", source.layout.offset + byte_index));
                     self.emit("sub t2, t0, t1");
-                    let ok_label = self.fresh_label("output_byte_ok");
-                    self.emit(format!("beqz t2, {}", ok_label));
-                    self.emit_fail(3);
-                    self.emit_label(&ok_label);
+                    self.emit(format!("bnez t2, {}", mismatch_label));
                 }
+                self.emit_fixed_byte_mismatch_fail(&mismatch_label, 3);
             }
             ExpectedFixedByteSource::Const(bytes) => {
                 self.emit(format!(
                     "# cellscript abi: verify output bytes field {} offset={} size={} against const",
                     context, layout.offset, width
                 ));
+                let mismatch_label = self.fresh_label("output_byte_mismatch");
                 self.emit_sp_addi("t4", buffer_offset);
                 for (byte_index, byte) in bytes.iter().enumerate() {
                     self.emit(format!("lbu t0, {}(t4)", layout.offset + byte_index));
                     self.emit(format!("li t1, {}", byte));
                     self.emit("sub t2, t0, t1");
-                    let ok_label = self.fresh_label("output_byte_ok");
-                    self.emit(format!("beqz t2, {}", ok_label));
-                    self.emit_fail(3);
-                    self.emit_label(&ok_label);
+                    self.emit(format!("bnez t2, {}", mismatch_label));
                 }
+                self.emit_fixed_byte_mismatch_fail(&mismatch_label, 3);
             }
             ExpectedFixedByteSource::StackSlot { var_id, width } => {
                 self.emit(format!(
                     "# cellscript abi: verify output bytes field {} offset={} size={} against stack slot var{}",
                     context, layout.offset, width, var_id
                 ));
+                let mismatch_label = self.fresh_label("output_byte_mismatch");
                 self.emit_sp_addi("t4", buffer_offset);
                 self.emit_sp_addi("t5", var_id * 8);
                 for byte_index in 0..width {
                     self.emit(format!("lbu t0, {}(t4)", layout.offset + byte_index));
                     self.emit(format!("lbu t1, {}(t5)", byte_index));
                     self.emit("sub t2, t0, t1");
-                    let ok_label = self.fresh_label("output_byte_ok");
-                    self.emit(format!("beqz t2, {}", ok_label));
-                    self.emit_fail(3);
-                    self.emit_label(&ok_label);
+                    self.emit(format!("bnez t2, {}", mismatch_label));
                 }
+                self.emit_fixed_byte_mismatch_fail(&mismatch_label, 3);
             }
             ExpectedFixedByteSource::ParamBytes { var_id, size_offset, width } => {
                 self.emit_loaded_schema_exact_size_check(size_offset, width, &format!("param var{}", var_id));
@@ -2706,17 +2702,16 @@ impl CodeGenerator {
                     "# cellscript abi: verify output bytes field {} offset={} size={} against fixed-byte param var{}",
                     context, layout.offset, width, var_id
                 ));
+                let mismatch_label = self.fresh_label("output_byte_mismatch");
                 self.emit_sp_addi("t4", buffer_offset);
                 self.emit(format!("ld t5, {}(sp)", var_id * 8));
                 for byte_index in 0..width {
                     self.emit(format!("lbu t0, {}(t4)", layout.offset + byte_index));
                     self.emit(format!("lbu t1, {}(t5)", byte_index));
                     self.emit("sub t2, t0, t1");
-                    let ok_label = self.fresh_label("output_byte_ok");
-                    self.emit(format!("beqz t2, {}", ok_label));
-                    self.emit_fail(3);
-                    self.emit_label(&ok_label);
+                    self.emit(format!("bnez t2, {}", mismatch_label));
                 }
+                self.emit_fixed_byte_mismatch_fail(&mismatch_label, 3);
             }
             ExpectedFixedByteSource::LoadedBytes { var_id, size_offset, width } => {
                 self.emit_loaded_schema_exact_size_check(size_offset, width, &format!("loaded bytes var{}", var_id));
@@ -2724,17 +2719,16 @@ impl CodeGenerator {
                     "# cellscript abi: verify output bytes field {} offset={} size={} against loaded bytes var{}",
                     context, layout.offset, width, var_id
                 ));
+                let mismatch_label = self.fresh_label("output_byte_mismatch");
                 self.emit_sp_addi("t4", buffer_offset);
                 self.emit(format!("ld t5, {}(sp)", var_id * 8));
                 for byte_index in 0..width {
                     self.emit(format!("lbu t0, {}(t4)", layout.offset + byte_index));
                     self.emit(format!("lbu t1, {}(t5)", byte_index));
                     self.emit("sub t2, t0, t1");
-                    let ok_label = self.fresh_label("output_byte_ok");
-                    self.emit(format!("beqz t2, {}", ok_label));
-                    self.emit_fail(3);
-                    self.emit_label(&ok_label);
+                    self.emit(format!("bnez t2, {}", mismatch_label));
                 }
+                self.emit_fixed_byte_mismatch_fail(&mismatch_label, 3);
             }
         }
         true
@@ -2782,6 +2776,14 @@ impl CodeGenerator {
                 self.emit(format!("lbu {}, {}({})", dest_reg, byte_index, base_reg));
             }
         }
+    }
+
+    fn emit_fixed_byte_mismatch_fail(&mut self, mismatch_label: &str, fail_code: u64) {
+        let done_label = self.fresh_label("fixed_byte_verify_done");
+        self.emit(format!("j {}", done_label));
+        self.emit_label(mismatch_label);
+        self.emit_fail(fail_code);
+        self.emit_label(&done_label);
     }
 
     fn emit_fixed_byte_comparison(&mut self, dest: &IrVar, op: BinaryOp, left: &IrOperand, right: &IrOperand) -> bool {
