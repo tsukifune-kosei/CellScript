@@ -5279,6 +5279,8 @@ fn assemble_elf_internal(lines: &[String]) -> Result<Vec<u8>> {
         plan.cfg.blocks.len(),
         plan.cfg.edges.len(),
         plan.order.block_order.len(),
+        plan.order.placed_blocks.len(),
+        plan.order.text_size,
     );
     let entry_label = parsed.entry_label.as_deref().ok_or_else(|| {
         CompileError::new("ELF target requires at least one action or lock entry point", crate::error::Span::default())
@@ -5772,6 +5774,15 @@ struct MachineBlockCoverage {
 #[derive(Debug, Clone)]
 struct MachineLayoutOrder {
     block_order: Vec<usize>,
+    placed_blocks: Vec<MachinePlacedBlock>,
+    text_size: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MachinePlacedBlock {
+    block_index: usize,
+    byte_start: usize,
+    byte_size: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5915,8 +5926,19 @@ fn validate_machine_block_coverage(parsed: &ParsedAssembly, cfg: &MachineCfg) ->
 
 fn machine_layout_order(cfg: &MachineCfg) -> Result<MachineLayoutOrder> {
     let block_order = (0..cfg.blocks.len()).collect::<Vec<_>>();
+    build_machine_layout_order(cfg, block_order)
+}
+
+fn build_machine_layout_order(cfg: &MachineCfg, block_order: Vec<usize>) -> Result<MachineLayoutOrder> {
     validate_machine_layout_order(cfg, &block_order)?;
-    Ok(MachineLayoutOrder { block_order })
+    let mut byte_start = 0usize;
+    let mut placed_blocks = Vec::with_capacity(block_order.len());
+    for &block_index in &block_order {
+        let block = &cfg.blocks[block_index];
+        placed_blocks.push(MachinePlacedBlock { block_index, byte_start, byte_size: block.byte_size });
+        byte_start += block.byte_size;
+    }
+    Ok(MachineLayoutOrder { block_order, placed_blocks, text_size: byte_start })
 }
 
 fn validate_machine_layout_order(cfg: &MachineCfg, block_order: &[usize]) -> Result<()> {
@@ -6042,12 +6064,7 @@ impl ParsedAssembly {
         let machine_cfg_edge_count = machine_cfg.edges.len();
         let unreachable_machine_block_count = unreachable_machine_block_count(machine_cfg);
         let layout_order_block_count = machine_order.block_order.len();
-        let layout_order_text_size = machine_order
-            .block_order
-            .iter()
-            .filter_map(|block_index| machine_cfg.blocks.get(*block_index))
-            .map(|block| block.byte_size)
-            .sum();
+        let layout_order_text_size = machine_order.text_size;
         let _covered_text_ops = machine_cfg.blocks.iter().map(|block| block.op_end.saturating_sub(block.op_start)).sum::<usize>();
         let _first_block_byte_start = machine_cfg.blocks.first().map(|block| block.byte_start).unwrap_or_default();
         Ok(BackendLayoutMetrics {
@@ -6791,6 +6808,20 @@ mod tests {
 
         assert_eq!(cfg.blocks.len(), 3);
         assert_eq!(plan.order.block_order, vec![0, 1, 2]);
+        assert_eq!(plan.order.placed_blocks.len(), 3);
+        assert_eq!(
+            plan.order.placed_blocks,
+            vec![
+                MachinePlacedBlock { block_index: 0, byte_start: 0, byte_size: cfg.blocks[0].byte_size },
+                MachinePlacedBlock { block_index: 1, byte_start: cfg.blocks[0].byte_size, byte_size: cfg.blocks[1].byte_size },
+                MachinePlacedBlock {
+                    block_index: 2,
+                    byte_start: cfg.blocks[0].byte_size + cfg.blocks[1].byte_size,
+                    byte_size: cfg.blocks[2].byte_size
+                },
+            ]
+        );
+        assert_eq!(plan.order.text_size, plan.metrics.text_size);
         assert_eq!(plan.metrics.executable_text_op_count, 5);
         assert_eq!(plan.metrics.covered_text_op_count, 5);
         assert_eq!(plan.metrics.layout_order_block_count, 3);
@@ -6823,7 +6854,12 @@ mod tests {
         assert!(validate_machine_layout_order(&plan.cfg, &[0, 1]).is_err());
         assert!(validate_machine_layout_order(&plan.cfg, &[0, 1, 1]).is_err());
         assert!(validate_machine_layout_order(&plan.cfg, &[0, 1, 3]).is_err());
-        validate_machine_layout_order(&plan.cfg, &[2, 0, 1]).expect("permuted layout order should be valid");
+        let permuted = build_machine_layout_order(&plan.cfg, vec![2, 0, 1]).expect("permuted layout order should be valid");
+        assert_eq!(permuted.block_order, vec![2, 0, 1]);
+        assert_eq!(permuted.placed_blocks[0].block_index, 2);
+        assert_eq!(permuted.placed_blocks[0].byte_start, 0);
+        assert_eq!(permuted.placed_blocks[1].byte_start, plan.cfg.blocks[2].byte_size);
+        assert_eq!(permuted.text_size, plan.order.text_size);
     }
 
     #[test]
