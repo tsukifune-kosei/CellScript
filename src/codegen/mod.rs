@@ -2266,8 +2266,7 @@ impl CodeGenerator {
                 self.emit("sub t2, t0, t1");
                 let ok_label = self.fresh_label("mutate_preserved_byte_ok");
                 self.emit(format!("beqz t2, {}", ok_label));
-                self.emit("li a0, 13");
-                self.emit_epilogue();
+                self.emit_fail(13);
                 self.emit_label(&ok_label);
             }
         }
@@ -2436,8 +2435,7 @@ impl CodeGenerator {
             self.emit("sub t2, t0, t1");
             let ok_label = self.fresh_label("mutate_transition_ok");
             self.emit(format!("beqz t2, {}", ok_label));
-            self.emit("li a0, 14");
-            self.emit_epilogue();
+            self.emit_fail(14);
             self.emit_label(&ok_label);
         }
     }
@@ -2478,8 +2476,7 @@ impl CodeGenerator {
                 &transition.operand,
                 &format!("{} set.{}", pattern.ty, transition.field),
             ) {
-                self.emit("li a0, 14");
-                self.emit_epilogue();
+                self.emit_fail(14);
             }
         }
     }
@@ -2594,8 +2591,7 @@ impl CodeGenerator {
             self.emit("sub t1, t3, t6"); // diff_hi = actual_hi - expected_hi
             self.emit("or t2, t2, t1"); // combined diff = diff_lo | diff_hi
             self.emit(format!("beqz t2, {}", ok_label));
-            self.emit("li a0, 14");
-            self.emit_epilogue();
+            self.emit_fail(14);
             self.emit_label(&ok_label);
         }
     }
@@ -2619,8 +2615,7 @@ impl CodeGenerator {
         self.emit("sub t2, t0, t1");
         let ok_label = self.fresh_label("output_field_ok");
         self.emit(format!("beqz t2, {}", ok_label));
-        self.emit("li a0, 3");
-        self.emit_epilogue();
+        self.emit_fail(3);
         self.emit_label(&ok_label);
     }
 
@@ -2668,8 +2663,7 @@ impl CodeGenerator {
                     self.emit("sub t2, t0, t1");
                     let ok_label = self.fresh_label("output_byte_ok");
                     self.emit(format!("beqz t2, {}", ok_label));
-                    self.emit("li a0, 3");
-                    self.emit_epilogue();
+                    self.emit_fail(3);
                     self.emit_label(&ok_label);
                 }
             }
@@ -2685,8 +2679,7 @@ impl CodeGenerator {
                     self.emit("sub t2, t0, t1");
                     let ok_label = self.fresh_label("output_byte_ok");
                     self.emit(format!("beqz t2, {}", ok_label));
-                    self.emit("li a0, 3");
-                    self.emit_epilogue();
+                    self.emit_fail(3);
                     self.emit_label(&ok_label);
                 }
             }
@@ -2703,8 +2696,7 @@ impl CodeGenerator {
                     self.emit("sub t2, t0, t1");
                     let ok_label = self.fresh_label("output_byte_ok");
                     self.emit(format!("beqz t2, {}", ok_label));
-                    self.emit("li a0, 3");
-                    self.emit_epilogue();
+                    self.emit_fail(3);
                     self.emit_label(&ok_label);
                 }
             }
@@ -2722,8 +2714,7 @@ impl CodeGenerator {
                     self.emit("sub t2, t0, t1");
                     let ok_label = self.fresh_label("output_byte_ok");
                     self.emit(format!("beqz t2, {}", ok_label));
-                    self.emit("li a0, 3");
-                    self.emit_epilogue();
+                    self.emit_fail(3);
                     self.emit_label(&ok_label);
                 }
             }
@@ -2741,8 +2732,7 @@ impl CodeGenerator {
                     self.emit("sub t2, t0, t1");
                     let ok_label = self.fresh_label("output_byte_ok");
                     self.emit(format!("beqz t2, {}", ok_label));
-                    self.emit("li a0, 3");
-                    self.emit_epilogue();
+                    self.emit_fail(3);
                     self.emit_label(&ok_label);
                 }
             }

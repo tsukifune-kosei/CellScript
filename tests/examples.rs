@@ -4,8 +4,25 @@ use cellscript::{compile_file, ArtifactFormat, CompileOptions, PoolPrimitiveMeta
 const BUNDLED_EXAMPLES: [&str; 7] =
     ["amm_pool.cell", "launch.cell", "multisig.cell", "nft.cell", "timelock.cell", "token.cell", "vesting.cell"];
 
+const BUNDLED_EXAMPLE_ELF_SIZE_BUDGETS: [(&str, usize); 7] = [
+    ("amm_pool.cell", 56 * 1024),
+    ("launch.cell", 48 * 1024),
+    ("multisig.cell", 40 * 1024),
+    ("nft.cell", 64 * 1024),
+    ("timelock.cell", 40 * 1024),
+    ("token.cell", 24 * 1024),
+    ("vesting.cell", 36 * 1024),
+];
+
 fn example_path(name: &str) -> Utf8PathBuf {
     Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples").join(name)
+}
+
+fn bundled_example_elf_size_budget(name: &str) -> usize {
+    BUNDLED_EXAMPLE_ELF_SIZE_BUDGETS
+        .iter()
+        .find_map(|(example, budget)| (*example == name).then_some(*budget))
+        .expect("missing bundled example ELF size budget")
 }
 
 #[allow(dead_code)]
@@ -293,6 +310,13 @@ fn bundled_examples_compile_to_elf() {
         .unwrap_or_else(|e| panic!("{} should compile to ELF: {}", example, e.message));
 
         assert!(!result.artifact_bytes.is_empty(), "ELF artifact for {} should be non-empty", example);
+        assert!(
+            result.artifact_bytes.len() <= bundled_example_elf_size_budget(example),
+            "ELF artifact for {} grew past its backend shape budget: {} > {} bytes",
+            example,
+            result.artifact_bytes.len(),
+            bundled_example_elf_size_budget(example)
+        );
     }
 }
 
