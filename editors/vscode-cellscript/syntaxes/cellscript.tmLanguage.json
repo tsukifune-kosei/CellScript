@@ -1,0 +1,247 @@
+{
+  "name": "CellScript",
+  "scopeName": "source.cellscript",
+  "fileTypes": [
+    "cell"
+  ],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#attributes"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#functions"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#operators"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.cellscript",
+          "begin": "//",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.cellscript"
+            }
+          },
+          "end": "$"
+        },
+        {
+          "name": "comment.block.cellscript",
+          "begin": "/\\*",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.begin.cellscript"
+            }
+          },
+          "end": "\\*/",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.end.cellscript"
+            }
+          }
+        }
+      ]
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "meta.annotation.cellscript",
+          "begin": "(#\\[)(effect|scheduler_hint)\\b",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.definition.annotation.begin.cellscript"
+            },
+            "2": {
+              "name": "entity.name.tag.annotation.cellscript"
+            }
+          },
+          "end": "(\\])",
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.definition.annotation.end.cellscript"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\b(Pure|ReadOnly|Mutating|Creating|Destroying|parallel|sequential|estimated_cycles)\\b",
+              "name": "constant.language.annotation.cellscript"
+            },
+            {
+              "include": "#numbers"
+            },
+            {
+              "include": "#comments"
+            }
+          ]
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.byte.cellscript",
+          "begin": "b\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.cellscript"
+            }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.cellscript"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.cellscript",
+              "match": "\\\\(?:[nrt\\\\\"]|x[0-9A-Fa-f]{2})"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.cellscript",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.cellscript"
+            }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.cellscript"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.cellscript",
+              "match": "\\\\(?:[nrt\\\\\"])"
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.cellscript",
+          "match": "\\b0x[0-9A-Fa-f]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.cellscript",
+          "match": "\\b\\d+\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.cellscript",
+          "match": "\\b(module|use|if|else|for|in|while|match|return|let|mut|ref|as)\\b"
+        },
+        {
+          "name": "keyword.declaration.cellscript",
+          "match": "\\b(resource|shared|receipt|struct|const|enum|action|fn|lock)\\b"
+        },
+        {
+          "name": "keyword.other.cellscript",
+          "match": "\\b(has|store|consume|create|read_ref|claim|settle|launch|self|env|with_lock|assert_invariant|transfer|destroy)\\b"
+        },
+        {
+          "name": "constant.language.boolean.cellscript",
+          "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.primitive.cellscript",
+          "match": "\\b(u8|u16|u32|u64|u128|bool|Address|Hash)\\b"
+        },
+        {
+          "name": "support.type.collection.cellscript",
+          "match": "\\bVec\\b"
+        },
+        {
+          "name": "support.type.effect.cellscript",
+          "match": "\\b(Pure|ReadOnly|Mutating|Creating|Destroying)\\b"
+        },
+        {
+          "name": "entity.name.type.cellscript",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "meta.function.definition.cellscript",
+          "match": "\\b(action|fn|lock)\\s+([a-zA-Z_][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.function.cellscript"
+            },
+            "2": {
+              "name": "entity.name.function.cellscript"
+            }
+          }
+        },
+        {
+          "name": "support.function.builtin.cellscript",
+          "match": "\\b(assert_invariant|min|max|isqrt)\\b"
+        },
+        {
+          "name": "support.function.namespace.cellscript",
+          "match": "\\b(?:Address|Hash|Vec|env)::[A-Za-z_][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.other.enum-variant.cellscript",
+          "match": "\\b[A-Z][A-Za-z0-9_]*::[A-Z][A-Za-z0-9_]*\\b"
+        },
+        {
+          "name": "constant.language.wildcard.cellscript",
+          "match": "\\b_\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.cellscript",
+          "match": "->|=>|::|==|!=|<=|>=|&&|\\|\\||\\+=|[-+*/%=&|!<>]"
+        },
+        {
+          "name": "punctuation.separator.cellscript",
+          "match": "[,;:.]"
+        }
+      ]
+    }
+  }
+}

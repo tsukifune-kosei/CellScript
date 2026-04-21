@@ -1,0 +1,262 @@
+
+module nft_contract;
+
+
+const MAX_SUPPLY: u64 = 10000;
+
+const ROYALTY_BASIS_POINTS: u16 = 250; // 2.5%
+
+
+struct Metadata {
+    name: String,
+    description: String,
+    image_uri: String,
+    attributes: Vec<(String, String)>,
+}
+
+#[capability(store, transfer, destroy)]
+resource NFT has destroy {
+    token_id: u64,
+    owner: Address,
+    metadata_hash: Hash,
+    royalty_recipient: Address,
+    royalty_bps: u16,
+}
+
+#[capability(store)]
+resource Collection {
+    name: String,
+    symbol: String,
+    creator: Address,
+    total_supply: u64,
+    max_supply: u64,
+    base_uri: String,
+}
+
+#[lifecycle(Created, Active, Filled, Cancelled)]
+receipt Listing has destroy {
+    token_id: u64,
+    seller: Address,
+    price: u64,
+    created_at: u64,
+}
+
+#[lifecycle(Created, Active, Accepted, Expired)]
+receipt Offer has destroy {
+    token_id: u64,
+    buyer: Address,
+    price: u64,
+    expires_at: u64,
+}
+
+receipt RoyaltyPayment {
+    token_id: u64,
+    recipient: Address,
+    amount: u64,
+}
+
+
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 5000)]
+action mint(
+    collection: &mut Collection,
+    to: Address,
+    metadata_hash: Hash,
+) -> NFT {
+    assert!(collection.total_supply < collection.max_supply, "Max supply reached");
+    
+    let token_id = collection.total_supply + 1;
+    
+    collection.total_supply = token_id;
+    
+    let nft = create NFT {
+        token_id: token_id,
+        owner: to,
+        metadata_hash: metadata_hash,
+        royalty_recipient: collection.creator,
+        royalty_bps: ROYALTY_BASIS_POINTS,
+    };
+    
+    nft
+}
+
+#[effect(Mutating)]
+#[scheduler_hint(parallel, estimated_cycles = 2000)]
+action transfer(nft: &mut NFT, to: Address) {
+    assert!(nft.owner != to, "Cannot transfer to self");
+    
+    nft.owner = to;
+}
+
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 3000)]
+action create_listing(
+    nft: &NFT,
+    price: u64,
+    current_time: u64,
+) -> Listing {
+    assert!(price > 0, "Price must be positive");
+    
+    let listing = create Listing {
+        token_id: nft.token_id,
+        seller: nft.owner,
+        price: price,
+        created_at: current_time,
+    };
+    
+    listing
+}
+
+#[effect(Destroying)]
+#[scheduler_hint(parallel, estimated_cycles = 2000)]
+action cancel_listing(listing: Listing) {
+    
+    destroy listing;
+}
+
+#[effect(Mutating, Destroying)]
+#[scheduler_hint(sequential, estimated_cycles = 8000)]
+action buy_from_listing(
+    nft: &mut NFT,
+    listing: Listing,
+    buyer: Address,
+    payment: u64,
+) -> (RoyaltyPayment, RoyaltyPayment) {
+    assert!(payment >= listing.price, "Insufficient payment");
+    
+    let royalty_amount = (payment * nft.royalty_bps as u64) / 10000;
+    let seller_amount = payment - royalty_amount;
+    
+    nft.owner = buyer;
+    
+    destroy listing;
+    
+    let royalty_payment = create RoyaltyPayment {
+        token_id: nft.token_id,
+        recipient: nft.royalty_recipient,
+        amount: royalty_amount,
+    };
+    
+    let seller_payment = create RoyaltyPayment {
+        token_id: nft.token_id,
+        recipient: listing.seller,
+        amount: seller_amount,
+    };
+    
+    (royalty_payment, seller_payment)
+}
+
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 3000)]
+action create_offer(
+    token_id: u64,
+    buyer: Address,
+    price: u64,
+    expires_at: u64,
+) -> Offer {
+    assert!(price > 0, "Price must be positive");
+    assert!(expires_at > 0, "Expiration must be in the future");
+    
+    let offer = create Offer {
+        token_id: token_id,
+        buyer: buyer,
+        price: price,
+        expires_at: expires_at,
+    };
+    
+    offer
+}
+
+#[effect(Mutating, Destroying)]
+#[scheduler_hint(sequential, estimated_cycles = 8000)]
+action accept_offer(
+    nft: &mut NFT,
+    offer: Offer,
+    current_time: u64,
+) -> (RoyaltyPayment, RoyaltyPayment) {
+    assert!(current_time < offer.expires_at, "Offer expired");
+    
+    
+    let royalty_amount = (offer.price * nft.royalty_bps as u64) / 10000;
+    let seller_amount = offer.price - royalty_amount;
+    
+    nft.owner = offer.buyer;
+    
+    destroy offer;
+    
+    let royalty_payment = create RoyaltyPayment {
+        token_id: nft.token_id,
+        recipient: nft.royalty_recipient,
+        amount: royalty_amount,
+    };
+    
+    let seller_payment = create RoyaltyPayment {
+        token_id: nft.token_id,
+        recipient: nft.owner,
+        amount: seller_amount,
+    };
+    
+    (royalty_payment, seller_payment)
+}
+
+#[effect(Destroying)]
+#[scheduler_hint(parallel, estimated_cycles = 1000)]
+action burn(nft: NFT) {
+    destroy nft;
+}
+
+#[effect(Creating)]
+#[scheduler_hint(sequential, estimated_cycles = 20000)]
+action batch_mint(
+    collection: &mut Collection,
+    recipients: Vec<Address>,
+    metadata_hashes: Vec<Hash>,
+) -> Vec<NFT> {
+    assert!(
+        recipients.len() == metadata_hashes.len(),
+        "Recipients and metadata count mismatch"
+    );
+    
+    let mut nfts = Vec::new();
+    
+    for i in 0..recipients.len() {
+        let token_id = collection.total_supply + 1 + i as u64;
+        
+        assert!(token_id <= collection.max_supply, "Max supply would be exceeded");
+        
+        let nft = create NFT {
+            token_id: token_id,
+            owner: recipients[i],
+            metadata_hash: metadata_hashes[i],
+            royalty_recipient: collection.creator,
+            royalty_bps: ROYALTY_BASIS_POINTS,
+        };
+        
+        nfts.push(nft);
+    }
+    
+    collection.total_supply += recipients.len() as u64;
+    
+    nfts
+}
+
+
+lock nft_ownership(nft: &NFT, claimed_owner: Address) -> bool {
+    nft.owner == claimed_owner
+}
+
+lock listing_seller(listing: &Listing, claimed_seller: Address) -> bool {
+    listing.seller == claimed_seller
+}
+
+lock offer_buyer(offer: &Offer, claimed_buyer: Address) -> bool {
+    offer.buyer == claimed_buyer
+}
+
+lock valid_royalty(nft: &NFT) -> bool {
+    nft.royalty_bps <= 1000
+}
+
+lock collection_creator(collection: &Collection, claimed_creator: Address) -> bool {
+    collection.creator == claimed_creator
+}

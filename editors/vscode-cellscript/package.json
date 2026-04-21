@@ -1,0 +1,98 @@
+{
+  "name": "cellscript-vscode",
+  "displayName": "CellScript",
+  "description": "Syntax highlighting and editor support for CellScript (.cell) files.",
+  "version": "0.1.0",
+  "publisher": "spora-foundation",
+  "license": "MIT OR Apache-2.0",
+  "main": "./extension.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Spora-Foundation/Spora.git"
+  },
+  "homepage": "https://github.com/Spora-Foundation/Spora/tree/spora/cellscript/editors/vscode-cellscript",
+  "bugs": {
+    "url": "https://github.com/Spora-Foundation/Spora/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "activationEvents": [
+    "onLanguage:cellscript",
+    "onCommand:cellscript.validateCurrentFile"
+  ],
+  "scripts": {
+    "validate": "node ./scripts/validate.mjs",
+    "package": "npx @vscode/vsce package",
+    "publish:dry-run": "npx @vscode/vsce publish --dry-run"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "cellscript",
+    "spora",
+    "ckbvm",
+    "smart-contracts",
+    "blockchain"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "cellscript",
+        "aliases": [
+          "CellScript",
+          "cellscript"
+        ],
+        "extensions": [
+          ".cell"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "cellscript",
+        "scopeName": "source.cellscript",
+        "path": "./syntaxes/cellscript.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "cellscript",
+        "path": "./snippets/cellscript.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "cellscript.validateCurrentFile",
+        "title": "CellScript: Validate Current File"
+      }
+    ],
+    "configuration": {
+      "title": "CellScript",
+      "properties": {
+        "cellscript.compilerPath": {
+          "type": "string",
+          "default": "cellc",
+          "description": "Path to the CellScript compiler binary used for editor diagnostics."
+        },
+        "cellscript.useCargoRunFallback": {
+          "type": "boolean",
+          "default": true,
+          "description": "If compilerPath is unavailable, try `cargo run -q -p cellscript --` from the workspace root."
+        },
+        "cellscript.validationMode": {
+          "type": "string",
+          "enum": [
+            "parse",
+            "compile-asm",
+            "off"
+          ],
+          "default": "parse",
+          "description": "Validation mode for editor diagnostics. 'parse' is fast syntax validation, 'compile-asm' runs the wider compiler pipeline to an assembly scratch file, and 'off' disables diagnostics."
+        }
+      }
+    }
+  }
+}

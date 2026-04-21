@@ -1,0 +1,64 @@
+{
+  "Action": {
+    "prefix": "action",
+    "body": [
+      "action ${1:name}(${2:param}: ${3:u64}) -> ${4:u64} {",
+      "    ${5:return ${2}}",
+      "}"
+    ],
+    "description": "Create a CellScript action"
+  },
+  "Lock": {
+    "prefix": "lock",
+    "body": [
+      "lock ${1:name}(${2:value}: ${3:u64}) -> bool {",
+      "    ${4:${2} == 0}",
+      "}"
+    ],
+    "description": "Create a CellScript lock"
+  },
+  "Resource": {
+    "prefix": "resource",
+    "body": [
+      "resource ${1:Token} {",
+      "    ${2:amount}: ${3:u64},",
+      "}"
+    ],
+    "description": "Create a CellScript resource"
+  },
+  "Shared": {
+    "prefix": "shared",
+    "body": [
+      "shared ${1:Pool} {",
+      "    ${2:reserve}: ${3:u64},",
+      "}"
+    ],
+    "description": "Create a CellScript shared state"
+  },
+  "Receipt": {
+    "prefix": "receipt",
+    "body": [
+      "receipt ${1:Grant} {",
+      "    ${2:beneficiary}: ${3:Address},",
+      "}"
+    ],
+    "description": "Create a CellScript receipt"
+  },
+  "Effect Attribute": {
+    "prefix": "effect",
+    "body": [
+      "#[effect(${1:Pure})]",
+      "#[scheduler_hint(${2:parallel}, estimated_cycles = ${3:1000})]"
+    ],
+    "description": "Insert effect and scheduler hint attributes"
+  },
+  "Create With Lock": {
+    "prefix": "create",
+    "body": [
+      "create ${1:Token} {",
+      "    ${2:amount}: ${3:1}",
+      "} with_lock(${4:owner})"
+    ],
+    "description": "Create a resource with a lock"
+  }
+}

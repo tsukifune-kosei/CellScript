@@ -1,0 +1,358 @@
+
+module timelock_contract;
+
+
+const MIN_LOCK_PERIOD: u64 = 10;
+
+const MAX_LOCK_PERIOD: u64 = 2628000;
+
+
+enum LockType {
+    Absolute,
+    Relative,
+}
+
+#[capability(store)]
+resource TimeLock has destroy {
+    owner: Address,
+    lock_type: LockType,
+    unlock_height: u64,
+    created_at: u64,
+}
+
+#[capability(store)]
+resource LockedAsset has destroy {
+    asset_type: AssetType,
+    amount: u64,
+    lock_hash: Hash,
+}
+
+enum AssetType {
+    Native,
+    Token(Hash),
+    NFT(Hash, u64),
+}
+
+#[lifecycle(Created, Processing, Released, Cancelled)]
+receipt ReleaseRequest has destroy {
+    lock_hash: Hash,
+    requester: Address,
+    requested_at: u64,
+}
+
+receipt ReleaseRecord {
+    lock_hash: Hash,
+    released_at: u64,
+    released_by: Address,
+}
+
+#[lifecycle(Created, Pending, Approved, Rejected)]
+receipt EmergencyRelease has destroy {
+    lock_hash: Hash,
+    requester: Address,
+    reason: String,
+    requested_at: u64,
+    approvers: Vec<Address>,
+}
+
+
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 3000)]
+action create_absolute_lock(
+    owner: Address,
+    unlock_height: u64,
+    current_height: u64,
+) -> TimeLock {
+    assert!(
+        unlock_height > current_height + MIN_LOCK_PERIOD,
+        "Unlock height too close"
+    );
+    assert!(
+        unlock_height <= current_height + MAX_LOCK_PERIOD,
+        "Unlock height too far"
+    );
+    
+    let lock = create TimeLock {
+        owner: owner,
+        lock_type: LockType::Absolute,
+        unlock_height: unlock_height,
+        created_at: current_height,
+    };
+    
+    lock
+}
+
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 3000)]
+action create_relative_lock(
+    owner: Address,
+    lock_period: u64,
+    current_height: u64,
+) -> TimeLock {
+    assert!(lock_period >= MIN_LOCK_PERIOD, "Lock period too short");
+    assert!(lock_period <= MAX_LOCK_PERIOD, "Lock period too long");
+    
+    let lock = create TimeLock {
+        owner: owner,
+        lock_type: LockType::Relative,
+        unlock_height: current_height + lock_period,
+        created_at: current_height,
+    };
+    
+    lock
+}
+
+#[effect(Creating)]
+#[scheduler_hint(sequential, estimated_cycles = 5000)]
+action lock_asset(
+    time_lock: &TimeLock,
+    asset_type: AssetType,
+    amount: u64,
+) -> LockedAsset {
+    assert!(amount > 0, "Amount must be positive");
+    
+    let locked = create LockedAsset {
+        asset_type: asset_type,
+        amount: amount,
+        lock_hash: hash_lock(time_lock),
+    };
+    
+    locked
+}
+
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 2000)]
+action request_release(
+    time_lock: &TimeLock,
+    requester: Address,
+    current_height: u64,
+) -> ReleaseRequest {
+    assert!(can_unlock(time_lock, current_height), "Cannot unlock yet");
+    
+    let request = create ReleaseRequest {
+        lock_hash: hash_lock(time_lock),
+        requester: requester,
+        requested_at: current_height,
+    };
+    
+    request
+}
+
+#[effect(Mutating)]
+#[scheduler_hint(sequential, estimated_cycles = 4000)]
+action execute_release(
+    time_lock: TimeLock,
+    locked_asset: LockedAsset,
+    request: ReleaseRequest,
+    executor: Address,
+    current_height: u64,
+) -> ReleaseRecord {
+    assert!(time_lock.owner == executor, "Not the owner");
+    
+    assert!(can_unlock(&time_lock, current_height), "Cannot unlock yet");
+    
+    assert!(
+        locked_asset.lock_hash == hash_lock(&time_lock),
+        "Asset does not match lock"
+    );
+    
+    assert!(
+        request.lock_hash == hash_lock(&time_lock),
+        "Request does not match lock"
+    );
+    
+    destroy time_lock;
+    destroy locked_asset;
+    destroy request;
+    
+    let record = create ReleaseRecord {
+        lock_hash: request.lock_hash,
+        released_at: current_height,
+        released_by: executor,
+    };
+    
+    record
+}
+
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 3000)]
+action request_emergency_release(
+    time_lock: &TimeLock,
+    requester: Address,
+    reason: String,
+    current_height: u64,
+) -> EmergencyRelease {
+    assert!(time_lock.owner == requester, "Not the owner");
+    
+    assert!(!can_unlock(time_lock, current_height), "Already unlockable");
+    
+    let emergency = create EmergencyRelease {
+        lock_hash: hash_lock(time_lock),
+        requester: requester,
+        reason: reason,
+        requested_at: current_height,
+        approvers: Vec::new(),
+    };
+    
+    emergency
+}
+
+#[effect(Mutating)]
+#[scheduler_hint(parallel, estimated_cycles = 2000)]
+action approve_emergency_release(
+    emergency: &mut EmergencyRelease,
+    approver: Address,
+    required_approvals: u8,
+) {
+    for existing in &emergency.approvers {
+        assert!(*existing != approver, "Already approved");
+    }
+    
+    emergency.approvers.push(approver);
+    
+}
+
+#[effect(Mutating)]
+#[scheduler_hint(sequential, estimated_cycles = 5000)]
+action execute_emergency_release(
+    time_lock: TimeLock,
+    locked_asset: LockedAsset,
+    emergency: EmergencyRelease,
+    executor: Address,
+    required_approvals: u8,
+    current_height: u64,
+) -> ReleaseRecord {
+    assert!(time_lock.owner == executor, "Not the owner");
+    
+    assert!(
+        emergency.approvers.len() >= required_approvals as usize,
+        "Not enough approvals"
+    );
+    
+    assert!(
+        emergency.lock_hash == hash_lock(&time_lock),
+        "Emergency request does not match"
+    );
+    assert!(
+        locked_asset.lock_hash == hash_lock(&time_lock),
+        "Asset does not match"
+    );
+    
+    destroy time_lock;
+    destroy locked_asset;
+    destroy emergency;
+    
+    let record = create ReleaseRecord {
+        lock_hash: hash_lock(&time_lock),
+        released_at: current_height,
+        released_by: executor,
+    };
+    
+    record
+}
+
+#[effect(Mutating)]
+#[scheduler_hint(parallel, estimated_cycles = 2000)]
+action extend_lock(
+    time_lock: &mut TimeLock,
+    additional_period: u64,
+    owner: Address,
+    current_height: u64,
+) {
+    assert!(time_lock.owner == owner, "Not the owner");
+    
+    assert!(!can_unlock(time_lock, current_height), "Already unlocked");
+    
+    let new_unlock_height = time_lock.unlock_height + additional_period;
+    assert!(
+        new_unlock_height <= current_height + MAX_LOCK_PERIOD,
+        "New unlock height too far"
+    );
+    
+    time_lock.unlock_height = new_unlock_height;
+}
+
+#[effect(Creating)]
+#[scheduler_hint(sequential, estimated_cycles = 15000)]
+action batch_create_locks(
+    owners: Vec<Address>,
+    unlock_heights: Vec<u64>,
+    current_height: u64,
+) -> Vec<TimeLock> {
+    assert!(
+        owners.len() == unlock_heights.len(),
+        "Owners and heights count mismatch"
+    );
+    
+    let mut locks = Vec::new();
+    
+    for i in 0..owners.len() {
+        let lock = create TimeLock {
+            owner: owners[i],
+            lock_type: LockType::Absolute,
+            unlock_height: unlock_heights[i],
+            created_at: current_height,
+        };
+        locks.push(lock);
+    }
+    
+    locks
+}
+
+
+fn can_unlock(time_lock: &TimeLock, current_height: u64) -> bool {
+    current_height >= time_lock.unlock_height
+}
+
+fn remaining_blocks(time_lock: &TimeLock, current_height: u64) -> u64 {
+    if current_height >= time_lock.unlock_height {
+        0
+    } else {
+        time_lock.unlock_height - current_height
+    }
+}
+
+fn lock_progress(time_lock: &TimeLock, current_height: u64) -> u8 {
+    if current_height >= time_lock.unlock_height {
+        100
+    } else {
+        let elapsed = current_height - time_lock.created_at;
+        let total = time_lock.unlock_height - time_lock.created_at;
+        
+        if total == 0 {
+            100
+        } else {
+            let progress = (elapsed * 100) / total;
+            if progress > 100 {
+                100
+            } else {
+                progress as u8
+            }
+        }
+    }
+}
+
+fn hash_lock(time_lock: &TimeLock) -> Hash {
+    Hash::zero()
+}
+
+
+lock can_unlock_lock(time_lock: &TimeLock, current_height: u64) -> bool {
+    can_unlock(time_lock, current_height)
+}
+
+lock is_owner(time_lock: &TimeLock, addr: Address) -> bool {
+    time_lock.owner == addr
+}
+
+lock asset_matches(locked_asset: &LockedAsset, time_lock: &TimeLock) -> bool {
+    locked_asset.lock_hash == hash_lock(time_lock)
+}
+
+lock emergency_approved(emergency: &EmergencyRelease, required: u8) -> bool {
+    emergency.approvers.len() >= required as usize
+}
+
+lock not_expired(time_lock: &TimeLock, current_height: u64) -> bool {
+    current_height < time_lock.unlock_height
+}

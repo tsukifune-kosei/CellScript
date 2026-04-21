@@ -1,0 +1,144 @@
+
+module spora::vesting
+
+use spora::fungible_token::Token
+
+shared VestingConfig has store {
+    admin: Address
+    token_symbol: [u8; 8]
+    cliff_period: u64
+    total_vesting_period: u64
+    revocable: bool
+}
+
+#[lifecycle(Granted -> Claimable -> FullyClaimed)]
+receipt VestingGrant has store {
+    state: u8                  // 0=Granted, 1=Claimable, 2=FullyClaimed
+    beneficiary: Address
+    total_amount: u64
+    claimed_amount: u64
+    grant_daa_score: u64
+    cliff_daa_score: u64
+    end_daa_score: u64
+    token_symbol: [u8; 8]
+}
+
+action create_vesting_config(
+    admin: Address,
+    token_symbol: [u8; 8],
+    cliff_period: u64,
+    total_period: u64,
+    revocable: bool
+) -> VestingConfig {
+    assert_invariant(cliff_period < total_period, "cliff >= total")
+    
+    create VestingConfig {
+        admin: admin,
+        token_symbol: token_symbol,
+        cliff_period: cliff_period,
+        total_vesting_period: total_period,
+        revocable: revocable
+    } with_lock(admin)
+}
+
+action grant_vesting(
+    config: read_ref VestingConfig,
+    tokens: Token,
+    beneficiary: Address
+) -> VestingGrant {
+    assert_invariant(tokens.symbol == config.token_symbol, "wrong token")
+    assert_invariant(tokens.amount > 0, "zero grant")
+    
+    let now = env::current_daa_score()
+    
+    consume tokens
+    
+    create VestingGrant {
+        state: 0,  // Granted
+        beneficiary: beneficiary,
+        total_amount: tokens.amount,
+        claimed_amount: 0,
+        grant_daa_score: now,
+        cliff_daa_score: now + config.cliff_period,
+        end_daa_score: now + config.total_vesting_period,
+        token_symbol: config.token_symbol
+    } with_lock(beneficiary)
+}
+
+action claim_vested(grant: VestingGrant) -> (Token, VestingGrant) {
+    let now = env::current_daa_score()
+    
+    assert_invariant(now >= grant.cliff_daa_score, "cliff not reached")
+    assert_invariant(grant.state < 2, "already fully claimed")
+    
+    let vested_total = if now >= grant.end_daa_score {
+        grant.total_amount
+    } else {
+        let elapsed = now - grant.cliff_daa_score
+        let period = grant.end_daa_score - grant.cliff_daa_score
+        grant.total_amount * elapsed / period
+    }
+    
+    let claimable = vested_total - grant.claimed_amount
+    assert_invariant(claimable > 0, "nothing to claim")
+    
+    consume grant
+    
+    let new_state: u8 = if vested_total == grant.total_amount { 2 } else { 1 }
+    
+    let tokens = create Token {
+        amount: claimable,
+        symbol: grant.token_symbol
+    } with_lock(grant.beneficiary)
+    
+    let updated_grant = create VestingGrant {
+        state: new_state,
+        beneficiary: grant.beneficiary,
+        total_amount: grant.total_amount,
+        claimed_amount: grant.claimed_amount + claimable,
+        grant_daa_score: grant.grant_daa_score,
+        cliff_daa_score: grant.cliff_daa_score,
+        end_daa_score: grant.end_daa_score,
+        token_symbol: grant.token_symbol
+    } with_lock(grant.beneficiary)
+    
+    (tokens, updated_grant)
+}
+
+action revoke_grant(
+    config: read_ref VestingConfig,
+    grant: VestingGrant,
+    admin: Address
+) -> (Token, Token) {
+    assert_invariant(config.revocable, "not revocable")
+    assert_invariant(grant.state < 2, "already fully claimed")
+    
+    let now = env::current_daa_score()
+    
+    let vested = if now >= grant.end_daa_score {
+        grant.total_amount
+    } else if now >= grant.cliff_daa_score {
+        let elapsed = now - grant.cliff_daa_score
+        let period = grant.end_daa_score - grant.cliff_daa_score
+        grant.total_amount * elapsed / period
+    } else {
+        0
+    }
+    
+    let unclaimed_vested = vested - grant.claimed_amount
+    let unvested = grant.total_amount - vested
+    
+    consume grant
+    
+    let employee_tokens = create Token {
+        amount: unclaimed_vested,
+        symbol: grant.token_symbol
+    } with_lock(grant.beneficiary)
+    
+    let admin_tokens = create Token {
+        amount: unvested,
+        symbol: grant.token_symbol
+    } with_lock(admin)
+    
+    (employee_tokens, admin_tokens)
+}

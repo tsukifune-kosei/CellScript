@@ -1,0 +1,15 @@
+/target/
+/Cargo.lock
+
+.DS_Store
+.vscode/
+*.swp
+*.swo
+
+*.s
+*.elf
+*.wasm
+*.meta.json
+
+.cell/
+Cell.lock
