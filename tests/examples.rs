@@ -1,5 +1,8 @@
 use camino::Utf8PathBuf;
-use cellscript::{codegen::analyze_backend_shape, compile_file, ArtifactFormat, CompileOptions, PoolPrimitiveMetadata};
+use cellscript::{
+    codegen::{analyze_backend_shape, BackendShapeMetrics},
+    compile_file, ArtifactFormat, CompileOptions, PoolPrimitiveMetadata,
+};
 
 const BUNDLED_EXAMPLES: [&str; 7] =
     ["amm_pool.cell", "launch.cell", "multisig.cell", "nft.cell", "timelock.cell", "token.cell", "vesting.cell"];
@@ -122,7 +125,7 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
     ),
 ];
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 struct AssemblyShapeBudget {
     max_lines: usize,
     max_fail_handlers: usize,
@@ -134,6 +137,21 @@ struct AssemblyShapeBudget {
     max_machine_block_bytes: usize,
     max_cfg_edges: usize,
     max_unreachable_machine_blocks: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct BackendShapeReportRow {
+    example: &'static str,
+    line_count: usize,
+    fail_handlers: usize,
+    shared_epilogues: usize,
+    fixed_byte_compare_helpers: usize,
+    fixed_byte_zero_helpers: usize,
+    min_size_guard_helpers: usize,
+    exact_size_guard_helpers: usize,
+    leaked_assembler_overflow_diagnostic: bool,
+    budget: AssemblyShapeBudget,
+    metrics: BackendShapeMetrics,
 }
 
 fn example_path(name: &str) -> Utf8PathBuf {
@@ -160,6 +178,37 @@ fn count_lines_containing(assembly: &str, needle: &str) -> usize {
 
 fn count_lines_with_prefix_and_contains(assembly: &str, prefix: &str, needle: &str) -> usize {
     assembly.lines().filter(|line| line.starts_with(prefix) && line.contains(needle)).count()
+}
+
+fn bundled_example_backend_shape_report_rows() -> Vec<BackendShapeReportRow> {
+    BUNDLED_EXAMPLES
+        .into_iter()
+        .map(|example| {
+            let result = compile_file(
+                example_path(example),
+                CompileOptions { target: Some("riscv64-asm".to_string()), ..CompileOptions::default() },
+            )
+            .unwrap_or_else(|e| panic!("{} should compile to assembly: {}", example, e.message));
+            let assembly = std::str::from_utf8(&result.artifact_bytes)
+                .unwrap_or_else(|e| panic!("{} emitted invalid utf-8 assembly: {}", example, e));
+            let metrics =
+                analyze_backend_shape(assembly).unwrap_or_else(|e| panic!("{} backend shape analysis failed: {}", example, e));
+
+            BackendShapeReportRow {
+                example,
+                line_count: assembly.lines().count(),
+                fail_handlers: count_lines_with_prefix_and_contains(assembly, ".L", "_fail_"),
+                shared_epilogues: count_lines_with_prefix_and_contains(assembly, ".L", "_epilogue:"),
+                fixed_byte_compare_helpers: count_lines_containing(assembly, "__cellscript_memcmp_fixed:"),
+                fixed_byte_zero_helpers: count_lines_containing(assembly, "__cellscript_memzero_fixed:"),
+                min_size_guard_helpers: count_lines_containing(assembly, "__cellscript_require_min_size:"),
+                exact_size_guard_helpers: count_lines_containing(assembly, "__cellscript_require_exact_size:"),
+                leaked_assembler_overflow_diagnostic: assembly.contains("immediate '"),
+                budget: bundled_example_asm_shape_budget(example),
+                metrics,
+            }
+        })
+        .collect()
 }
 
 #[allow(dead_code)]
@@ -473,40 +522,30 @@ fn bundled_examples_compile_to_elf() {
 
 #[test]
 fn bundled_examples_stay_within_backend_shape_budgets() {
-    for example in BUNDLED_EXAMPLES {
-        let result = compile_file(
-            example_path(example),
-            CompileOptions { target: Some("riscv64-asm".to_string()), ..CompileOptions::default() },
-        )
-        .unwrap_or_else(|e| panic!("{} should compile to assembly: {}", example, e.message));
-        let assembly = std::str::from_utf8(&result.artifact_bytes)
-            .unwrap_or_else(|e| panic!("{} emitted invalid utf-8 assembly: {}", example, e));
-        let budget = bundled_example_asm_shape_budget(example);
-        let line_count = assembly.lines().count();
-        let fail_handlers = count_lines_with_prefix_and_contains(assembly, ".L", "_fail_");
-        let shared_epilogues = count_lines_with_prefix_and_contains(assembly, ".L", "_epilogue:");
-        let backend_shape =
-            analyze_backend_shape(assembly).unwrap_or_else(|e| panic!("{} backend shape analysis failed: {}", example, e));
+    for row in bundled_example_backend_shape_report_rows() {
+        let example = row.example;
+        let budget = row.budget;
+        let backend_shape = row.metrics;
 
         assert!(
-            line_count <= budget.max_lines,
+            row.line_count <= budget.max_lines,
             "{} assembly grew past its backend shape budget: {} > {} lines",
             example,
-            line_count,
+            row.line_count,
             budget.max_lines
         );
         assert!(
-            fail_handlers <= budget.max_fail_handlers,
+            row.fail_handlers <= budget.max_fail_handlers,
             "{} emitted too many shared fail handlers: {} > {}",
             example,
-            fail_handlers,
+            row.fail_handlers,
             budget.max_fail_handlers
         );
         assert!(
-            shared_epilogues <= budget.max_shared_epilogues,
+            row.shared_epilogues <= budget.max_shared_epilogues,
             "{} emitted too many shared epilogues: {} > {}",
             example,
-            shared_epilogues,
+            row.shared_epilogues,
             budget.max_shared_epilogues
         );
         assert_eq!(
@@ -580,31 +619,33 @@ fn bundled_examples_stay_within_backend_shape_budgets() {
             budget.max_unreachable_machine_blocks,
             backend_shape
         );
-        assert_eq!(
-            count_lines_containing(assembly, "__cellscript_memcmp_fixed:"),
-            1,
-            "{} should emit one fixed-byte comparison helper",
+        assert_eq!(row.fixed_byte_compare_helpers, 1, "{} should emit one fixed-byte comparison helper", example);
+        assert_eq!(row.fixed_byte_zero_helpers, 1, "{} should emit one fixed-byte zero helper", example);
+        assert_eq!(row.min_size_guard_helpers, 1, "{} should emit one minimum-size guard helper", example);
+        assert_eq!(row.exact_size_guard_helpers, 1, "{} should emit one exact-size guard helper", example);
+        assert!(
+            !row.leaked_assembler_overflow_diagnostic,
+            "{} assembly should not contain a leaked assembler overflow diagnostic",
             example
         );
-        assert_eq!(
-            count_lines_containing(assembly, "__cellscript_memzero_fixed:"),
-            1,
-            "{} should emit one fixed-byte zero helper",
-            example
-        );
-        assert_eq!(
-            count_lines_containing(assembly, "__cellscript_require_min_size:"),
-            1,
-            "{} should emit one minimum-size guard helper",
-            example
-        );
-        assert_eq!(
-            count_lines_containing(assembly, "__cellscript_require_exact_size:"),
-            1,
-            "{} should emit one exact-size guard helper",
-            example
-        );
-        assert!(!assembly.contains("immediate '"), "{} assembly should not contain a leaked assembler overflow diagnostic", example);
+    }
+}
+
+#[test]
+fn bundled_examples_backend_shape_report_serializes() {
+    let rows = bundled_example_backend_shape_report_rows();
+    assert_eq!(rows.len(), BUNDLED_EXAMPLES.len(), "backend shape report should cover every bundled example");
+    for (row, expected) in rows.iter().zip(BUNDLED_EXAMPLES) {
+        assert_eq!(row.example, expected, "backend shape report should preserve bundled example order");
+    }
+
+    let json = serde_json::to_string_pretty(&rows).expect("backend shape report should serialize to JSON");
+    assert!(json.contains("\"max_machine_block_bytes\""), "shape report should include machine-block size budgets");
+    assert!(json.contains("\"unreachable_machine_block_count\""), "shape report should include unreachable-block metrics");
+    assert!(json.contains("\"fixed_byte_compare_helpers\""), "shape report should include helper dedup metrics");
+
+    if let Ok(path) = std::env::var("CELLSCRIPT_BACKEND_SHAPE_REPORT") {
+        std::fs::write(&path, json).unwrap_or_else(|e| panic!("failed to write backend shape report to {}: {}", path, e));
     }
 }
 

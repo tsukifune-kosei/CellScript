@@ -4,6 +4,7 @@ use crate::ast::{BinaryOp, UnaryOp};
 use crate::error::{CompileError, Result};
 use crate::ir::*;
 use crate::{ArtifactFormat, TargetProfile, ENTRY_WITNESS_ABI_MAGIC};
+use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::fs;
@@ -5186,7 +5187,7 @@ struct BackendLayoutMetrics {
     layout_order_text_size: usize,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct BackendShapeMetrics {
     pub text_size: usize,
     pub rodata_size: usize,
