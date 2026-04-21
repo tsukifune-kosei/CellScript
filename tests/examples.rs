@@ -14,6 +14,23 @@ const BUNDLED_EXAMPLE_ELF_SIZE_BUDGETS: [(&str, usize); 7] = [
     ("vesting.cell", 36 * 1024),
 ];
 
+const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
+    ("amm_pool.cell", AssemblyShapeBudget { max_lines: 9_000, max_fail_handlers: 32, max_shared_epilogues: 8 }),
+    ("launch.cell", AssemblyShapeBudget { max_lines: 5_000, max_fail_handlers: 16, max_shared_epilogues: 4 }),
+    ("multisig.cell", AssemblyShapeBudget { max_lines: 7_800, max_fail_handlers: 64, max_shared_epilogues: 20 }),
+    ("nft.cell", AssemblyShapeBudget { max_lines: 10_000, max_fail_handlers: 64, max_shared_epilogues: 18 }),
+    ("timelock.cell", AssemblyShapeBudget { max_lines: 7_000, max_fail_handlers: 52, max_shared_epilogues: 22 }),
+    ("token.cell", AssemblyShapeBudget { max_lines: 2_800, max_fail_handlers: 24, max_shared_epilogues: 6 }),
+    ("vesting.cell", AssemblyShapeBudget { max_lines: 4_400, max_fail_handlers: 28, max_shared_epilogues: 6 }),
+];
+
+#[derive(Debug, Clone, Copy)]
+struct AssemblyShapeBudget {
+    max_lines: usize,
+    max_fail_handlers: usize,
+    max_shared_epilogues: usize,
+}
+
 fn example_path(name: &str) -> Utf8PathBuf {
     Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples").join(name)
 }
@@ -23,6 +40,21 @@ fn bundled_example_elf_size_budget(name: &str) -> usize {
         .iter()
         .find_map(|(example, budget)| (*example == name).then_some(*budget))
         .expect("missing bundled example ELF size budget")
+}
+
+fn bundled_example_asm_shape_budget(name: &str) -> AssemblyShapeBudget {
+    BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS
+        .iter()
+        .find_map(|(example, budget)| (*example == name).then_some(*budget))
+        .expect("missing bundled example assembly shape budget")
+}
+
+fn count_lines_containing(assembly: &str, needle: &str) -> usize {
+    assembly.lines().filter(|line| line.contains(needle)).count()
+}
+
+fn count_lines_with_prefix_and_contains(assembly: &str, prefix: &str, needle: &str) -> usize {
+    assembly.lines().filter(|line| line.starts_with(prefix) && line.contains(needle)).count()
 }
 
 #[allow(dead_code)]
@@ -321,6 +353,64 @@ fn bundled_examples_compile_to_elf() {
 }
 
 #[test]
+fn bundled_examples_stay_within_backend_shape_budgets() {
+    for example in BUNDLED_EXAMPLES {
+        let result = compile_file(
+            example_path(example),
+            CompileOptions { target: Some("riscv64-asm".to_string()), ..CompileOptions::default() },
+        )
+        .unwrap_or_else(|e| panic!("{} should compile to assembly: {}", example, e.message));
+        let assembly = std::str::from_utf8(&result.artifact_bytes)
+            .unwrap_or_else(|e| panic!("{} emitted invalid utf-8 assembly: {}", example, e));
+        let budget = bundled_example_asm_shape_budget(example);
+        let line_count = assembly.lines().count();
+        let fail_handlers = count_lines_with_prefix_and_contains(assembly, ".L", "_fail_");
+        let shared_epilogues = count_lines_with_prefix_and_contains(assembly, ".L", "_epilogue:");
+
+        assert!(
+            line_count <= budget.max_lines,
+            "{} assembly grew past its backend shape budget: {} > {} lines",
+            example,
+            line_count,
+            budget.max_lines
+        );
+        assert!(
+            fail_handlers <= budget.max_fail_handlers,
+            "{} emitted too many shared fail handlers: {} > {}",
+            example,
+            fail_handlers,
+            budget.max_fail_handlers
+        );
+        assert!(
+            shared_epilogues <= budget.max_shared_epilogues,
+            "{} emitted too many shared epilogues: {} > {}",
+            example,
+            shared_epilogues,
+            budget.max_shared_epilogues
+        );
+        assert_eq!(
+            count_lines_containing(assembly, "__cellscript_memcmp_fixed:"),
+            1,
+            "{} should emit one fixed-byte comparison helper",
+            example
+        );
+        assert_eq!(
+            count_lines_containing(assembly, "__cellscript_require_min_size:"),
+            1,
+            "{} should emit one minimum-size guard helper",
+            example
+        );
+        assert_eq!(
+            count_lines_containing(assembly, "__cellscript_require_exact_size:"),
+            1,
+            "{} should emit one exact-size guard helper",
+            example
+        );
+        assert!(!assembly.contains("immediate '"), "{} assembly should not contain a leaked assembler overflow diagnostic", example);
+    }
+}
+
+#[test]
 fn vesting_read_ref_params_are_scheduler_visible() {
     let result = compile_file(example_path("vesting.cell"), CompileOptions::default()).expect("vesting example should compile");
     let grant_vesting = result.metadata.actions.iter().find(|action| action.name == "grant_vesting").expect("grant_vesting metadata");
@@ -600,13 +690,20 @@ fn nft_core_actions_expose_action_specific_builder_metadata() {
     assert_create(mint, "NFT", "nft mint");
     assert_mutate_field(mint, "Collection", "collection", "total_supply", "nft mint");
     assert_runtime_requirement(mint, "create-output:NFT:create_NFT", "checked-runtime", "create-output-fields", "nft mint");
-    assert_runtime_requirement(mint, "mutable-cell:Collection", "runtime-required", "mutate-field-transition", "nft mint");
+    assert_runtime_requirement(mint, "mutable-cell:Collection", "runtime-required", "mutate-field-equality", "nft mint");
 
     let transfer = action(&result.metadata, "transfer");
     assert_eq!(transfer.effect_class, "Mutating");
     assert!(transfer.fail_closed_runtime_features.is_empty(), "nft transfer should not carry fail-closed debt");
     assert_mutate_field(transfer, "NFT", "nft", "owner", "nft transfer");
-    assert_runtime_requirement(transfer, "mutable-cell:NFT", "runtime-required", "mutate-field-transition", "nft transfer");
+    assert!(
+        !transfer
+            .transaction_runtime_input_requirements
+            .iter()
+            .any(|requirement| { requirement.feature == "mutable-cell:NFT" && requirement.status == "runtime-required" }),
+        "nft transfer should have no remaining mutable-cell runtime-required debt: {:?}",
+        transfer.transaction_runtime_input_requirements
+    );
 
     let burn = action(&result.metadata, "burn");
     assert_eq!(burn.effect_class, "Destroying");
@@ -673,7 +770,7 @@ fn timelock_core_actions_expose_time_and_release_metadata() {
         extend_lock,
         "mutable-cell:TimeLock",
         "runtime-required",
-        "mutate-field-transition",
+        "mutate-field-equality",
         "timelock extend_lock",
     );
 }
@@ -708,7 +805,7 @@ fn multisig_core_actions_expose_threshold_lifecycle_metadata() {
         propose_transfer,
         "mutable-cell:MultisigWallet",
         "runtime-required",
-        "mutate-field-transition",
+        "mutate-field-equality",
         "multisig propose_transfer",
     );
 
