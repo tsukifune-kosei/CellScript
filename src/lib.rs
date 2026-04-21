@@ -8450,6 +8450,8 @@ fn mutate_field_equality_status(pattern: &ir::MutatePattern, type_layouts: &Meta
         .count();
     if checked == pattern.preserved_fields.len() {
         "checked-runtime"
+    } else if mutate_preserved_data_except_transition_is_verifier_coverable(pattern, type_layouts) {
+        "checked-runtime"
     } else if checked > 0 {
         "checked-partial"
     } else {
@@ -8465,6 +8467,22 @@ fn mutate_preserved_field_is_verifier_coverable(pattern: &ir::MutatePattern, fie
         return false;
     };
     layout.offset + width <= METADATA_MUTATE_CELL_BUFFER_SIZE
+}
+
+fn mutate_preserved_data_except_transition_is_verifier_coverable(
+    pattern: &ir::MutatePattern,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
+    if pattern.preserved_fields.is_empty() || pattern.transitions.len() != pattern.fields.len() || pattern.transitions.is_empty() {
+        return false;
+    }
+    pattern.transitions.iter().all(|transition| {
+        type_layouts
+            .get(&pattern.ty)
+            .and_then(|fields| fields.get(&transition.field))
+            .and_then(|layout| metadata_fixed_byte_width(&layout.ty, layout.fixed_size).map(|width| layout.offset + width))
+            .is_some_and(|end| end <= METADATA_MUTATE_CELL_BUFFER_SIZE)
+    })
 }
 
 fn mutate_field_transition_status(pattern: &ir::MutatePattern, type_layouts: &MetadataTypeLayouts) -> &'static str {

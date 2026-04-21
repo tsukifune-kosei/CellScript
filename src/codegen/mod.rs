@@ -2211,8 +2211,43 @@ impl CodeGenerator {
             .collect()
     }
 
+    fn mutate_transition_exclusion_ranges(&self, pattern: &MutatePattern) -> Option<Vec<(usize, usize)>> {
+        if pattern.transitions.len() != pattern.fields.len() {
+            return None;
+        }
+        let mut ranges = Vec::new();
+        for transition in &pattern.transitions {
+            let layout = self.type_layouts.get(&pattern.ty).and_then(|fields| fields.get(&transition.field))?;
+            let width = fixed_byte_width(&layout.ty, layout.fixed_size)?;
+            if layout.offset + width > RUNTIME_SCRATCH_BUFFER_SIZE {
+                return None;
+            }
+            ranges.push((layout.offset, layout.offset + width));
+        }
+        ranges.sort_unstable();
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for (start, end) in ranges {
+            if start >= end {
+                continue;
+            }
+            if let Some(last) = merged.last_mut() {
+                if start <= last.1 {
+                    last.1 = last.1.max(end);
+                    continue;
+                }
+            }
+            merged.push((start, end));
+        }
+        Some(merged)
+    }
+
     fn emit_mutate_replacement_preserved_field_checks(&mut self, pattern: &MutatePattern) {
         let preserved_fields = self.mutate_preserved_field_layouts(pattern);
+        if !pattern.preserved_fields.is_empty() && preserved_fields.len() != pattern.preserved_fields.len() {
+            if self.emit_mutate_replacement_data_except_transition_checks(pattern) {
+                return;
+            }
+        }
         if preserved_fields.is_empty() {
             return;
         }
@@ -2268,6 +2303,85 @@ impl CodeGenerator {
             }
             self.emit_fixed_byte_mismatch_fail(&mismatch_label, 13);
         }
+    }
+
+    fn emit_mutate_replacement_data_except_transition_checks(&mut self, pattern: &MutatePattern) -> bool {
+        let Some(exclusion_ranges) = self.mutate_transition_exclusion_ranges(pattern) else {
+            return false;
+        };
+        if exclusion_ranges.is_empty() {
+            return false;
+        }
+        let input_size_offset = self.runtime_scratch_size_offset();
+        let input_buffer_offset = self.runtime_scratch_buffer_offset();
+        let output_size_offset = self.runtime_scratch2_size_offset();
+        let output_buffer_offset = self.runtime_scratch2_buffer_offset();
+        self.emit_load_cell_data_syscall_to_offsets(
+            "mutate_input_preserved_data",
+            CKB_SOURCE_INPUT,
+            pattern.input_index,
+            input_size_offset,
+            input_buffer_offset,
+            RUNTIME_SCRATCH_BUFFER_SIZE,
+        );
+        self.emit_return_on_syscall_error(1);
+        self.emit_load_cell_data_syscall_to_offsets(
+            "mutate_output_preserved_data",
+            CKB_SOURCE_OUTPUT,
+            pattern.output_index,
+            output_size_offset,
+            output_buffer_offset,
+            RUNTIME_SCRATCH_BUFFER_SIZE,
+        );
+        self.emit_return_on_syscall_error(1);
+        let size_ok_label = self.fresh_label("mutate_preserved_data_size_ok");
+        self.emit_stack_ld("t0", input_size_offset);
+        self.emit_stack_ld("t1", output_size_offset);
+        self.emit("sub t2, t0, t1");
+        self.emit(format!("beqz t2, {}", size_ok_label));
+        self.emit_fail(13);
+        self.emit_label(&size_ok_label);
+
+        self.emit(format!(
+            "# cellscript abi: verify mutate preserved data {} Input#{} == Output#{} except transition ranges {:?}",
+            pattern.ty, pattern.input_index, pattern.output_index, exclusion_ranges
+        ));
+        let loop_label = self.fresh_label("mutate_preserved_data_loop");
+        let compare_label = self.fresh_label("mutate_preserved_data_compare");
+        let skip_label = self.fresh_label("mutate_preserved_data_skip");
+        let done_label = self.fresh_label("mutate_preserved_data_done");
+        let mismatch_label = self.fresh_label("mutate_preserved_data_mismatch");
+        self.emit_sp_addi("a3", input_buffer_offset);
+        self.emit_sp_addi("a4", output_buffer_offset);
+        self.emit("li t6, 0");
+        self.emit_label(&loop_label);
+        self.emit("sltu t2, t6, t0");
+        self.emit(format!("beqz t2, {}", done_label));
+        for (range_index, (start, end)) in exclusion_ranges.iter().enumerate() {
+            let next_range_label = self.fresh_label(&format!("mutate_preserved_data_next_range_{}", range_index));
+            self.emit(format!("li t3, {}", start));
+            self.emit("sltu t2, t6, t3");
+            self.emit(format!("bnez t2, {}", compare_label));
+            self.emit(format!("li t3, {}", end));
+            self.emit("sltu t2, t6, t3");
+            self.emit(format!("beqz t2, {}", next_range_label));
+            self.emit(format!("j {}", skip_label));
+            self.emit_label(&next_range_label);
+        }
+        self.emit_label(&compare_label);
+        self.emit("add t3, a3, t6");
+        self.emit("lbu t4, 0(t3)");
+        self.emit("add t3, a4, t6");
+        self.emit("lbu t5, 0(t3)");
+        self.emit("sub t2, t4, t5");
+        self.emit(format!("bnez t2, {}", mismatch_label));
+        self.emit_label(&skip_label);
+        self.emit("addi t6, t6, 1");
+        self.emit(format!("j {}", loop_label));
+        self.emit_label(&mismatch_label);
+        self.emit_fail(13);
+        self.emit_label(&done_label);
+        true
     }
 
     fn mutate_u128_transition_layouts(&self, pattern: &MutatePattern) -> Vec<(MutateFieldTransition, SchemaFieldLayout)> {

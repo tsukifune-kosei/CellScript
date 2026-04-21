@@ -307,6 +307,20 @@ fn assert_runtime_requirement(action: &cellscript::ActionMetadata, feature: &str
     );
 }
 
+fn assert_no_runtime_requirement(action: &cellscript::ActionMetadata, feature: &str, component: &str, context: &str) {
+    assert!(
+        !action
+            .transaction_runtime_input_requirements
+            .iter()
+            .any(|requirement| { requirement.feature == feature && requirement.component == component }),
+        "{} should not expose {} runtime requirement for {}: {:?}",
+        context,
+        component,
+        feature,
+        action.transaction_runtime_input_requirements
+    );
+}
+
 #[test]
 fn bundled_examples_compile_to_non_empty_assembly() {
     for example in BUNDLED_EXAMPLES {
@@ -682,6 +696,7 @@ fn token_mint_authority_mutation_is_explicit() {
 #[test]
 fn nft_core_actions_expose_action_specific_builder_metadata() {
     let result = compile_file(example_path("nft.cell"), CompileOptions::default()).expect("nft example should compile");
+    let asm = String::from_utf8(result.artifact_bytes.clone()).expect("nft asm should be utf8");
 
     let mint = action(&result.metadata, "mint");
     assert_eq!(mint.effect_class, "Creating");
@@ -690,7 +705,12 @@ fn nft_core_actions_expose_action_specific_builder_metadata() {
     assert_create(mint, "NFT", "nft mint");
     assert_mutate_field(mint, "Collection", "collection", "total_supply", "nft mint");
     assert_runtime_requirement(mint, "create-output:NFT:create_NFT", "checked-runtime", "create-output-fields", "nft mint");
-    assert_runtime_requirement(mint, "mutable-cell:Collection", "runtime-required", "mutate-field-equality", "nft mint");
+    assert_no_runtime_requirement(mint, "mutable-cell:Collection", "mutate-field-equality", "nft mint");
+    assert!(
+        asm.contains("# cellscript abi: verify mutate preserved data Collection Input#0 == Output#1 except transition ranges"),
+        "nft mint should verify dynamic Collection preserved data except total_supply transition:\n{}",
+        asm
+    );
 
     let transfer = action(&result.metadata, "transfer");
     assert_eq!(transfer.effect_class, "Mutating");
@@ -716,6 +736,7 @@ fn nft_core_actions_expose_action_specific_builder_metadata() {
 #[test]
 fn timelock_core_actions_expose_time_and_release_metadata() {
     let result = compile_file(example_path("timelock.cell"), CompileOptions::default()).expect("timelock example should compile");
+    let asm = String::from_utf8(result.artifact_bytes.clone()).expect("timelock asm should be utf8");
 
     let create_absolute_lock = action(&result.metadata, "create_absolute_lock");
     assert_eq!(create_absolute_lock.effect_class, "Creating");
@@ -766,18 +787,18 @@ fn timelock_core_actions_expose_time_and_release_metadata() {
     let extend_lock = action(&result.metadata, "extend_lock");
     assert!(extend_lock.fail_closed_runtime_features.is_empty(), "extend_lock should not carry fail-closed debt");
     assert_mutate_field(extend_lock, "TimeLock", "time_lock", "unlock_height", "timelock extend_lock");
-    assert_runtime_requirement(
-        extend_lock,
-        "mutable-cell:TimeLock",
-        "runtime-required",
-        "mutate-field-equality",
-        "timelock extend_lock",
+    assert_no_runtime_requirement(extend_lock, "mutable-cell:TimeLock", "mutate-field-equality", "timelock extend_lock");
+    assert!(
+        asm.contains("# cellscript abi: verify mutate preserved data TimeLock Input#0 == Output#0 except transition ranges"),
+        "timelock extend_lock should verify dynamic TimeLock preserved data except unlock_height transition:\n{}",
+        asm
     );
 }
 
 #[test]
 fn multisig_core_actions_expose_threshold_lifecycle_metadata() {
     let result = compile_file(example_path("multisig.cell"), CompileOptions::default()).expect("multisig example should compile");
+    let asm = String::from_utf8(result.artifact_bytes.clone()).expect("multisig asm should be utf8");
 
     let create_wallet = action(&result.metadata, "create_wallet");
     assert_eq!(create_wallet.effect_class, "Creating");
@@ -801,12 +822,16 @@ fn multisig_core_actions_expose_threshold_lifecycle_metadata() {
         "create-output-fields",
         "multisig propose_transfer",
     );
-    assert_runtime_requirement(
+    assert_no_runtime_requirement(
         propose_transfer,
         "mutable-cell:MultisigWallet",
-        "runtime-required",
         "mutate-field-equality",
         "multisig propose_transfer",
+    );
+    assert!(
+        asm.contains("# cellscript abi: verify mutate preserved data MultisigWallet Input#0 == Output#1 except transition ranges"),
+        "multisig propose_transfer should verify dynamic wallet preserved data except nonce transition:\n{}",
+        asm
     );
 
     let add_signature = action(&result.metadata, "add_signature");
