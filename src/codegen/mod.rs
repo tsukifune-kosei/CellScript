@@ -5171,6 +5171,8 @@ struct BackendLayoutMetrics {
     max_machine_block_size: usize,
     conditional_branch_block_count: usize,
     labeled_machine_block_count: usize,
+    machine_cfg_edge_count: usize,
+    unreachable_machine_block_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -5262,6 +5264,8 @@ fn assemble_elf_internal(lines: &[String]) -> Result<Vec<u8>> {
         plan.metrics.max_machine_block_size,
         plan.metrics.conditional_branch_block_count,
         plan.metrics.labeled_machine_block_count,
+        plan.metrics.machine_cfg_edge_count,
+        plan.metrics.unreachable_machine_block_count,
     );
     let entry_label = parsed.entry_label.as_deref().ok_or_else(|| {
         CompileError::new("ELF target requires at least one action or lock entry point", crate::error::Span::default())
@@ -5737,6 +5741,27 @@ struct MachineBlock {
     terminator: MachineTerminator,
 }
 
+#[derive(Debug, Clone)]
+struct MachineCfg {
+    blocks: Vec<MachineBlock>,
+    edges: Vec<MachineCfgEdge>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MachineCfgEdge {
+    from: usize,
+    to: usize,
+    kind: MachineCfgEdgeKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MachineCfgEdgeKind {
+    Fallthrough,
+    Jump,
+    ConditionalTaken,
+    ConditionalFallthrough,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum MachineTerminator {
     Fallthrough,
@@ -5788,6 +5813,78 @@ fn machine_blocks(parsed: &ParsedAssembly) -> Vec<MachineBlock> {
     blocks
 }
 
+fn machine_cfg(parsed: &ParsedAssembly) -> Result<MachineCfg> {
+    let blocks = machine_blocks(parsed);
+    let label_to_block = machine_label_to_block(parsed, &blocks);
+    let mut edges = Vec::new();
+
+    for (index, block) in blocks.iter().enumerate() {
+        match &block.terminator {
+            MachineTerminator::Fallthrough => {
+                if index + 1 < blocks.len() {
+                    edges.push(MachineCfgEdge { from: index, to: index + 1, kind: MachineCfgEdgeKind::Fallthrough });
+                }
+            }
+            MachineTerminator::Jump { target } => {
+                edges.push(MachineCfgEdge {
+                    from: index,
+                    to: machine_cfg_target_block(target, &label_to_block)?,
+                    kind: MachineCfgEdgeKind::Jump,
+                });
+            }
+            MachineTerminator::ConditionalBranch { target } => {
+                edges.push(MachineCfgEdge {
+                    from: index,
+                    to: machine_cfg_target_block(target, &label_to_block)?,
+                    kind: MachineCfgEdgeKind::ConditionalTaken,
+                });
+                if index + 1 < blocks.len() {
+                    edges.push(MachineCfgEdge { from: index, to: index + 1, kind: MachineCfgEdgeKind::ConditionalFallthrough });
+                }
+            }
+            MachineTerminator::Return | MachineTerminator::Ecall => {}
+        }
+    }
+
+    Ok(MachineCfg { blocks, edges })
+}
+
+fn machine_label_to_block(parsed: &ParsedAssembly, blocks: &[MachineBlock]) -> HashMap<String, usize> {
+    let mut label_to_block = HashMap::new();
+    for (label, symbol) in &parsed.symbols {
+        if symbol.section != SectionKind::Text {
+            continue;
+        }
+        if let Some((block_index, _)) = blocks.iter().enumerate().find(|(_, block)| block.byte_start == symbol.offset) {
+            label_to_block.insert(label.clone(), block_index);
+        }
+    }
+    label_to_block
+}
+
+fn machine_cfg_target_block(target: &str, label_to_block: &HashMap<String, usize>) -> Result<usize> {
+    label_to_block.get(target).copied().ok_or_else(|| {
+        CompileError::new(format!("assembly branch target '{}' does not start a machine block", target), crate::error::Span::default())
+    })
+}
+
+fn unreachable_machine_block_count(cfg: &MachineCfg) -> usize {
+    if cfg.blocks.is_empty() {
+        return 0;
+    }
+    let mut reachable = BTreeSet::new();
+    let mut stack = vec![0usize];
+    while let Some(block) = stack.pop() {
+        if !reachable.insert(block) {
+            continue;
+        }
+        for edge in cfg.edges.iter().filter(|edge| edge.from == block) {
+            stack.push(edge.to);
+        }
+    }
+    cfg.blocks.len().saturating_sub(reachable.len())
+}
+
 fn block_has_executable_ops(ops: &[AsmOp]) -> bool {
     ops.iter().any(|op| !matches!(op, AsmOp::Label(_)))
 }
@@ -5834,14 +5931,16 @@ impl ParsedAssembly {
             let distance = relative_offset(pc, target)?.unsigned_abs();
             max_cond_branch_abs_distance = max_cond_branch_abs_distance.max(distance);
         }
-        let machine_blocks = machine_blocks(self);
-        let machine_block_count = machine_blocks.len();
-        let max_machine_block_size = machine_blocks.iter().map(|block| block.byte_size).max().unwrap_or_default();
+        let machine_cfg = machine_cfg(self)?;
+        let machine_block_count = machine_cfg.blocks.len();
+        let max_machine_block_size = machine_cfg.blocks.iter().map(|block| block.byte_size).max().unwrap_or_default();
         let conditional_branch_block_count =
-            machine_blocks.iter().filter(|block| matches!(block.terminator, MachineTerminator::ConditionalBranch { .. })).count();
-        let labeled_machine_block_count = machine_blocks.iter().filter(|block| block.label.is_some()).count();
-        let _covered_text_ops = machine_blocks.iter().map(|block| block.op_end.saturating_sub(block.op_start)).sum::<usize>();
-        let _first_block_byte_start = machine_blocks.first().map(|block| block.byte_start).unwrap_or_default();
+            machine_cfg.blocks.iter().filter(|block| matches!(block.terminator, MachineTerminator::ConditionalBranch { .. })).count();
+        let labeled_machine_block_count = machine_cfg.blocks.iter().filter(|block| block.label.is_some()).count();
+        let machine_cfg_edge_count = machine_cfg.edges.len();
+        let unreachable_machine_block_count = unreachable_machine_block_count(&machine_cfg);
+        let _covered_text_ops = machine_cfg.blocks.iter().map(|block| block.op_end.saturating_sub(block.op_start)).sum::<usize>();
+        let _first_block_byte_start = machine_cfg.blocks.first().map(|block| block.byte_start).unwrap_or_default();
         Ok(BackendLayoutMetrics {
             text_size,
             rodata_size: self.section_size(SectionKind::Rodata),
@@ -5851,6 +5950,8 @@ impl ParsedAssembly {
             max_machine_block_size,
             conditional_branch_block_count,
             labeled_machine_block_count,
+            machine_cfg_edge_count,
+            unreachable_machine_block_count,
         })
     }
 }
@@ -6537,6 +6638,8 @@ mod tests {
         );
         assert_eq!(plan.metrics.text_size, plan.parsed.section_size(SectionKind::Text));
         assert_eq!(plan.metrics.conditional_branch_block_count, 1);
+        assert!(plan.metrics.machine_cfg_edge_count >= 2, "far branch CFG edges should be visible: {:?}", plan.metrics);
+        assert_eq!(plan.metrics.unreachable_machine_block_count, 0);
         assert!(plan.metrics.machine_block_count >= 2, "far branch should produce multiple machine blocks: {:?}", plan.metrics);
         assert!(
             plan.metrics.max_machine_block_size > 4096,
@@ -6567,6 +6670,36 @@ mod tests {
         assert_eq!(blocks[1].terminator, MachineTerminator::Jump { target: "done".to_string() });
         assert_eq!(blocks[2].label.as_deref(), Some("done"));
         assert_eq!(blocks[2].terminator, MachineTerminator::Return);
+
+        let cfg = machine_cfg(&plan.parsed).expect("machine cfg");
+        assert_eq!(cfg.blocks.len(), 3);
+        assert_eq!(
+            cfg.edges,
+            vec![
+                MachineCfgEdge { from: 0, to: 2, kind: MachineCfgEdgeKind::ConditionalTaken },
+                MachineCfgEdge { from: 0, to: 1, kind: MachineCfgEdgeKind::ConditionalFallthrough },
+                MachineCfgEdge { from: 1, to: 2, kind: MachineCfgEdgeKind::Jump },
+            ]
+        );
+        assert_eq!(unreachable_machine_block_count(&cfg), 0);
+    }
+
+    #[test]
+    fn machine_layout_plan_rejects_branch_target_outside_text() {
+        let lines = vec![
+            ".section .text".to_string(),
+            ".global entry".to_string(),
+            "entry:".to_string(),
+            "li a0, 0".to_string(),
+            "beqz a0, data_label".to_string(),
+            "ret".to_string(),
+            ".section .rodata".to_string(),
+            "data_label:".to_string(),
+            ".word 1".to_string(),
+        ];
+
+        let err = MachineLayoutPlan::build(&lines).expect_err("branch targets outside text blocks should be rejected");
+        assert!(err.message.contains("does not start a machine block"), "unexpected error for invalid CFG target: {}", err.message);
     }
 
     #[test]
