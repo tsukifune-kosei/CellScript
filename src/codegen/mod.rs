@@ -1300,6 +1300,7 @@ impl CodeGenerator {
         }
         self.emit_mutate_replacement_preserved_field_checks(pattern);
         self.emit_mutate_replacement_transition_checks(pattern);
+        self.emit_mutate_replacement_set_transition_checks(pattern);
         self.emit_mutate_replacement_u128_transition_checks(pattern);
         Ok(())
     }
@@ -2245,6 +2246,9 @@ impl CodeGenerator {
             .transitions
             .iter()
             .filter_map(|transition| {
+                if transition.op == MutateTransitionOp::Set {
+                    return None;
+                }
                 let layout = self.type_layouts.get(&pattern.ty).and_then(|fields| fields.get(&transition.field)).cloned()?;
                 // Only u128 fields (16 bytes) that don't fit in a single register.
                 if layout.ty != IrType::U128 || layout.fixed_size != Some(16) {
@@ -2273,12 +2277,44 @@ impl CodeGenerator {
             .transitions
             .iter()
             .filter_map(|transition| {
+                if transition.op == MutateTransitionOp::Set {
+                    return None;
+                }
                 let layout = self.type_layouts.get(&pattern.ty).and_then(|fields| fields.get(&transition.field)).cloned()?;
                 let width = fixed_register_width(&layout.ty, layout.fixed_size)?;
                 if layout.offset + width > RUNTIME_SCRATCH_BUFFER_SIZE {
                     return None;
                 }
                 if self.prelude_u64_operand_source(&transition.operand).is_none() {
+                    return None;
+                }
+                Some((transition.clone(), layout, width))
+            })
+            .collect()
+    }
+
+    fn mutate_set_transition_layouts(&self, pattern: &MutatePattern) -> Vec<(MutateFieldTransition, SchemaFieldLayout, usize)> {
+        let Some(type_size) = self.type_fixed_sizes.get(&pattern.ty).copied() else {
+            return Vec::new();
+        };
+        if type_size > RUNTIME_SCRATCH_BUFFER_SIZE {
+            return Vec::new();
+        }
+        pattern
+            .transitions
+            .iter()
+            .filter_map(|transition| {
+                if transition.op != MutateTransitionOp::Set {
+                    return None;
+                }
+                let layout = self.type_layouts.get(&pattern.ty).and_then(|fields| fields.get(&transition.field)).cloned()?;
+                let width = fixed_byte_width(&layout.ty, layout.fixed_size)?;
+                if layout.offset + width > RUNTIME_SCRATCH_BUFFER_SIZE {
+                    return None;
+                }
+                if fixed_scalar_width(&layout.ty, layout.fixed_size).is_none()
+                    && self.expected_fixed_byte_source(&transition.operand, width).is_none()
+                {
                     return None;
                 }
                 Some((transition.clone(), layout, width))
@@ -2353,6 +2389,9 @@ impl CodeGenerator {
             match transition.op {
                 MutateTransitionOp::Add => self.emit("add t1, t0, t1"),
                 MutateTransitionOp::Sub => self.emit("sub t1, t0, t1"),
+                MutateTransitionOp::Set => {
+                    unreachable!("set transitions are verified by emit_mutate_replacement_set_transition_checks")
+                }
             }
             self.emit_sp_addi("t4", output_buffer_offset);
             self.emit_unaligned_scalar_load("t4", "t0", "t2", layout.offset, width);
@@ -2362,6 +2401,48 @@ impl CodeGenerator {
             self.emit("li a0, 14");
             self.emit_epilogue();
             self.emit_label(&ok_label);
+        }
+    }
+
+    fn emit_mutate_replacement_set_transition_checks(&mut self, pattern: &MutatePattern) {
+        let transitions = self.mutate_set_transition_layouts(pattern);
+        if transitions.is_empty() {
+            return;
+        }
+        let output_size_offset = self.runtime_scratch2_size_offset();
+        let output_buffer_offset = self.runtime_scratch2_buffer_offset();
+        self.emit_load_cell_data_syscall_to_offsets(
+            "mutate_output_set_transition",
+            CKB_SOURCE_OUTPUT,
+            pattern.output_index,
+            output_size_offset,
+            output_buffer_offset,
+            RUNTIME_SCRATCH_BUFFER_SIZE,
+        );
+        self.emit_return_on_syscall_error(1);
+        if let Some(expected_size) = self.type_fixed_sizes.get(&pattern.ty).copied() {
+            self.emit_loaded_schema_exact_size_check(
+                output_size_offset,
+                expected_size,
+                &format!("{} mutate set transition output", pattern.ty),
+            );
+        }
+        self.emit(format!("# cellscript abi: verify mutate set transition fields {} Output#{}", pattern.ty, pattern.output_index));
+        for (transition, layout, width) in transitions {
+            self.emit(format!(
+                "# cellscript abi: verify mutate set transition field {}.{} Output#{} offset={} size={}",
+                pattern.ty, transition.field, pattern.output_index, layout.offset, width
+            ));
+            if !self.emit_loaded_field_bytes_equals_expected(
+                output_size_offset,
+                output_buffer_offset,
+                &layout,
+                &transition.operand,
+                &format!("{} set.{}", pattern.ty, transition.field),
+            ) {
+                self.emit("li a0, 14");
+                self.emit_epilogue();
+            }
         }
     }
 
@@ -2458,6 +2539,9 @@ impl CodeGenerator {
                     self.emit("sub t5, t0, t1"); // expected_lo = input_lo - delta
                     self.emit("sltu t2, t0, t1"); // borrow = 1 if subtraction underflowed
                     self.emit("sub t6, t3, t2"); // expected_hi = input_hi - borrow
+                }
+                MutateTransitionOp::Set => {
+                    unreachable!("set transitions are verified by emit_mutate_replacement_set_transition_checks")
                 }
             }
 

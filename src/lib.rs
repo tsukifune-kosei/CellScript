@@ -8493,6 +8493,22 @@ fn mutate_transition_is_verifier_coverable(
     let Some(layout) = type_layouts.get(&pattern.ty).and_then(|fields| fields.get(&transition.field)) else {
         return false;
     };
+    if transition.op == ir::MutateTransitionOp::Set {
+        let Some(width) = metadata_fixed_byte_width(&layout.ty, layout.fixed_size) else {
+            return false;
+        };
+        if layout.offset + width > METADATA_MUTATE_CELL_BUFFER_SIZE {
+            return false;
+        }
+        return match &transition.operand {
+            ir::IrOperand::Const(ir::IrConst::U64(_))
+            | ir::IrOperand::Const(ir::IrConst::Address(_))
+            | ir::IrOperand::Const(ir::IrConst::Hash(_))
+            | ir::IrOperand::Const(ir::IrConst::Array(_)) => true,
+            ir::IrOperand::Var(var) => metadata_fixed_byte_width(&var.ty, type_static_length(&var.ty)).is_some(),
+            _ => false,
+        };
+    }
     // u128 fields are verifier-coverable via 128-bit add/sub with carry.
     if layout.ty == ir::IrType::U128 && layout.fixed_size == Some(16) {
         if layout.offset + 16 > METADATA_MUTATE_CELL_BUFFER_SIZE {
@@ -16575,6 +16591,59 @@ action credit(ledger: &mut Ledger, delta: u64) {
         assert!(!action.transaction_runtime_input_requirements.iter().any(|requirement| {
             requirement.feature == "shared-mutation:Ledger" && requirement.component == "mutate-field-transition"
         }));
+    }
+
+    #[test]
+    fn fixed_byte_mutable_state_set_transition_is_checked_under_ckb_profile() {
+        let source = r#"
+module test
+
+resource NFT has store, destroy {
+    token_id: u64
+    owner: Address
+    metadata_hash: Hash
+    royalty_recipient: Address
+    royalty_bps: u16
+}
+
+action transfer(nft: &mut NFT, to: Address) {
+    assert_invariant(nft.owner != to, "cannot transfer to self")
+    nft.owner = to
+}
+"#;
+
+        let result = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() }).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+        let action = result.metadata.actions.iter().find(|action| action.name == "transfer").expect("transfer metadata");
+        let mutation = action
+            .mutate_set
+            .iter()
+            .find(|mutation| mutation.operation == "mutate" && mutation.ty == "NFT" && mutation.binding == "nft")
+            .expect("transfer should expose NFT mutate_set metadata");
+
+        assert_eq!(mutation.field_equality_status, "checked-runtime");
+        assert_eq!(mutation.field_transition_status, "checked-runtime");
+        assert!(
+            asm.contains("# cellscript abi: verify mutate set transition field NFT.owner Output#0 offset=8 size=32"),
+            "fixed-byte set transition should be checked against the replacement output:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: verify output bytes field NFT set.owner offset=8 size=32 against fixed-byte param"),
+            "fixed-byte set transition should compare the output field to the Address parameter:\n{}",
+            asm
+        );
+        assert!(action.verifier_obligations.iter().any(|obligation| {
+            obligation.category == "cell-state"
+                && obligation.feature == "mutable-cell:NFT"
+                && obligation.status == "checked-runtime"
+                && obligation.detail.contains("field equality=checked-runtime")
+                && obligation.detail.contains("field transition=checked-runtime")
+        }));
+        assert!(!action
+            .transaction_runtime_input_requirements
+            .iter()
+            .any(|requirement| { requirement.feature == "mutable-cell:NFT" && requirement.component == "mutate-field-transition" }));
     }
 
     #[test]

@@ -186,6 +186,7 @@ pub struct MutateFieldTransition {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MutateTransitionOp {
+    Set,
     Add,
     Sub,
 }
@@ -2531,7 +2532,7 @@ impl IrGenerator {
                         _ => return None,
                     }
                 }
-                _ => return None,
+                _ => (MutateTransitionOp::Set, self.transition_operand_from_expr(value_expr, vars)?),
             },
         };
         Some(MutateFieldTransition { field: target_field.to_string(), op, operand })
