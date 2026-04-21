@@ -229,9 +229,9 @@ The repository also includes bundled protocol examples:
 
 ## Comparison
 
-The language design follows the comparison in
-[`docs/SPORA_DSL_DESIGN_PROPOSAL_CN.md`](../docs/SPORA_DSL_DESIGN_PROPOSAL_CN.md),
-with the target narrative widened from Spora-only to Spora and CKB profiles.
+The comparison below summarizes why CellScript is shaped around typed Cells,
+linear resources, explicit transaction effects, and ckb-vm artifacts instead
+of account storage or a chain-specific VM.
 
 | Dimension | CellScript | Solidity | Move | Sway |
 |---|---|---|---|---|

@@ -219,9 +219,8 @@ action burn(token: Token) {
 
 ## 对比
 
-下面的对比浓缩自
-[`docs/SPORA_DSL_DESIGN_PROPOSAL_CN.md`](../docs/SPORA_DSL_DESIGN_PROPOSAL_CN.md)，
-并把叙事从 Spora-only 调整为同时面向 Spora 和 CKB profile。
+下面的对比总结了 CellScript 为什么围绕 typed Cells、线性资源、显式交易
+effect 和 ckb-vm artifact 设计，而不是围绕账户存储或单链专用 VM 设计。
 
 | 维度 | CellScript | Solidity | Move | Sway |
 |---|---|---|---|---|
