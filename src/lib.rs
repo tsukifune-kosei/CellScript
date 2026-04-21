@@ -16750,6 +16750,11 @@ action transfer(nft: &mut NFT, to: Address) {
             "fixed-byte set transition should compare the output field to the Address parameter:\n{}",
             asm
         );
+        assert!(
+            asm.contains("li a0, 0\n    j .Ltransfer_epilogue"),
+            "void action success path must clear a0 before returning to ckb-vm:\n{}",
+            asm
+        );
         assert!(action.verifier_obligations.iter().any(|obligation| {
             obligation.category == "cell-state"
                 && obligation.feature == "mutable-cell:NFT"

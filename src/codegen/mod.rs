@@ -1534,6 +1534,7 @@ impl CodeGenerator {
     fn generate_terminator(&mut self, terminator: &IrTerminator) -> Result<()> {
         match terminator {
             IrTerminator::Return(None) => {
+                self.emit("li a0, 0");
                 self.emit_epilogue();
             }
             IrTerminator::Return(Some(operand)) => {
