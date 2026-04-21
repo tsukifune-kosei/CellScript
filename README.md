@@ -393,14 +393,6 @@ cellscript/
     └── vscode-cellscript/
 ```
 
-## Further Reading
-
-- [`docs/SPORA_DSL_DESIGN_PROPOSAL_CN.md`](../docs/SPORA_DSL_DESIGN_PROPOSAL_CN.md)
-- [`docs/CELLSCRIPT_CKB_COMPATIBILITY_DECISION.md`](../docs/CELLSCRIPT_CKB_COMPATIBILITY_DECISION.md)
-- [`docs/CELLSCRIPT_COMPATIBILITY_MATRIX.md`](../docs/CELLSCRIPT_COMPATIBILITY_MATRIX.md)
-- [`docs/CELLSCRIPT_V1_RELEASE_SCOPE.md`](../docs/CELLSCRIPT_V1_RELEASE_SCOPE.md)
-- [`docs/CELLSCRIPT_V1_FEATURE_COMPLETENESS_AUDIT.md`](../docs/CELLSCRIPT_V1_FEATURE_COMPLETENESS_AUDIT.md)
-
 ## License
 
 License metadata is declared in [`Cargo.toml`](Cargo.toml). The repository
