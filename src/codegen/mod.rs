@@ -5620,7 +5620,6 @@ struct ParsedAssembly {
     text_size: usize,
     rodata_size: usize,
     symbols: HashMap<String, SymbolDef>,
-    global_text_labels: BTreeSet<String>,
     entry_label: Option<String>,
     relaxed_text_branches: BTreeSet<usize>,
 }
@@ -5644,7 +5643,6 @@ impl ParsedAssembly {
         let mut rodata_ops = Vec::new();
         let mut symbols = HashMap::new();
         let mut globals = BTreeSet::new();
-        let mut global_text_labels = BTreeSet::new();
         let mut entry_label = None;
         let mut fallback_entry = None;
 
@@ -5681,7 +5679,6 @@ impl ParsedAssembly {
                     return Err(CompileError::new(format!("duplicate assembly label '{}'", label), crate::error::Span::default()));
                 }
                 if current_section == SectionKind::Text && globals.contains(&label) {
-                    global_text_labels.insert(label.clone());
                     if fallback_entry.is_none() {
                         fallback_entry = Some(label.clone());
                     }
@@ -5704,7 +5701,6 @@ impl ParsedAssembly {
             text_size,
             rodata_size,
             symbols,
-            global_text_labels,
             entry_label: entry_label.or(fallback_entry),
             relaxed_text_branches: branch_size_mode.relaxed_text_branches().cloned().unwrap_or_default(),
         })
@@ -6061,7 +6057,7 @@ fn unreachable_machine_block_count(parsed: &ParsedAssembly, cfg: &MachineCfg) ->
         return 0;
     }
     let label_to_block = machine_label_to_block(parsed, &cfg.blocks);
-    let mut roots = parsed.global_text_labels.iter().filter_map(|label| label_to_block.get(label).copied()).collect::<Vec<_>>();
+    let mut roots = parsed.entry_label.as_ref().and_then(|label| label_to_block.get(label).copied()).into_iter().collect::<Vec<_>>();
     if roots.is_empty() {
         roots.push(0);
     }
@@ -6937,6 +6933,27 @@ mod tests {
         );
         assert_eq!(plan.metrics.machine_call_edge_count, 1);
         assert_eq!(unreachable_machine_block_count(&plan.parsed, cfg), 0);
+    }
+
+    #[test]
+    fn machine_reachability_uses_entry_label_not_every_global() {
+        let lines = vec![
+            ".section .text".to_string(),
+            ".global entry".to_string(),
+            "entry:".to_string(),
+            "li a0, 0".to_string(),
+            "ret".to_string(),
+            ".global unused_export".to_string(),
+            "unused_export:".to_string(),
+            "li a0, 1".to_string(),
+            "ret".to_string(),
+        ];
+
+        let plan = MachineLayoutPlan::build(&lines).expect("machine layout plan");
+        assert_eq!(plan.parsed.entry_label.as_deref(), Some("entry"));
+        assert_eq!(plan.cfg.blocks.len(), 2, "expected entry and unused export blocks: {:?}", plan.cfg.blocks);
+        assert_eq!(plan.metrics.unreachable_machine_block_count, 1);
+        assert_eq!(unreachable_machine_block_count(&plan.parsed, &plan.cfg), 1);
     }
 
     #[test]

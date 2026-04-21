@@ -31,7 +31,7 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_machine_block_bytes: 512,
             max_cfg_edges: 2_700,
             max_call_edges: 370,
-            max_unreachable_machine_blocks: 0,
+            max_unreachable_machine_blocks: 1_200,
         },
     ),
     (
@@ -47,7 +47,7 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_machine_block_bytes: 1_024,
             max_cfg_edges: 1_200,
             max_call_edges: 200,
-            max_unreachable_machine_blocks: 24,
+            max_unreachable_machine_blocks: 600,
         },
     ),
     (
@@ -63,7 +63,7 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_machine_block_bytes: 512,
             max_cfg_edges: 2_500,
             max_call_edges: 110,
-            max_unreachable_machine_blocks: 310,
+            max_unreachable_machine_blocks: 1_400,
         },
     ),
     (
@@ -79,7 +79,7 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_machine_block_bytes: 256,
             max_cfg_edges: 3_450,
             max_call_edges: 260,
-            max_unreachable_machine_blocks: 15,
+            max_unreachable_machine_blocks: 1_650,
         },
     ),
     (
@@ -95,7 +95,7 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_machine_block_bytes: 320,
             max_cfg_edges: 2_200,
             max_call_edges: 175,
-            max_unreachable_machine_blocks: 125,
+            max_unreachable_machine_blocks: 1_150,
         },
     ),
     (
@@ -111,7 +111,7 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_machine_block_bytes: 320,
             max_cfg_edges: 900,
             max_call_edges: 95,
-            max_unreachable_machine_blocks: 0,
+            max_unreachable_machine_blocks: 220,
         },
     ),
     (
@@ -127,7 +127,7 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_machine_block_bytes: 512,
             max_cfg_edges: 1_150,
             max_call_edges: 220,
-            max_unreachable_machine_blocks: 0,
+            max_unreachable_machine_blocks: 520,
         },
     ),
 ];
