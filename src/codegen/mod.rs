@@ -5183,6 +5183,7 @@ struct BackendLayoutMetrics {
     conditional_branch_block_count: usize,
     labeled_machine_block_count: usize,
     machine_cfg_edge_count: usize,
+    machine_call_edge_count: usize,
     unreachable_machine_block_count: usize,
     layout_order_block_count: usize,
     layout_order_text_size: usize,
@@ -5201,6 +5202,7 @@ pub struct BackendShapeMetrics {
     pub conditional_branch_block_count: usize,
     pub labeled_machine_block_count: usize,
     pub machine_cfg_edge_count: usize,
+    pub machine_call_edge_count: usize,
     pub unreachable_machine_block_count: usize,
     pub layout_order_block_count: usize,
     pub layout_order_text_size: usize,
@@ -5220,6 +5222,7 @@ impl From<BackendLayoutMetrics> for BackendShapeMetrics {
             conditional_branch_block_count: metrics.conditional_branch_block_count,
             labeled_machine_block_count: metrics.labeled_machine_block_count,
             machine_cfg_edge_count: metrics.machine_cfg_edge_count,
+            machine_call_edge_count: metrics.machine_call_edge_count,
             unreachable_machine_block_count: metrics.unreachable_machine_block_count,
             layout_order_block_count: metrics.layout_order_block_count,
             layout_order_text_size: metrics.layout_order_text_size,
@@ -5319,6 +5322,7 @@ fn assemble_elf_internal(lines: &[String]) -> Result<Vec<u8>> {
         plan.metrics.conditional_branch_block_count,
         plan.metrics.labeled_machine_block_count,
         plan.metrics.machine_cfg_edge_count,
+        plan.metrics.machine_call_edge_count,
         plan.metrics.unreachable_machine_block_count,
         plan.metrics.layout_order_block_count,
         plan.metrics.layout_order_text_size,
@@ -5848,6 +5852,7 @@ enum MachineCfgEdgeKind {
     Jump,
     ConditionalTaken,
     ConditionalFallthrough,
+    Call,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5906,6 +5911,11 @@ fn machine_cfg(parsed: &ParsedAssembly) -> Result<MachineCfg> {
     let mut edges = Vec::new();
 
     for (index, block) in blocks.iter().enumerate() {
+        for target in machine_block_call_targets(parsed, block) {
+            if let Some(&target_block) = label_to_block.get(&target) {
+                edges.push(MachineCfgEdge { from: index, to: target_block, kind: MachineCfgEdgeKind::Call });
+            }
+        }
         match &block.terminator {
             MachineTerminator::Fallthrough => {
                 if index + 1 < blocks.len() {
@@ -6036,6 +6046,16 @@ fn machine_cfg_target_block(target: &str, label_to_block: &HashMap<String, usize
     })
 }
 
+fn machine_block_call_targets(parsed: &ParsedAssembly, block: &MachineBlock) -> Vec<String> {
+    parsed.text_ops[block.op_start..block.op_end]
+        .iter()
+        .filter_map(|op| match op {
+            AsmOp::Instruction(Instruction::Call { label }) => Some(label.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 fn unreachable_machine_block_count(parsed: &ParsedAssembly, cfg: &MachineCfg) -> usize {
     if cfg.blocks.is_empty() {
         return 0;
@@ -6115,6 +6135,7 @@ impl ParsedAssembly {
             machine_cfg.blocks.iter().filter(|block| matches!(block.terminator, MachineTerminator::ConditionalBranch { .. })).count();
         let labeled_machine_block_count = machine_cfg.blocks.iter().filter(|block| block.label.is_some()).count();
         let machine_cfg_edge_count = machine_cfg.edges.len();
+        let machine_call_edge_count = machine_cfg.edges.iter().filter(|edge| edge.kind == MachineCfgEdgeKind::Call).count();
         let unreachable_machine_block_count = unreachable_machine_block_count(self, machine_cfg);
         let layout_order_block_count = machine_order.block_order.len();
         let layout_order_text_size = machine_order.text_size;
@@ -6132,6 +6153,7 @@ impl ParsedAssembly {
             conditional_branch_block_count,
             labeled_machine_block_count,
             machine_cfg_edge_count,
+            machine_call_edge_count,
             unreachable_machine_block_count,
             layout_order_block_count,
             layout_order_text_size,
@@ -6826,6 +6848,7 @@ mod tests {
         assert_eq!(plan.metrics.layout_order_text_size, plan.metrics.text_size);
         assert_eq!(plan.metrics.conditional_branch_block_count, 1);
         assert!(plan.metrics.machine_cfg_edge_count >= 2, "far branch CFG edges should be visible: {:?}", plan.metrics);
+        assert_eq!(plan.metrics.machine_call_edge_count, 0);
         assert_eq!(plan.metrics.unreachable_machine_block_count, 0);
         assert!(plan.metrics.machine_block_count >= 2, "far branch should produce multiple machine blocks: {:?}", plan.metrics);
         assert!(
@@ -6886,6 +6909,33 @@ mod tests {
                 MachineCfgEdge { from: 1, to: 2, kind: MachineCfgEdgeKind::Jump },
             ]
         );
+        assert_eq!(unreachable_machine_block_count(&plan.parsed, cfg), 0);
+    }
+
+    #[test]
+    fn machine_cfg_tracks_call_edges_to_local_helpers() {
+        let lines = vec![
+            ".section .text".to_string(),
+            ".global entry".to_string(),
+            "entry:".to_string(),
+            "call local_helper".to_string(),
+            "ret".to_string(),
+            "local_helper:".to_string(),
+            "li a0, 0".to_string(),
+            "ret".to_string(),
+        ];
+
+        let plan = MachineLayoutPlan::build(&lines).expect("machine layout plan");
+        let cfg = &plan.cfg;
+        assert_eq!(cfg.blocks.len(), 2, "expected entry and local helper blocks: {:?}", cfg.blocks);
+        assert_eq!(cfg.blocks[0].label.as_deref(), Some("entry"));
+        assert_eq!(cfg.blocks[1].label.as_deref(), Some("local_helper"));
+        assert!(
+            cfg.edges.contains(&MachineCfgEdge { from: 0, to: 1, kind: MachineCfgEdgeKind::Call }),
+            "call edge to local helper should be explicit: {:?}",
+            cfg.edges
+        );
+        assert_eq!(plan.metrics.machine_call_edge_count, 1);
         assert_eq!(unreachable_machine_block_count(&plan.parsed, cfg), 0);
     }
 
