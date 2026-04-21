@@ -399,6 +399,8 @@ pub struct CodeGenerator {
     operation_output_indices: HashMap<usize, usize>,
     /// Operation destination ids whose transaction Output relation is fully verifier-covered.
     verified_operation_outputs: BTreeSet<usize>,
+    /// Function-local cold fail handlers keyed by returned verifier error code.
+    fail_handler_codes: BTreeSet<u64>,
     /// Unique label counter for runtime checks.
     next_runtime_label: usize,
 }
@@ -444,6 +446,7 @@ impl CodeGenerator {
             mutate_param_ids: HashMap::new(),
             operation_output_indices: HashMap::new(),
             verified_operation_outputs: BTreeSet::new(),
+            fail_handler_codes: BTreeSet::new(),
             next_runtime_label: 0,
         }
     }
@@ -759,6 +762,7 @@ impl CodeGenerator {
 
     fn generate_action(&mut self, action: &IrAction) -> Result<()> {
         self.current_function = Some(action.name.clone());
+        self.fail_handler_codes.clear();
         self.prepare_function_layout(&action.body, &action.params);
         self.next_virtual_output = 0;
         self.set_schema_pointer_params(&action.params);
@@ -777,6 +781,7 @@ impl CodeGenerator {
         self.emit_param_spills(&action.params)?;
 
         self.generate_body(&action.body)?;
+        self.emit_shared_epilogue();
 
         self.current_function = None;
         self.schema_pointer_vars.clear();
@@ -802,6 +807,7 @@ impl CodeGenerator {
 
     fn generate_pure_fn(&mut self, function: &IrPureFn) -> Result<()> {
         self.current_function = Some(function.name.clone());
+        self.fail_handler_codes.clear();
         self.prepare_function_layout(&function.body, &function.params);
         self.next_virtual_output = 0;
         self.set_schema_pointer_params(&function.params);
@@ -816,6 +822,7 @@ impl CodeGenerator {
         self.emit_prologue();
         self.emit_param_spills(&function.params)?;
         self.generate_body(&function.body)?;
+        self.emit_shared_epilogue();
 
         self.current_function = None;
         self.schema_pointer_vars.clear();
@@ -841,6 +848,7 @@ impl CodeGenerator {
 
     fn generate_lock(&mut self, lock: &IrLock) -> Result<()> {
         self.current_function = Some(lock.name.clone());
+        self.fail_handler_codes.clear();
         self.prepare_function_layout(&lock.body, &lock.params);
         self.next_virtual_output = 0;
         self.set_schema_pointer_params(&lock.params);
@@ -859,6 +867,7 @@ impl CodeGenerator {
         self.emit_param_spills(&lock.params)?;
 
         self.generate_body(&lock.body)?;
+        self.emit_shared_epilogue();
 
         self.current_function = None;
         self.schema_pointer_vars.clear();
@@ -1475,6 +1484,38 @@ impl CodeGenerator {
     }
 
     fn emit_epilogue(&mut self) {
+        if let Some(function) = &self.current_function {
+            self.emit(format!("j .L{}_epilogue", function));
+            return;
+        }
+        self.emit_epilogue_body();
+    }
+
+    fn emit_fail(&mut self, code: u64) {
+        if let Some(function) = &self.current_function {
+            self.fail_handler_codes.insert(code);
+            self.emit(format!("j .L{}_fail_{}", function, code));
+            return;
+        }
+        self.emit(format!("li a0, {}", code));
+        self.emit_epilogue_body();
+    }
+
+    fn emit_shared_epilogue(&mut self) {
+        let Some(function) = self.current_function.clone() else {
+            return;
+        };
+        let fail_codes = self.fail_handler_codes.iter().copied().collect::<Vec<_>>();
+        for code in fail_codes {
+            self.emit_label(&format!(".L{}_fail_{}", function, code));
+            self.emit(format!("li a0, {}", code));
+            self.emit(format!("j .L{}_epilogue", function));
+        }
+        self.emit_label(&format!(".L{}_epilogue", function));
+        self.emit_epilogue_body();
+    }
+
+    fn emit_epilogue_body(&mut self) {
         self.emit_stack_ld("ra", self.frame_size - 8);
         self.emit_stack_ld("fp", self.frame_size - 16);
         self.emit_large_addi("sp", "sp", self.frame_size as i64);
@@ -1816,8 +1857,7 @@ impl CodeGenerator {
     fn emit_return_on_syscall_error(&mut self, code: u64) {
         let ok_label = self.fresh_label("ckb_syscall_ok");
         self.emit(format!("beqz a0, {}", ok_label));
-        self.emit(format!("li a0, {}", code));
-        self.emit_epilogue();
+        self.emit_fail(code);
         self.emit_label(&ok_label);
     }
 
@@ -1828,8 +1868,7 @@ impl CodeGenerator {
         self.emit(format!("li t2, {}", required_size));
         self.emit("slt t1, t1, t2");
         self.emit(format!("beqz t1, {}", ok_label));
-        self.emit("li a0, 2");
-        self.emit_epilogue();
+        self.emit_fail(2);
         self.emit_label(&ok_label);
     }
 
@@ -1840,8 +1879,7 @@ impl CodeGenerator {
         self.emit(format!("li t2, {}", expected_size));
         self.emit("sub t1, t1, t2");
         self.emit(format!("beqz t1, {}", ok_label));
-        self.emit("li a0, 4");
-        self.emit_epilogue();
+        self.emit_fail(4);
         self.emit_label(&ok_label);
     }
 
@@ -4792,11 +4830,18 @@ fn assembly_with_external_call_stubs(lines: &[String]) -> Option<Vec<String>> {
 }
 
 fn assemble_elf_internal(lines: &[String]) -> Result<Vec<u8>> {
-    let parsed = ParsedAssembly::from_lines(lines)?;
+    let preliminary = ParsedAssembly::from_lines_with_branch_mode(lines, BranchSizeMode::Conservative)?;
+    let text_user_size = preliminary.section_size(SectionKind::Text);
+    let rodata_offset = align_up(START_TRAMPOLINE_SIZE + text_user_size, 8);
+    let layout = SectionLayout {
+        text_base: ELF_BASE_ADDR,
+        text_user_base: ELF_BASE_ADDR + START_TRAMPOLINE_SIZE as u64,
+        rodata_base: ELF_BASE_ADDR + rodata_offset as u64,
+    };
+    let parsed = ParsedAssembly::from_lines_relaxed(lines, &layout)?;
     let entry_label = parsed.entry_label.as_deref().ok_or_else(|| {
         CompileError::new("ELF target requires at least one action or lock entry point", crate::error::Span::default())
     })?;
-
     let text_user_size = parsed.section_size(SectionKind::Text);
     let rodata_size = parsed.section_size(SectionKind::Rodata);
     let rodata_offset = align_up(START_TRAMPOLINE_SIZE + text_user_size, 8);
@@ -5088,10 +5133,21 @@ struct ParsedAssembly {
     rodata_size: usize,
     symbols: HashMap<String, SymbolDef>,
     entry_label: Option<String>,
+    relaxed_text_branches: BTreeSet<usize>,
 }
 
 impl ParsedAssembly {
     fn from_lines(lines: &[String]) -> Result<Self> {
+        Self::from_lines_with_branch_mode(lines, BranchSizeMode::Exact(&BTreeSet::new()))
+    }
+
+    fn from_lines_relaxed(lines: &[String], layout: &SectionLayout) -> Result<Self> {
+        let conservative = Self::from_lines_with_branch_mode(lines, BranchSizeMode::Conservative)?;
+        let relaxed_text_branches = conservative.relaxed_branch_indices(layout)?;
+        Self::from_lines_with_branch_mode(lines, BranchSizeMode::Exact(&relaxed_text_branches))
+    }
+
+    fn from_lines_with_branch_mode(lines: &[String], branch_size_mode: BranchSizeMode<'_>) -> Result<Self> {
         let mut current_section = SectionKind::Text;
         let mut text_size = 0usize;
         let mut rodata_size = 0usize;
@@ -5126,6 +5182,7 @@ impl ParsedAssembly {
                 SectionKind::Text => (&mut text_ops, &mut text_size),
                 SectionKind::Rodata => (&mut rodata_ops, &mut rodata_size),
             };
+            let op_index = ops.len();
 
             if let Some(label) = clean.strip_suffix(':') {
                 let label = label.trim().to_string();
@@ -5146,11 +5203,35 @@ impl ParsedAssembly {
             }
 
             let op = parse_asm_op(clean)?;
-            *offset += op_size(&op, *offset);
+            *offset += op_size(&op, *offset, current_section, op_index, branch_size_mode);
             ops.push(op);
         }
 
-        Ok(Self { text_ops, rodata_ops, text_size, rodata_size, symbols, entry_label: entry_label.or(fallback_entry) })
+        Ok(Self {
+            text_ops,
+            rodata_ops,
+            text_size,
+            rodata_size,
+            symbols,
+            entry_label: entry_label.or(fallback_entry),
+            relaxed_text_branches: branch_size_mode.relaxed_text_branches().cloned().unwrap_or_default(),
+        })
+    }
+
+    fn relaxed_branch_indices(&self, layout: &SectionLayout) -> Result<BTreeSet<usize>> {
+        let mut relaxed = BTreeSet::new();
+        let mut offset = 0usize;
+        for (index, op) in self.text_ops.iter().enumerate() {
+            if let AsmOp::Instruction(inst @ (Instruction::Beqz { .. } | Instruction::Bnez { .. })) = op {
+                let pc = layout.text_user_base + offset as u64;
+                let target = branch_target(inst, self, layout)?;
+                if !signed_bits_fit(relative_offset(pc, target)?, 13) {
+                    relaxed.insert(index);
+                }
+            }
+            offset += op_size(op, offset, SectionKind::Text, index, BranchSizeMode::Conservative);
+        }
+        Ok(relaxed)
     }
 
     fn section_size(&self, section: SectionKind) -> usize {
@@ -5181,7 +5262,7 @@ impl ParsedAssembly {
             SectionKind::Rodata => layout.rodata_base,
         };
 
-        for op in ops {
+        for (op_index, op) in ops.iter().enumerate() {
             match op {
                 AsmOp::Label => {}
                 AsmOp::Word(word) => out.extend_from_slice(&word.to_le_bytes()),
@@ -5193,7 +5274,14 @@ impl ParsedAssembly {
                         CompileError::new("assembly output offset is smaller than section base bias", crate::error::Span::default())
                     })?;
                     let pc = section_base + section_offset as u64;
-                    encode_instruction(out, inst, pc, self, layout)?;
+                    encode_instruction(
+                        out,
+                        inst,
+                        pc,
+                        self,
+                        layout,
+                        section == SectionKind::Text && self.relaxed_text_branches.contains(&op_index),
+                    )?;
                 }
             }
         }
@@ -5341,7 +5429,36 @@ fn parse_instruction(line: &str) -> Result<Instruction> {
     }
 }
 
-fn encode_instruction(out: &mut Vec<u8>, inst: &Instruction, pc: u64, parsed: &ParsedAssembly, layout: &SectionLayout) -> Result<()> {
+#[derive(Debug, Clone, Copy)]
+enum BranchSizeMode<'a> {
+    Conservative,
+    Exact(&'a BTreeSet<usize>),
+}
+
+impl<'a> BranchSizeMode<'a> {
+    fn relaxed_text_branches(self) -> Option<&'a BTreeSet<usize>> {
+        match self {
+            Self::Conservative => None,
+            Self::Exact(branches) => Some(branches),
+        }
+    }
+}
+
+fn branch_target(inst: &Instruction, parsed: &ParsedAssembly, layout: &SectionLayout) -> Result<u64> {
+    match inst {
+        Instruction::Beqz { label, .. } | Instruction::Bnez { label, .. } => parsed.symbol_address(label, layout),
+        _ => Err(CompileError::new("instruction is not a conditional branch", crate::error::Span::default())),
+    }
+}
+
+fn encode_instruction(
+    out: &mut Vec<u8>,
+    inst: &Instruction,
+    pc: u64,
+    parsed: &ParsedAssembly,
+    layout: &SectionLayout,
+    relaxed_branch: bool,
+) -> Result<()> {
     match inst {
         Instruction::Addi { rd, rs1, imm } => out.extend_from_slice(&encode_i_type(0x13, *rd, 0b000, *rs1, *imm)?.to_le_bytes()),
         Instruction::Add { rd, rs1, rs2 } => {
@@ -5405,12 +5522,22 @@ fn encode_instruction(out: &mut Vec<u8>, inst: &Instruction, pc: u64, parsed: &P
         }
         Instruction::Beqz { rs, label } => {
             let target = parsed.symbol_address(label, layout)?;
-            out.extend_from_slice(&encode_b_type(0x63, 0b000, *rs, 0, relative_offset(pc, target)?)?.to_le_bytes());
+            if relaxed_branch {
+                out.extend_from_slice(&encode_b_type(0x63, 0b001, *rs, 0, 8)?.to_le_bytes());
+                out.extend_from_slice(&encode_j_type(0x6f, 0, relative_offset(pc + 4, target)?)?.to_le_bytes());
+            } else {
+                out.extend_from_slice(&encode_b_type(0x63, 0b000, *rs, 0, relative_offset(pc, target)?)?.to_le_bytes());
+            }
         }
         Instruction::Bnez { rs, label } => {
             let target = parsed.symbol_address(label, layout)?;
-            // bnez rs, label = bne rs, x0, label (funct3=001, rs1=rs, rs2=x0)
-            out.extend_from_slice(&encode_b_type(0x63, 0b001, *rs, 0, relative_offset(pc, target)?)?.to_le_bytes());
+            if relaxed_branch {
+                out.extend_from_slice(&encode_b_type(0x63, 0b000, *rs, 0, 8)?.to_le_bytes());
+                out.extend_from_slice(&encode_j_type(0x6f, 0, relative_offset(pc + 4, target)?)?.to_le_bytes());
+            } else {
+                // bnez rs, label = bne rs, x0, label (funct3=001, rs1=rs, rs2=x0)
+                out.extend_from_slice(&encode_b_type(0x63, 0b001, *rs, 0, relative_offset(pc, target)?)?.to_le_bytes());
+            }
         }
         Instruction::Ret => out.extend_from_slice(&encode_i_type(0x67, 0, 0b000, 1, 0)?.to_le_bytes()),
         Instruction::Ecall => out.extend_from_slice(&encode_ecall().to_le_bytes()),
@@ -5452,12 +5579,17 @@ fn encode_call_sequence(out: &mut Vec<u8>, pc: u64, target: u64) -> Result<()> {
     Ok(())
 }
 
-fn op_size(op: &AsmOp, current_offset: usize) -> usize {
+fn op_size(op: &AsmOp, current_offset: usize, section: SectionKind, op_index: usize, branch_size_mode: BranchSizeMode<'_>) -> usize {
     match op {
         AsmOp::Label => 0,
         AsmOp::Instruction(Instruction::Li { imm, .. }) => li_sequence_size(*imm),
         AsmOp::Instruction(Instruction::La { .. }) => 8,
         AsmOp::Instruction(Instruction::Call { .. }) => 8,
+        AsmOp::Instruction(Instruction::Beqz { .. } | Instruction::Bnez { .. }) => match branch_size_mode {
+            BranchSizeMode::Conservative => 8,
+            BranchSizeMode::Exact(relaxed) if section == SectionKind::Text && relaxed.contains(&op_index) => 8,
+            BranchSizeMode::Exact(_) => 4,
+        },
         AsmOp::Instruction(_) => 4,
         AsmOp::Word(_) => 4,
         AsmOp::Byte(_) => 1,
@@ -5703,15 +5835,19 @@ fn encode_ecall() -> u32 {
 }
 
 fn encode_signed_bits(value: i64, bits: u32) -> Result<u32> {
-    let min = -(1i64 << (bits - 1));
-    let max = (1i64 << (bits - 1)) - 1;
-    if value < min || value > max {
+    if !signed_bits_fit(value, bits) {
         return Err(CompileError::new(
             format!("immediate '{}' does not fit {}-bit signed field", value, bits),
             crate::error::Span::default(),
         ));
     }
     Ok((value as i32 as u32) & ((1u32 << bits) - 1))
+}
+
+fn signed_bits_fit(value: i64, bits: u32) -> bool {
+    let min = -(1i64 << (bits - 1));
+    let max = (1i64 << (bits - 1)) - 1;
+    value >= min && value <= max
 }
 
 fn split_hi_lo(value: i64) -> Result<(i64, i64)> {
@@ -5787,4 +5923,76 @@ fn padding_for(offset: usize, align: usize) -> usize {
 fn pad_to_alignment(out: &mut Vec<u8>, align: usize) {
     let pad = padding_for(out.len(), align);
     out.resize(out.len() + pad, 0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn internal_assembler_relaxes_out_of_range_conditional_branch() {
+        let mut lines = vec![
+            ".section .text".to_string(),
+            ".global entry".to_string(),
+            "entry:".to_string(),
+            "li a0, 0".to_string(),
+            "beqz a0, far_target".to_string(),
+        ];
+        for _ in 0..1500 {
+            lines.push("addi t0, t0, 0".to_string());
+        }
+        lines.push("far_target:".to_string());
+        lines.push("ret".to_string());
+
+        let elf = assemble_elf_internal(&lines).expect("internal assembler should relax long conditional branches");
+        assert!(elf.starts_with(b"\x7fELF"));
+    }
+
+    #[test]
+    fn generated_functions_use_shared_epilogue_tail() {
+        let ir = IrModule {
+            name: "shape_test".to_string(),
+            items: vec![IrItem::Action(IrAction {
+                name: "shape".to_string(),
+                params: vec![],
+                return_type: Some(IrType::U64),
+                effect_class: EffectClass::Pure,
+                scheduler_hints: SchedulerHints::default(),
+                body: IrBody {
+                    consume_set: vec![],
+                    read_refs: vec![],
+                    create_set: vec![],
+                    mutate_set: vec![],
+                    write_intents: vec![],
+                    blocks: vec![IrBlock {
+                        id: BlockId(0),
+                        instructions: vec![],
+                        terminator: IrTerminator::Return(Some(IrOperand::Const(IrConst::U64(7)))),
+                    }],
+                },
+            })],
+            external_type_defs: vec![],
+            external_callable_abis: vec![],
+        };
+        let assembly = CodeGenerator::new(CodegenOptions::default()).generate(&ir, ArtifactFormat::RiscvAssembly).unwrap();
+        let assembly = String::from_utf8(assembly).unwrap();
+        let shape_start = assembly.find("shape:\n").expect("shape function label");
+        let runtime_start =
+            assembly[shape_start..].find(".section .text").map(|offset| shape_start + offset).unwrap_or(assembly.len());
+        let shape_assembly = &assembly[shape_start..runtime_start];
+
+        assert!(shape_assembly.contains("j .Lshape_epilogue"), "return sites should jump to the shared epilogue:\n{}", shape_assembly);
+        assert_eq!(
+            shape_assembly.matches(".Lshape_epilogue:").count(),
+            1,
+            "a function should emit one shared epilogue label:\n{}",
+            shape_assembly
+        );
+        assert_eq!(
+            shape_assembly.matches("ret").count(),
+            1,
+            "a function should emit one physical return in its shared epilogue:\n{}",
+            shape_assembly
+        );
+    }
 }
