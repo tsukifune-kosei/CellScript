@@ -2618,6 +2618,56 @@ impl CodeGenerator {
         self.emit_label(&ok_label);
     }
 
+    fn emit_loaded_fixed_bytes_against_source(
+        &mut self,
+        output_buffer_offset: usize,
+        output_field_offset: usize,
+        source: &ExpectedFixedByteSource,
+        width: usize,
+        fail_code: u64,
+    ) {
+        let mismatch_label = self.fresh_label("fixed_byte_mismatch");
+        self.emit_sp_addi("t4", output_buffer_offset);
+        match source {
+            ExpectedFixedByteSource::SchemaField(source) => {
+                self.emit(format!("ld t5, {}(sp)", source.obj_var_id * 8));
+                for byte_index in 0..width {
+                    self.emit(format!("lbu t0, {}(t4)", output_field_offset + byte_index));
+                    self.emit(format!("lbu t1, {}(t5)", source.layout.offset + byte_index));
+                    self.emit("sub t2, t0, t1");
+                    self.emit(format!("bnez t2, {}", mismatch_label));
+                }
+            }
+            ExpectedFixedByteSource::Const(bytes) => {
+                for (byte_index, byte) in bytes.iter().take(width).enumerate() {
+                    self.emit(format!("lbu t0, {}(t4)", output_field_offset + byte_index));
+                    self.emit(format!("li t1, {}", byte));
+                    self.emit("sub t2, t0, t1");
+                    self.emit(format!("bnez t2, {}", mismatch_label));
+                }
+            }
+            ExpectedFixedByteSource::StackSlot { var_id, .. } => {
+                self.emit_sp_addi("t5", var_id * 8);
+                for byte_index in 0..width {
+                    self.emit(format!("lbu t0, {}(t4)", output_field_offset + byte_index));
+                    self.emit(format!("lbu t1, {}(t5)", byte_index));
+                    self.emit("sub t2, t0, t1");
+                    self.emit(format!("bnez t2, {}", mismatch_label));
+                }
+            }
+            ExpectedFixedByteSource::ParamBytes { var_id, .. } | ExpectedFixedByteSource::LoadedBytes { var_id, .. } => {
+                self.emit(format!("ld t5, {}(sp)", var_id * 8));
+                for byte_index in 0..width {
+                    self.emit(format!("lbu t0, {}(t4)", output_field_offset + byte_index));
+                    self.emit(format!("lbu t1, {}(t5)", byte_index));
+                    self.emit("sub t2, t0, t1");
+                    self.emit(format!("bnez t2, {}", mismatch_label));
+                }
+            }
+        }
+        self.emit_fixed_byte_mismatch_fail(&mismatch_label, fail_code);
+    }
+
     fn emit_loaded_field_bytes_equals_expected(
         &mut self,
         size_offset: usize,
@@ -2654,47 +2704,39 @@ impl CodeGenerator {
                     "# cellscript abi: expected bytes field {}.{} offset={} size={}",
                     source.type_name, source.field, source.layout.offset, width
                 ));
-                let mismatch_label = self.fresh_label("output_byte_mismatch");
-                self.emit_sp_addi("t4", buffer_offset);
-                self.emit(format!("ld t5, {}(sp)", source.obj_var_id * 8));
-                for byte_index in 0..width {
-                    self.emit(format!("lbu t0, {}(t4)", layout.offset + byte_index));
-                    self.emit(format!("lbu t1, {}(t5)", source.layout.offset + byte_index));
-                    self.emit("sub t2, t0, t1");
-                    self.emit(format!("bnez t2, {}", mismatch_label));
-                }
-                self.emit_fixed_byte_mismatch_fail(&mismatch_label, 3);
+                self.emit_loaded_fixed_bytes_against_source(
+                    buffer_offset,
+                    layout.offset,
+                    &ExpectedFixedByteSource::SchemaField(source),
+                    width,
+                    3,
+                );
             }
             ExpectedFixedByteSource::Const(bytes) => {
                 self.emit(format!(
                     "# cellscript abi: verify output bytes field {} offset={} size={} against const",
                     context, layout.offset, width
                 ));
-                let mismatch_label = self.fresh_label("output_byte_mismatch");
-                self.emit_sp_addi("t4", buffer_offset);
-                for (byte_index, byte) in bytes.iter().enumerate() {
-                    self.emit(format!("lbu t0, {}(t4)", layout.offset + byte_index));
-                    self.emit(format!("li t1, {}", byte));
-                    self.emit("sub t2, t0, t1");
-                    self.emit(format!("bnez t2, {}", mismatch_label));
-                }
-                self.emit_fixed_byte_mismatch_fail(&mismatch_label, 3);
+                self.emit_loaded_fixed_bytes_against_source(
+                    buffer_offset,
+                    layout.offset,
+                    &ExpectedFixedByteSource::Const(bytes),
+                    width,
+                    3,
+                );
             }
             ExpectedFixedByteSource::StackSlot { var_id, width } => {
                 self.emit(format!(
                     "# cellscript abi: verify output bytes field {} offset={} size={} against stack slot var{}",
                     context, layout.offset, width, var_id
                 ));
-                let mismatch_label = self.fresh_label("output_byte_mismatch");
-                self.emit_sp_addi("t4", buffer_offset);
-                self.emit_sp_addi("t5", var_id * 8);
-                for byte_index in 0..width {
-                    self.emit(format!("lbu t0, {}(t4)", layout.offset + byte_index));
-                    self.emit(format!("lbu t1, {}(t5)", byte_index));
-                    self.emit("sub t2, t0, t1");
-                    self.emit(format!("bnez t2, {}", mismatch_label));
-                }
-                self.emit_fixed_byte_mismatch_fail(&mismatch_label, 3);
+                self.emit_loaded_fixed_bytes_against_source(
+                    buffer_offset,
+                    layout.offset,
+                    &ExpectedFixedByteSource::StackSlot { var_id, width },
+                    width,
+                    3,
+                );
             }
             ExpectedFixedByteSource::ParamBytes { var_id, size_offset, width } => {
                 self.emit_loaded_schema_exact_size_check(size_offset, width, &format!("param var{}", var_id));
@@ -2702,16 +2744,13 @@ impl CodeGenerator {
                     "# cellscript abi: verify output bytes field {} offset={} size={} against fixed-byte param var{}",
                     context, layout.offset, width, var_id
                 ));
-                let mismatch_label = self.fresh_label("output_byte_mismatch");
-                self.emit_sp_addi("t4", buffer_offset);
-                self.emit(format!("ld t5, {}(sp)", var_id * 8));
-                for byte_index in 0..width {
-                    self.emit(format!("lbu t0, {}(t4)", layout.offset + byte_index));
-                    self.emit(format!("lbu t1, {}(t5)", byte_index));
-                    self.emit("sub t2, t0, t1");
-                    self.emit(format!("bnez t2, {}", mismatch_label));
-                }
-                self.emit_fixed_byte_mismatch_fail(&mismatch_label, 3);
+                self.emit_loaded_fixed_bytes_against_source(
+                    buffer_offset,
+                    layout.offset,
+                    &ExpectedFixedByteSource::ParamBytes { var_id, size_offset, width },
+                    width,
+                    3,
+                );
             }
             ExpectedFixedByteSource::LoadedBytes { var_id, size_offset, width } => {
                 self.emit_loaded_schema_exact_size_check(size_offset, width, &format!("loaded bytes var{}", var_id));
@@ -2719,16 +2758,13 @@ impl CodeGenerator {
                     "# cellscript abi: verify output bytes field {} offset={} size={} against loaded bytes var{}",
                     context, layout.offset, width, var_id
                 ));
-                let mismatch_label = self.fresh_label("output_byte_mismatch");
-                self.emit_sp_addi("t4", buffer_offset);
-                self.emit(format!("ld t5, {}(sp)", var_id * 8));
-                for byte_index in 0..width {
-                    self.emit(format!("lbu t0, {}(t4)", layout.offset + byte_index));
-                    self.emit(format!("lbu t1, {}(t5)", byte_index));
-                    self.emit("sub t2, t0, t1");
-                    self.emit(format!("bnez t2, {}", mismatch_label));
-                }
-                self.emit_fixed_byte_mismatch_fail(&mismatch_label, 3);
+                self.emit_loaded_fixed_bytes_against_source(
+                    buffer_offset,
+                    layout.offset,
+                    &ExpectedFixedByteSource::LoadedBytes { var_id, size_offset, width },
+                    width,
+                    3,
+                );
             }
         }
         true
