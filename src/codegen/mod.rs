@@ -105,6 +105,7 @@ struct SchemaFieldLayout {
     offset: usize,
     ty: IrType,
     fixed_size: Option<usize>,
+    fixed_enum_size: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -164,6 +165,14 @@ fn fixed_byte_width(ty: &IrType, fixed_size: Option<usize>) -> Option<usize> {
     }
 }
 
+fn layout_fixed_scalar_width(layout: &SchemaFieldLayout) -> Option<usize> {
+    fixed_scalar_width(&layout.ty, layout.fixed_size).or(layout.fixed_enum_size)
+}
+
+fn layout_fixed_byte_width(layout: &SchemaFieldLayout) -> Option<usize> {
+    fixed_byte_width(&layout.ty, layout.fixed_size).or(layout.fixed_enum_size)
+}
+
 fn type_static_length(ty: &IrType) -> Option<usize> {
     match ty {
         IrType::Bool | IrType::U8 => Some(1),
@@ -189,6 +198,31 @@ fn operand_fixed_byte_width(operand: &IrOperand) -> Option<usize> {
     match ty {
         IrType::Address | IrType::Hash => Some(32),
         IrType::Array(inner, len) if matches!(inner.as_ref(), IrType::U8) => Some(*len),
+        _ => None,
+    }
+}
+
+fn collect_pure_const_returns(ir: &IrModule) -> HashMap<String, IrConst> {
+    ir.items
+        .iter()
+        .filter_map(|item| {
+            let IrItem::PureFn(function) = item else {
+                return None;
+            };
+            pure_const_return(&function.body).map(|value| (function.name.clone(), value))
+        })
+        .collect()
+}
+
+fn pure_const_return(body: &IrBody) -> Option<IrConst> {
+    let [block] = body.blocks.as_slice() else {
+        return None;
+    };
+    match (&block.instructions[..], &block.terminator) {
+        ([], IrTerminator::Return(Some(IrOperand::Const(value)))) => Some(value.clone()),
+        ([IrInstruction::LoadConst { dest, value }], IrTerminator::Return(Some(IrOperand::Var(var)))) if dest.id == var.id => {
+            Some(value.clone())
+        }
         _ => None,
     }
 }
@@ -256,11 +290,14 @@ fn aggregate_field_layout(ty: &IrType, field: &str) -> Option<SchemaFieldLayout>
             let field_ty = items.get(index)?.clone();
             let offset = items.iter().take(index).try_fold(0usize, |acc, item| type_static_length(item).map(|size| acc + size))?;
             let fixed_size = type_static_length(&field_ty);
-            Some(SchemaFieldLayout { offset, ty: field_ty, fixed_size })
+            Some(SchemaFieldLayout { offset, ty: field_ty, fixed_size, fixed_enum_size: None })
         }
-        IrType::Address | IrType::Hash if field == "0" => {
-            Some(SchemaFieldLayout { offset: 0, ty: IrType::Array(Box::new(IrType::U8), 32), fixed_size: Some(32) })
-        }
+        IrType::Address | IrType::Hash if field == "0" => Some(SchemaFieldLayout {
+            offset: 0,
+            ty: IrType::Array(Box::new(IrType::U8), 32),
+            fixed_size: Some(32),
+            fixed_enum_size: None,
+        }),
         _ => None,
     }
 }
@@ -345,6 +382,8 @@ pub struct CodeGenerator {
     next_collection_slot: usize,
     /// Named schema field layouts, keyed by type name then field name.
     type_layouts: HashMap<String, HashMap<String, SchemaFieldLayout>>,
+    /// Fieldless enum storage widths, keyed by enum name.
+    enum_fixed_sizes: HashMap<String, usize>,
     /// Fixed encoded size of named schemas when all fields have fixed-width layouts.
     type_fixed_sizes: HashMap<String, usize>,
     /// Named types declared as receipts.
@@ -377,6 +416,8 @@ pub struct CodeGenerator {
     prelude_scalar_immediates: HashMap<usize, u64>,
     /// Fixed-byte constant temporaries that can be recomputed byte-by-byte in the CKB-runtime prelude.
     prelude_fixed_byte_constants: HashMap<usize, Vec<u8>>,
+    /// Local pure functions proven to return one constant on every path.
+    pure_const_returns: HashMap<String, IrConst>,
     /// Per-CKB-runtime cell data buffers keyed by IR variable id.
     cell_buffer_offsets: HashMap<usize, usize>,
     /// Per-CKB-runtime cell size words keyed by IR variable id.
@@ -422,6 +463,7 @@ impl CodeGenerator {
             collection_region_start: 0,
             next_collection_slot: 0,
             type_layouts: HashMap::new(),
+            enum_fixed_sizes: HashMap::new(),
             type_fixed_sizes: HashMap::new(),
             receipt_type_names: BTreeSet::new(),
             lifecycle_states: HashMap::new(),
@@ -438,6 +480,7 @@ impl CodeGenerator {
             prelude_u64_value_sources: HashMap::new(),
             prelude_scalar_immediates: HashMap::new(),
             prelude_fixed_byte_constants: HashMap::new(),
+            pure_const_returns: HashMap::new(),
             cell_buffer_offsets: HashMap::new(),
             cell_buffer_size_offsets: HashMap::new(),
             output_type_hash_sources: HashMap::new(),
@@ -463,6 +506,8 @@ impl CodeGenerator {
 
     pub fn generate(mut self, ir: &IrModule, format: ArtifactFormat) -> Result<Vec<u8>> {
         let has_entrypoint = ir.items.iter().any(|item| matches!(item, IrItem::Action(_) | IrItem::Lock(_)));
+        self.enum_fixed_sizes = ir.enum_fixed_sizes.clone();
+        self.pure_const_returns = collect_pure_const_returns(ir);
         for item in &ir.items {
             if let IrItem::TypeDef(type_def) = item {
                 self.register_type_def(type_def);
@@ -711,7 +756,14 @@ impl CodeGenerator {
             .fields
             .iter()
             .map(|field| {
-                (field.name.clone(), SchemaFieldLayout { offset: field.offset, ty: field.ty.clone(), fixed_size: field.fixed_size })
+                let fixed_enum_size = match &field.ty {
+                    IrType::Named(name) => self.enum_fixed_sizes.get(name).copied(),
+                    _ => None,
+                };
+                (
+                    field.name.clone(),
+                    SchemaFieldLayout { offset: field.offset, ty: field.ty.clone(), fixed_size: field.fixed_size, fixed_enum_size },
+                )
             })
             .collect();
         self.type_layouts.insert(type_def.name.clone(), fields);
@@ -994,6 +1046,18 @@ impl CodeGenerator {
                     IrInstruction::Call { dest: Some(dest), .. } if matches!(dest.ty, IrType::Tuple(_)) => {
                         self.tuple_call_return_vars.insert(dest.id, dest.ty.clone());
                     }
+                    IrInstruction::Call { dest: Some(dest), func, .. } if self.pure_const_returns.contains_key(func) => {
+                        let value = self.pure_const_returns.get(func).cloned().expect("guarded pure const return");
+                        if let Some(value) = fixed_scalar_const_value(&value) {
+                            self.prelude_scalar_immediates.insert(dest.id, value);
+                            if dest.ty == IrType::U64 {
+                                self.prelude_u64_value_sources.insert(dest.id, PreludeU64ValueSource::Const(value));
+                            }
+                        }
+                        if let Some(bytes) = fixed_byte_const_bytes(&value) {
+                            self.prelude_fixed_byte_constants.insert(dest.id, bytes);
+                        }
+                    }
                     IrInstruction::LoadConst { dest, value } => {
                         if let Some(value) = fixed_scalar_const_value(value) {
                             self.prelude_scalar_immediates.insert(dest.id, value);
@@ -1042,9 +1106,9 @@ impl CodeGenerator {
                             continue;
                         };
                         let layout = source.layout.clone();
-                        if fixed_byte_width(&layout.ty, layout.fixed_size).is_some() && layout.ty == dest.ty {
+                        if layout_fixed_byte_width(&layout).is_some() && layout.ty == dest.ty {
                             self.schema_field_value_sources.insert(dest.id, source.clone());
-                            if fixed_scalar_width(&layout.ty, layout.fixed_size).is_some() {
+                            if layout_fixed_scalar_width(&layout).is_some() {
                                 self.prelude_u64_value_sources.insert(dest.id, PreludeU64ValueSource::Field(source));
                             }
                         }
@@ -2000,7 +2064,7 @@ impl CodeGenerator {
         let fields = self.type_layouts.get(type_name)?;
         CLAIM_SIGNER_PUBKEY_HASH_FIELDS.iter().find_map(|field| {
             let layout = fields.get(*field)?.clone();
-            (fixed_byte_width(&layout.ty, layout.fixed_size) == Some(20)).then(|| SchemaFieldValueSource {
+            (layout_fixed_byte_width(&layout) == Some(20)).then(|| SchemaFieldValueSource {
                 obj_var_id: var_id,
                 type_name: type_name.clone(),
                 field: (*field).to_string(),
@@ -2245,7 +2309,7 @@ impl CodeGenerator {
             .iter()
             .filter_map(|field| {
                 let layout = self.type_layouts.get(&pattern.ty).and_then(|fields| fields.get(field)).cloned()?;
-                let width = fixed_byte_width(&layout.ty, layout.fixed_size)?;
+                let width = layout_fixed_byte_width(&layout)?;
                 (layout.offset + width <= RUNTIME_SCRATCH_BUFFER_SIZE).then(|| (field.clone(), layout, width))
             })
             .collect()
@@ -2258,7 +2322,7 @@ impl CodeGenerator {
         let mut ranges = Vec::new();
         for transition in &pattern.transitions {
             let layout = self.type_layouts.get(&pattern.ty).and_then(|fields| fields.get(&transition.field))?;
-            let width = fixed_byte_width(&layout.ty, layout.fixed_size)?;
+            let width = layout_fixed_byte_width(&layout)?;
             if layout.offset + width > RUNTIME_SCRATCH_BUFFER_SIZE {
                 return None;
             }
@@ -2497,11 +2561,11 @@ impl CodeGenerator {
                     return None;
                 }
                 let layout = self.type_layouts.get(&pattern.ty).and_then(|fields| fields.get(&transition.field)).cloned()?;
-                let width = fixed_byte_width(&layout.ty, layout.fixed_size)?;
+                let width = layout_fixed_byte_width(&layout)?;
                 if layout.offset + width > RUNTIME_SCRATCH_BUFFER_SIZE {
                     return None;
                 }
-                if fixed_scalar_width(&layout.ty, layout.fixed_size).is_none()
+                if layout_fixed_scalar_width(&layout).is_none()
                     && self.expected_fixed_byte_source(&transition.operand, width).is_none()
                 {
                     return None;
@@ -2756,7 +2820,7 @@ impl CodeGenerator {
         expected: &IrOperand,
         context: &str,
     ) {
-        let Some(width) = fixed_scalar_width(&layout.ty, layout.fixed_size) else {
+        let Some(width) = layout_fixed_scalar_width(&layout) else {
             return;
         };
         self.emit_loaded_schema_bounds_check(size_offset, layout.offset + width, context);
@@ -2792,11 +2856,18 @@ impl CodeGenerator {
                 );
             }
             ExpectedFixedByteSource::Const(bytes) => {
-                for (byte_index, byte) in bytes.iter().take(width).enumerate() {
-                    self.emit(format!("lbu t0, {}(t4)", output_field_offset + byte_index));
-                    self.emit(format!("li t1, {}", byte));
-                    self.emit("sub t2, t0, t1");
-                    self.emit(format!("bnez t2, {}", mismatch_label));
+                if width >= 8 && bytes.iter().take(width).all(|byte| *byte == 0) {
+                    self.emit_sp_addi("a0", output_buffer_offset + output_field_offset);
+                    self.emit(format!("li a1, {}", width));
+                    self.emit("call __cellscript_memzero_fixed");
+                    self.emit(format!("bnez a0, {}", mismatch_label));
+                } else {
+                    for (byte_index, byte) in bytes.iter().take(width).enumerate() {
+                        self.emit(format!("lbu t0, {}(t4)", output_field_offset + byte_index));
+                        self.emit(format!("li t1, {}", byte));
+                        self.emit("sub t2, t0, t1");
+                        self.emit(format!("bnez t2, {}", mismatch_label));
+                    }
                 }
             }
             ExpectedFixedByteSource::StackSlot { var_id, .. } => {
@@ -2854,11 +2925,11 @@ impl CodeGenerator {
         expected: &IrOperand,
         context: &str,
     ) -> bool {
-        if fixed_scalar_width(&layout.ty, layout.fixed_size).is_some() {
+        if layout_fixed_scalar_width(&layout).is_some() {
             self.emit_loaded_field_equals_expected(size_offset, buffer_offset, layout, expected, context);
             return true;
         }
-        let Some(width) = fixed_byte_width(&layout.ty, layout.fixed_size) else {
+        let Some(width) = layout_fixed_byte_width(&layout) else {
             return false;
         };
         let Some(source) = self.expected_fixed_byte_source(expected, width) else {
@@ -2992,6 +3063,27 @@ impl CodeGenerator {
         }
     }
 
+    fn emit_fixed_byte_source_pointer_to(&mut self, dest_reg: &str, source: &ExpectedFixedByteSource) -> bool {
+        match source {
+            ExpectedFixedByteSource::SchemaField(source) => {
+                self.emit(format!("ld {}, {}(sp)", dest_reg, source.obj_var_id * 8));
+                if source.layout.offset != 0 {
+                    self.emit_large_addi(dest_reg, dest_reg, source.layout.offset as i64);
+                }
+                true
+            }
+            ExpectedFixedByteSource::StackSlot { var_id, .. } => {
+                self.emit_sp_addi(dest_reg, var_id * 8);
+                true
+            }
+            ExpectedFixedByteSource::ParamBytes { var_id, .. } | ExpectedFixedByteSource::LoadedBytes { var_id, .. } => {
+                self.emit(format!("ld {}, {}(sp)", dest_reg, var_id * 8));
+                true
+            }
+            ExpectedFixedByteSource::Const(_) => false,
+        }
+    }
+
     fn emit_fixed_byte_mismatch_fail(&mut self, mismatch_label: &str, fail_code: u64) {
         let done_label = self.fresh_label("fixed_byte_verify_done");
         self.emit(format!("j {}", done_label));
@@ -3016,6 +3108,9 @@ impl CodeGenerator {
         self.emit(format!("# cellscript abi: fixed-byte {:?} comparison size={}", op, width));
         self.emit_prepare_fixed_byte_source(&left_source, width, "left fixed-byte comparison");
         self.emit_prepare_fixed_byte_source(&right_source, width, "right fixed-byte comparison");
+        if width >= 8 && self.emit_fixed_byte_comparison_helper(dest, op, &left_source, &right_source, width) {
+            return true;
+        }
         let mismatch_label = self.fresh_label("fixed_byte_mismatch");
         let done_label = self.fresh_label("fixed_byte_done");
         for byte_index in 0..width {
@@ -3035,6 +3130,50 @@ impl CodeGenerator {
         true
     }
 
+    fn emit_fixed_byte_comparison_helper(
+        &mut self,
+        dest: &IrVar,
+        op: BinaryOp,
+        left_source: &ExpectedFixedByteSource,
+        right_source: &ExpectedFixedByteSource,
+        width: usize,
+    ) -> bool {
+        match (left_source, right_source) {
+            (ExpectedFixedByteSource::Const(bytes), source) if bytes.iter().take(width).all(|byte| *byte == 0) => {
+                if !self.emit_fixed_byte_source_pointer_to("a0", source) {
+                    return false;
+                }
+                self.emit(format!("li a1, {}", width));
+                self.emit("call __cellscript_memzero_fixed");
+            }
+            (source, ExpectedFixedByteSource::Const(bytes)) if bytes.iter().take(width).all(|byte| *byte == 0) => {
+                if !self.emit_fixed_byte_source_pointer_to("a0", source) {
+                    return false;
+                }
+                self.emit(format!("li a1, {}", width));
+                self.emit("call __cellscript_memzero_fixed");
+            }
+            (ExpectedFixedByteSource::Const(_), _) | (_, ExpectedFixedByteSource::Const(_)) => return false,
+            _ => {
+                if !self.emit_fixed_byte_source_pointer_to("a0", left_source) {
+                    return false;
+                }
+                if !self.emit_fixed_byte_source_pointer_to("a1", right_source) {
+                    return false;
+                }
+                self.emit(format!("li a2, {}", width));
+                self.emit("call __cellscript_memcmp_fixed");
+            }
+        }
+        if matches!(op, BinaryOp::Eq) {
+            self.emit("seqz t3, a0");
+        } else {
+            self.emit("snez t3, a0");
+        }
+        self.emit(format!("sd t3, {}(sp)", dest.id * 8));
+        true
+    }
+
     fn expected_fixed_byte_source(&self, operand: &IrOperand, expected_width: usize) -> Option<ExpectedFixedByteSource> {
         match operand {
             IrOperand::Const(value) => {
@@ -3044,7 +3183,7 @@ impl CodeGenerator {
             IrOperand::Var(var) if fixed_byte_width(&var.ty, type_static_length(&var.ty)).is_some() => {
                 let var_width = fixed_byte_width(&var.ty, type_static_length(&var.ty))?;
                 if let Some(source) = self.schema_field_value_sources.get(&var.id).cloned() {
-                    let source_width = fixed_byte_width(&source.layout.ty, source.layout.fixed_size)?;
+                    let source_width = layout_fixed_byte_width(&source.layout)?;
                     if source_width == expected_width {
                         return Some(ExpectedFixedByteSource::SchemaField(source));
                     }
@@ -3286,7 +3425,7 @@ impl CodeGenerator {
 
     fn emit_schema_field_source_to_t1(&mut self, source: &SchemaFieldValueSource) {
         let context = format!("{}.{}", source.type_name, source.field);
-        let Some(width) = fixed_scalar_width(&source.layout.ty, source.layout.fixed_size) else {
+        let Some(width) = layout_fixed_scalar_width(&source.layout) else {
             self.emit("li t1, 0");
             return;
         };
@@ -3314,8 +3453,7 @@ impl CodeGenerator {
         }
         pattern.fields.iter().all(|(field, value)| {
             layouts.get(field).is_some_and(|layout| {
-                fixed_byte_width(&layout.ty, layout.fixed_size)
-                    .is_some_and(|width| self.is_prelude_available_fixed_value(value, width))
+                layout_fixed_byte_width(&layout).is_some_and(|width| self.is_prelude_available_fixed_value(value, width))
             })
         })
     }
@@ -3370,7 +3508,7 @@ impl CodeGenerator {
         self.emit_return_on_syscall_error(1);
         self.emit_loaded_schema_exact_size_check(size_offset, 32, "output lock hash");
         self.emit("# cellscript abi: verify output lock hash offset=0 size=32");
-        let layout = SchemaFieldLayout { offset: 0, ty: IrType::Hash, fixed_size: Some(32) };
+        let layout = SchemaFieldLayout { offset: 0, ty: IrType::Hash, fixed_size: Some(32), fixed_enum_size: None };
         self.emit_loaded_field_bytes_equals_expected(size_offset, buffer_offset, &layout, expected, "output lock hash")
     }
 
@@ -3391,7 +3529,7 @@ impl CodeGenerator {
         let Some(state_layout) = self.type_layouts.get(&pattern.ty).and_then(|fields| fields.get("state")).cloned() else {
             return;
         };
-        let Some(width) = fixed_scalar_width(&state_layout.ty, state_layout.fixed_size) else {
+        let Some(width) = layout_fixed_scalar_width(&state_layout) else {
             return;
         };
         let Some(expected_size) = self.type_fixed_sizes.get(&pattern.ty).copied() else {
@@ -3448,7 +3586,7 @@ impl CodeGenerator {
         let Some(state_layout) = self.type_layouts.get(&pattern.ty).and_then(|fields| fields.get("state")).cloned() else {
             return;
         };
-        let Some(width) = fixed_scalar_width(&state_layout.ty, state_layout.fixed_size) else {
+        let Some(width) = layout_fixed_scalar_width(&state_layout) else {
             return;
         };
         let Some(expected_size) = self.type_fixed_sizes.get(&pattern.ty).copied() else {
@@ -3828,7 +3966,7 @@ impl CodeGenerator {
         let Some(layout) = self.type_layouts.get(type_name).and_then(|fields| fields.get(field)).cloned() else {
             return false;
         };
-        let Some(width) = fixed_byte_width(&layout.ty, layout.fixed_size) else {
+        let Some(width) = layout_fixed_byte_width(&layout) else {
             return false;
         };
 
@@ -3841,7 +3979,7 @@ impl CodeGenerator {
             self.emit_loaded_schema_bounds_check(size_offset, layout.offset + width, &format!("{}.{}", type_name, field));
         }
         self.emit(format!("ld t4, {}(sp)", var.id * 8));
-        if fixed_scalar_width(&layout.ty, layout.fixed_size).is_some() {
+        if layout_fixed_scalar_width(&layout).is_some() {
             self.emit_unaligned_scalar_load("t4", "t0", "t2", layout.offset, width);
         } else {
             self.emit(format!("addi t0, t4, {}", layout.offset));
@@ -3861,7 +3999,7 @@ impl CodeGenerator {
         let Some(layout) = aggregate_field_layout(&source_ty, field) else {
             return false;
         };
-        let Some(width) = fixed_byte_width(&layout.ty, layout.fixed_size) else {
+        let Some(width) = layout_fixed_byte_width(&layout) else {
             return false;
         };
 
@@ -3874,7 +4012,7 @@ impl CodeGenerator {
             width
         ));
         self.emit(format!("ld t4, {}(sp)", var.id * 8));
-        if fixed_scalar_width(&layout.ty, layout.fixed_size).is_some() {
+        if layout_fixed_scalar_width(&layout).is_some() {
             self.emit_unaligned_scalar_load("t4", "t0", "t2", layout.offset, width);
         } else {
             self.emit(format!("addi t0, t4, {}", layout.offset));
@@ -3913,7 +4051,7 @@ impl CodeGenerator {
         let Some(layout) = self.type_layouts.get(type_name).and_then(|fields| fields.get(field)).cloned() else {
             return false;
         };
-        let Some(width) = fixed_byte_width(&layout.ty, layout.fixed_size) else {
+        let Some(width) = layout_fixed_byte_width(&layout) else {
             return false;
         };
 
@@ -3930,7 +4068,7 @@ impl CodeGenerator {
 
         // Load the object pointer from the stack slot
         self.emit(format!("ld t4, {}(sp)", var.id * 8));
-        if fixed_scalar_width(&layout.ty, layout.fixed_size).is_some() {
+        if layout_fixed_scalar_width(&layout).is_some() {
             self.emit_unaligned_scalar_load("t4", "t0", "t2", layout.offset, width);
         } else {
             self.emit(format!("addi t0, t4, {}", layout.offset));
@@ -4691,6 +4829,7 @@ impl CodeGenerator {
     fn generate_runtime_support(&mut self) {
         self.emit_section(".text");
         self.emit_runtime_memcmp_fixed();
+        self.emit_runtime_memzero_fixed();
         self.emit_runtime_size_guards();
         self.emit_runtime_header_field_u64(
             "__env_current_daa_score",
@@ -4746,6 +4885,28 @@ impl CodeGenerator {
         self.emit("addi a1, a1, 1");
         self.emit("addi a2, a2, -1");
         self.emit(format!("bnez a2, {}", loop_label));
+        self.emit_label(equal_label);
+        self.emit("li a0, 0");
+        self.emit("ret");
+        self.emit_label(mismatch_label);
+        self.emit("li a0, 1");
+        self.emit("ret");
+    }
+
+    fn emit_runtime_memzero_fixed(&mut self) {
+        self.emit_global("__cellscript_memzero_fixed");
+        self.emit_label("__cellscript_memzero_fixed");
+        self.emit("# cellscript abi: fixed-byte helper checks a0 for a1 zero bytes; returns a0=0 when all zero");
+        let loop_label = ".L__cellscript_memzero_fixed_loop";
+        let mismatch_label = ".L__cellscript_memzero_fixed_mismatch";
+        let equal_label = ".L__cellscript_memzero_fixed_equal";
+        self.emit(format!("beqz a1, {}", equal_label));
+        self.emit_label(loop_label);
+        self.emit("lbu t0, 0(a0)");
+        self.emit(format!("bnez t0, {}", mismatch_label));
+        self.emit("addi a0, a0, 1");
+        self.emit("addi a1, a1, -1");
+        self.emit(format!("bnez a1, {}", loop_label));
         self.emit_label(equal_label);
         self.emit("li a0, 0");
         self.emit("ret");
@@ -6199,6 +6360,7 @@ mod tests {
             })],
             external_type_defs: vec![],
             external_callable_abis: vec![],
+            enum_fixed_sizes: HashMap::new(),
         };
         let assembly = CodeGenerator::new(CodegenOptions::default()).generate(&ir, ArtifactFormat::RiscvAssembly).unwrap();
         let assembly = String::from_utf8(assembly).unwrap();

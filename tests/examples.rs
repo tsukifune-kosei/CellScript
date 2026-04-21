@@ -19,7 +19,7 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
     ("launch.cell", AssemblyShapeBudget { max_lines: 5_000, max_fail_handlers: 16, max_shared_epilogues: 4 }),
     ("multisig.cell", AssemblyShapeBudget { max_lines: 7_800, max_fail_handlers: 64, max_shared_epilogues: 20 }),
     ("nft.cell", AssemblyShapeBudget { max_lines: 10_000, max_fail_handlers: 64, max_shared_epilogues: 18 }),
-    ("timelock.cell", AssemblyShapeBudget { max_lines: 7_000, max_fail_handlers: 52, max_shared_epilogues: 22 }),
+    ("timelock.cell", AssemblyShapeBudget { max_lines: 7_000, max_fail_handlers: 60, max_shared_epilogues: 22 }),
     ("token.cell", AssemblyShapeBudget { max_lines: 2_800, max_fail_handlers: 24, max_shared_epilogues: 6 }),
     ("vesting.cell", AssemblyShapeBudget { max_lines: 4_400, max_fail_handlers: 28, max_shared_epilogues: 6 }),
 ];
@@ -409,6 +409,12 @@ fn bundled_examples_stay_within_backend_shape_budgets() {
             example
         );
         assert_eq!(
+            count_lines_containing(assembly, "__cellscript_memzero_fixed:"),
+            1,
+            "{} should emit one fixed-byte zero helper",
+            example
+        );
+        assert_eq!(
             count_lines_containing(assembly, "__cellscript_require_min_size:"),
             1,
             "{} should emit one minimum-size guard helper",
@@ -744,9 +750,28 @@ fn timelock_core_actions_expose_time_and_release_metadata() {
     assert_runtime_requirement(
         create_absolute_lock,
         "create-output:TimeLock:create_TimeLock",
-        "runtime-required",
+        "checked-runtime",
         "create-output-fields",
         "timelock create_absolute_lock",
+    );
+    let create_relative_lock = action(&result.metadata, "create_relative_lock");
+    assert_create(create_relative_lock, "TimeLock", "timelock create_relative_lock");
+    assert_runtime_requirement(
+        create_relative_lock,
+        "create-output:TimeLock:create_TimeLock",
+        "checked-runtime",
+        "create-output-fields",
+        "timelock create_relative_lock",
+    );
+
+    let request_release = action(&result.metadata, "request_release");
+    assert_create(request_release, "ReleaseRequest", "timelock request_release");
+    assert_runtime_requirement(
+        request_release,
+        "create-output:ReleaseRequest:create_ReleaseRequest",
+        "checked-runtime",
+        "create-output-fields",
+        "timelock request_release",
     );
 
     let execute_release = action(&result.metadata, "execute_release");
@@ -783,14 +808,25 @@ fn timelock_core_actions_expose_time_and_release_metadata() {
         "create-output-fields",
         "timelock execute_release",
     );
+    let execute_emergency_release = action(&result.metadata, "execute_emergency_release");
+    assert_create(execute_emergency_release, "ReleaseRecord", "timelock execute_emergency_release");
+    assert_runtime_requirement(
+        execute_emergency_release,
+        "create-output:ReleaseRecord:create_ReleaseRecord",
+        "checked-runtime",
+        "create-output-fields",
+        "timelock execute_emergency_release",
+    );
 
     let extend_lock = action(&result.metadata, "extend_lock");
     assert!(extend_lock.fail_closed_runtime_features.is_empty(), "extend_lock should not carry fail-closed debt");
     assert_mutate_field(extend_lock, "TimeLock", "time_lock", "unlock_height", "timelock extend_lock");
     assert_no_runtime_requirement(extend_lock, "mutable-cell:TimeLock", "mutate-field-equality", "timelock extend_lock");
     assert!(
-        asm.contains("# cellscript abi: verify mutate preserved data TimeLock Input#0 == Output#0 except transition ranges"),
-        "timelock extend_lock should verify dynamic TimeLock preserved data except unlock_height transition:\n{}",
+        asm.contains("# cellscript abi: verify mutate preserved fields TimeLock Input#0 == Output#0")
+            && asm.contains("# cellscript abi: verify mutate preserved field TimeLock.lock_type Input#0 == Output#0 offset=32 size=1")
+            && asm.contains("# cellscript abi: verify output field TimeLock set.unlock_height offset=33 size=8"),
+        "timelock extend_lock should verify fieldless enum preservation and unlock_height transition:\n{}",
         asm
     );
     assert!(
