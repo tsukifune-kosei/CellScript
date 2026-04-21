@@ -3188,7 +3188,7 @@ fn body_transaction_resource_obligations(
                     if let Some(type_name) = operand_named_type_name(operand) {
                         let binding = operand_var_name(operand).unwrap_or(&type_name);
                         let scan_detail = if destroy_group_output_absence_scan_is_checked(body, &type_name, binding) {
-                            "; destroy-output-absence=checked-runtime; destroy-group-boundary=checked-runtime"
+                            "; destroy-output-absence=checked-runtime; destroy-output-scan=checked-runtime"
                         } else {
                             ""
                         };
@@ -3197,7 +3197,7 @@ fn body_transaction_resource_obligations(
                             feature: format!("destroy-output-scan:{}", type_name),
                             status: if scan_detail.is_empty() { "runtime-required" } else { "checked-runtime" },
                             detail: format!(
-                                "Runtime verifier must scan grouped outputs to prove the destroyed '{}' instance is not recreated by the same state transition{}",
+                                "Runtime verifier must scan transaction outputs to prove the destroyed '{}' instance is not recreated by the same state transition{}",
                                 type_name, scan_detail
                             ),
                         });
@@ -4164,7 +4164,7 @@ fn transaction_runtime_input_requirements_from_obligations(
             } else {
                 "runtime-required"
             };
-            let group_boundary_status = if transaction_obligation_has_checked_subcondition(obligation, "destroy-group-boundary") {
+            let output_scan_status = if transaction_obligation_has_checked_subcondition(obligation, "destroy-output-scan") {
                 "checked-runtime"
             } else {
                 "runtime-required"
@@ -4173,10 +4173,9 @@ fn transaction_runtime_input_requirements_from_obligations(
                 obligation,
                 "destroy-output-absence",
                 absence_status,
-                (absence_status == "runtime-required")
-                    .then_some("destroy lowering has no executable grouped output type-id absence scan"),
-                (absence_status == "runtime-required").then_some("grouped-output-scan-gap"),
-                "GroupOutput",
+                (absence_status == "runtime-required").then_some("destroy lowering has no executable output type-id absence scan"),
+                (absence_status == "runtime-required").then_some("output-scan-gap"),
+                "Output",
                 binding,
                 Some("type_hash-absence"),
                 "destroy-output-scan-type-id",
@@ -4184,15 +4183,15 @@ fn transaction_runtime_input_requirements_from_obligations(
             ));
             requirements.push(transaction_runtime_input_requirement(
                 obligation,
-                "destroy-group-boundary",
-                group_boundary_status,
-                (group_boundary_status == "runtime-required")
-                    .then_some("destroy lowering does not bind transaction input/output group boundaries"),
-                (group_boundary_status == "runtime-required").then_some("group-boundary-binding-gap"),
+                "destroy-output-scan",
+                output_scan_status,
+                (output_scan_status == "runtime-required")
+                    .then_some("destroy lowering does not bind transaction output scan boundaries"),
+                (output_scan_status == "runtime-required").then_some("output-scan-boundary-gap"),
                 "Transaction",
                 binding,
-                Some("input-output-group"),
-                "destroy-output-scan-group-context",
+                Some("outputs"),
+                "destroy-output-scan-transaction-boundary",
                 None,
             ));
         } else if let Some(binding) = obligation.feature.strip_prefix("claim-output:") {
@@ -12907,15 +12906,13 @@ action activate(ticket: Ticket) -> Ticket {
         assert!(asm.contains("# consume"), "consume expression vanished from assembly:\n{}", asm);
         assert!(asm.contains("# destroy"), "destroy expression vanished from assembly:\n{}", asm);
         assert!(
-            asm.contains("# cellscript abi: destroy group output type-hash absence scan binding=b size=32"),
-            "destroy did not emit a GroupOutput TypeHash absence scan:\n{}",
+            asm.contains("# cellscript abi: destroy output type-hash absence scan binding=b size=32"),
+            "destroy did not emit an Output TypeHash absence scan:\n{}",
             asm
         );
         assert!(
-            asm.contains(
-                "# cellscript abi: LOAD_CELL_BY_FIELD reason=destroy_group_output_type_hash source=GroupOutput index=t6 field=5"
-            ),
-            "destroy absence scan did not use GroupOutput LOAD_CELL_BY_FIELD:\n{}",
+            asm.contains("# cellscript abi: LOAD_CELL_BY_FIELD reason=destroy_output_type_hash source=Output index=t6 field=5"),
+            "destroy absence scan did not use Output LOAD_CELL_BY_FIELD:\n{}",
             asm
         );
         assert!(
@@ -12981,13 +12978,13 @@ action activate(ticket: Ticket) -> Ticket {
                 && obligation.feature == "destroy-output-scan:Token"
                 && obligation.status == "checked-runtime"
                 && obligation.detail.contains("destroy-output-absence=checked-runtime")
-                && obligation.detail.contains("destroy-group-boundary=checked-runtime")
+                && obligation.detail.contains("destroy-output-scan=checked-runtime")
         }));
         assert!(action.transaction_runtime_input_requirements.iter().any(|requirement| {
             requirement.feature == "destroy-output-scan:Token"
                 && requirement.status == "checked-runtime"
                 && requirement.component == "destroy-output-absence"
-                && requirement.source == "GroupOutput"
+                && requirement.source == "Output"
                 && requirement.field.as_deref() == Some("type_hash-absence")
                 && requirement.abi == "destroy-output-scan-type-id"
                 && requirement.blocker.is_none()
@@ -12997,7 +12994,7 @@ action activate(ticket: Ticket) -> Ticket {
             requirement.scope == "action:burn"
                 && requirement.feature == "destroy-output-scan:Token"
                 && requirement.status == "checked-runtime"
-                && requirement.component == "destroy-group-boundary"
+                && requirement.component == "destroy-output-scan"
                 && requirement.blocker.is_none()
                 && requirement.blocker_class.is_none()
         }));

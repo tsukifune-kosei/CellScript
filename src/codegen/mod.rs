@@ -63,7 +63,6 @@ struct RuntimeSyscallAbi {
     secp256k1_verify: u64,
     load_ecdsa_signature_hash: u64,
     source_group_input: u64,
-    source_group_output: u64,
     source_header_dep: u64,
 }
 
@@ -76,7 +75,6 @@ const SPORA_RUNTIME_SYSCALL_ABI: RuntimeSyscallAbi = RuntimeSyscallAbi {
     secp256k1_verify: SPORA_SECP256K1_VERIFY_SYSCALL_NUMBER,
     load_ecdsa_signature_hash: SPORA_LOAD_ECDSA_SIGNATURE_HASH_SYSCALL_NUMBER,
     source_group_input: CKB_SOURCE_GROUP_INPUT,
-    source_group_output: CKB_SOURCE_GROUP_OUTPUT,
     source_header_dep: CKB_SOURCE_HEADER_DEP,
 };
 
@@ -92,7 +90,6 @@ const CKB_RUNTIME_SYSCALL_ABI: RuntimeSyscallAbi = RuntimeSyscallAbi {
     secp256k1_verify: SPORA_SECP256K1_VERIFY_SYSCALL_NUMBER,
     load_ecdsa_signature_hash: SPORA_LOAD_ECDSA_SIGNATURE_HASH_SYSCALL_NUMBER,
     source_group_input: CKB_SOURCE_GROUP_FLAG | CKB_SOURCE_INPUT,
-    source_group_output: CKB_SOURCE_GROUP_FLAG | CKB_SOURCE_OUTPUT,
     source_header_dep: CKB_SOURCE_HEADER_DEP,
 };
 
@@ -396,6 +393,8 @@ pub struct CodeGenerator {
     read_ref_order: Vec<usize>,
     /// Read-ref CellDep index keyed by IR destination variable id.
     read_ref_indices: HashMap<usize, usize>,
+    /// Mutable schema parameter variable ids keyed by source binding name.
+    mutate_param_ids: HashMap<String, usize>,
     /// Output index for source-level operations that materialize transaction Outputs.
     operation_output_indices: HashMap<usize, usize>,
     /// Operation destination ids whose transaction Output relation is fully verifier-covered.
@@ -442,6 +441,7 @@ impl CodeGenerator {
             consume_type_names: HashMap::new(),
             read_ref_order: Vec::new(),
             read_ref_indices: HashMap::new(),
+            mutate_param_ids: HashMap::new(),
             operation_output_indices: HashMap::new(),
             verified_operation_outputs: BTreeSet::new(),
             next_runtime_label: 0,
@@ -1208,7 +1208,7 @@ impl CodeGenerator {
                     self.emit_claim_witness_authorization_domain_check(input_index, &pattern.binding, signer_source.as_ref());
                 }
                 if pattern.operation == "destroy" {
-                    self.emit_destroy_group_output_absence_scan(pattern);
+                    self.emit_destroy_group_output_absence_scan(pattern, input_index);
                 }
                 return Ok(());
             }
@@ -1220,7 +1220,7 @@ impl CodeGenerator {
             self.emit_claim_witness_authorization_domain_check(index, &pattern.binding, None);
         }
         if pattern.operation == "destroy" {
-            self.emit_destroy_group_output_absence_scan(pattern);
+            self.emit_destroy_group_output_absence_scan(pattern, index);
         }
         Ok(())
     }
@@ -1291,6 +1291,7 @@ impl CodeGenerator {
             "# mutate replacement {} {} Input#{} -> Output#{}",
             pattern.binding, pattern.ty, pattern.input_index, pattern.output_index
         ));
+        self.emit_mutate_parameter_binding(pattern);
         if pattern.preserve_type_hash {
             self.emit_mutate_replacement_field_hash_check(pattern, CKB_CELL_FIELD_TYPE_HASH, "type_hash", 11);
         }
@@ -1301,6 +1302,30 @@ impl CodeGenerator {
         self.emit_mutate_replacement_transition_checks(pattern);
         self.emit_mutate_replacement_u128_transition_checks(pattern);
         Ok(())
+    }
+
+    fn emit_mutate_parameter_binding(&mut self, pattern: &MutatePattern) {
+        let Some(var_id) = self.mutate_param_ids.get(&pattern.binding).copied() else {
+            return;
+        };
+        let Some(size_offset) = self.cell_buffer_size_offsets.get(&var_id).copied() else {
+            return;
+        };
+        let Some(buffer_offset) = self.cell_buffer_offsets.get(&var_id).copied() else {
+            return;
+        };
+        self.emit(format!("# cellscript abi: bind mutable param {} to Input#{} cell data", pattern.binding, pattern.input_index));
+        self.emit_load_cell_data_syscall_to_offsets(
+            "mutate_param_input",
+            CKB_SOURCE_INPUT,
+            pattern.input_index,
+            size_offset,
+            buffer_offset,
+            RUNTIME_CELL_BUFFER_SIZE,
+        );
+        self.emit_return_on_syscall_error(1);
+        self.emit_sp_addi("t0", buffer_offset);
+        self.emit(format!("sd t0, {}(sp)", var_id * 8));
     }
 
     fn generate_block(&mut self, block: &IrBlock) -> Result<()> {
@@ -1518,6 +1543,7 @@ impl CodeGenerator {
         self.consume_type_names.clear();
         self.read_ref_order.clear();
         self.read_ref_indices.clear();
+        self.mutate_param_ids.clear();
         self.schema_pointer_size_offsets.clear();
         self.fixed_byte_param_size_offsets.clear();
         self.param_type_hash_pointer_offsets.clear();
@@ -1557,6 +1583,19 @@ impl CodeGenerator {
                 self.param_type_hash_size_offsets.insert(param.binding.id, next_cell_slot);
                 next_cell_slot += 8;
             }
+        }
+
+        for pattern in &body.mutate_set {
+            let Some(param) = params.iter().find(|param| param.name == pattern.binding) else {
+                continue;
+            };
+            self.mutate_param_ids.insert(pattern.binding.clone(), param.binding.id);
+            self.consume_type_names.insert(param.binding.id, pattern.ty.clone());
+            self.consume_indices.insert(param.binding.id, pattern.input_index);
+            self.schema_pointer_size_offsets.insert(param.binding.id, next_cell_slot);
+            self.cell_buffer_size_offsets.insert(param.binding.id, next_cell_slot);
+            self.cell_buffer_offsets.insert(param.binding.id, next_cell_slot + 8);
+            next_cell_slot += RUNTIME_CELL_SLOT_SIZE;
         }
 
         let mut consume_index = 0usize;
@@ -2049,31 +2088,37 @@ impl CodeGenerator {
         self.emit_label(&distinct_label);
     }
 
-    fn emit_destroy_group_output_absence_scan(&mut self, pattern: &CellPattern) {
-        let Some(type_hash) = pattern.type_hash else {
-            self.emit("# cellscript abi: destroy group-output scan unavailable because type_hash is unknown");
-            self.emit("li a0, 16");
-            self.emit_epilogue();
-            return;
-        };
+    fn emit_destroy_group_output_absence_scan(&mut self, pattern: &CellPattern, input_index: usize) {
+        let input_size_offset = self.runtime_scratch_size_offset();
+        let input_buffer_offset = self.runtime_scratch_buffer_offset();
+        let output_size_offset = self.runtime_scratch2_size_offset();
+        let output_buffer_offset = self.runtime_scratch2_buffer_offset();
+        let loop_label = self.fresh_label("destroy_output_scan");
+        let type_hash_label = self.fresh_label("destroy_output_type_hash");
+        let next_label = self.fresh_label("destroy_output_next");
+        let done_label = self.fresh_label("destroy_output_done");
 
-        let size_offset = self.runtime_scratch2_size_offset();
-        let buffer_offset = self.runtime_scratch2_buffer_offset();
-        let loop_label = self.fresh_label("destroy_group_output_scan");
-        let type_hash_label = self.fresh_label("destroy_group_output_type_hash");
-        let next_label = self.fresh_label("destroy_group_output_next");
-        let done_label = self.fresh_label("destroy_group_output_done");
-
-        self.emit(format!("# cellscript abi: destroy group output type-hash absence scan binding={} size=32", pattern.binding));
+        self.emit(format!("# cellscript abi: destroy output type-hash absence scan binding={} size=32", pattern.binding));
+        self.emit_load_cell_by_field_syscall_to_offsets(
+            "destroy_input_type_hash",
+            CKB_SOURCE_INPUT,
+            input_index,
+            CKB_CELL_FIELD_TYPE_HASH,
+            input_size_offset,
+            input_buffer_offset,
+            32,
+        );
+        self.emit_return_on_syscall_error(1);
+        self.emit_loaded_schema_exact_size_check(input_size_offset, 32, "destroy input type hash");
         self.emit("li t6, 0");
         self.emit_label(&loop_label);
         self.emit_load_cell_by_field_syscall_to_offsets_dynamic_index(
-            "destroy_group_output_type_hash",
-            self.runtime_abi().source_group_output,
+            "destroy_output_type_hash",
+            CKB_SOURCE_OUTPUT,
             "t6",
             CKB_CELL_FIELD_TYPE_HASH,
-            size_offset,
-            buffer_offset,
+            output_size_offset,
+            output_buffer_offset,
             32,
         );
         self.emit(format!("beqz a0, {}", type_hash_label));
@@ -2087,15 +2132,16 @@ impl CodeGenerator {
         self.emit_epilogue();
 
         self.emit_label(&type_hash_label);
-        self.emit_loaded_schema_exact_size_check(size_offset, 32, "destroy group output type hash");
+        self.emit_loaded_schema_exact_size_check(output_size_offset, 32, "destroy output type hash");
         self.emit(format!(
-            "# cellscript abi: reject destroy replacement when GroupOutput#t6 TypeHash matches consumed {}",
+            "# cellscript abi: reject destroy replacement when Output#t6 TypeHash matches consumed {}",
             pattern.binding
         ));
-        self.emit_sp_addi("t4", buffer_offset);
-        for (byte_index, byte) in type_hash.iter().enumerate() {
+        self.emit_sp_addi("t4", output_buffer_offset);
+        self.emit_sp_addi("t5", input_buffer_offset);
+        for byte_index in 0..32 {
             self.emit(format!("lbu t0, {}(t4)", byte_index));
-            self.emit(format!("li t1, {}", byte));
+            self.emit(format!("lbu t1, {}(t5)", byte_index));
             self.emit("sub t2, t0, t1");
             self.emit(format!("bnez t2, {}", next_label));
         }
@@ -2106,6 +2152,7 @@ impl CodeGenerator {
         self.emit("addi t6, t6, 1");
         self.emit(format!("j {}", loop_label));
         self.emit_label(&done_label);
+        self.emit("li a0, 0");
     }
 
     fn mutate_preserved_field_layouts(&self, pattern: &MutatePattern) -> Vec<(String, SchemaFieldLayout, usize)> {
@@ -4241,7 +4288,7 @@ impl CodeGenerator {
         self.emit("# destroy");
         if let IrOperand::Var(var) = operand {
             self.emit(format!("sd zero, {}(sp)", var.id * 8));
-            self.emit("# cellscript abi: destroy consumed input is checked by GroupOutput absence scan");
+            self.emit("# cellscript abi: destroy consumed input is checked by Output absence scan");
             return Ok(());
         }
         // Non-Var destroy: this should not happen in valid IR, fail with specific error.
@@ -4533,9 +4580,10 @@ fn named_type_name(ty: &IrType) -> Option<&str> {
 
 fn consumed_operand_var(instruction: &IrInstruction) -> Option<&IrVar> {
     let operand = match instruction {
-        IrInstruction::Consume { operand } | IrInstruction::Transfer { operand, .. } | IrInstruction::Settle { operand, .. } => {
-            operand
-        }
+        IrInstruction::Consume { operand }
+        | IrInstruction::Transfer { operand, .. }
+        | IrInstruction::Destroy { operand }
+        | IrInstruction::Settle { operand, .. } => operand,
         IrInstruction::Claim { receipt, .. } => receipt,
         _ => return None,
     };
