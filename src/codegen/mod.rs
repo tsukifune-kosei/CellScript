@@ -5158,6 +5158,7 @@ impl SectionLayout {
 struct MachineLayoutPlan {
     parsed: ParsedAssembly,
     layout: SectionLayout,
+    cfg: MachineCfg,
     metrics: BackendLayoutMetrics,
 }
 
@@ -5266,6 +5267,8 @@ fn assemble_elf_internal(lines: &[String]) -> Result<Vec<u8>> {
         plan.metrics.labeled_machine_block_count,
         plan.metrics.machine_cfg_edge_count,
         plan.metrics.unreachable_machine_block_count,
+        plan.cfg.blocks.len(),
+        plan.cfg.edges.len(),
     );
     let entry_label = parsed.entry_label.as_deref().ok_or_else(|| {
         CompileError::new("ELF target requires at least one action or lock entry point", crate::error::Span::default())
@@ -5719,8 +5722,9 @@ impl MachineLayoutPlan {
         let preliminary_layout = SectionLayout::for_text_user_size(preliminary.section_size(SectionKind::Text));
         let parsed = ParsedAssembly::from_lines_relaxed(lines, &preliminary_layout)?;
         let layout = SectionLayout::for_text_user_size(parsed.section_size(SectionKind::Text));
-        let metrics = parsed.layout_metrics(&layout)?;
-        Ok(Self { parsed, layout, metrics })
+        let cfg = machine_cfg(&parsed)?;
+        let metrics = parsed.layout_metrics(&layout, &cfg)?;
+        Ok(Self { parsed, layout, cfg, metrics })
     }
 }
 
@@ -5917,7 +5921,7 @@ fn instruction_terminator(op: &AsmOp) -> Option<MachineTerminator> {
 }
 
 impl ParsedAssembly {
-    fn layout_metrics(&self, layout: &SectionLayout) -> Result<BackendLayoutMetrics> {
+    fn layout_metrics(&self, layout: &SectionLayout, machine_cfg: &MachineCfg) -> Result<BackendLayoutMetrics> {
         let text_op_layouts = text_op_layouts(self);
         let text_size = text_op_layouts.iter().map(|op| op.size).sum();
         let mut max_cond_branch_abs_distance = 0u64;
@@ -5931,14 +5935,13 @@ impl ParsedAssembly {
             let distance = relative_offset(pc, target)?.unsigned_abs();
             max_cond_branch_abs_distance = max_cond_branch_abs_distance.max(distance);
         }
-        let machine_cfg = machine_cfg(self)?;
         let machine_block_count = machine_cfg.blocks.len();
         let max_machine_block_size = machine_cfg.blocks.iter().map(|block| block.byte_size).max().unwrap_or_default();
         let conditional_branch_block_count =
             machine_cfg.blocks.iter().filter(|block| matches!(block.terminator, MachineTerminator::ConditionalBranch { .. })).count();
         let labeled_machine_block_count = machine_cfg.blocks.iter().filter(|block| block.label.is_some()).count();
         let machine_cfg_edge_count = machine_cfg.edges.len();
-        let unreachable_machine_block_count = unreachable_machine_block_count(&machine_cfg);
+        let unreachable_machine_block_count = unreachable_machine_block_count(machine_cfg);
         let _covered_text_ops = machine_cfg.blocks.iter().map(|block| block.op_end.saturating_sub(block.op_start)).sum::<usize>();
         let _first_block_byte_start = machine_cfg.blocks.first().map(|block| block.byte_start).unwrap_or_default();
         Ok(BackendLayoutMetrics {
@@ -6663,7 +6666,8 @@ mod tests {
         ];
 
         let plan = MachineLayoutPlan::build(&lines).expect("machine layout plan");
-        let blocks = machine_blocks(&plan.parsed);
+        let cfg = &plan.cfg;
+        let blocks = &cfg.blocks;
         assert_eq!(blocks.len(), 3, "expected entry, fallthrough, and done blocks: {:?}", blocks);
         assert_eq!(blocks[0].label.as_deref(), Some("entry"));
         assert_eq!(blocks[0].terminator, MachineTerminator::ConditionalBranch { target: "done".to_string() });
@@ -6671,7 +6675,6 @@ mod tests {
         assert_eq!(blocks[2].label.as_deref(), Some("done"));
         assert_eq!(blocks[2].terminator, MachineTerminator::Return);
 
-        let cfg = machine_cfg(&plan.parsed).expect("machine cfg");
         assert_eq!(cfg.blocks.len(), 3);
         assert_eq!(
             cfg.edges,
@@ -6681,7 +6684,7 @@ mod tests {
                 MachineCfgEdge { from: 1, to: 2, kind: MachineCfgEdgeKind::Jump },
             ]
         );
-        assert_eq!(unreachable_machine_block_count(&cfg), 0);
+        assert_eq!(unreachable_machine_block_count(cfg), 0);
     }
 
     #[test]
