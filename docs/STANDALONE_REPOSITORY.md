@@ -29,7 +29,7 @@ while smoke artifacts and pure baseline artifacts must still compile and verify.
 From the standalone repository root:
 
 ```bash
-CARGO_TARGET_DIR=/tmp/cellscript-standalone-target cargo test --manifest-path Cargo.toml -- --test-threads=1
+CARGO_TARGET_DIR=/tmp/cellscript-standalone-target cargo test --locked --manifest-path Cargo.toml -- --test-threads=1
 ```
 
 Using an explicit `CARGO_TARGET_DIR` keeps standalone validation separate from a
