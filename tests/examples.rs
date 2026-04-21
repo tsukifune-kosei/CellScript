@@ -793,6 +793,12 @@ fn timelock_core_actions_expose_time_and_release_metadata() {
         "timelock extend_lock should verify dynamic TimeLock preserved data except unlock_height transition:\n{}",
         asm
     );
+    assert!(
+        !asm.contains("call can_unlock schema param time_lock has no tracked ABI length")
+            && !asm.contains("call hash_lock schema param time_lock has no tracked ABI length"),
+        "timelock helper calls should preserve schema pointer length through ref/deref aliases:\n{}",
+        asm
+    );
 }
 
 #[test]

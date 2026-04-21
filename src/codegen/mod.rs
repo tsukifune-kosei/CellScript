@@ -774,6 +774,7 @@ impl CodeGenerator {
         self.set_schema_pointer_params(&action.params);
         self.set_consumed_schema_pointers(&action.body);
         self.set_read_ref_schema_pointers(&action.body);
+        self.set_pointer_aliases(&action.body);
         self.set_schema_field_value_sources(&action.body);
         self.set_verified_operation_outputs(&action.body);
 
@@ -819,6 +820,7 @@ impl CodeGenerator {
         self.set_schema_pointer_params(&function.params);
         self.set_consumed_schema_pointers(&function.body);
         self.set_read_ref_schema_pointers(&function.body);
+        self.set_pointer_aliases(&function.body);
         self.set_schema_field_value_sources(&function.body);
         self.set_verified_operation_outputs(&function.body);
 
@@ -860,6 +862,7 @@ impl CodeGenerator {
         self.set_schema_pointer_params(&lock.params);
         self.set_consumed_schema_pointers(&lock.body);
         self.set_read_ref_schema_pointers(&lock.body);
+        self.set_pointer_aliases(&lock.body);
         self.set_schema_field_value_sources(&lock.body);
         self.set_verified_operation_outputs(&lock.body);
 
@@ -931,6 +934,43 @@ impl CodeGenerator {
                     self.schema_pointer_vars.insert(var.id);
                     if let Some(size_offset) = self.cell_buffer_size_offsets.get(&var.id).copied() {
                         self.schema_pointer_size_offsets.insert(var.id, size_offset);
+                    }
+                }
+            }
+        }
+    }
+
+    fn set_pointer_aliases(&mut self, body: &IrBody) {
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for block in &body.blocks {
+                for instruction in &block.instructions {
+                    let alias = match instruction {
+                        IrInstruction::Unary { dest, op: UnaryOp::Ref | UnaryOp::Deref, operand: IrOperand::Var(src) }
+                        | IrInstruction::Move { dest, src: IrOperand::Var(src) } => Some((dest, src)),
+                        _ => None,
+                    };
+                    let Some((dest, src)) = alias else {
+                        continue;
+                    };
+                    if self.schema_pointer_vars.contains(&src.id) && self.schema_pointer_vars.insert(dest.id) {
+                        changed = true;
+                    }
+                    if let Some(size_offset) = self.schema_pointer_size_offsets.get(&src.id).copied() {
+                        if self.schema_pointer_size_offsets.insert(dest.id, size_offset) != Some(size_offset) {
+                            changed = true;
+                        }
+                    }
+                    if let Some(size_offset) = self.fixed_byte_param_size_offsets.get(&src.id).copied() {
+                        if self.fixed_byte_param_size_offsets.insert(dest.id, size_offset) != Some(size_offset) {
+                            changed = true;
+                        }
+                    }
+                    if let Some(source) = self.aggregate_pointer_sources.get(&src.id).cloned() {
+                        if self.aggregate_pointer_sources.insert(dest.id, source).is_none() {
+                            changed = true;
+                        }
                     }
                 }
             }
