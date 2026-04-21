@@ -1,5 +1,14 @@
 # CellScript
 
+[![CellScript CI](https://github.com/tsukifune-kosei/CellScript/actions/workflows/ci.yml/badge.svg)](https://github.com/tsukifune-kosei/CellScript/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)
+[![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
+[![Language: Rust](https://img.shields.io/badge/language-Rust-b7410e.svg)](https://www.rust-lang.org/)
+[![Targets: Spora and CKB](https://img.shields.io/badge/targets-Spora%20%7C%20CKB-2f6f4e.svg)](#target-profiles)
+[![Package Manager: Beta](https://img.shields.io/badge/package%20manager-beta-f0ad4e.svg)](#包管理器-beta)
+[![LSP: Available](https://img.shields.io/badge/LSP-available-4c78a8.svg)](#编辑器支持)
+[![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](docs/wiki/Home.md)
+
 [English](README.md) | [中文](README_CN.md)
 
 独立仓库：<https://github.com/tsukifune-kosei/CellScript>
