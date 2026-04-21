@@ -100,6 +100,62 @@ CellScript 程序围绕 Cell 生命周期操作书写。
 
 ## 示例
 
+CellScript 语法刻意贴近 Cell 交易形状。一个 module 包含 schema 声明和可
+执行入口。持久值用 `resource`、`shared` 或 `receipt` 声明；可执行逻辑用
+`action` 或 `lock` 声明；交易效果用显式生命周期操作表达。
+
+常见声明形式：
+
+```cellscript
+module spora::example
+
+struct Config {
+    threshold: u64
+}
+
+resource Token has store, transfer, destroy {
+    amount: u64
+    symbol: [u8; 8]
+}
+
+shared Pool has store {
+    token_reserve: u64
+    spora_reserve: u64
+}
+
+receipt VestingGrant has store, claim {
+    beneficiary: Address
+    amount: u64
+    unlock_epoch: u64
+}
+
+lock owner_only(owner: Address, signature: Signature) {
+    assert_invariant(verify_signature(owner, signature), "invalid signature")
+}
+```
+
+常见语句和效果形式：
+
+```cellscript
+action move_token(token: Token, to: Address) -> Token {
+    assert_invariant(token.amount > 0, "empty token")
+
+    consume token
+
+    create Token {
+        amount: token.amount,
+        symbol: token.symbol
+    } with_lock(to)
+}
+```
+
+编译器把 `consume`、`create`、`transfer`、`destroy`、`claim`、`settle` 和
+`read_ref` 当作 Cell effect，而不是普通函数调用。这些 effect 会反映到
+metadata 中，使 Spora 调度、CKB admission policy、schema decoding 和
+artifact verification 都能审计生成脚本。
+
+完整的 fungible-token 示例：
+
 ```cellscript
 module spora::fungible_token
 
@@ -139,6 +195,18 @@ action burn(token: Token) {
     destroy token
 }
 ```
+
+仓库还包含以下 bundled protocol examples：
+
+| Example | 展示内容 |
+|---|---|
+| `examples/token.cell` | Mint、transfer、burn，以及带同 symbol guard 的 token merge。 |
+| `examples/timelock.cell` | 时间门控状态转换和延迟 claim 路径。 |
+| `examples/multisig.cell` | 授权阈值和签名导向的 lock 逻辑。 |
+| `examples/nft.cell` | 唯一资产、metadata 和所有权转移。 |
+| `examples/vesting.cell` | Receipt-style grants 和 claim lifecycle。 |
+| `examples/amm_pool.cell` | Shared pool state、swap 和 liquidity effects。 |
+| `examples/launch.cell` | Launch/pool composition patterns。 |
 
 ## 对比
 
@@ -186,6 +254,16 @@ cellc check --target-profile ckb
 cellc check --target-profile portable-cell
 ```
 
+初始化和维护包：
+
+```bash
+cellc init token-package
+cd token-package
+cellc add shared-types --path ../shared-types
+cellc info
+cellc build --target riscv64-elf --target-profile spora
+```
+
 输出 metadata：
 
 ```bash
@@ -219,6 +297,28 @@ deny_runtime_obligations = false
 
 命令行 flags 可以在构建或 CI 中进一步收紧策略检查。
 
+## 包管理器 Beta
+
+CellScript 在 `cellc` 中提供 beta 包管理器。当前设计刻意保持本地优先和
+fail-closed；registry protocol 仍属于 post-v1 工作。
+
+当前支持：
+
+- `cellc init` 创建带 `Cell.toml` 的应用包或 library package。
+- `cellc build`、`cellc check`、`cellc metadata` 和 `cellc test` 可以接受包
+  目录或 manifest 作为输入。
+- `cellc add --path` 和 `cellc add --git` 会把依赖写入 `Cell.toml`。
+- 本地 path dependencies 会递归解析，并参与 module loading、source
+  hashing 和 metadata。
+- `Cell.lock` 记录解析后的依赖身份，用于可复现检查。
+- `cellc info --json` 为 CI 和工具输出 package metadata。
+
+仍处于 beta：
+
+- Registry `publish`、`install`、`update` 和 `login` 已有命令形状，但在
+  registry backend 和 trust model 定稿前会 fail closed。
+- Package name、lockfile 字段和 registry authentication 还不是稳定生产接口。
+
 ## CLI Reference
 
 | Command | 用途 |
@@ -233,6 +333,7 @@ deny_runtime_obligations = false
 | `cellc fmt` | 格式化 `.cell` 源码或检查格式。 |
 | `cellc init` | 创建 package skeleton。 |
 | `cellc add` / `cellc remove` | 修改本地包依赖。 |
+| `cellc publish` / `cellc install` / `cellc update` / `cellc login` | Beta registry-shaped commands；registry-backed operation 仍会 fail closed。 |
 | `cellc info` | 输出 manifest 和 package 信息。 |
 | `cellc repl` | 启动交互式 REPL。 |
 | `cellc run` | 通过可选 VM runner 或 simulator 路径运行支持的 ELF entrypoints。 |
@@ -255,9 +356,15 @@ deny_runtime_obligations = false
 
 ## 编辑器支持
 
-仓库包含一个 VS Code 扩展，支持 `.cell` 语法高亮、语言配置、snippets、
-formatting integration、diagnostics、hover、definition、references 和
-metadata-oriented code actions：
+CellScript 包含 beta 语言工具：
+
+- 编译器 crate 暴露 in-process LSP service，覆盖 diagnostics、completions、
+  hover、definition、references、rename、formatting 和 metadata-oriented code
+  actions。
+- 仓库包含一个 VS Code 扩展，支持 `.cell` 语法高亮、语言配置、snippets、
+  open/save diagnostics，以及 compiler-backed formatting/validation hooks。
+- 编辑器集成仍处于 beta。它适合本地编写和获取编译器反馈，但
+  language-server transport 和 extension packaging 后续仍可能演进。
 
 - [`editors/vscode-cellscript`](editors/vscode-cellscript)
 
