@@ -20,6 +20,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TARGET_DIR: /tmp/cellscript-ci-target
+      CELLSCRIPT_BACKEND_SHAPE_REPORT: /tmp/cellscript-backend-shape/backend-shape-report.json
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -45,4 +46,14 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Run tests
-        run: cargo test --manifest-path Cargo.toml -- --test-threads=1
+        run: |
+          mkdir -p "$(dirname "$CELLSCRIPT_BACKEND_SHAPE_REPORT")"
+          cargo test --manifest-path Cargo.toml -- --test-threads=1
+
+      - name: Upload backend shape report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cellscript-backend-shape-report
+          if-no-files-found: warn
+          path: /tmp/cellscript-backend-shape/
