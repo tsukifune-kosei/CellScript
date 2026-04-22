@@ -1,5 +1,3 @@
-# Tutorial 01: Getting Started
-
 This page gets you from a fresh checkout to a compiled CellScript artifact.
 
 ## Prerequisites

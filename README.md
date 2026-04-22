@@ -1,5 +1,9 @@
 # CellScript
 
+<p align="center">
+  <img src="assets/cellscript-logo.png" alt="CellScript" width="560">
+</p>
+
 [![CellScript CI](https://github.com/tsukifune-kosei/CellScript/actions/workflows/ci.yml/badge.svg)](https://github.com/tsukifune-kosei/CellScript/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
@@ -10,8 +14,6 @@
 [![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](docs/wiki/Home.md)
 
 [English](README.md) | [中文](README_CN.md)
-
-Canonical standalone repository: <https://github.com/tsukifune-kosei/CellScript>
 
 CellScript is a domain-specific language for Cell-based smart contracts on
 Spora and CKB. It compiles `.cell` source into ckb-vm RISC-V assembly or ELF

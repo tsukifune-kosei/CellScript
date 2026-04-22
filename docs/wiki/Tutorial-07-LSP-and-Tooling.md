@@ -1,5 +1,3 @@
-# Tutorial 07: LSP and Tooling
-
 CellScript includes LSP support and a beta package/tooling workflow. The goal is to make `.cell` contracts auditable before they are deployed.
 
 ## LSP Capabilities

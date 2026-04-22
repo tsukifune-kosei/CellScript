@@ -1,5 +1,3 @@
-# Tutorial 02: Language Basics
-
 CellScript modules describe typed Cell state and executable transition logic. A source file normally contains:
 
 - one `module` declaration;

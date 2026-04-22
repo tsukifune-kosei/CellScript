@@ -1,5 +1,9 @@
 # CellScript
 
+<p align="center">
+  <img src="assets/cellscript-logo.png" alt="CellScript" width="560">
+</p>
+
 [![CellScript CI](https://github.com/tsukifune-kosei/CellScript/actions/workflows/ci.yml/badge.svg)](https://github.com/tsukifune-kosei/CellScript/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
@@ -10,8 +14,6 @@
 [![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](docs/wiki/Home.md)
 
 [English](README.md) | [中文](README_CN.md)
-
-独立仓库：<https://github.com/tsukifune-kosei/CellScript>
 
 CellScript 是面向 Spora 和 CKB 的 Cell 模型智能合约 DSL。它把 `.cell`
 源码编译为 ckb-vm RISC-V assembly 或 ELF 产物，并同时输出可用于审计、

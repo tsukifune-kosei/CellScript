@@ -1,5 +1,3 @@
-# Tutorial 03: Resources and Cell Effects
-
 CellScript is built around explicit Cell transaction effects. These operations are not ordinary function calls; they describe how a transaction consumes inputs, creates outputs, reads dependencies, and proves state transitions.
 
 ## The Main Effects

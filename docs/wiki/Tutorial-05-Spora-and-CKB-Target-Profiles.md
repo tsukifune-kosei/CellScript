@@ -1,5 +1,3 @@
-# Tutorial 05: Spora and CKB Target Profiles
-
 CellScript must support both Spora and CKB without mixing their runtime assumptions. The selected target profile controls syscalls, source constants, header/runtime rules, artifact packaging, metadata policy, and verification boundaries.
 
 ## Profiles

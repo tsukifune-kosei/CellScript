@@ -1,5 +1,3 @@
-# Tutorial 08: Bundled Example Contracts
-
 The repository includes bundled examples that exercise the v1 language surface and compiler gates.
 
 | Example | Purpose |

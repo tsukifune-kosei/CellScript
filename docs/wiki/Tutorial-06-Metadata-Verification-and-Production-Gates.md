@@ -1,5 +1,3 @@
-# Tutorial 06: Metadata, Verification, and Production Gates
-
 Every artifact should be treated as a pair:
 
 ```text

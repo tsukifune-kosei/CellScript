@@ -1,5 +1,3 @@
-# CellScript Wiki
-
 CellScript is a domain-specific language for Cell-based smart contracts on Spora and CKB. It compiles `.cell` source into ckb-vm compatible RISC-V assembly or ELF artifacts and emits metadata for schema auditing, target-profile policy checks, artifact verification, and Spora scheduler-aware execution.
 
 This wiki is a practical tutorial set. It focuses on writing contracts, compiling them, checking portability, and preparing artifacts for Spora or CKB deployment.

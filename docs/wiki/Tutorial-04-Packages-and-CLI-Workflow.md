@@ -1,5 +1,3 @@
-# Tutorial 04: Packages and CLI Workflow
-
 CellScript includes a beta package manager. It is stable enough for local package workflows, local path dependencies, build/check/doc/fmt flows, and lockfile validation. Registry publishing and remote package workflows should still be treated as experimental.
 
 ## Create a Package
