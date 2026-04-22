@@ -63,7 +63,6 @@ const DEFAULT_TARGET_PROFILE: &str = "spora";
 pub const METADATA_SCHEMA_VERSION: u32 = 26;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
-pub(crate) const ENTRY_WITNESS_ABI_MAX_REGISTER_ARGS: usize = 8;
 const METADATA_MUTATE_CELL_BUFFER_SIZE: usize = 512;
 const CKB_ACCEPTANCE_SMOKE_POLICY_BYPASS_ENV: &str = "CELLSCRIPT_CKB_ACCEPTANCE_SMOKE_ALLOW_UNPORTABLE_EXAMPLES";
 const CLAIM_SIGNER_PUBKEY_HASH_FIELDS: [&str; 5] =
@@ -559,7 +558,7 @@ fn common_portability_policy_violations(metadata: &CompileMetadata) -> Vec<Strin
         .collect::<Vec<_>>();
     if !persistent_types_without_schema.is_empty() {
         violations.push(format!(
-            "generated Molecule schemas are required before persistent Cell types can be portable: {}",
+            "generated Molecule schemas are required before persistent Cell types can be CKB-portable: {}",
             persistent_types_without_schema.join(", ")
         ));
     }
@@ -577,14 +576,12 @@ fn common_portability_policy_violations(metadata: &CompileMetadata) -> Vec<Strin
         ));
     }
 
-    let shared_touch_actions = metadata
-        .actions
-        .iter()
-        .filter(|action| !action.touches_shared.is_empty())
-        .map(|action| action.name.clone())
-        .collect::<Vec<_>>();
+    let shared_touch_actions = ckb_unportable_shared_touch_actions(metadata);
     if !shared_touch_actions.is_empty() {
-        violations.push(format!("Spora shared-state scheduler touch domains are not portable: {}", shared_touch_actions.join(", ")));
+        violations.push(format!(
+            "Spora shared-state scheduler touch domains have unresolved state semantics: {}",
+            shared_touch_actions.join(", ")
+        ));
     }
 
     if !metadata.runtime.pool_primitives.is_empty() {
@@ -593,6 +590,21 @@ fn common_portability_policy_violations(metadata: &CompileMetadata) -> Vec<Strin
     }
 
     violations
+}
+
+fn ckb_unportable_shared_touch_actions(metadata: &CompileMetadata) -> Vec<String> {
+    metadata
+        .actions
+        .iter()
+        .filter(|action| !action.touches_shared.is_empty())
+        .filter(|action| {
+            action
+                .verifier_obligations
+                .iter()
+                .any(|obligation| obligation.category == "shared-state" && obligation.status != "checked-runtime")
+        })
+        .map(|action| action.name.clone())
+        .collect()
 }
 
 fn ckb_only_feature_names(metadata: &CompileMetadata) -> Vec<String> {
@@ -606,9 +618,11 @@ fn ckb_only_feature_names(metadata: &CompileMetadata) -> Vec<String> {
 }
 
 fn type_has_public_molecule_schema(ty: &TypeMetadata) -> bool {
-    ty.molecule_schema
-        .as_ref()
-        .is_some_and(|schema| schema.abi == "molecule" && schema.layout == "fixed-struct-v1" && !schema.schema.is_empty())
+    ty.molecule_schema.as_ref().is_some_and(|schema| {
+        schema.abi == "molecule"
+            && matches!(schema.layout.as_str(), "fixed-struct-v1" | "molecule-table-v1")
+            && !schema.schema.is_empty()
+    })
 }
 
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
@@ -932,7 +946,7 @@ fn validate_molecule_schema_metadata(metadata: &CompileMetadata) -> Result<()> {
                 ty.name, schema.abi
             )));
         }
-        if schema.layout != "fixed-struct-v1" {
+        if !matches!(schema.layout.as_str(), "fixed-struct-v1" | "molecule-table-v1") {
             return Err(CompileError::without_span(format!(
                 "metadata type '{}' has unsupported molecule_schema.layout '{}'",
                 ty.name, schema.layout
@@ -944,11 +958,30 @@ fn validate_molecule_schema_metadata(metadata: &CompileMetadata) -> Result<()> {
                 ty.name, schema.name
             )));
         }
-        if ty.encoded_size != Some(schema.fixed_size) {
-            return Err(CompileError::without_span(format!(
-                "metadata type '{}' molecule_schema.fixed_size {} does not match encoded_size {:?}",
-                ty.name, schema.fixed_size, ty.encoded_size
-            )));
+        match schema.layout.as_str() {
+            "fixed-struct-v1" => {
+                if ty.encoded_size != Some(schema.fixed_size) {
+                    return Err(CompileError::without_span(format!(
+                        "metadata type '{}' molecule_schema.fixed_size {} does not match encoded_size {:?}",
+                        ty.name, schema.fixed_size, ty.encoded_size
+                    )));
+                }
+            }
+            "molecule-table-v1" => {
+                if schema.fixed_size != 0 {
+                    return Err(CompileError::without_span(format!(
+                        "metadata type '{}' molecule_schema.fixed_size {} must be 0 for molecule-table-v1",
+                        ty.name, schema.fixed_size
+                    )));
+                }
+                if ty.encoded_size.is_some() {
+                    return Err(CompileError::without_span(format!(
+                        "metadata type '{}' uses molecule-table-v1 but encoded_size is {:?}",
+                        ty.name, ty.encoded_size
+                    )));
+                }
+            }
+            _ => unreachable!("layout match guarded above"),
         }
         if schema.schema.is_empty() {
             return Err(CompileError::without_span(format!("metadata type '{}' has empty molecule_schema.schema", ty.name)));
@@ -1226,6 +1259,8 @@ pub struct MoleculeSchemaMetadata {
     pub abi: String,
     pub layout: String,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dynamic_fields: Vec<String>,
     pub fixed_size: usize,
     pub schema_hash_blake3: String,
     pub schema: String,
@@ -1395,14 +1430,6 @@ pub enum EntryWitnessArg {
 /// from cells and consume no witness payload, fixed-byte parameters are appended
 /// verbatim, and scalar parameters are little-endian encoded.
 pub fn encode_entry_witness_args_for_params(params: &[ParamMetadata], args: &[EntryWitnessArg]) -> Result<Vec<u8>> {
-    let abi_arg_count = entry_witness_metadata_abi_arg_count(params);
-    if abi_arg_count > ENTRY_WITNESS_ABI_MAX_REGISTER_ARGS {
-        return Err(CompileError::without_span(format!(
-            "{} requires {} ABI args; entry wrapper supports a0-a7 only",
-            ENTRY_WITNESS_ABI, abi_arg_count
-        )));
-    }
-
     let payload_len = entry_witness_metadata_payload_len(params)?;
     let mut witness = Vec::with_capacity(ENTRY_WITNESS_ABI_MAGIC.len() + payload_len);
     witness.extend_from_slice(ENTRY_WITNESS_ABI_MAGIC);
@@ -1447,21 +1474,6 @@ pub fn encode_entry_witness_args_for_params(params: &[ParamMetadata], args: &[En
     }
 
     Ok(witness)
-}
-
-fn entry_witness_metadata_abi_arg_count(params: &[ParamMetadata]) -> usize {
-    params
-        .iter()
-        .map(|param| {
-            if param.schema_pointer_abi || param.schema_length_abi {
-                2 + usize::from(param.type_hash_pointer_abi || param.type_hash_length_abi) * 2
-            } else if param.fixed_byte_len.is_some() {
-                2
-            } else {
-                1
-            }
-        })
-        .sum()
 }
 
 fn entry_witness_metadata_payload_len(params: &[ParamMetadata]) -> Result<usize> {
@@ -1846,7 +1858,13 @@ pub fn compile_metadata(source: &str, target: Option<String>) -> Result<CompileM
 }
 
 fn compile_ast(ast: &ast::Module, options: &CompileOptions, resolver: Option<(&ModuleResolver, &str)>) -> Result<CompileResult> {
-    compile_ast_with_build(ast, options, resolver, None)
+    compile_ast_with_build(ast, options, resolver, None, None)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompileEntryScope {
+    Action(String),
+    Lock(String),
 }
 
 fn compile_ast_with_build(
@@ -1854,6 +1872,7 @@ fn compile_ast_with_build(
     options: &CompileOptions,
     resolver: Option<(&ModuleResolver, &str)>,
     build: Option<&CellBuildConfig>,
+    entry_scope: Option<&CompileEntryScope>,
 ) -> Result<CompileResult> {
     validate_compile_options(options)?;
     let target_profile = TargetProfile::from_options(options, build)?;
@@ -1889,6 +1908,11 @@ fn compile_ast_with_build(
     } else {
         ir::generate(lowering_ast)?
     };
+    let scoped_ir = match entry_scope {
+        Some(scope) => Some(scope_ir_to_entry(&ir, scope)?),
+        None => None,
+    };
+    let ir = scoped_ir.as_ref().unwrap_or(&ir);
 
     let mut metadata = compile_metadata_from_ir(&ir, artifact_format, target_profile);
     let target_policy_violations = target_profile_artifact_policy_violations(&metadata, target_profile);
@@ -1948,6 +1972,48 @@ pub fn compile_path<P: AsRef<Utf8Path>>(path: P, options: CompileOptions) -> Res
 
 /// Compile from file
 pub fn compile_file<P: AsRef<Utf8Path>>(path: P, options: CompileOptions) -> Result<CompileResult> {
+    compile_file_with_entry_scope(path, options, None)
+}
+
+pub fn compile_file_with_entry_action<P: AsRef<Utf8Path>>(
+    path: P,
+    options: CompileOptions,
+    action: impl Into<String>,
+) -> Result<CompileResult> {
+    compile_file_with_entry_scope(path, options, Some(CompileEntryScope::Action(action.into())))
+}
+
+pub fn compile_file_with_entry_lock<P: AsRef<Utf8Path>>(
+    path: P,
+    options: CompileOptions,
+    lock: impl Into<String>,
+) -> Result<CompileResult> {
+    compile_file_with_entry_scope(path, options, Some(CompileEntryScope::Lock(lock.into())))
+}
+
+pub fn compile_path_with_entry_action<P: AsRef<Utf8Path>>(
+    path: P,
+    options: CompileOptions,
+    action: impl Into<String>,
+) -> Result<CompileResult> {
+    let resolved = resolve_input_path(path)?;
+    compile_file_with_entry_action(&resolved, options, action)
+}
+
+pub fn compile_path_with_entry_lock<P: AsRef<Utf8Path>>(
+    path: P,
+    options: CompileOptions,
+    lock: impl Into<String>,
+) -> Result<CompileResult> {
+    let resolved = resolve_input_path(path)?;
+    compile_file_with_entry_lock(&resolved, options, lock)
+}
+
+fn compile_file_with_entry_scope<P: AsRef<Utf8Path>>(
+    path: P,
+    options: CompileOptions,
+    entry_scope: Option<CompileEntryScope>,
+) -> Result<CompileResult> {
     let path = path.as_ref();
     let source =
         std::fs::read_to_string(path).map_err(|e| CompileError::new(format!("failed to read file: {}", e), error::Span::default()))?;
@@ -1961,8 +2027,13 @@ pub fn compile_file<P: AsRef<Utf8Path>>(path: P, options: CompileOptions) -> Res
     let ast = parser::parse(&tokens)?;
     let resolver = build_module_resolver(path, &ast)?;
     let manifest = find_package_root(path)?.map(|root| load_manifest(&root)).transpose()?;
-    let mut result =
-        compile_ast_with_build(&ast, &options, Some((&resolver, &ast.name)), manifest.as_ref().map(|manifest| &manifest.build))?;
+    let mut result = compile_ast_with_build(
+        &ast,
+        &options,
+        Some((&resolver, &ast.name)),
+        manifest.as_ref().map(|manifest| &manifest.build),
+        entry_scope.as_ref(),
+    )?;
     bind_source_metadata(&mut result.metadata, collect_source_units_for_compile_file(path)?);
     result.validate()?;
 
@@ -2639,6 +2710,279 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
             })
             .collect(),
         debug_info_sections: Vec::new(),
+    }
+}
+
+fn scope_ir_to_entry(ir: &ir::IrModule, scope: &CompileEntryScope) -> Result<ir::IrModule> {
+    let selected_item = ir
+        .items
+        .iter()
+        .find(|item| match (scope, item) {
+            (CompileEntryScope::Action(name), ir::IrItem::Action(action)) => action.name == *name,
+            (CompileEntryScope::Lock(name), ir::IrItem::Lock(lock)) => lock.name == *name,
+            _ => false,
+        })
+        .cloned()
+        .ok_or_else(|| match scope {
+            CompileEntryScope::Action(name) => CompileError::without_span(format!("entry action '{}' was not found", name)),
+            CompileEntryScope::Lock(name) => CompileError::without_span(format!("entry lock '{}' was not found", name)),
+        })?;
+
+    let function_by_name = ir
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ir::IrItem::PureFn(function) => Some((function.name.as_str(), function)),
+            _ => None,
+        })
+        .collect::<HashMap<_, _>>();
+    let type_by_name = ir
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ir::IrItem::TypeDef(type_def) => Some((type_def.name.as_str(), type_def)),
+            _ => None,
+        })
+        .chain(ir.external_type_defs.iter().map(|type_def| (type_def.name.as_str(), type_def)))
+        .collect::<HashMap<_, _>>();
+
+    let mut used_functions = BTreeSet::new();
+    let mut pending_functions = Vec::new();
+    let mut used_types = BTreeSet::new();
+
+    collect_entry_item_scope(&selected_item, &mut used_types, &mut pending_functions);
+    while let Some(function_name) = pending_functions.pop() {
+        if !used_functions.insert(function_name.clone()) {
+            continue;
+        }
+        let Some(function) = function_by_name.get(function_name.as_str()) else {
+            continue;
+        };
+        collect_params_named_types(&function.params, &mut used_types);
+        if let Some(return_type) = &function.return_type {
+            collect_ir_type_named_types(return_type, &mut used_types);
+        }
+        collect_body_scope(&function.body, &mut used_types, &mut pending_functions);
+    }
+
+    let mut pending_types = used_types.iter().cloned().collect::<Vec<_>>();
+    while let Some(type_name) = pending_types.pop() {
+        let Some(type_def) = type_by_name.get(type_name.as_str()) else {
+            continue;
+        };
+        for field in &type_def.fields {
+            let before = used_types.len();
+            collect_ir_type_named_types(&field.ty, &mut used_types);
+            if used_types.len() != before {
+                pending_types.extend(used_types.iter().cloned());
+            }
+        }
+        if let Some(claim_output) = &type_def.claim_output {
+            let before = used_types.len();
+            collect_ir_type_named_types(claim_output, &mut used_types);
+            if used_types.len() != before {
+                pending_types.extend(used_types.iter().cloned());
+            }
+        }
+    }
+
+    let mut items = Vec::new();
+    items.extend(ir.items.iter().filter_map(|item| match item {
+        ir::IrItem::TypeDef(type_def) if used_types.contains(&type_def.name) => Some(item.clone()),
+        _ => None,
+    }));
+    items.push(selected_item);
+    items.extend(ir.items.iter().filter_map(|item| match item {
+        ir::IrItem::PureFn(function) if used_functions.contains(&function.name) => Some(item.clone()),
+        _ => None,
+    }));
+
+    Ok(ir::IrModule {
+        name: ir.name.clone(),
+        items,
+        external_type_defs: ir.external_type_defs.iter().filter(|type_def| used_types.contains(&type_def.name)).cloned().collect(),
+        external_callable_abis: ir.external_callable_abis.iter().filter(|abi| used_functions.contains(&abi.name)).cloned().collect(),
+        enum_fixed_sizes: ir
+            .enum_fixed_sizes
+            .iter()
+            .filter(|(name, _)| used_types.contains(*name))
+            .map(|(name, size)| (name.clone(), *size))
+            .collect(),
+    })
+}
+
+fn collect_entry_item_scope(item: &ir::IrItem, used_types: &mut BTreeSet<String>, pending_functions: &mut Vec<String>) {
+    match item {
+        ir::IrItem::Action(action) => {
+            collect_params_named_types(&action.params, used_types);
+            if let Some(return_type) = &action.return_type {
+                collect_ir_type_named_types(return_type, used_types);
+            }
+            collect_body_scope(&action.body, used_types, pending_functions);
+        }
+        ir::IrItem::Lock(lock) => {
+            collect_params_named_types(&lock.params, used_types);
+            collect_body_scope(&lock.body, used_types, pending_functions);
+        }
+        ir::IrItem::TypeDef(_) | ir::IrItem::PureFn(_) => {}
+    }
+}
+
+fn collect_params_named_types(params: &[ir::IrParam], used_types: &mut BTreeSet<String>) {
+    for param in params {
+        collect_ir_type_named_types(&param.ty, used_types);
+        collect_ir_type_named_types(&param.binding.ty, used_types);
+    }
+}
+
+fn collect_body_scope(body: &ir::IrBody, used_types: &mut BTreeSet<String>, pending_functions: &mut Vec<String>) {
+    for pattern in body.consume_set.iter().chain(body.read_refs.iter()) {
+        for (_, operand) in &pattern.fields {
+            collect_operand_named_types(operand, used_types);
+        }
+    }
+    for pattern in &body.create_set {
+        used_types.insert(pattern.ty.clone());
+        for (_, operand) in &pattern.fields {
+            collect_operand_named_types(operand, used_types);
+        }
+        if let Some(lock) = &pattern.lock {
+            collect_operand_named_types(lock, used_types);
+        }
+    }
+    for pattern in &body.mutate_set {
+        used_types.insert(pattern.ty.clone());
+        for transition in &pattern.transitions {
+            collect_operand_named_types(&transition.operand, used_types);
+        }
+    }
+    for intent in &body.write_intents {
+        used_types.insert(intent.ty.clone());
+    }
+    for block in &body.blocks {
+        for instruction in &block.instructions {
+            collect_instruction_scope(instruction, used_types, pending_functions);
+        }
+        match &block.terminator {
+            ir::IrTerminator::Return(Some(operand)) | ir::IrTerminator::Branch { cond: operand, .. } => {
+                collect_operand_named_types(operand, used_types);
+            }
+            ir::IrTerminator::Return(None) | ir::IrTerminator::Jump(_) => {}
+        }
+    }
+}
+
+fn collect_instruction_scope(instruction: &ir::IrInstruction, used_types: &mut BTreeSet<String>, pending_functions: &mut Vec<String>) {
+    match instruction {
+        ir::IrInstruction::LoadConst { dest, .. } => collect_ir_type_named_types(&dest.ty, used_types),
+        ir::IrInstruction::LoadVar { dest, .. } => collect_ir_type_named_types(&dest.ty, used_types),
+        ir::IrInstruction::StoreVar { src, .. } => collect_operand_named_types(src, used_types),
+        ir::IrInstruction::Binary { dest, left, right, .. } => {
+            collect_ir_type_named_types(&dest.ty, used_types);
+            collect_operand_named_types(left, used_types);
+            collect_operand_named_types(right, used_types);
+        }
+        ir::IrInstruction::Unary { dest, operand, .. }
+        | ir::IrInstruction::FieldAccess { dest, obj: operand, .. }
+        | ir::IrInstruction::Index { dest, arr: operand, .. }
+        | ir::IrInstruction::Length { dest, operand }
+        | ir::IrInstruction::TypeHash { dest, operand }
+        | ir::IrInstruction::Move { dest, src: operand }
+        | ir::IrInstruction::Transfer { dest, operand, .. }
+        | ir::IrInstruction::Claim { dest, receipt: operand }
+        | ir::IrInstruction::Settle { dest, operand } => {
+            collect_ir_type_named_types(&dest.ty, used_types);
+            collect_operand_named_types(operand, used_types);
+        }
+        ir::IrInstruction::CollectionNew { dest, ty } => {
+            collect_ir_type_named_types(&dest.ty, used_types);
+            used_types.insert(ty.clone());
+        }
+        ir::IrInstruction::CollectionPush { collection, value } | ir::IrInstruction::CollectionExtend { collection, slice: value } => {
+            collect_operand_named_types(collection, used_types);
+            collect_operand_named_types(value, used_types);
+        }
+        ir::IrInstruction::Call { dest, func, args } => {
+            if let Some(dest) = dest {
+                collect_ir_type_named_types(&dest.ty, used_types);
+            }
+            pending_functions.push(func.clone());
+            for arg in args {
+                collect_operand_named_types(arg, used_types);
+            }
+        }
+        ir::IrInstruction::ReadRef { dest, ty } => {
+            collect_ir_type_named_types(&dest.ty, used_types);
+            used_types.insert(ty.clone());
+        }
+        ir::IrInstruction::Tuple { dest, fields } => {
+            collect_ir_type_named_types(&dest.ty, used_types);
+            for field in fields {
+                collect_operand_named_types(field, used_types);
+            }
+        }
+        ir::IrInstruction::Consume { operand } | ir::IrInstruction::Destroy { operand } => {
+            collect_operand_named_types(operand, used_types);
+        }
+        ir::IrInstruction::Create { dest, pattern } => {
+            collect_ir_type_named_types(&dest.ty, used_types);
+            used_types.insert(pattern.ty.clone());
+            for (_, operand) in &pattern.fields {
+                collect_operand_named_types(operand, used_types);
+            }
+            if let Some(lock) = &pattern.lock {
+                collect_operand_named_types(lock, used_types);
+            }
+        }
+    }
+}
+
+fn collect_operand_named_types(operand: &ir::IrOperand, used_types: &mut BTreeSet<String>) {
+    if let ir::IrOperand::Var(var) = operand {
+        collect_ir_type_named_types(&var.ty, used_types);
+    }
+}
+
+fn collect_ir_type_named_types(ty: &ir::IrType, used_types: &mut BTreeSet<String>) {
+    match ty {
+        ir::IrType::Named(name) => {
+            used_types.insert(name.clone());
+            collect_inline_named_type_dependencies(name, used_types);
+        }
+        ir::IrType::Array(inner, _) | ir::IrType::Ref(inner) | ir::IrType::MutRef(inner) => {
+            collect_ir_type_named_types(inner, used_types)
+        }
+        ir::IrType::Tuple(items) => {
+            for item in items {
+                collect_ir_type_named_types(item, used_types);
+            }
+        }
+        ir::IrType::U8
+        | ir::IrType::U16
+        | ir::IrType::U32
+        | ir::IrType::U64
+        | ir::IrType::U128
+        | ir::IrType::Bool
+        | ir::IrType::Unit
+        | ir::IrType::Address
+        | ir::IrType::Hash => {}
+    }
+}
+
+fn collect_inline_named_type_dependencies(name: &str, used_types: &mut BTreeSet<String>) {
+    let Some(inner) = name.strip_prefix("Vec<").and_then(|name| name.strip_suffix('>')) else {
+        return;
+    };
+    match inner {
+        "bool" | "u8" | "u16" | "u32" | "u64" | "u128" | "Address" | "Hash" | "String" | "Vec" => {}
+        nested if nested.starts_with("Vec<") && nested.ends_with('>') => {
+            used_types.insert(nested.to_string());
+            collect_inline_named_type_dependencies(nested, used_types);
+        }
+        named => {
+            used_types.insert(named.to_string());
+            collect_inline_named_type_dependencies(named, used_types);
+        }
     }
 }
 
@@ -4030,7 +4374,7 @@ fn body_uses_current_daa_score(body: &ir::IrBody) -> bool {
                 func,
                 args,
                 ..
-            } if func == "__env_current_daa_score" && args.is_empty()
+            } if matches!(func.as_str(), "__env_current_daa_score" | "__env_current_timepoint") && args.is_empty()
         )
     })
 }
@@ -6900,7 +7244,7 @@ fn body_fail_closed_runtime_features(
             match instruction {
                 ir::IrInstruction::FieldAccess { obj, field, .. } => {
                     if !is_executable_schema_field_access(obj, field, param_schema_vars, type_layouts)
-                        && !is_executable_aggregate_field_access(obj, field, &prelude_availability)
+                        && !is_executable_aggregate_field_access(obj, field, &prelude_availability, type_layouts)
                         && !is_executable_tuple_call_return_field_access(obj, field, &prelude_availability)
                     {
                         features.insert("field-access".to_string());
@@ -6912,10 +7256,17 @@ fn body_fail_closed_runtime_features(
                 {
                     features.insert("fixed-byte-comparison".to_string());
                 }
-                ir::IrInstruction::Index { dest, .. } if !prelude_availability.aggregate_pointer_vars.contains_key(&dest.id) => {
+                ir::IrInstruction::Index { dest, .. }
+                    if !prelude_availability.aggregate_pointer_vars.contains_key(&dest.id)
+                        && !prelude_availability.fixed_value_vars.contains(&dest.id)
+                        && !prelude_availability.scalar_vars.contains(&dest.id) =>
+                {
                     features.insert("index-access".to_string());
                 }
-                ir::IrInstruction::Length { operand, .. } if operand_static_length(operand).is_none() => {
+                ir::IrInstruction::Length { operand, .. }
+                    if operand_static_length(operand).is_none()
+                        && !metadata_dynamic_length_available(operand, &prelude_availability) =>
+                {
                     features.insert("dynamic-length".to_string());
                 }
                 ir::IrInstruction::TypeHash { .. } => {
@@ -6923,17 +7274,25 @@ fn body_fail_closed_runtime_features(
                         features.insert("type-hash".to_string());
                     }
                 }
-                ir::IrInstruction::CollectionNew { .. } => {
-                    features.insert("collection-new".to_string());
+                ir::IrInstruction::CollectionNew { dest, .. } => {
+                    if !metadata_collection_new_is_verified_create_value(dest.id, body, type_layouts, &prelude_availability) {
+                        features.insert("collection-new".to_string());
+                    }
                 }
-                ir::IrInstruction::CollectionPush { value, .. } => {
-                    features.insert("collection-push".to_string());
+                ir::IrInstruction::CollectionPush { collection, value } => {
+                    if !metadata_collection_push_is_verified_append(collection, value, body, type_layouts)
+                        && !metadata_collection_mutation_is_verified_create_vector(collection, value, &prelude_availability)
+                    {
+                        features.insert("collection-push".to_string());
+                    }
                     if ir_operand_contains_cell_backed_value(value, cell_type_kinds) {
                         features.insert("cell-backed-collection-push".to_string());
                     }
                 }
-                ir::IrInstruction::CollectionExtend { slice, .. } => {
-                    features.insert("collection-extend".to_string());
+                ir::IrInstruction::CollectionExtend { collection, slice } => {
+                    if !metadata_collection_mutation_is_verified_create_vector(collection, slice, &prelude_availability) {
+                        features.insert("collection-extend".to_string());
+                    }
                     if ir_operand_is_cell_backed_collection(slice, cell_type_kinds) {
                         features.insert("cell-backed-collection-extend".to_string());
                     }
@@ -7023,8 +7382,12 @@ fn metadata_output_operation_is_verifier_covered(
 struct MetadataPreludeAvailability {
     scalar_vars: HashSet<usize>,
     fixed_value_vars: HashSet<usize>,
+    schema_pointer_vars: HashSet<usize>,
+    empty_molecule_vector_vars: HashSet<usize>,
+    constructed_byte_vector_vars: HashMap<usize, usize>,
     u64_value_vars: HashSet<usize>,
     u64_operand_vars: HashSet<usize>,
+    dynamic_collection_vars: HashSet<usize>,
     aggregate_pointer_vars: HashMap<usize, MetadataAggregatePointerSource>,
     tuple_call_return_vars: HashMap<usize, ir::IrType>,
     created_output_vars: HashMap<usize, usize>,
@@ -7074,6 +7437,7 @@ fn metadata_prelude_availability(
     let mut availability = MetadataPreludeAvailability::default();
     let schema_param_ids =
         params.iter().filter(|param| named_type_name(&param.ty).is_some()).map(|param| param.binding.id).collect::<HashSet<_>>();
+    availability.schema_pointer_vars.extend(schema_param_ids.iter().copied());
 
     for param in params {
         if metadata_fixed_scalar_size(&param.ty).is_some() {
@@ -7085,14 +7449,61 @@ fn metadata_prelude_availability(
             }
         } else if metadata_fixed_byte_width(&param.ty, type_static_length(&param.ty)).is_some() {
             availability.fixed_value_vars.insert(param.binding.id);
+            if metadata_fixed_byte_width(&param.ty, type_static_length(&param.ty)).is_some_and(|width| width > 8) {
+                availability.aggregate_pointer_vars.insert(param.binding.id, MetadataAggregatePointerSource { ty: param.ty.clone() });
+            }
         } else if metadata_fixed_aggregate_pointer_size(&param.ty).is_some() {
             availability.aggregate_pointer_vars.insert(param.binding.id, MetadataAggregatePointerSource { ty: param.ty.clone() });
         }
+        if metadata_molecule_vector_element_fixed_width(&param.ty, type_layouts).is_some() {
+            availability.dynamic_collection_vars.insert(param.binding.id);
+        }
     }
 
+    let mut named_constructed_vectors = HashMap::<String, usize>::new();
+    let mut loaded_constructed_vector_names = HashMap::<usize, String>::new();
+    let mut named_fixed_vars = params
+        .iter()
+        .filter(|param| availability.fixed_value_vars.contains(&param.binding.id))
+        .map(|param| (param.name.clone(), param.binding.id))
+        .collect::<HashMap<_, _>>();
+    let mut named_scalar_vars = params
+        .iter()
+        .filter(|param| availability.scalar_vars.contains(&param.binding.id))
+        .map(|param| (param.name.clone(), param.binding.id))
+        .collect::<HashMap<_, _>>();
     for block in &body.blocks {
         for instruction in &block.instructions {
             match instruction {
+                ir::IrInstruction::StoreVar { name, src: ir::IrOperand::Var(src) } => {
+                    if availability.constructed_byte_vector_vars.contains_key(&src.id) {
+                        named_constructed_vectors.insert(name.clone(), src.id);
+                    }
+                    if availability.fixed_value_vars.contains(&src.id) {
+                        named_fixed_vars.insert(name.clone(), src.id);
+                    }
+                    if availability.scalar_vars.contains(&src.id) {
+                        named_scalar_vars.insert(name.clone(), src.id);
+                    }
+                }
+                ir::IrInstruction::LoadVar { dest, name } => {
+                    if let Some(source_id) = named_constructed_vectors.get(name).copied() {
+                        if let Some(byte_count) = availability.constructed_byte_vector_vars.get(&source_id).copied() {
+                            availability.constructed_byte_vector_vars.insert(dest.id, byte_count);
+                            loaded_constructed_vector_names.insert(dest.id, name.clone());
+                        }
+                    }
+                    if named_fixed_vars.contains_key(name) {
+                        availability.fixed_value_vars.insert(dest.id);
+                    }
+                    if named_scalar_vars.contains_key(name) {
+                        availability.scalar_vars.insert(dest.id);
+                        if dest.ty == ir::IrType::U64 {
+                            availability.u64_value_vars.insert(dest.id);
+                            availability.u64_operand_vars.insert(dest.id);
+                        }
+                    }
+                }
                 ir::IrInstruction::Call { dest: Some(dest), .. } if matches!(dest.ty, ir::IrType::Tuple(_)) => {
                     availability.tuple_call_return_vars.insert(dest.id, dest.ty.clone());
                 }
@@ -7114,6 +7525,10 @@ fn metadata_prelude_availability(
                 ir::IrInstruction::Create { dest, .. } => {
                     let output_index = availability.created_output_vars.len();
                     availability.created_output_vars.insert(dest.id, output_index);
+                }
+                ir::IrInstruction::CollectionNew { dest, .. } => {
+                    availability.empty_molecule_vector_vars.insert(dest.id);
+                    availability.constructed_byte_vector_vars.insert(dest.id, 0);
                 }
                 ir::IrInstruction::TypeHash { dest, operand: ir::IrOperand::Var(var) } => {
                     if availability.created_output_vars.contains_key(&var.id) {
@@ -7159,7 +7574,7 @@ fn metadata_prelude_availability(
                         let Some(source) = availability.aggregate_pointer_vars.get(&obj.id) else {
                             continue;
                         };
-                        let Some(layout) = metadata_aggregate_field_layout(&source.ty, field) else {
+                        let Some(layout) = metadata_aggregate_or_named_field_layout(&source.ty, field, type_layouts) else {
                             continue;
                         };
                         layout
@@ -7174,9 +7589,34 @@ fn metadata_prelude_availability(
                             availability.u64_operand_vars.insert(dest.id);
                         }
                     }
+                    if metadata_layout_fixed_byte_width(&layout).is_none()
+                        && metadata_molecule_vector_element_fixed_width(&layout.ty, type_layouts).is_some()
+                        && layout.ty == dest.ty
+                    {
+                        availability.dynamic_collection_vars.insert(dest.id);
+                    }
                 }
                 ir::IrInstruction::Index { dest, arr: ir::IrOperand::Var(arr), idx } => {
-                    if availability.aggregate_pointer_vars.contains_key(&arr.id) {
+                    if availability.dynamic_collection_vars.contains(&arr.id)
+                        && metadata_molecule_vector_element_fixed_width(&arr.ty, type_layouts).is_some()
+                        && metadata_u64_operand_available(idx, &availability)
+                    {
+                        let fixed_size = metadata_ir_type_fixed_width(&dest.ty, type_layouts);
+                        if metadata_fixed_scalar_width(&dest.ty, fixed_size).is_some() {
+                            availability.scalar_vars.insert(dest.id);
+                            availability.fixed_value_vars.insert(dest.id);
+                            if dest.ty == ir::IrType::U64 {
+                                availability.u64_value_vars.insert(dest.id);
+                                availability.u64_operand_vars.insert(dest.id);
+                            }
+                        } else if metadata_fixed_byte_width(&dest.ty, fixed_size).is_some() {
+                            availability.fixed_value_vars.insert(dest.id);
+                        } else if matches!(dest.ty, ir::IrType::Named(_)) && fixed_size.is_some() {
+                            availability
+                                .aggregate_pointer_vars
+                                .insert(dest.id, MetadataAggregatePointerSource { ty: dest.ty.clone() });
+                        }
+                    } else if availability.aggregate_pointer_vars.contains_key(&arr.id) {
                         if let (ir::IrType::Array(inner, len), Some(index)) = (&arr.ty, const_usize_operand(idx)) {
                             let element_ty = inner.as_ref();
                             let fixed_size = type_static_length(element_ty);
@@ -7197,16 +7637,27 @@ fn metadata_prelude_availability(
                         }
                     }
                 }
+                ir::IrInstruction::Length { dest, operand } if dest.ty == ir::IrType::U64 => {
+                    if operand_static_length(operand).is_some() || metadata_dynamic_length_available(operand, &availability) {
+                        availability.scalar_vars.insert(dest.id);
+                        availability.fixed_value_vars.insert(dest.id);
+                        availability.u64_value_vars.insert(dest.id);
+                        availability.u64_operand_vars.insert(dest.id);
+                    }
+                }
                 ir::IrInstruction::Binary { dest, op, left, right }
                     if dest.ty == ir::IrType::U64 && matches!(op, ast::BinaryOp::Add | ast::BinaryOp::Sub) =>
                 {
                     if metadata_u64_value_available(left, &availability) && metadata_u64_operand_available(right, &availability) {
                         availability.scalar_vars.insert(dest.id);
                         availability.u64_value_vars.insert(dest.id);
+                        availability.u64_operand_vars.insert(dest.id);
                     }
                 }
                 ir::IrInstruction::Call { dest: Some(dest), func, args }
-                    if dest.ty == ir::IrType::U64 && func == "__env_current_daa_score" && args.is_empty() =>
+                    if dest.ty == ir::IrType::U64
+                        && matches!(func.as_str(), "__env_current_daa_score" | "__env_current_timepoint")
+                        && args.is_empty() =>
                 {
                     availability.scalar_vars.insert(dest.id);
                     availability.fixed_value_vars.insert(dest.id);
@@ -7227,6 +7678,81 @@ fn metadata_prelude_availability(
                         availability.u64_value_vars.insert(dest.id);
                         if metadata_u64_operand_available(src, &availability) {
                             availability.u64_operand_vars.insert(dest.id);
+                        }
+                    }
+                    if let ir::IrOperand::Var(src_var) = src {
+                        if availability.schema_pointer_vars.contains(&src_var.id) && named_type_name(&dest.ty).is_some() {
+                            availability.schema_pointer_vars.insert(dest.id);
+                        }
+                        if availability.dynamic_collection_vars.contains(&src_var.id) && dest.ty == src_var.ty {
+                            availability.dynamic_collection_vars.insert(dest.id);
+                        }
+                        if availability.empty_molecule_vector_vars.contains(&src_var.id) && dest.ty == src_var.ty {
+                            availability.empty_molecule_vector_vars.insert(dest.id);
+                        }
+                        if let Some(byte_count) = availability.constructed_byte_vector_vars.get(&src_var.id).copied() {
+                            availability.constructed_byte_vector_vars.insert(dest.id, byte_count);
+                        }
+                    }
+                }
+                ir::IrInstruction::Unary {
+                    dest,
+                    op: ast::UnaryOp::Ref | ast::UnaryOp::Deref,
+                    operand: ir::IrOperand::Var(src_var),
+                } => {
+                    if availability.schema_pointer_vars.contains(&src_var.id) && named_type_name(&dest.ty).is_some() {
+                        availability.schema_pointer_vars.insert(dest.id);
+                    }
+                    if availability.dynamic_collection_vars.contains(&src_var.id) && dest.ty == src_var.ty {
+                        availability.dynamic_collection_vars.insert(dest.id);
+                    }
+                    if availability.empty_molecule_vector_vars.contains(&src_var.id) && dest.ty == src_var.ty {
+                        availability.empty_molecule_vector_vars.insert(dest.id);
+                    }
+                    if let Some(byte_count) = availability.constructed_byte_vector_vars.get(&src_var.id).copied() {
+                        availability.constructed_byte_vector_vars.insert(dest.id, byte_count);
+                    }
+                    if let Some(source) = availability.aggregate_pointer_vars.get(&src_var.id).cloned() {
+                        availability.aggregate_pointer_vars.insert(dest.id, source);
+                    }
+                    if availability.fixed_value_vars.contains(&src_var.id) {
+                        availability.fixed_value_vars.insert(dest.id);
+                    }
+                    if availability.scalar_vars.contains(&src_var.id) {
+                        availability.scalar_vars.insert(dest.id);
+                    }
+                    if availability.u64_value_vars.contains(&src_var.id) && dest.ty == ir::IrType::U64 {
+                        availability.u64_value_vars.insert(dest.id);
+                    }
+                    if availability.u64_operand_vars.contains(&src_var.id) && dest.ty == ir::IrType::U64 {
+                        availability.u64_operand_vars.insert(dest.id);
+                    }
+                }
+                ir::IrInstruction::CollectionPush { collection: ir::IrOperand::Var(collection), value } => {
+                    if let Some(byte_count) = availability.constructed_byte_vector_vars.get(&collection.id).copied() {
+                        if metadata_fixed_value_available_with_width(value, &availability, 1) {
+                            availability.constructed_byte_vector_vars.insert(collection.id, byte_count + 1);
+                            if let Some(name) = loaded_constructed_vector_names.get(&collection.id).cloned() {
+                                named_constructed_vectors.insert(name, collection.id);
+                            }
+                        } else {
+                            availability.constructed_byte_vector_vars.remove(&collection.id);
+                        }
+                    }
+                }
+                ir::IrInstruction::CollectionExtend { collection: ir::IrOperand::Var(collection), slice } => {
+                    if let Some(byte_count) = availability.constructed_byte_vector_vars.get(&collection.id).copied() {
+                        if let Some(width) = operand_fixed_byte_width(slice) {
+                            if metadata_fixed_value_available_with_width(slice, &availability, width) {
+                                availability.constructed_byte_vector_vars.insert(collection.id, byte_count + width);
+                                if let Some(name) = loaded_constructed_vector_names.get(&collection.id).cloned() {
+                                    named_constructed_vectors.insert(name, collection.id);
+                                }
+                            } else {
+                                availability.constructed_byte_vector_vars.remove(&collection.id);
+                            }
+                        } else {
+                            availability.constructed_byte_vector_vars.remove(&collection.id);
                         }
                     }
                 }
@@ -7255,10 +7781,69 @@ fn metadata_can_verify_create_output_fields(
     }
     pattern.fields.iter().all(|(field, value)| {
         layouts.get(field).is_some_and(|layout| {
-            metadata_layout_fixed_byte_width(&layout)
-                .is_some_and(|width| metadata_fixed_value_available_with_width(value, availability, width))
+            if let Some(width) = metadata_layout_fixed_byte_width(&layout) {
+                metadata_fixed_value_available_with_width(value, availability, width)
+            } else {
+                metadata_dynamic_create_output_value_available(value, layout, availability, type_layouts)
+            }
         })
     })
+}
+
+fn metadata_dynamic_create_output_value_available(
+    operand: &ir::IrOperand,
+    layout: &MetadataFieldLayout,
+    availability: &MetadataPreludeAvailability,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
+    match operand {
+        ir::IrOperand::Var(var) => {
+            availability.schema_pointer_vars.contains(&var.id)
+                || availability.constructed_byte_vector_vars.contains_key(&var.id)
+                || (availability.empty_molecule_vector_vars.contains(&var.id)
+                    && metadata_molecule_vector_element_fixed_width(&layout.ty, type_layouts).is_some())
+        }
+        ir::IrOperand::Const(_) => false,
+    }
+}
+
+fn metadata_collection_new_is_verified_create_value(
+    var_id: usize,
+    body: &ir::IrBody,
+    type_layouts: &MetadataTypeLayouts,
+    availability: &MetadataPreludeAvailability,
+) -> bool {
+    if !availability.empty_molecule_vector_vars.contains(&var_id) && !availability.constructed_byte_vector_vars.contains_key(&var_id) {
+        return false;
+    }
+    body.create_set.iter().any(|pattern| {
+        let Some(layouts) = type_layouts.get(&pattern.ty) else {
+            return false;
+        };
+        pattern.fields.iter().any(|(field, value)| {
+            matches!(value, ir::IrOperand::Var(var) if var.id == var_id)
+                && layouts
+                    .get(field)
+                    .is_some_and(|layout| metadata_molecule_vector_element_fixed_width(&layout.ty, type_layouts).is_some())
+        })
+    })
+}
+
+fn metadata_collection_mutation_is_verified_create_vector(
+    collection: &ir::IrOperand,
+    value: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+) -> bool {
+    let ir::IrOperand::Var(collection) = collection else {
+        return false;
+    };
+    if !availability.constructed_byte_vector_vars.contains_key(&collection.id) {
+        return false;
+    }
+    match value {
+        ir::IrOperand::Var(var) => availability.fixed_value_vars.contains(&var.id) || availability.scalar_vars.contains(&var.id),
+        ir::IrOperand::Const(_) => true,
+    }
 }
 
 fn metadata_can_verify_output_lock(pattern: &ir::CreatePattern, availability: &MetadataPreludeAvailability) -> bool {
@@ -7293,8 +7878,11 @@ fn metadata_fixed_value_available_with_width(
             return metadata_scalar_const_fits_width(value, expected_width);
         }
     }
+    if expected_width <= 8 && matches!(operand, ir::IrOperand::Var(_)) && metadata_scalar_available(operand, availability) {
+        return true;
+    }
     metadata_fixed_value_available(operand, availability)
-        && metadata_operand_fixed_value_width(operand).is_some_and(|width| width == expected_width)
+        && metadata_operand_fixed_value_width(operand).is_some_and(|width| expected_width <= width)
 }
 
 fn metadata_fixed_value_available(operand: &ir::IrOperand, availability: &MetadataPreludeAvailability) -> bool {
@@ -7357,6 +7945,13 @@ fn metadata_u64_operand_available(operand: &ir::IrOperand, availability: &Metada
     }
 }
 
+fn metadata_dynamic_length_available(operand: &ir::IrOperand, availability: &MetadataPreludeAvailability) -> bool {
+    match operand {
+        ir::IrOperand::Var(var) => availability.dynamic_collection_vars.contains(&var.id),
+        _ => false,
+    }
+}
+
 fn metadata_fixed_scalar_width(ty: &ir::IrType, fixed_size: Option<usize>) -> Option<usize> {
     match (ty, fixed_size) {
         (ir::IrType::Bool | ir::IrType::U8, Some(1)) => Some(1),
@@ -7375,6 +7970,7 @@ fn metadata_fixed_byte_width(ty: &ir::IrType, fixed_size: Option<usize>) -> Opti
     match (ty, fixed_size) {
         (ir::IrType::Address | ir::IrType::Hash, Some(32)) => Some(32),
         (ir::IrType::Array(inner, len), Some(size)) if matches!(inner.as_ref(), ir::IrType::U8) && *len == size => Some(size),
+        (ir::IrType::Ref(inner) | ir::IrType::MutRef(inner), _) => metadata_fixed_byte_width(inner, type_static_length(inner)),
         _ => None,
     }
 }
@@ -7394,6 +7990,38 @@ fn metadata_fixed_aggregate_pointer_size(ty: &ir::IrType) -> Option<usize> {
     }
 }
 
+fn metadata_molecule_vector_element_fixed_width(ty: &ir::IrType, type_layouts: &MetadataTypeLayouts) -> Option<usize> {
+    let ir::IrType::Named(name) = ty else {
+        return None;
+    };
+    if name == "String" {
+        return Some(1);
+    }
+    let inner = name.strip_prefix("Vec<")?.strip_suffix('>')?;
+    metadata_inline_type_fixed_width(inner, type_layouts)
+}
+
+fn metadata_inline_type_fixed_width(ty: &str, type_layouts: &MetadataTypeLayouts) -> Option<usize> {
+    match ty.trim() {
+        "bool" | "u8" => Some(1),
+        "u16" => Some(2),
+        "u32" => Some(4),
+        "u64" => Some(8),
+        "u128" => Some(16),
+        "Address" | "Hash" => Some(32),
+        other => type_layouts.get(other).and_then(|fields| {
+            fields.values().try_fold(0usize, |acc, layout| metadata_layout_fixed_byte_width(layout).map(|width| acc + width))
+        }),
+    }
+}
+
+fn metadata_ir_type_fixed_width(ty: &ir::IrType, type_layouts: &MetadataTypeLayouts) -> Option<usize> {
+    type_static_length(ty).or_else(|| match ty {
+        ir::IrType::Named(name) => metadata_inline_type_fixed_width(name, type_layouts),
+        _ => None,
+    })
+}
+
 fn metadata_aggregate_field_layout(ty: &ir::IrType, field: &str) -> Option<MetadataFieldLayout> {
     match ty {
         ir::IrType::Tuple(items) => {
@@ -7411,6 +8039,17 @@ fn metadata_aggregate_field_layout(ty: &ir::IrType, field: &str) -> Option<Metad
         }),
         _ => None,
     }
+}
+
+fn metadata_aggregate_or_named_field_layout(
+    ty: &ir::IrType,
+    field: &str,
+    type_layouts: &MetadataTypeLayouts,
+) -> Option<MetadataFieldLayout> {
+    metadata_aggregate_field_layout(ty, field).or_else(|| {
+        let type_name = named_type_name(ty)?;
+        type_layouts.get(type_name).and_then(|fields| fields.get(field)).cloned()
+    })
 }
 
 fn metadata_tuple_return_field_type(ty: &ir::IrType, field: &str) -> Option<ir::IrType> {
@@ -7493,6 +8132,9 @@ fn body_ckb_runtime_features(
                 ir::IrInstruction::Call { func, .. } if func == "__env_current_daa_score" => {
                     features.insert("load-header-daa-score".to_string());
                 }
+                ir::IrInstruction::Call { func, .. } if func == "__env_current_timepoint" => {
+                    features.insert("load-header-timepoint".to_string());
+                }
                 ir::IrInstruction::Call { func, .. } if func == "__ckb_header_epoch_number" => {
                     features.insert("ckb-header-epoch-number".to_string());
                 }
@@ -7531,16 +8173,22 @@ fn is_executable_schema_field_access(
         return false;
     };
     metadata_layout_fixed_byte_width(&layout).is_some()
+        || metadata_molecule_vector_element_fixed_width(&layout.ty, type_layouts).is_some()
 }
 
-fn is_executable_aggregate_field_access(obj: &ir::IrOperand, field: &str, availability: &MetadataPreludeAvailability) -> bool {
+fn is_executable_aggregate_field_access(
+    obj: &ir::IrOperand,
+    field: &str,
+    availability: &MetadataPreludeAvailability,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
     let ir::IrOperand::Var(var) = obj else {
         return false;
     };
     let Some(source) = availability.aggregate_pointer_vars.get(&var.id) else {
         return false;
     };
-    let Some(layout) = metadata_aggregate_field_layout(&source.ty, field) else {
+    let Some(layout) = metadata_aggregate_or_named_field_layout(&source.ty, field, type_layouts) else {
         return false;
     };
     metadata_layout_fixed_byte_width(&layout).is_some()
@@ -7922,11 +8570,16 @@ fn type_molecule_schema_metadata(
     type_def: &ir::IrTypeDef,
     type_defs: &BTreeMap<String, &ir::IrTypeDef>,
 ) -> Option<MoleculeSchemaMetadata> {
-    let fixed_size = type_encoded_size(type_def, type_defs)?;
+    let encoded_size = type_encoded_size(type_def, type_defs);
+    let fixed_size = encoded_size.unwrap_or(0);
     let mut aliases = BTreeMap::new();
     let mut structs = Vec::new();
     let mut emitted = BTreeSet::new();
-    let root_type = molecule_struct_for_type(type_def, type_defs, &mut aliases, &mut structs, &mut emitted, &mut BTreeSet::new())?;
+    let root_type = if encoded_size.is_some() {
+        molecule_struct_for_type(type_def, type_defs, &mut aliases, &mut structs, &mut emitted, &mut BTreeSet::new())?
+    } else {
+        molecule_table_for_type(type_def, type_defs, &mut aliases, &mut structs, &mut emitted, &mut BTreeSet::new())?
+    };
 
     let mut schema = String::new();
     for definition in ordered_molecule_alias_definitions(&aliases) {
@@ -7945,12 +8598,22 @@ fn type_molecule_schema_metadata(
     let schema_hash_blake3 = hex_encode(blake3::hash(schema.as_bytes()).as_bytes());
     Some(MoleculeSchemaMetadata {
         abi: "molecule".to_string(),
-        layout: "fixed-struct-v1".to_string(),
+        layout: if encoded_size.is_some() { "fixed-struct-v1" } else { "molecule-table-v1" }.to_string(),
         name: type_def.name.clone(),
+        dynamic_fields: if encoded_size.is_some() { Vec::new() } else { molecule_dynamic_fields(type_def, type_defs) },
         fixed_size,
         schema_hash_blake3,
         schema,
     })
+}
+
+fn molecule_dynamic_fields(type_def: &ir::IrTypeDef, type_defs: &BTreeMap<String, &ir::IrTypeDef>) -> Vec<String> {
+    type_def
+        .fields
+        .iter()
+        .filter(|field| ir_type_encoded_size(&field.ty, type_defs, &mut BTreeSet::new()).or(field.fixed_size).is_none())
+        .map(|field| field.name.clone())
+        .collect()
 }
 
 fn molecule_struct_for_type(
@@ -7971,8 +8634,14 @@ fn molecule_struct_for_type(
     let result = (|| {
         let mut fields = Vec::new();
         for field in &type_def.fields {
-            let ty =
-                molecule_type_for_ir_type(&field.ty, &type_def.name, &field.name, type_defs, aliases, structs, emitted, visiting)?;
+            let ty = molecule_type_for_ir_type(&field.ty, &type_def.name, &field.name, type_defs, aliases, structs, emitted, visiting)
+                .or_else(|| (field.fixed_size == Some(1)).then(|| molecule_fixed_array_alias(aliases, "CellScriptEnumTag", "byte", 1)))
+                .or_else(|| {
+                    (field.fixed_size.is_none()).then(|| {
+                        let alias = format!("{}{}Bytes", molecule_identifier(&type_def.name), molecule_identifier(&field.name));
+                        molecule_bytes_alias(aliases, &alias)
+                    })
+                })?;
             fields.push((field.name.clone(), ty));
         }
 
@@ -7984,6 +8653,50 @@ fn molecule_struct_for_type(
         definition.push_str("}\n");
         structs.push(definition);
         emitted.insert(type_def.name.clone());
+        Some(name)
+    })();
+
+    visiting.remove(&type_def.name);
+    result
+}
+
+fn molecule_table_for_type(
+    type_def: &ir::IrTypeDef,
+    type_defs: &BTreeMap<String, &ir::IrTypeDef>,
+    aliases: &mut BTreeMap<String, String>,
+    structs: &mut Vec<String>,
+    emitted: &mut BTreeSet<String>,
+    visiting: &mut BTreeSet<String>,
+) -> Option<String> {
+    let name = molecule_identifier(&type_def.name);
+    if emitted.contains(&name) {
+        return Some(name);
+    }
+    if !visiting.insert(type_def.name.clone()) {
+        return None;
+    }
+
+    let result = (|| {
+        let mut fields = Vec::new();
+        for field in &type_def.fields {
+            let ty = molecule_type_for_ir_type(&field.ty, &type_def.name, &field.name, type_defs, aliases, structs, emitted, visiting)
+                .or_else(|| (field.fixed_size == Some(1)).then(|| molecule_fixed_array_alias(aliases, "CellScriptEnumTag", "byte", 1)))
+                .or_else(|| {
+                    (field.fixed_size.is_none()).then(|| {
+                        let alias = format!("{}{}Bytes", molecule_identifier(&type_def.name), molecule_identifier(&field.name));
+                        molecule_bytes_alias(aliases, &alias)
+                    })
+                })?;
+            fields.push((field.name.clone(), ty));
+        }
+
+        let mut definition = format!("table {} {{\n", name);
+        for (field, ty) in fields {
+            definition.push_str(&format!("    {}: {},\n", field, ty));
+        }
+        definition.push_str("}\n");
+        structs.push(definition);
+        emitted.insert(name.clone());
         Some(name)
     })();
 
@@ -8010,6 +8723,14 @@ fn molecule_type_for_ir_type(
         ir::IrType::Bool => Some(molecule_fixed_array_alias(aliases, "CellScriptBool", "byte", 1)),
         ir::IrType::Address => Some(molecule_fixed_array_alias(aliases, "CellScriptAddress", "byte", 32)),
         ir::IrType::Hash => Some(molecule_fixed_array_alias(aliases, "CellScriptHash", "byte", 32)),
+        ir::IrType::Named(name) if name == "String" => Some(molecule_bytes_alias(aliases, "CellScriptString")),
+        ir::IrType::Named(name) if name == "Vec" => Some(molecule_dynvec_alias(aliases, "CellScriptUnknownVec", "byte")),
+        ir::IrType::Named(name) if name.starts_with("Vec<") && name.ends_with('>') => {
+            let inner = name.strip_prefix("Vec<")?.strip_suffix('>')?;
+            let inner_ty = molecule_type_for_named_type(inner, owner, field, type_defs, aliases, structs, emitted, visiting)?;
+            let alias = format!("{}{}Vec", molecule_identifier(owner), molecule_identifier(field));
+            Some(molecule_dynvec_alias(aliases, &alias, &inner_ty))
+        }
         ir::IrType::Array(inner, len) => {
             let inner_ty = molecule_type_for_ir_type(inner, owner, field, type_defs, aliases, structs, emitted, visiting)?;
             let alias = format!("{}{}Array{}", molecule_identifier(owner), molecule_identifier(field), len);
@@ -8021,9 +8742,50 @@ fn molecule_type_for_ir_type(
         }
         ir::IrType::Named(name) => {
             let type_def = type_defs.get(name.as_str())?;
-            molecule_struct_for_type(type_def, type_defs, aliases, structs, emitted, visiting)
+            if type_encoded_size(type_def, type_defs).is_some() {
+                molecule_struct_for_type(type_def, type_defs, aliases, structs, emitted, visiting)
+            } else {
+                molecule_table_for_type(type_def, type_defs, aliases, structs, emitted, visiting)
+            }
         }
         ir::IrType::Unit | ir::IrType::Ref(_) | ir::IrType::MutRef(_) => None,
+    }
+}
+
+fn molecule_type_for_named_type(
+    name: &str,
+    owner: &str,
+    field: &str,
+    type_defs: &BTreeMap<String, &ir::IrTypeDef>,
+    aliases: &mut BTreeMap<String, String>,
+    structs: &mut Vec<String>,
+    emitted: &mut BTreeSet<String>,
+    visiting: &mut BTreeSet<String>,
+) -> Option<String> {
+    match name {
+        "u8" => Some("byte".to_string()),
+        "u16" => Some(molecule_fixed_array_alias(aliases, "CellScriptUint16", "byte", 2)),
+        "u32" => Some(molecule_fixed_array_alias(aliases, "CellScriptUint32", "byte", 4)),
+        "u64" => Some(molecule_fixed_array_alias(aliases, "CellScriptUint64", "byte", 8)),
+        "u128" => Some(molecule_fixed_array_alias(aliases, "CellScriptUint128", "byte", 16)),
+        "bool" => Some(molecule_fixed_array_alias(aliases, "CellScriptBool", "byte", 1)),
+        "Address" => Some(molecule_fixed_array_alias(aliases, "CellScriptAddress", "byte", 32)),
+        "Hash" => Some(molecule_fixed_array_alias(aliases, "CellScriptHash", "byte", 32)),
+        "String" => Some(molecule_bytes_alias(aliases, "CellScriptString")),
+        other if other.starts_with("Vec<") && other.ends_with('>') => {
+            let inner = other.strip_prefix("Vec<")?.strip_suffix('>')?;
+            let inner_ty = molecule_type_for_named_type(inner, owner, field, type_defs, aliases, structs, emitted, visiting)?;
+            let alias = format!("{}{}Vec", molecule_identifier(owner), molecule_identifier(field));
+            Some(molecule_dynvec_alias(aliases, &alias, &inner_ty))
+        }
+        other => {
+            let type_def = type_defs.get(other)?;
+            if type_encoded_size(type_def, type_defs).is_some() {
+                molecule_struct_for_type(type_def, type_defs, aliases, structs, emitted, visiting)
+            } else {
+                molecule_table_for_type(type_def, type_defs, aliases, structs, emitted, visiting)
+            }
+        }
     }
 }
 
@@ -8067,8 +8829,20 @@ fn molecule_fixed_array_alias(aliases: &mut BTreeMap<String, String>, name: &str
     name
 }
 
+fn molecule_bytes_alias(aliases: &mut BTreeMap<String, String>, name: &str) -> String {
+    let name = molecule_identifier(name);
+    aliases.entry(name.clone()).or_insert_with(|| format!("vector {} <byte>;", name));
+    name
+}
+
+fn molecule_dynvec_alias(aliases: &mut BTreeMap<String, String>, name: &str, item: &str) -> String {
+    let name = molecule_identifier(name);
+    aliases.entry(name.clone()).or_insert_with(|| format!("vector {} <{}>;", name, item));
+    name
+}
+
 fn ordered_molecule_alias_definitions(aliases: &BTreeMap<String, String>) -> Vec<&String> {
-    const PRIMITIVE_ORDER: [&str; 7] = [
+    const PRIMITIVE_ORDER: [&str; 9] = [
         "CellScriptBool",
         "CellScriptUint16",
         "CellScriptUint32",
@@ -8076,6 +8850,8 @@ fn ordered_molecule_alias_definitions(aliases: &BTreeMap<String, String>) -> Vec
         "CellScriptUint128",
         "CellScriptAddress",
         "CellScriptHash",
+        "CellScriptString",
+        "CellScriptUnknownVec",
     ];
     let mut definitions = Vec::new();
     for name in PRIMITIVE_ORDER {
@@ -8150,10 +8926,9 @@ fn field_metadata(field: &ir::IrField, type_defs: &BTreeMap<String, &ir::IrTypeD
 }
 
 fn type_encoded_size(type_def: &ir::IrTypeDef, type_defs: &BTreeMap<String, &ir::IrTypeDef>) -> Option<usize> {
-    type_def
-        .fields
-        .iter()
-        .try_fold(0usize, |acc, field| ir_type_encoded_size(&field.ty, type_defs, &mut BTreeSet::new()).map(|size| acc + size))
+    type_def.fields.iter().try_fold(0usize, |acc, field| {
+        ir_type_encoded_size(&field.ty, type_defs, &mut BTreeSet::new()).or(field.fixed_size).map(|size| acc + size)
+    })
 }
 
 fn ir_type_encoded_size(
@@ -8179,7 +8954,7 @@ fn ir_type_encoded_size(
             }
             let size = type_defs.get(name.as_str()).and_then(|type_def| {
                 type_def.fields.iter().try_fold(0usize, |acc, field| {
-                    ir_type_encoded_size(&field.ty, type_defs, visiting).map(|field_size| acc + field_size)
+                    ir_type_encoded_size(&field.ty, type_defs, visiting).or(field.fixed_size).map(|field_size| acc + field_size)
                 })
             });
             visiting.remove(name);
@@ -8559,9 +9334,15 @@ fn mutate_field_equality_status(pattern: &ir::MutatePattern, type_layouts: &Meta
 }
 
 fn mutate_preserved_field_is_verifier_coverable(pattern: &ir::MutatePattern, field: &str, type_layouts: &MetadataTypeLayouts) -> bool {
-    let Some(layout) = type_layouts.get(&pattern.ty).and_then(|fields| fields.get(field)) else {
+    let Some(fields) = type_layouts.get(&pattern.ty) else {
         return false;
     };
+    let Some(layout) = fields.get(field) else {
+        return false;
+    };
+    if metadata_type_encoded_size_from_layouts(fields).is_none() {
+        return true;
+    }
     let Some(width) = metadata_layout_fixed_byte_width(&layout) else {
         return false;
     };
@@ -8575,12 +9356,20 @@ fn mutate_preserved_data_except_transition_is_verifier_coverable(
     if pattern.preserved_fields.is_empty() || pattern.transitions.len() != pattern.fields.len() || pattern.transitions.is_empty() {
         return false;
     }
+    let Some(fields) = type_layouts.get(&pattern.ty) else {
+        return false;
+    };
+    let dynamic_table = metadata_type_encoded_size_from_layouts(fields).is_none();
     pattern.transitions.iter().all(|transition| {
-        type_layouts
-            .get(&pattern.ty)
-            .and_then(|fields| fields.get(&transition.field))
-            .and_then(|layout| metadata_layout_fixed_byte_width(&layout).map(|width| layout.offset + width))
-            .is_some_and(|end| end <= METADATA_MUTATE_CELL_BUFFER_SIZE)
+        fields.get(&transition.field).is_some_and(|layout| {
+            if dynamic_table {
+                metadata_layout_fixed_byte_width(&layout).is_some()
+            } else {
+                metadata_layout_fixed_byte_width(&layout)
+                    .map(|width| layout.offset + width)
+                    .is_some_and(|end| end <= METADATA_MUTATE_CELL_BUFFER_SIZE)
+            }
+        })
     })
 }
 
@@ -8607,14 +9396,30 @@ fn mutate_transition_is_verifier_coverable(
     transition: &ir::MutateFieldTransition,
     type_layouts: &MetadataTypeLayouts,
 ) -> bool {
-    let Some(layout) = type_layouts.get(&pattern.ty).and_then(|fields| fields.get(&transition.field)) else {
+    let Some(fields) = type_layouts.get(&pattern.ty) else {
         return false;
     };
+    let Some(layout) = fields.get(&transition.field) else {
+        return false;
+    };
+    let dynamic_table = metadata_type_encoded_size_from_layouts(fields).is_none();
+    if transition.op == ir::MutateTransitionOp::Append {
+        if !dynamic_table {
+            return false;
+        }
+        let Some(element_width) = metadata_molecule_vector_element_fixed_width(&layout.ty, type_layouts) else {
+            return false;
+        };
+        return match &transition.operand {
+            ir::IrOperand::Var(var) => metadata_ir_type_fixed_width(&var.ty, type_layouts) == Some(element_width),
+            ir::IrOperand::Const(_) => false,
+        };
+    }
     if transition.op == ir::MutateTransitionOp::Set {
         let Some(width) = metadata_layout_fixed_byte_width(&layout) else {
             return false;
         };
-        if layout.offset + width > METADATA_MUTATE_CELL_BUFFER_SIZE {
+        if !dynamic_table && layout.offset + width > METADATA_MUTATE_CELL_BUFFER_SIZE {
             return false;
         }
         return match &transition.operand {
@@ -8623,6 +9428,20 @@ fn mutate_transition_is_verifier_coverable(
             | ir::IrOperand::Const(ir::IrConst::Hash(_))
             | ir::IrOperand::Const(ir::IrConst::Array(_)) => true,
             ir::IrOperand::Var(var) => metadata_fixed_byte_width(&var.ty, type_static_length(&var.ty)).is_some(),
+            _ => false,
+        };
+    }
+    // u128 fields are verifier-coverable via 128-bit add/sub with carry.
+    if dynamic_table {
+        let Some(width) = metadata_layout_fixed_scalar_width(&layout) else {
+            return false;
+        };
+        if width > 8 {
+            return false;
+        }
+        return match &transition.operand {
+            ir::IrOperand::Const(ir::IrConst::U64(_)) => true,
+            ir::IrOperand::Var(var) => matches!(var.ty, ir::IrType::U8 | ir::IrType::U16 | ir::IrType::U32 | ir::IrType::U64),
             _ => false,
         };
     }
@@ -8653,6 +9472,32 @@ fn mutate_transition_is_verifier_coverable(
         ir::IrOperand::Var(var) => matches!(var.ty, ir::IrType::U8 | ir::IrType::U16 | ir::IrType::U32 | ir::IrType::U64),
         _ => false,
     }
+}
+
+fn metadata_collection_push_is_verified_append(
+    collection: &ir::IrOperand,
+    value: &ir::IrOperand,
+    body: &ir::IrBody,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
+    let collection_ty = match collection {
+        ir::IrOperand::Var(var) => &var.ty,
+        ir::IrOperand::Const(_) => return false,
+    };
+    let Some(element_width) = metadata_molecule_vector_element_fixed_width(collection_ty, type_layouts) else {
+        return false;
+    };
+    let pushed_var_id = match value {
+        ir::IrOperand::Var(var) if metadata_ir_type_fixed_width(&var.ty, type_layouts) == Some(element_width) => var.id,
+        _ => return false,
+    };
+    body.mutate_set.iter().any(|pattern| {
+        pattern.transitions.iter().any(|transition| {
+            transition.op == ir::MutateTransitionOp::Append
+                && matches!(&transition.operand, ir::IrOperand::Var(var) if var.id == pushed_var_id)
+                && mutate_transition_is_verifier_coverable(pattern, transition, type_layouts)
+        })
+    })
 }
 
 fn hex_hash(bytes: &[u8; 32]) -> String {
@@ -8839,9 +9684,10 @@ pub const NAME: &str = "cellc";
 #[cfg(test)]
 mod tests {
     use super::{
-        compile, compile_file, compile_path, decode_scheduler_witness_hex, default_output_path_for_input,
-        encode_entry_witness_args_for_params, load_modules_for_input, resolve_input_path, ActionMetadata, ArtifactFormat,
-        CompileError, CompileOptions, EntryWitnessArg, Result, ENTRY_WITNESS_ABI_MAGIC, SCHEDULER_WITNESS_ABI_MOLECULE,
+        compile, compile_file, compile_file_with_entry_action, compile_file_with_entry_lock, compile_path,
+        decode_scheduler_witness_hex, default_output_path_for_input, encode_entry_witness_args_for_params, load_modules_for_input,
+        resolve_input_path, ActionMetadata, ArtifactFormat, CompileError, CompileOptions, EntryWitnessArg, Result,
+        ENTRY_WITNESS_ABI_MAGIC, SCHEDULER_WITNESS_ABI_MOLECULE,
     };
     use crate::{ir, lexer, parser};
     use camino::{Utf8Path, Utf8PathBuf};
@@ -13192,6 +14038,56 @@ action activate(ticket: Ticket) -> Ticket {
     }
 
     #[test]
+    fn compile_binds_readonly_schema_entry_params_to_input_cells() {
+        let program = r#"
+module entry_read_ref
+
+resource NFT has destroy {
+    token_id: u64,
+    owner: Address,
+}
+
+receipt Listing has destroy {
+    token_id: u64,
+    seller: Address,
+    price: u64,
+}
+
+action create_listing(nft: &NFT, price: u64) -> Listing {
+    create Listing {
+        token_id: nft.token_id,
+        seller: nft.owner,
+        price: price,
+    }
+}
+"#;
+
+        let result = compile(program, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: bind read-only param nft to Input#0 cell data"),
+            "read-only schema entry parameter was not bound to an input cell:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: LOAD_CELL_DATA reason=read_ref_param_input source=Input index=0"),
+            "read-only schema entry parameter did not use the Input LOAD_CELL ABI:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: verify output field Listing.token_id offset=0 size=8"),
+            "created output did not verify the u64 field copied from the read-only input:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: verify output bytes field Listing.seller offset=8 size=32"),
+            "created output did not verify the fixed-byte field copied from the read-only input:\n{}",
+            asm
+        );
+    }
+
+    #[test]
     fn compile_rejects_read_ref_for_non_cell_backed_types() {
         let err = compile(READ_REF_STRUCT_TARGET_PROGRAM, CompileOptions::default()).unwrap_err();
         assert!(
@@ -14226,6 +15122,36 @@ action activate(ticket: Ticket) -> Ticket {
     }
 
     #[test]
+    fn ckb_dynamic_vector_len_can_drive_mutate_transition() {
+        let source = r#"
+module dynamic_len_transition
+
+resource Collection {
+    total_supply: u64,
+    name: Vec<u8>,
+}
+
+action batch(collection: &mut Collection, recipients: Vec<Address>) {
+    collection.total_supply += recipients.len() as u64
+}
+"#;
+        let result = compile(source, CompileOptions::default()).unwrap();
+        let action = result.metadata.actions.iter().find(|action| action.name == "batch").expect("batch metadata");
+        let mutation = action.mutate_set.iter().find(|mutation| mutation.ty == "Collection").expect("Collection mutation");
+
+        assert_eq!(mutation.field_transition_status, "checked-runtime");
+        assert!(
+            !action
+                .transaction_runtime_input_requirements
+                .iter()
+                .any(|requirement| requirement.feature == "mutable-cell:Collection"
+                    && requirement.component == "mutate-field-transition"),
+            "dynamic vector len transition should not leave a runtime-required mutable-cell transition blocker: {:?}",
+            action.transaction_runtime_input_requirements
+        );
+    }
+
+    #[test]
     fn compile_lowers_type_hash_without_generic_call() {
         let result = compile(TYPE_HASH_PROGRAM, CompileOptions::default()).unwrap();
         let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
@@ -14380,6 +15306,43 @@ action activate(ticket: Ticket) -> Ticket {
     }
 
     #[test]
+    fn compile_accepts_ckb_shared_create_when_verifier_covered() {
+        let source = r#"
+module test::shared_create
+
+shared Config has store {
+    admin: Address,
+    enabled: bool,
+}
+
+action create_config(admin: Address, enabled: bool) -> Config {
+    create Config {
+        admin: admin,
+        enabled: enabled,
+    } with_lock(admin)
+}
+"#;
+
+        let result = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() }).unwrap();
+        let action = result.metadata.actions.iter().find(|action| action.name == "create_config").expect("create_config metadata");
+
+        assert_eq!(result.metadata.target_profile.name.as_str(), "ckb");
+        assert!(!action.touches_shared.is_empty(), "shared creation should remain scheduler-visible metadata");
+        assert!(action.fail_closed_runtime_features.is_empty(), "shared create should not carry fail-closed debt");
+        assert!(action.transaction_runtime_input_requirements.iter().any(|requirement| {
+            requirement.feature == "create-output:Config:create_Config"
+                && requirement.status == "checked-runtime"
+                && requirement.component == "create-output-fields"
+        }));
+        assert!(action.transaction_runtime_input_requirements.iter().any(|requirement| {
+            requirement.feature == "create-output:Config:create_Config"
+                && requirement.status == "checked-runtime"
+                && requirement.component == "create-output-lock"
+        }));
+        result.validate().unwrap();
+    }
+
+    #[test]
     fn compile_rejects_portable_cell_artifact_profile() {
         let err =
             compile(SIMPLE_PROGRAM, CompileOptions { target_profile: Some("portable-cell".to_string()), ..CompileOptions::default() })
@@ -14405,6 +15368,35 @@ action now() -> u64 {
 
         assert!(err.message.contains("target profile policy failed for 'ckb'"), "unexpected error: {}", err.message);
         assert!(err.message.contains("DAA/header assumptions are Spora-specific"), "unexpected error: {}", err.message);
+    }
+
+    #[test]
+    fn compile_accepts_chain_neutral_timepoint_under_ckb_profile() {
+        let result = compile(
+            r#"
+module test::timepoint
+
+action now() -> u64 {
+    return env::current_timepoint()
+}
+"#,
+            CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
+        )
+        .unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(asm.contains("call __env_current_timepoint"), "timepoint call was not lowered:\n{}", asm);
+        assert!(
+            asm.contains("LOAD_HEADER_BY_FIELD field=ckb_epoch_number source=HeaderDep index=0"),
+            "CKB timepoint should use the CKB epoch-number header field:\n{}",
+            asm
+        );
+        assert!(result.metadata.runtime.ckb_runtime_features.contains(&"load-header-timepoint".to_string()));
+        assert!(
+            !result.metadata.runtime.ckb_runtime_features.contains(&"load-header-daa-score".to_string()),
+            "chain-neutral timepoint must not expose Spora DAA under CKB: {:?}",
+            result.metadata.runtime.ckb_runtime_features
+        );
     }
 
     #[test]
@@ -16821,6 +17813,412 @@ action transfer(nft: &mut NFT, to: Address) {
     }
 
     #[test]
+    fn ckb_entry_action_scope_excludes_unselected_unportable_code() {
+        let source = r#"
+module scoped_ckb
+
+resource Token has destroy {
+    amount: u64,
+}
+
+resource Collection {
+    name: String,
+}
+
+action burn(token: Token) {
+    destroy token
+}
+
+action unsupported_collection(name: String) -> Collection {
+    let collection = create Collection {
+        name: name,
+    };
+    collection
+}
+"#;
+        let temp = tempdir().unwrap();
+        let entry = Utf8Path::from_path(temp.path()).unwrap().join("scoped.cell");
+        std::fs::write(&entry, source).unwrap();
+
+        let full = compile_file(&entry, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() })
+            .unwrap_err()
+            .to_string();
+        assert!(full.contains("Collection"), "full CKB compile should reject the unselected dynamic resource: {}", full);
+
+        let scoped = compile_file_with_entry_action(
+            &entry,
+            CompileOptions {
+                target_profile: Some("ckb".to_string()),
+                target: Some("riscv64-elf".to_string()),
+                ..CompileOptions::default()
+            },
+            "burn",
+        )
+        .unwrap();
+        assert_eq!(scoped.metadata.actions.len(), 1);
+        assert_eq!(scoped.metadata.actions[0].name, "burn");
+        assert!(scoped.metadata.types.iter().any(|ty| ty.name == "Token"));
+        assert!(!scoped.metadata.types.iter().any(|ty| ty.name == "Collection"));
+        assert!(scoped.artifact_bytes.starts_with(b"\x7fELF"));
+        assert_eq!(scoped.metadata.target_profile.name, "ckb");
+    }
+
+    #[test]
+    fn ckb_entry_lock_scope_selects_lock_entrypoint() {
+        let source = r#"
+module scoped_lock
+
+resource DynamicCell {
+    name: String,
+}
+
+lock owner_lock(owner: Address) -> bool {
+    true
+}
+
+action unsupported(name: String) -> DynamicCell {
+    let cell = create DynamicCell {
+        name: name,
+    };
+    cell
+}
+"#;
+        let temp = tempdir().unwrap();
+        let entry = Utf8Path::from_path(temp.path()).unwrap().join("scoped_lock.cell");
+        std::fs::write(&entry, source).unwrap();
+
+        let scoped = compile_file_with_entry_lock(
+            &entry,
+            CompileOptions {
+                target_profile: Some("ckb".to_string()),
+                target: Some("riscv64-elf".to_string()),
+                ..CompileOptions::default()
+            },
+            "owner_lock",
+        )
+        .unwrap();
+        assert_eq!(scoped.metadata.locks.len(), 1);
+        assert_eq!(scoped.metadata.locks[0].name, "owner_lock");
+        assert!(scoped.metadata.actions.is_empty());
+        assert!(!scoped.metadata.types.iter().any(|ty| ty.name == "DynamicCell"));
+        assert!(scoped.artifact_bytes.starts_with(b"\x7fELF"));
+    }
+
+    #[test]
+    fn ckb_entry_scope_keeps_vec_element_schema_dependencies() {
+        let source = r#"
+module scoped_vec_dependency
+
+struct Signature {
+    signer: Address,
+}
+
+receipt Proposal {
+    signatures: Vec<Signature>,
+    expires_at: u64,
+}
+
+lock not_expired(proposal: &Proposal, now: u64) -> bool {
+    now < proposal.expires_at
+}
+"#;
+        let temp = tempdir().unwrap();
+        let entry = Utf8Path::from_path(temp.path()).unwrap().join("scoped_vec_dependency.cell");
+        std::fs::write(&entry, source).unwrap();
+
+        let scoped = compile_file_with_entry_lock(
+            &entry,
+            CompileOptions {
+                target_profile: Some("ckb".to_string()),
+                target: Some("riscv64-elf".to_string()),
+                ..CompileOptions::default()
+            },
+            "not_expired",
+        )
+        .unwrap();
+        let proposal = scoped.metadata.types.iter().find(|ty| ty.name == "Proposal").expect("Proposal metadata");
+        let schema = proposal.molecule_schema.as_ref().expect("Proposal schema should be generated in scoped CKB compile");
+        assert!(schema.schema.contains("struct Signature"), "Vec<Signature> dependency was not retained:\n{}", schema.schema);
+        assert!(scoped.metadata.types.iter().any(|ty| ty.name == "Signature"));
+    }
+
+    #[test]
+    fn fixed_enum_fields_have_molecule_schema_metadata() {
+        let source = r#"
+module enum_schema
+
+enum LockType {
+    Absolute,
+    Relative,
+}
+
+resource TimeLock {
+    owner: Address,
+    lock_type: LockType,
+    unlock_height: u64,
+}
+
+action create_lock(owner: Address) -> TimeLock {
+    let lock = create TimeLock {
+        owner: owner,
+        lock_type: LockType::Absolute,
+        unlock_height: 42,
+    };
+    lock
+}
+"#;
+        let result = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() }).unwrap();
+        let time_lock = result.metadata.types.iter().find(|ty| ty.name == "TimeLock").expect("TimeLock metadata");
+        assert_eq!(time_lock.encoded_size, Some(41));
+        let lock_type = time_lock.fields.iter().find(|field| field.name == "lock_type").expect("lock_type field");
+        assert_eq!(lock_type.encoded_size, Some(1));
+        let schema = time_lock.molecule_schema.as_ref().expect("TimeLock molecule schema");
+        assert_eq!(schema.layout, "fixed-struct-v1");
+        assert_eq!(schema.fixed_size, 41);
+        assert!(schema.schema.contains("array CellScriptEnumTag [byte; 1];"));
+        assert!(schema.schema.contains("lock_type: CellScriptEnumTag"));
+    }
+
+    #[test]
+    fn payload_enum_fields_use_dynamic_molecule_schema_metadata() {
+        let source = r#"
+module payload_enum_schema
+
+enum AssetType {
+    Native,
+    Token(Hash),
+}
+
+resource LockedAsset {
+    asset_type: AssetType,
+    amount: u64,
+    lock_hash: Hash,
+}
+
+action lock_asset(asset_type: AssetType, amount: u64) -> LockedAsset {
+    let locked = create LockedAsset {
+        asset_type: asset_type,
+        amount: amount,
+        lock_hash: Hash::zero(),
+    };
+    locked
+}
+
+lock asset_matches(locked_asset: &LockedAsset, expected: Hash) -> bool {
+    locked_asset.lock_hash == expected
+}
+"#;
+        let result = compile(source, CompileOptions::default()).unwrap();
+        let locked = result.metadata.types.iter().find(|ty| ty.name == "LockedAsset").expect("LockedAsset metadata");
+        assert_eq!(locked.encoded_size, None);
+        let asset_type = locked.fields.iter().find(|field| field.name == "asset_type").expect("asset_type field");
+        assert_eq!(asset_type.encoded_size, None);
+        let schema = locked.molecule_schema.as_ref().expect("LockedAsset should have a dynamic Molecule schema");
+        assert_eq!(schema.layout, "molecule-table-v1");
+        assert_eq!(schema.dynamic_fields, vec!["asset_type"]);
+        assert!(schema.schema.contains("asset_type: LockedAssetAssetTypeBytes"));
+        assert!(
+            !schema.schema.contains("asset_type: CellScriptEnumTag"),
+            "payload enum fields must not be represented as one-byte enum tags"
+        );
+
+        let ckb_err = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() })
+            .unwrap_err()
+            .to_string();
+        assert!(
+            !ckb_err.contains("generated Molecule schemas are required"),
+            "CKB policy should not fail solely because payload enum table metadata is missing: {}",
+            ckb_err
+        );
+
+        let temp = tempdir().unwrap();
+        let entry = Utf8Path::from_path(temp.path()).unwrap().join("payload_enum_schema.cell");
+        std::fs::write(&entry, source).unwrap();
+        let scoped = compile_file_with_entry_lock(
+            &entry,
+            CompileOptions {
+                target_profile: Some("ckb".to_string()),
+                target: Some("riscv64-elf".to_string()),
+                ..CompileOptions::default()
+            },
+            "asset_matches",
+        )
+        .unwrap();
+        assert!(scoped.artifact_bytes.starts_with(b"\x7fELF"));
+    }
+
+    #[test]
+    fn dynamic_schema_fixed_field_access_is_table_decoded() {
+        let source = r#"
+module dynamic_schema_access
+
+resource Collection {
+    name: String,
+    creator: Address,
+}
+
+lock collection_creator(collection: &Collection, claimed_creator: Address) -> bool {
+    collection.creator == claimed_creator
+}
+"#;
+        let result = compile(source, CompileOptions::default()).unwrap();
+        let collection = result.metadata.types.iter().find(|ty| ty.name == "Collection").expect("Collection metadata");
+        let schema = collection.molecule_schema.as_ref().expect("dynamic Collection molecule schema");
+        assert_eq!(collection.encoded_size, None);
+        assert_eq!(schema.layout, "molecule-table-v1");
+        assert_eq!(schema.fixed_size, 0);
+        assert_eq!(schema.dynamic_fields, vec!["name".to_string()]);
+        assert!(schema.schema.contains("vector CellScriptString <byte>;"));
+        assert!(schema.schema.contains("table Collection"));
+        assert!(schema.schema.contains("name: CellScriptString"));
+        assert!(schema.schema.contains("creator: CellScriptAddress"));
+
+        let lock = result.metadata.locks.iter().find(|lock| lock.name == "collection_creator").expect("lock metadata");
+        assert!(
+            !lock.fail_closed_runtime_features.contains(&"field-access".to_string()),
+            "fixed field access through a Molecule table should be verifier-covered: {:?}",
+            lock.fail_closed_runtime_features
+        );
+
+        let ckb = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() }).unwrap();
+        assert!(
+            ckb.metadata.locks[0].fail_closed_runtime_features.is_empty(),
+            "CKB table fixed-field lock should not require fail-closed runtime paths: {:?}",
+            ckb.metadata.locks[0].fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn dynamic_schema_fixed_vec_length_is_table_decoded() {
+        let source = r#"
+module dynamic_vec_len
+
+receipt Emergency {
+    lock_hash: Hash,
+    approvers: Vec<Address>,
+}
+
+lock enough(emergency: &Emergency, required: u8) -> bool {
+    emergency.approvers.len() >= required as usize
+}
+"#;
+        let result = compile(source, CompileOptions::default()).unwrap();
+        let emergency = result.metadata.types.iter().find(|ty| ty.name == "Emergency").expect("Emergency metadata");
+        let schema = emergency.molecule_schema.as_ref().expect("dynamic Emergency molecule schema");
+        assert_eq!(schema.layout, "molecule-table-v1");
+        assert_eq!(schema.dynamic_fields, vec!["approvers".to_string()]);
+
+        let lock = result.metadata.locks.iter().find(|lock| lock.name == "enough").expect("lock metadata");
+        assert!(
+            !lock.fail_closed_runtime_features.contains(&"field-access".to_string()),
+            "dynamic Molecule vector field access should be verifier-covered: {:?}",
+            lock.fail_closed_runtime_features
+        );
+        assert!(
+            !lock.fail_closed_runtime_features.contains(&"dynamic-length".to_string()),
+            "fixed-element Molecule vector length should be verifier-covered: {:?}",
+            lock.fail_closed_runtime_features
+        );
+
+        let ckb = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() }).unwrap();
+        assert!(
+            ckb.metadata.locks[0].fail_closed_runtime_features.is_empty(),
+            "CKB fixed-element vector length lock should not require fail-closed runtime paths: {:?}",
+            ckb.metadata.locks[0].fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn dynamic_schema_fixed_vec_iteration_is_table_decoded() {
+        let source = r#"
+module dynamic_vec_iter
+
+resource Wallet {
+    signers: Vec<Address>,
+    threshold: u8,
+}
+
+fn is_signer(wallet: &Wallet, addr: Address) -> bool {
+    for signer in &wallet.signers {
+        if *signer == addr {
+            return true;
+        }
+    }
+    false
+}
+
+lock signer(wallet: &Wallet, addr: Address) -> bool {
+    is_signer(wallet, addr)
+}
+"#;
+        let result = compile(source, CompileOptions::default()).unwrap();
+        let function = result.metadata.functions.iter().find(|function| function.name == "is_signer").expect("function metadata");
+        assert!(
+            !function.fail_closed_runtime_features.contains(&"dynamic-length".to_string()),
+            "fixed-element Molecule vector length should be verifier-covered: {:?}",
+            function.fail_closed_runtime_features
+        );
+        assert!(
+            !function.fail_closed_runtime_features.contains(&"index-access".to_string()),
+            "fixed-element Molecule vector index should be verifier-covered: {:?}",
+            function.fail_closed_runtime_features
+        );
+        assert!(
+            !function.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
+            "fixed-element Molecule vector comparison should be verifier-covered: {:?}",
+            function.fail_closed_runtime_features
+        );
+
+        let ckb = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() }).unwrap();
+        let function = ckb.metadata.functions.iter().find(|function| function.name == "is_signer").expect("CKB function metadata");
+        assert!(
+            function.fail_closed_runtime_features.is_empty(),
+            "CKB fixed-element vector iteration should not require fail-closed runtime paths: {:?}",
+            function.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn dynamic_mutable_schema_transitions_are_runtime_required_until_table_decoding_exists() {
+        let source = r#"
+module dynamic_mutation
+
+resource Collection {
+    name: String,
+    total_supply: u64,
+    max_supply: u64,
+}
+
+action mint(collection: &mut Collection) {
+    assert!(collection.total_supply < collection.max_supply, "max supply reached");
+    collection.total_supply = collection.total_supply + 1;
+}
+"#;
+        let result = compile(source, CompileOptions::default()).unwrap();
+        let collection = result.metadata.types.iter().find(|ty| ty.name == "Collection").expect("Collection metadata");
+        let schema = collection.molecule_schema.as_ref().expect("dynamic Collection molecule schema");
+        assert_eq!(schema.layout, "molecule-table-v1");
+        assert_eq!(schema.dynamic_fields, vec!["name".to_string()]);
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "mint").expect("mint metadata");
+        let mutation = action.mutate_set.iter().find(|mutation| mutation.ty == "Collection").expect("mutation metadata");
+
+        assert_eq!(mutation.field_equality_status, "runtime-required");
+        assert_eq!(mutation.field_transition_status, "runtime-required");
+        assert!(!action.fail_closed_runtime_features.contains(&"field-access".to_string()));
+        assert!(action.transaction_runtime_input_requirements.iter().any(|requirement| {
+            requirement.feature == "mutable-cell:Collection"
+                && requirement.component == "mutate-field-equality"
+                && requirement.status == "runtime-required"
+        }));
+        assert!(action.transaction_runtime_input_requirements.iter().any(|requirement| {
+            requirement.feature == "mutable-cell:Collection"
+                && requirement.component == "mutate-field-transition"
+                && requirement.status == "runtime-required"
+        }));
+    }
+
+    #[test]
     fn compile_result_exposes_nested_fixed_molecule_schema_metadata() {
         let source = r#"
 module audit::nested_schema
@@ -17189,6 +18587,55 @@ action owned(owner: Address) -> u64 {
 
         let err = action.entry_witness_args(&[EntryWitnessArg::U64(9)]).unwrap_err();
         assert!(err.message.contains("expects 32 fixed bytes for type 'Address'"), "unexpected error: {}", err.message);
+    }
+
+    #[test]
+    fn entry_witness_wrapper_supports_scalar_stack_args() {
+        let program = r#"
+module vm::entry_abi
+
+resource A has store, destroy {
+    value: u64,
+}
+
+resource B has store, destroy {
+    value: u64,
+}
+
+resource C has store, destroy {
+    value: u64,
+}
+
+action stack_arg(a: A, b: B, c: C, owner: Address, required: u64) -> u64 {
+    destroy a
+    destroy b
+    destroy c
+    return required
+}
+"#;
+
+        let result = compile(program, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+        assert!(
+            asm.contains("# cellscript entry abi: scalar param required -> stack+0 size=8"),
+            "entry wrapper did not map the ninth ABI argument to the caller stack:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript entry abi: scalar param required stored to caller stack +0"),
+            "entry wrapper did not store the stack scalar argument before calling the action:\n{}",
+            asm
+        );
+        assert!(asm.contains("sd t3, 0(sp)"), "entry wrapper did not emit the stack argument store:\n{}", asm);
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_arg").unwrap();
+        let owner = [7u8; 32];
+        let witness = action.entry_witness_args(&[EntryWitnessArg::Address(owner), EntryWitnessArg::U64(2)]).unwrap();
+
+        let mut expected = ENTRY_WITNESS_ABI_MAGIC.to_vec();
+        expected.extend_from_slice(&owner);
+        expected.extend_from_slice(&2u64.to_le_bytes());
+        assert_eq!(witness, expected);
     }
 
     #[test]

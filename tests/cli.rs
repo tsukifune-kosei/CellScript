@@ -1246,8 +1246,13 @@ version = "0.1.0"
         r#"
 module demo::main
 
+enum AssetType {
+    Native,
+    Token(Hash),
+}
+
 resource Bag has store {
-    items: Vec
+    asset: AssetType
 }
 
 action value() -> u64 {

@@ -120,6 +120,7 @@ action buy_from_listing(
     nft: &mut NFT,
     listing: Listing,
     buyer: Address,
+    seller: Address,
     payment: u64,
 ) -> (RoyaltyPayment, RoyaltyPayment) {
     assert!(payment >= listing.price, "Insufficient payment");
@@ -139,7 +140,7 @@ action buy_from_listing(
     
     let seller_payment = create RoyaltyPayment {
         token_id: nft.token_id,
-        recipient: listing.seller,
+        recipient: seller,
         amount: seller_amount,
     };
     
@@ -172,15 +173,18 @@ action create_offer(
 action accept_offer(
     nft: &mut NFT,
     offer: Offer,
+    buyer: Address,
+    seller: Address,
+    price: u64,
     current_time: u64,
 ) -> (RoyaltyPayment, RoyaltyPayment) {
     assert!(current_time < offer.expires_at, "Offer expired");
     
     
-    let royalty_amount = (offer.price * nft.royalty_bps as u64) / 10000;
-    let seller_amount = offer.price - royalty_amount;
+    let royalty_amount = (price * nft.royalty_bps as u64) / 10000;
+    let seller_amount = price - royalty_amount;
     
-    nft.owner = offer.buyer;
+    nft.owner = buyer;
     
     destroy offer;
     
@@ -192,7 +196,7 @@ action accept_offer(
     
     let seller_payment = create RoyaltyPayment {
         token_id: nft.token_id,
-        recipient: nft.owner,
+        recipient: seller,
         amount: seller_amount,
     };
     

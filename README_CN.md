@@ -253,6 +253,8 @@ cargo install --path .
 cellc examples/token.cell
 cellc examples/token.cell --target riscv64-elf
 cellc examples/token.cell --target riscv64-elf --target-profile ckb
+cellc examples/nft.cell --target riscv64-elf --target-profile ckb --entry-action transfer
+cellc examples/nft.cell --target riscv64-elf --target-profile ckb --entry-lock nft_ownership
 ```
 
 编译或检查包：
@@ -356,6 +358,8 @@ fail-closed；registry protocol 仍属于 post-v1 工作。
 | `--target-profile spora` | 使用 Spora profile。 |
 | `--target-profile ckb` | 使用 CKB profile。 |
 | `--target-profile portable-cell` | 检查 Cell profile 间的源码可移植性。 |
+| `--entry-action <ACTION>` | 将单个 action 编译为 artifact entrypoint。适合 CKB 下同一 module 仍有其它入口保持 fail-closed 的场景。 |
+| `--entry-lock <LOCK>` | 将单个 lock 编译为 artifact entrypoint。与 `--entry-action` 互斥。 |
 | `--json` | 在支持的命令中输出机器可读 summary。 |
 | `--production` | 启用 production-oriented metadata policy checks。 |
 | `--deny-fail-closed` | 拒绝 fail-closed runtime features 或 obligations。 |

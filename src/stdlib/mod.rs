@@ -110,6 +110,7 @@ impl StdLib {
                 return_type: Some(IrType::Hash),
             },
             StdFunction { name: "env_current_daa_score".to_string(), params: vec![], return_type: Some(IrType::U64) },
+            StdFunction { name: "env_current_timepoint".to_string(), params: vec![], return_type: Some(IrType::U64) },
             StdFunction { name: "ckb_header_epoch_number".to_string(), params: vec![], return_type: Some(IrType::U64) },
             StdFunction { name: "ckb_header_epoch_start_block_number".to_string(), params: vec![], return_type: Some(IrType::U64) },
             StdFunction { name: "ckb_header_epoch_length".to_string(), params: vec![], return_type: Some(IrType::U64) },
@@ -403,6 +404,27 @@ impl StdLib {
             asm.push_str("    addi sp, sp, 16\n");
             asm.push_str("    ret\n\n");
         }
+
+        asm.push_str("# Env: current_timepoint\n");
+        asm.push_str(".global __env_current_timepoint\n");
+        asm.push_str("__env_current_timepoint:\n");
+        asm.push_str("    addi sp, sp, -16\n");
+        asm.push_str("    sd ra, 8(sp)\n");
+        if target_profile == TargetProfile::Ckb {
+            asm.push_str("    # Load CKB epoch number from header dep\n");
+            asm.push_str("    li a7, 2082  # LOAD_HEADER_BY_FIELD\n");
+            asm.push_str("    li a0, 0     # header index\n");
+            asm.push_str("    li a1, 0     # field = epoch number\n");
+        } else {
+            asm.push_str("    # Load Spora DAA score from header dep\n");
+            asm.push_str("    li a7, 2072  # LOAD_HEADER\n");
+            asm.push_str("    li a0, 0     # header index\n");
+            asm.push_str("    li a1, 0     # field = DAA score\n");
+        }
+        asm.push_str("    ecall\n");
+        asm.push_str("    ld ra, 8(sp)\n");
+        asm.push_str("    addi sp, sp, 16\n");
+        asm.push_str("    ret\n\n");
 
         Self::push_ckb_header_epoch_helper(
             &mut asm,

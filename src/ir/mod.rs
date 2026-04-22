@@ -190,6 +190,7 @@ pub enum MutateTransitionOp {
     Set,
     Add,
     Sub,
+    Append,
 }
 
 #[derive(Debug, Clone)]
@@ -296,6 +297,7 @@ pub struct IrGenerator {
     var_counter: usize,
     block_counter: usize,
     aggregate_fields: HashMap<usize, HashMap<String, IrVar>>,
+    schema_field_roots: HashMap<usize, (usize, String)>,
     aggregate_elements: HashMap<usize, Vec<IrVar>>,
     mutated_fields: HashMap<usize, BTreeSet<String>>,
     mutated_field_transitions: HashMap<usize, BTreeMap<String, MutateFieldTransition>>,
@@ -331,6 +333,7 @@ impl IrGenerator {
             var_counter: 0,
             block_counter: 0,
             aggregate_fields: HashMap::new(),
+            schema_field_roots: HashMap::new(),
             aggregate_elements: HashMap::new(),
             mutated_fields: HashMap::new(),
             mutated_field_transitions: HashMap::new(),
@@ -600,6 +603,7 @@ impl IrGenerator {
         self.var_counter = 0;
         self.block_counter = 0;
         self.aggregate_fields.clear();
+        self.schema_field_roots.clear();
         self.aggregate_elements.clear();
         self.mutated_fields.clear();
         self.mutated_field_transitions.clear();
@@ -670,6 +674,7 @@ impl IrGenerator {
         self.var_counter = 0;
         self.block_counter = 0;
         self.aggregate_fields.clear();
+        self.schema_field_roots.clear();
         self.aggregate_elements.clear();
         self.mutated_fields.clear();
         self.mutated_field_transitions.clear();
@@ -719,6 +724,7 @@ impl IrGenerator {
         self.var_counter = 0;
         self.block_counter = 0;
         self.aggregate_fields.clear();
+        self.schema_field_roots.clear();
         self.aggregate_elements.clear();
         self.mutated_fields.clear();
         self.mutated_field_transitions.clear();
@@ -2405,6 +2411,7 @@ impl IrGenerator {
     ) -> LoweredExpr {
         let aggregate = self.new_var("struct_tmp", IrType::Named(init.ty.clone()));
         let mut field_map = HashMap::new();
+        let mut tuple_operands = Vec::new();
         let mut active = current;
 
         for (field_name, field_expr) in &init.fields {
@@ -2419,10 +2426,12 @@ impl IrGenerator {
                 IrOperand::Const(value) => self.const_type(value),
             };
             let field_var = self.new_var(format!("{}_{}", init.ty, field_name), field_ty);
+            tuple_operands.push(lowered.operand.clone());
             self.block_mut(blocks, active).instructions.push(IrInstruction::Move { dest: field_var.clone(), src: lowered.operand });
             field_map.insert(field_name.clone(), field_var);
         }
 
+        self.block_mut(blocks, active).instructions.push(IrInstruction::Tuple { dest: aggregate.clone(), fields: tuple_operands });
         self.aggregate_fields.insert(aggregate.id, field_map);
         LoweredExpr { operand: IrOperand::Var(aggregate), current: Some(active) }
     }
@@ -2517,12 +2526,16 @@ impl IrGenerator {
         target: &FieldAccessExpr,
         assign_op: AssignOp,
         value_expr: &Expr,
-        _value_operand: &IrOperand,
+        value_operand: &IrOperand,
         vars: &HashMap<String, IrVar>,
     ) -> Option<MutateFieldTransition> {
         let (target_root, target_field) = direct_field_access_root(target)?;
         let (op, operand) = match assign_op {
-            AssignOp::AddAssign => (MutateTransitionOp::Add, self.transition_operand_from_expr(value_expr, vars)?),
+            AssignOp::AddAssign => (
+                MutateTransitionOp::Add,
+                self.transition_operand_from_expr(value_expr, vars)
+                    .or_else(|| self.transition_expr_is_coverable_u64(value_expr, vars).then_some(value_operand.clone()))?,
+            ),
             AssignOp::Assign => match value_expr {
                 Expr::Binary(binary) if matches!(binary.op, BinaryOp::Add | BinaryOp::Sub) => {
                     let left_is_old = same_direct_field_access(&binary.left, target_root, target_field);
@@ -2587,6 +2600,17 @@ impl IrGenerator {
                         .is_some_and(|ty| matches!(ty, IrType::U8 | IrType::U16 | IrType::U32 | IrType::U64))
             }
             Expr::Cast(cast) => self.transition_expr_is_coverable_u64(&cast.expr, vars),
+            Expr::Call(call) if call.args.is_empty() => match call.func.as_ref() {
+                Expr::FieldAccess(field) if field.field == "len" => match field.expr.as_ref() {
+                    Expr::Identifier(name) => vars.get(name).is_some_and(|var| {
+                        (matches!(&var.ty, IrType::Named(type_name) if type_name == "String" || type_name.starts_with("Vec<"))
+                            || matches!(&var.ty, IrType::Array(_, _)))
+                            && (self.transition_param_ids.contains(&var.id) || self.transition_coverable_value_ids.contains(&var.id))
+                    }),
+                    _ => false,
+                },
+                _ => false,
+            },
             Expr::Binary(binary) if matches!(binary.op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div) => {
                 self.transition_expr_is_coverable_u64(&binary.left, vars) && self.transition_expr_is_coverable_u64(&binary.right, vars)
             }
@@ -2816,6 +2840,15 @@ impl IrGenerator {
                     });
                     Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(current) })
                 }
+                "env::current_timepoint" if call.args.is_empty() => {
+                    let dest = self.new_var("current_timepoint", IrType::U64);
+                    self.block_mut(blocks, current).instructions.push(IrInstruction::Call {
+                        dest: Some(dest.clone()),
+                        func: "__env_current_timepoint".to_string(),
+                        args: Vec::new(),
+                    });
+                    Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(current) })
+                }
                 "ckb::header_epoch_number" if call.args.is_empty() => {
                     let dest = self.new_var("ckb_header_epoch_number", IrType::U64);
                     self.block_mut(blocks, current).instructions.push(IrInstruction::Call {
@@ -2908,9 +2941,23 @@ impl IrGenerator {
                         }
                     }
                     let block = self.block_mut(blocks, active);
-                    block
-                        .instructions
-                        .push(IrInstruction::CollectionPush { collection: collection_operand, value: lowered_value.operand });
+                    block.instructions.push(IrInstruction::CollectionPush {
+                        collection: collection_operand.clone(),
+                        value: lowered_value.operand.clone(),
+                    });
+                    if let IrOperand::Var(collection_var) = &collection_operand {
+                        if let Some((root_id, field_name)) = self.schema_field_roots.get(&collection_var.id).cloned() {
+                            self.mutated_fields.entry(root_id).or_default().insert(field_name.clone());
+                            self.mutated_field_transitions.entry(root_id).or_default().insert(
+                                field_name.clone(),
+                                MutateFieldTransition {
+                                    field: field_name,
+                                    op: MutateTransitionOp::Append,
+                                    operand: lowered_value.operand,
+                                },
+                            );
+                        }
+                    }
                     Some(LoweredExpr { operand: IrOperand::Const(IrConst::Bool(true)), current: Some(active) })
                 }
                 "extend_from_slice" if call.args.len() == 1 => {
@@ -3066,6 +3113,7 @@ impl IrGenerator {
             field: field.to_string(),
         });
         self.aggregate_fields.entry(base_var.id).or_default().insert(field.to_string(), field_var.clone());
+        self.schema_field_roots.insert(field_var.id, (base_var.id, field.to_string()));
         Some(field_var)
     }
 
@@ -3075,6 +3123,9 @@ impl IrGenerator {
         };
         if let Some(fields) = self.aggregate_fields.get(&source_var.id).cloned() {
             self.aggregate_fields.insert(dest_id, fields);
+        }
+        if let Some(root) = self.schema_field_roots.get(&source_var.id).cloned() {
+            self.schema_field_roots.insert(dest_id, root);
         }
         if let Some(elements) = self.aggregate_elements.get(&source_var.id).cloned() {
             self.aggregate_elements.insert(dest_id, elements);

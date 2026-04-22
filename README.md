@@ -264,6 +264,8 @@ Compile a single file:
 cellc examples/token.cell
 cellc examples/token.cell --target riscv64-elf
 cellc examples/token.cell --target riscv64-elf --target-profile ckb
+cellc examples/nft.cell --target riscv64-elf --target-profile ckb --entry-action transfer
+cellc examples/nft.cell --target riscv64-elf --target-profile ckb --entry-lock nft_ownership
 ```
 
 Compile or check a package:
@@ -369,6 +371,8 @@ Common options:
 | `--target-profile spora` | Use the Spora profile. |
 | `--target-profile ckb` | Use the CKB profile. |
 | `--target-profile portable-cell` | Check source portability across Cell profiles. |
+| `--entry-action <ACTION>` | Compile a single action as the artifact entrypoint. Useful for CKB artifacts when other module entries are intentionally fail-closed. |
+| `--entry-lock <LOCK>` | Compile a single lock as the artifact entrypoint. Mutually exclusive with `--entry-action`. |
 | `--json` | Emit machine-readable summaries where supported. |
 | `--production` | Apply production-oriented metadata policy checks. |
 | `--deny-fail-closed` | Reject fail-closed runtime features or obligations. |

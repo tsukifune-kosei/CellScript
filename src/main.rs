@@ -4,7 +4,8 @@ use colored::Colorize;
 use std::process;
 
 use cellscript::{
-    compile_path, default_metadata_path_for_artifact, default_output_path_for_input, resolve_input_path, CompileOptions,
+    compile_path, compile_path_with_entry_action, compile_path_with_entry_lock, default_metadata_path_for_artifact,
+    default_output_path_for_input, resolve_input_path, CompileOptions,
 };
 
 #[derive(Parser, Debug)]
@@ -29,6 +30,12 @@ struct Cli {
 
     #[arg(long)]
     target_profile: Option<String>,
+
+    #[arg(long, value_name = "ACTION")]
+    entry_action: Option<String>,
+
+    #[arg(long, value_name = "LOCK")]
+    entry_lock: Option<String>,
 
     #[arg(long)]
     lex: bool,
@@ -176,7 +183,19 @@ fn main() {
         target_profile: cli.target_profile,
     };
 
-    match compile_path(Utf8Path::new(&input_file), options) {
+    if cli.entry_action.is_some() && cli.entry_lock.is_some() {
+        eprintln!("{}: --entry-action and --entry-lock are mutually exclusive", "error".red());
+        process::exit(1);
+    }
+
+    let compile_result = match (cli.entry_action, cli.entry_lock) {
+        (Some(action), None) => compile_path_with_entry_action(Utf8Path::new(&input_file), options, action),
+        (None, Some(lock)) => compile_path_with_entry_lock(Utf8Path::new(&input_file), options, lock),
+        (None, None) => compile_path(Utf8Path::new(&input_file), options),
+        (Some(_), Some(_)) => unreachable!("validated above"),
+    };
+
+    match compile_result {
         Ok(result) => {
             let output_path = output
                 .as_deref()

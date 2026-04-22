@@ -10,7 +10,7 @@ const BUNDLED_EXAMPLES: [&str; 7] =
 const BUNDLED_EXAMPLE_ELF_SIZE_BUDGETS: [(&str, usize); 7] = [
     ("amm_pool.cell", 56 * 1024),
     ("launch.cell", 48 * 1024),
-    ("multisig.cell", 40 * 1024),
+    ("multisig.cell", 64 * 1024),
     ("nft.cell", 64 * 1024),
     ("timelock.cell", 40 * 1024),
     ("token.cell", 24 * 1024),
@@ -44,7 +44,7 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_relaxed_branches: 4,
             max_cond_branch_abs_distance: 2_500,
             max_machine_blocks: 700,
-            max_machine_block_bytes: 1_024,
+            max_machine_block_bytes: 1_152,
             max_cfg_edges: 1_200,
             max_call_edges: 200,
             max_unreachable_machine_blocks: 600,
@@ -53,49 +53,49 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
     (
         "multisig.cell",
         AssemblyShapeBudget {
-            max_lines: 7_800,
+            max_lines: 20_500,
             max_fail_handlers: 64,
             max_shared_epilogues: 20,
-            max_text_bytes: 28 * 1024,
+            max_text_bytes: 80 * 1024,
             max_relaxed_branches: 4,
-            max_cond_branch_abs_distance: 1_500,
-            max_machine_blocks: 1_600,
+            max_cond_branch_abs_distance: 7_000,
+            max_machine_blocks: 3_600,
             max_machine_block_bytes: 512,
-            max_cfg_edges: 2_500,
-            max_call_edges: 110,
-            max_unreachable_machine_blocks: 1_400,
+            max_cfg_edges: 5_800,
+            max_call_edges: 300,
+            max_unreachable_machine_blocks: 3_400,
         },
     ),
     (
         "nft.cell",
         AssemblyShapeBudget {
-            max_lines: 10_000,
+            max_lines: 11_500,
             max_fail_handlers: 64,
             max_shared_epilogues: 18,
-            max_text_bytes: 38 * 1024,
+            max_text_bytes: 45 * 1024,
             max_relaxed_branches: 4,
             max_cond_branch_abs_distance: 4_096,
-            max_machine_blocks: 2_050,
+            max_machine_blocks: 2_300,
             max_machine_block_bytes: 256,
-            max_cfg_edges: 3_450,
-            max_call_edges: 260,
-            max_unreachable_machine_blocks: 1_650,
+            max_cfg_edges: 3_800,
+            max_call_edges: 290,
+            max_unreachable_machine_blocks: 1_850,
         },
     ),
     (
         "timelock.cell",
         AssemblyShapeBudget {
-            max_lines: 7_000,
-            max_fail_handlers: 60,
+            max_lines: 9_500,
+            max_fail_handlers: 64,
             max_shared_epilogues: 22,
-            max_text_bytes: 25 * 1024,
+            max_text_bytes: 36 * 1024,
             max_relaxed_branches: 4,
-            max_cond_branch_abs_distance: 1_024,
-            max_machine_blocks: 1_350,
+            max_cond_branch_abs_distance: 2_700,
+            max_machine_blocks: 1_800,
             max_machine_block_bytes: 320,
-            max_cfg_edges: 2_200,
-            max_call_edges: 175,
-            max_unreachable_machine_blocks: 1_150,
+            max_cfg_edges: 3_000,
+            max_call_edges: 215,
+            max_unreachable_machine_blocks: 1_750,
         },
     ),
     (
@@ -127,7 +127,7 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
             max_machine_block_bytes: 512,
             max_cfg_edges: 1_150,
             max_call_edges: 220,
-            max_unreachable_machine_blocks: 520,
+            max_unreachable_machine_blocks: 540,
         },
     ),
 ];
@@ -949,9 +949,15 @@ fn nft_core_actions_expose_action_specific_builder_metadata() {
     assert_mutate_field(mint, "Collection", "collection", "total_supply", "nft mint");
     assert_runtime_requirement(mint, "create-output:NFT:create_NFT", "checked-runtime", "create-output-fields", "nft mint");
     assert_no_runtime_requirement(mint, "mutable-cell:Collection", "mutate-field-equality", "nft mint");
+    assert_no_runtime_requirement(mint, "mutable-cell:Collection", "mutate-field-transition", "nft mint");
     assert!(
-        asm.contains("# cellscript abi: verify mutate preserved data Collection Input#0 == Output#1 except transition ranges"),
-        "nft mint should verify dynamic Collection preserved data except total_supply transition:\n{}",
+        asm.contains("# cellscript abi: verify mutate preserved Molecule table fields Collection Input#0 == Output#1"),
+        "nft mint should verify dynamic Collection preserved Molecule table fields:\n{}",
+        asm
+    );
+    assert!(
+        asm.contains("# cellscript abi: verify mutate Molecule table transition fields Collection Input#0 -> Output#1"),
+        "nft mint should verify dynamic Collection total_supply transition through Molecule table offsets:\n{}",
         asm
     );
 
@@ -1085,9 +1091,21 @@ fn multisig_core_actions_expose_threshold_lifecycle_metadata() {
     assert_runtime_requirement(
         create_wallet,
         "create-output:MultisigWallet:create_MultisigWallet",
-        "runtime-required",
+        "checked-runtime",
         "create-output-fields",
         "multisig create_wallet",
+    );
+    assert!(
+        asm.contains("# cellscript abi: verify output dynamic field MultisigWallet.signers as Molecule bytes"),
+        "multisig create_wallet should verify dynamic signer vector output bytes:\n{}",
+        asm
+    );
+    assert!(
+        asm.contains("# cellscript abi: verify output Molecule table scalar field MultisigWallet.threshold index=1 size=1")
+            && asm.contains("# cellscript abi: verify output Molecule table scalar field MultisigWallet.nonce index=2 size=8")
+            && asm.contains("# cellscript abi: verify output Molecule table scalar field MultisigWallet.created_at index=3 size=8"),
+        "multisig create_wallet should verify fixed fields through Molecule table offsets, not fixed-struct offsets:\n{}",
+        asm
     );
 
     let propose_transfer = action(&result.metadata, "propose_transfer");
@@ -1097,7 +1115,7 @@ fn multisig_core_actions_expose_threshold_lifecycle_metadata() {
     assert_runtime_requirement(
         propose_transfer,
         "create-output:Proposal:create_Proposal",
-        "runtime-required",
+        "checked-runtime",
         "create-output-fields",
         "multisig propose_transfer",
     );
@@ -1107,9 +1125,38 @@ fn multisig_core_actions_expose_threshold_lifecycle_metadata() {
         "mutate-field-equality",
         "multisig propose_transfer",
     );
+    assert_no_runtime_requirement(
+        propose_transfer,
+        "mutable-cell:MultisigWallet",
+        "mutate-field-transition",
+        "multisig propose_transfer",
+    );
     assert!(
-        asm.contains("# cellscript abi: verify mutate preserved data MultisigWallet Input#0 == Output#1 except transition ranges"),
-        "multisig propose_transfer should verify dynamic wallet preserved data except nonce transition:\n{}",
+        asm.contains("# cellscript abi: verify mutate preserved Molecule table fields MultisigWallet Input#0 == Output#1"),
+        "multisig propose_transfer should verify dynamic wallet preserved Molecule table fields:\n{}",
+        asm
+    );
+    assert!(
+        asm.contains("# cellscript abi: verify mutate Molecule table transition fields MultisigWallet Input#0 -> Output#1"),
+        "multisig propose_transfer should verify dynamic wallet nonce transition through Molecule table offsets:\n{}",
+        asm
+    );
+    assert!(
+        asm.contains("# cellscript abi: preserve mutate table input scalar before transition expression")
+            && asm.contains("# cellscript abi: preserve mutate table expected scalar across output field load"),
+        "multisig propose_transfer should preserve transition scalars across dynamic Molecule table expression and output decoding:\n{}",
+        asm
+    );
+    assert!(
+        asm.contains("# cellscript abi: verify output dynamic field Proposal.data as constructed Molecule byte vector len=0")
+            && asm.contains("# cellscript abi: verify output dynamic field Proposal.signatures as empty Molecule vector"),
+        "multisig propose_transfer should verify empty Molecule vector output fields:\n{}",
+        asm
+    );
+    assert!(
+        asm.contains("# cellscript abi: verify output Molecule table scalar field Proposal.proposal_id index=1 size=8")
+            && asm.contains("# cellscript abi: preserve output table scalar before expected expression"),
+        "multisig propose_transfer should preserve created Proposal scalar fields across expected expression evaluation:\n{}",
         asm
     );
 
@@ -1123,12 +1170,67 @@ fn multisig_core_actions_expose_threshold_lifecycle_metadata() {
         "create-output-fields",
         "multisig add_signature",
     );
+    assert_no_runtime_requirement(add_signature, "mutable-cell:Proposal", "mutate-field-equality", "multisig add_signature");
+    assert_no_runtime_requirement(add_signature, "mutable-cell:Proposal", "mutate-field-transition", "multisig add_signature");
+    assert!(
+        asm.contains("# cellscript abi: verify mutate Molecule table append fields Proposal Input#0 -> Output#1")
+            && asm.contains("# cellscript abi: verify mutate Molecule vector append Proposal.signatures element_size=96")
+            && asm.contains("# cellscript abi: collection push is covered by mutate append verifier"),
+        "multisig add_signature should verify Proposal.signatures append and skip runtime collection push:\n{}",
+        asm
+    );
+    let append_marker = "# cellscript abi: verify mutate Molecule vector append Proposal.signatures element_size=96";
+    let append_start = asm.find(append_marker).expect("multisig add_signature should emit a Proposal.signatures append verifier");
+    let append_end = (append_start + 4096).min(asm.len());
+    let append_block = &asm[append_start..append_end];
+    assert!(
+        append_block.contains("addi a0, a0, 4") && append_block.contains("addi a1, a1, 4") && append_block.contains("addi a2, a2, -4"),
+        "Molecule fixvec append prefix comparison must skip the 4-byte count header:\n{}",
+        append_block
+    );
+
+    let propose_add_signer = action(&result.metadata, "propose_add_signer");
+    assert_eq!(propose_add_signer.effect_class, "Creating");
+    assert_create(propose_add_signer, "Proposal", "multisig propose_add_signer");
     assert_runtime_requirement(
-        add_signature,
-        "mutable-cell:Proposal",
-        "runtime-required",
-        "mutate-field-equality",
-        "multisig add_signature",
+        propose_add_signer,
+        "create-output:Proposal:create_Proposal",
+        "checked-runtime",
+        "create-output-fields",
+        "multisig propose_add_signer",
+    );
+    assert!(
+        !propose_add_signer.fail_closed_runtime_features.contains(&"output-verification-incomplete".to_string()),
+        "multisig propose_add_signer should verify constructed Proposal.data bytes without fail-closed debt: {:?}",
+        propose_add_signer.fail_closed_runtime_features
+    );
+    assert!(
+        asm.contains("# cellscript abi: verify output dynamic field Proposal.data as constructed Molecule byte vector len=32")
+            && asm.contains("# cellscript abi: collection extend is covered by create-output vector verifier"),
+        "multisig propose_add_signer should verify Proposal.data as a constructed Molecule byte vector:\n{}",
+        asm
+    );
+
+    let propose_change_threshold = action(&result.metadata, "propose_change_threshold");
+    assert_eq!(propose_change_threshold.effect_class, "Creating");
+    assert_create(propose_change_threshold, "Proposal", "multisig propose_change_threshold");
+    assert_runtime_requirement(
+        propose_change_threshold,
+        "create-output:Proposal:create_Proposal",
+        "checked-runtime",
+        "create-output-fields",
+        "multisig propose_change_threshold",
+    );
+    assert!(
+        propose_change_threshold.fail_closed_runtime_features.is_empty(),
+        "multisig propose_change_threshold should verify scalar byte-vector construction without fail-closed debt: {:?}",
+        propose_change_threshold.fail_closed_runtime_features
+    );
+    assert!(
+        asm.contains("# cellscript abi: verify output dynamic field Proposal.data as constructed Molecule byte vector len=1")
+            && asm.contains("# cellscript abi: collection push is covered by create-output vector verifier"),
+        "multisig propose_change_threshold should verify Proposal.data as a one-byte Molecule vector:\n{}",
+        asm
     );
 
     let execute_proposal = action(&result.metadata, "execute_proposal");
@@ -1148,6 +1250,13 @@ fn multisig_core_actions_expose_threshold_lifecycle_metadata() {
         "checked-runtime",
         "create-output-fields",
         "multisig execute_proposal",
+    );
+    assert!(
+        asm.contains("# cellscript abi: retain consumed input pointer for post-destroy output verification")
+            && asm.contains("# cellscript abi: verify output field ExecutionRecord.success offset=48 size=1")
+            && asm.contains("# cellscript abi: preserve output scalar before expected expression"),
+        "multisig execute_proposal should retain destroyed Proposal input bytes and compare runtime scalar outputs:\n{}",
+        asm
     );
 
     let cancel_proposal = action(&result.metadata, "cancel_proposal");
@@ -2310,6 +2419,16 @@ fn launch_seed_pool_composition_is_scheduler_visible() {
         simple_launch.fail_closed_runtime_features.is_empty(),
         "simple_launch fixed tuple-array distribution and recipient locks should be fully verifier-coverable: {:?}",
         simple_launch.fail_closed_runtime_features
+    );
+    assert!(
+        !asm.contains("schema field byte source is not addressable"),
+        "simple_launch recipient lock verification must compare fixed tuple-array address fields without fail-closed traps:\n{}",
+        asm
+    );
+    assert!(
+        !asm.contains("expression verifier temp stack is exhausted"),
+        "simple_launch remaining-output verifier must have enough expression temp slots for the fixed recipient sum:\n{}",
+        asm
     );
     assert!(
         simple_launch.verifier_obligations.iter().all(|obligation| obligation.category != "pool-pattern"),

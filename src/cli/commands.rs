@@ -5,9 +5,10 @@ use crate::error::Result;
 use crate::fmt::format_default;
 use crate::package::{Dependency, DetailedDependency, Lockfile, PackageManager, PolicyConfig};
 use crate::{
-    compile_path, default_metadata_path_for_artifact, default_output_path_for_input, load_modules_for_input, resolve_input_path,
-    validate_artifact_metadata, validate_source_units_on_disk, ArtifactFormat, CompileMetadata, CompileOptions, EntryWitnessArg,
-    ParamMetadata, TargetProfile, ENTRY_WITNESS_ABI,
+    compile_path, compile_path_with_entry_action, compile_path_with_entry_lock, default_metadata_path_for_artifact,
+    default_output_path_for_input, load_modules_for_input, resolve_input_path, validate_artifact_metadata,
+    validate_source_units_on_disk, ArtifactFormat, CompileMetadata, CompileOptions, EntryWitnessArg, ParamMetadata, TargetProfile,
+    ENTRY_WITNESS_ABI,
 };
 use camino::Utf8Path;
 #[cfg(feature = "vm-runner")]
@@ -48,6 +49,8 @@ pub struct BuildArgs {
     pub release: bool,
     pub target: Option<String>,
     pub target_profile: Option<String>,
+    pub entry_action: Option<String>,
+    pub entry_lock: Option<String>,
     pub jobs: Option<usize>,
     pub features: Vec<String>,
     pub all_features: bool,
@@ -236,16 +239,22 @@ impl CommandExecutor {
     fn build(args: BuildArgs) -> Result<()> {
         let opt_level = if args.release { 3 } else { 0 };
         let input = Utf8Path::new(".");
-        let result = compile_path(
-            input,
-            CompileOptions {
-                opt_level,
-                output: None,
-                debug: false,
-                target: args.target.clone(),
-                target_profile: args.target_profile.clone(),
-            },
-        )?;
+        let options = CompileOptions {
+            opt_level,
+            output: None,
+            debug: false,
+            target: args.target.clone(),
+            target_profile: args.target_profile.clone(),
+        };
+        if args.entry_action.is_some() && args.entry_lock.is_some() {
+            return Err(crate::error::CompileError::without_span("--entry-action and --entry-lock are mutually exclusive"));
+        }
+        let result = match (args.entry_action.as_deref(), args.entry_lock.as_deref()) {
+            (Some(action), None) => compile_path_with_entry_action(input, options, action),
+            (None, Some(lock)) => compile_path_with_entry_lock(input, options, lock),
+            (None, None) => compile_path(input, options),
+            (Some(_), Some(_)) => unreachable!("validated above"),
+        }?;
         let policy_args = effective_build_check_args(&args)?;
         validate_check_policy(&result.metadata, &policy_args)?;
         let resolved = resolve_input_path(input)?;
@@ -1891,7 +1900,7 @@ fn common_portability_policy_violations(metadata: &crate::CompileMetadata) -> Ve
         .collect::<Vec<_>>();
     if !persistent_types_without_schema.is_empty() {
         violations.push(format!(
-            "generated Molecule schemas are required before persistent Cell types can be portable: {}",
+            "generated Molecule schemas are required before persistent Cell types can be CKB-portable: {}",
             persistent_types_without_schema.join(", ")
         ));
     }
@@ -1938,9 +1947,11 @@ fn ckb_only_feature_names(metadata: &crate::CompileMetadata) -> Vec<String> {
 }
 
 fn type_has_public_molecule_schema(ty: &crate::TypeMetadata) -> bool {
-    ty.molecule_schema
-        .as_ref()
-        .is_some_and(|schema| schema.abi == "molecule" && schema.layout == "fixed-struct-v1" && !schema.schema.is_empty())
+    ty.molecule_schema.as_ref().is_some_and(|schema| {
+        schema.abi == "molecule"
+            && matches!(schema.layout.as_str(), "fixed-struct-v1" | "molecule-table-v1")
+            && !schema.schema.is_empty()
+    })
 }
 
 fn runtime_required_obligation_count(metadata: &crate::CompileMetadata) -> usize {
@@ -2809,6 +2820,19 @@ impl CliParser {
                             .value_name("PROFILE")
                             .help("Target profile: spora, ckb, or portable-cell"),
                     )
+                    .arg(
+                        Arg::new("entry-action")
+                            .long("entry-action")
+                            .value_name("ACTION")
+                            .help("Compile only this action as the artifact entrypoint"),
+                    )
+                    .arg(
+                        Arg::new("entry-lock")
+                            .long("entry-lock")
+                            .value_name("LOCK")
+                            .conflicts_with("entry-action")
+                            .help("Compile only this lock as the artifact entrypoint"),
+                    )
                     .arg(Arg::new("jobs").long("jobs").short('j').value_name("N").help("Number of parallel jobs"))
                     .arg(Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON build summary"))
                     .arg(
@@ -3115,6 +3139,8 @@ impl CliParser {
                 release: m.get_flag("release"),
                 target: m.get_one::<String>("target").cloned(),
                 target_profile: m.get_one::<String>("target-profile").cloned(),
+                entry_action: m.get_one::<String>("entry-action").cloned(),
+                entry_lock: m.get_one::<String>("entry-lock").cloned(),
                 jobs: m.get_one::<String>("jobs").and_then(|s| s.parse().ok()),
                 json: m.get_flag("json"),
                 production: m.get_flag("production"),

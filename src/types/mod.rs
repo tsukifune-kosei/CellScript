@@ -2115,7 +2115,7 @@ impl<'a> TypeChecker<'a> {
                         }
                     }
                     return Ok(match (prefix, suffix) {
-                        ("env", "current_daa_score") => {
+                        ("env", "current_daa_score" | "current_timepoint") => {
                             self.validate_builtin_arity(name, 0, arg_types, call.span)?;
                             Type::U64
                         }

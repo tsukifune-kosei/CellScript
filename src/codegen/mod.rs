@@ -38,7 +38,7 @@ const CKB_SIG_HASH_ALL: u64 = 1;
 const RUNTIME_SCRATCH_BUFFER_SIZE: usize = 512;
 const RUNTIME_SCRATCH_SLOT_SIZE: usize = 8 + RUNTIME_SCRATCH_BUFFER_SIZE;
 const RUNTIME_SCRATCH_SIZE: usize = RUNTIME_SCRATCH_SLOT_SIZE * 2;
-const RUNTIME_EXPR_TEMP_SLOTS: usize = 8;
+const RUNTIME_EXPR_TEMP_SLOTS: usize = 16;
 const RUNTIME_EXPR_TEMP_SIZE: usize = RUNTIME_EXPR_TEMP_SLOTS * 8;
 const RUNTIME_CELL_BUFFER_SIZE: usize = 512;
 const RUNTIME_CELL_SLOT_SIZE: usize = 8 + RUNTIME_CELL_BUFFER_SIZE;
@@ -103,6 +103,7 @@ fn runtime_syscall_abi(profile: TargetProfile) -> RuntimeSyscallAbi {
 
 #[derive(Debug, Clone)]
 struct SchemaFieldLayout {
+    index: usize,
     offset: usize,
     ty: IrType,
     fixed_size: Option<usize>,
@@ -162,7 +163,39 @@ fn fixed_byte_width(ty: &IrType, fixed_size: Option<usize>) -> Option<usize> {
         (IrType::Address | IrType::Hash, Some(32)) => Some(32),
         (IrType::U128, Some(16)) => Some(16),
         (IrType::Array(inner, len), Some(size)) if matches!(inner.as_ref(), IrType::U8) && *len == size => Some(size),
+        (IrType::Ref(inner) | IrType::MutRef(inner), _) => fixed_byte_width(inner, type_static_length(inner)),
         _ => None,
+    }
+}
+
+fn molecule_vector_element_fixed_width(
+    ty: &IrType,
+    type_fixed_sizes: &HashMap<String, usize>,
+    enum_fixed_sizes: &HashMap<String, usize>,
+) -> Option<usize> {
+    let IrType::Named(name) = ty else {
+        return None;
+    };
+    if name == "String" {
+        return Some(1);
+    }
+    let inner = name.strip_prefix("Vec<")?.strip_suffix('>')?;
+    molecule_inline_type_fixed_width(inner, type_fixed_sizes, enum_fixed_sizes)
+}
+
+fn molecule_inline_type_fixed_width(
+    ty: &str,
+    type_fixed_sizes: &HashMap<String, usize>,
+    enum_fixed_sizes: &HashMap<String, usize>,
+) -> Option<usize> {
+    match ty.trim() {
+        "bool" | "u8" => Some(1),
+        "u16" => Some(2),
+        "u32" => Some(4),
+        "u64" => Some(8),
+        "u128" => Some(16),
+        "Address" | "Hash" => Some(32),
+        other => type_fixed_sizes.get(other).copied().or_else(|| enum_fixed_sizes.get(other).copied()),
     }
 }
 
@@ -185,7 +218,8 @@ fn type_static_length(ty: &IrType) -> Option<usize> {
         IrType::Array(inner, len) => type_static_length(inner).map(|inner_len| inner_len * len),
         IrType::Tuple(items) => items.iter().try_fold(0usize, |acc, item| type_static_length(item).map(|len| acc + len)),
         IrType::Unit => Some(0),
-        IrType::Named(_) | IrType::Ref(_) | IrType::MutRef(_) => None,
+        IrType::Ref(inner) | IrType::MutRef(inner) => type_static_length(inner),
+        IrType::Named(_) => None,
     }
 }
 
@@ -201,6 +235,17 @@ fn operand_fixed_byte_width(operand: &IrOperand) -> Option<usize> {
         IrType::Array(inner, len) if matches!(inner.as_ref(), IrType::U8) => Some(*len),
         _ => None,
     }
+}
+
+fn constructed_byte_vector_part_width(operand: &IrOperand) -> Option<usize> {
+    operand_fixed_byte_width(operand).or_else(|| match operand {
+        IrOperand::Var(var) => fixed_scalar_width(&var.ty, type_static_length(&var.ty)),
+        IrOperand::Const(IrConst::Bool(_)) | IrOperand::Const(IrConst::U8(_)) => Some(1),
+        IrOperand::Const(IrConst::U16(_)) => Some(2),
+        IrOperand::Const(IrConst::U32(_)) => Some(4),
+        IrOperand::Const(IrConst::U64(_)) => Some(8),
+        _ => None,
+    })
 }
 
 fn collect_pure_const_returns(ir: &IrModule) -> HashMap<String, IrConst> {
@@ -291,9 +336,10 @@ fn aggregate_field_layout(ty: &IrType, field: &str) -> Option<SchemaFieldLayout>
             let field_ty = items.get(index)?.clone();
             let offset = items.iter().take(index).try_fold(0usize, |acc, item| type_static_length(item).map(|size| acc + size))?;
             let fixed_size = type_static_length(&field_ty);
-            Some(SchemaFieldLayout { offset, ty: field_ty, fixed_size, fixed_enum_size: None })
+            Some(SchemaFieldLayout { index, offset, ty: field_ty, fixed_size, fixed_enum_size: None })
         }
         IrType::Address | IrType::Hash if field == "0" => Some(SchemaFieldLayout {
+            index: 0,
             offset: 0,
             ty: IrType::Array(Box::new(IrType::U8), 32),
             fixed_size: Some(32),
@@ -423,6 +469,14 @@ pub struct CodeGenerator {
     cell_buffer_offsets: HashMap<usize, usize>,
     /// Per-CKB-runtime cell size words keyed by IR variable id.
     cell_buffer_size_offsets: HashMap<usize, usize>,
+    /// Byte-size slots for dynamic Molecule values projected from schema table fields.
+    dynamic_value_size_offsets: HashMap<usize, usize>,
+    /// Empty collection temporaries that can be verified as empty Molecule vectors.
+    empty_molecule_vector_vars: BTreeSet<usize>,
+    /// Locally constructed `Vec<u8>` bytes keyed by collection variable id.
+    constructed_byte_vectors: HashMap<usize, Vec<IrOperand>>,
+    /// Collection mutation value ids that are covered by create-output vector verification.
+    verified_collection_construction_values: BTreeSet<usize>,
     /// `type_hash()` temporaries that can be loaded from a created Output cell's TypeHash field.
     output_type_hash_sources: HashMap<usize, usize>,
     /// Schema parameter TypeHash pointer slots, keyed by source parameter variable id.
@@ -441,12 +495,20 @@ pub struct CodeGenerator {
     read_ref_order: Vec<usize>,
     /// Read-ref CellDep index keyed by IR destination variable id.
     read_ref_indices: HashMap<usize, usize>,
+    /// Read-only schema parameter variable ids keyed by source binding name.
+    read_ref_param_ids: HashMap<String, usize>,
+    /// CKB Input index for read-only schema parameters keyed by IR variable id.
+    read_ref_param_input_indices: HashMap<usize, usize>,
+    /// Whether the current entry function should bind read-only schema params from Inputs.
+    bind_readonly_schema_params: bool,
     /// Mutable schema parameter variable ids keyed by source binding name.
     mutate_param_ids: HashMap<String, usize>,
     /// Output index for source-level operations that materialize transaction Outputs.
     operation_output_indices: HashMap<usize, usize>,
     /// Operation destination ids whose transaction Output relation is fully verifier-covered.
     verified_operation_outputs: BTreeSet<usize>,
+    /// Collection push value ids whose effect is covered by a mutate append verifier.
+    verified_collection_push_values: BTreeSet<usize>,
     /// Function-local cold fail handlers keyed by returned verifier error code.
     fail_handler_codes: BTreeSet<u64>,
     /// Unique label counter for runtime checks.
@@ -484,6 +546,10 @@ impl CodeGenerator {
             pure_const_returns: HashMap::new(),
             cell_buffer_offsets: HashMap::new(),
             cell_buffer_size_offsets: HashMap::new(),
+            dynamic_value_size_offsets: HashMap::new(),
+            empty_molecule_vector_vars: BTreeSet::new(),
+            constructed_byte_vectors: HashMap::new(),
+            verified_collection_construction_values: BTreeSet::new(),
             output_type_hash_sources: HashMap::new(),
             param_type_hash_pointer_offsets: HashMap::new(),
             param_type_hash_size_offsets: HashMap::new(),
@@ -493,9 +559,13 @@ impl CodeGenerator {
             consume_type_names: HashMap::new(),
             read_ref_order: Vec::new(),
             read_ref_indices: HashMap::new(),
+            read_ref_param_ids: HashMap::new(),
+            read_ref_param_input_indices: HashMap::new(),
+            bind_readonly_schema_params: false,
             mutate_param_ids: HashMap::new(),
             operation_output_indices: HashMap::new(),
             verified_operation_outputs: BTreeSet::new(),
+            verified_collection_push_values: BTreeSet::new(),
             fail_handler_codes: BTreeSet::new(),
             next_runtime_label: 0,
         }
@@ -600,7 +670,6 @@ impl CodeGenerator {
     fn emit_entry_witness_wrapper(&mut self, target: &str, params: &[IrParam]) -> Result<()> {
         let type_hash_param_indices =
             self.callable_abis.get(target).map(|abi| abi.type_hash_param_indices.clone()).unwrap_or_default();
-        let abi_arg_count = entry_witness_abi_arg_count(params, &type_hash_param_indices);
         let payload = entry_witness_payload_layout(params);
         let payload_len = payload.iter().map(|arg| arg.width).sum::<usize>();
         let min_witness_len = ENTRY_WITNESS_HEADER_SIZE + payload_len;
@@ -644,22 +713,32 @@ impl CodeGenerator {
         if payload.iter().any(|arg| arg.unsupported) {
             self.emit("# cellscript entry abi: unsupported witness parameter shape; fail closed");
             self.emit(format!("j {}", fail_label));
-        } else if abi_arg_count > 8 {
-            self.emit(format!(
-                "# cellscript entry abi: {} requires {} ABI args; entry wrapper supports a0-a7 only",
-                target, abi_arg_count
-            ));
-            self.emit(format!("j {}", fail_label));
         } else {
             let mut abi_index = 0usize;
             let mut payload_cursor = 0usize;
             for (param_index, param) in params.iter().enumerate() {
                 if named_type_name(&param.ty).is_some() {
                     self.emit(format!("# cellscript entry abi: schema param {} is runtime-loaded; pass null ABI bytes", param.name));
+                    if abi_index + 1 >= 8 {
+                        self.emit(format!(
+                            "# cellscript entry abi: schema param {} requires pointer/length beyond a0-a7; fail closed",
+                            param.name
+                        ));
+                        self.emit(format!("j {}", fail_label));
+                        break;
+                    }
                     self.emit_entry_abi_zero_arg(abi_index);
                     self.emit_entry_abi_zero_arg(abi_index + 1);
                     abi_index += 2;
                     if type_hash_param_indices.contains(&param_index) {
+                        if abi_index + 1 >= 8 {
+                            self.emit(format!(
+                                "# cellscript entry abi: schema param {} TypeHash requires pointer/length beyond a0-a7; fail closed",
+                                param.name
+                            ));
+                            self.emit(format!("j {}", fail_label));
+                            break;
+                        }
                         self.emit(format!(
                             "# cellscript entry abi: schema param {} TypeHash witness bytes unavailable; pass null ABI bytes",
                             param.name
@@ -671,6 +750,14 @@ impl CodeGenerator {
                 } else if let Some(width) =
                     fixed_byte_pointer_param_width(&param.ty).or_else(|| fixed_aggregate_pointer_param_width(&param.ty))
                 {
+                    if abi_index + 1 >= 8 {
+                        self.emit(format!(
+                            "# cellscript entry abi: fixed-byte param {} requires pointer/length beyond a0-a7; fail closed",
+                            param.name
+                        ));
+                        self.emit(format!("j {}", fail_label));
+                        break;
+                    }
                     self.emit(format!(
                         "# cellscript entry abi: fixed-byte param {} pointer=a{} length=a{} size={}",
                         param.name,
@@ -686,12 +773,24 @@ impl CodeGenerator {
                     payload_cursor += width;
                     abi_index += 2;
                 } else if let Some(width) = entry_witness_register_param_width(&param.ty) {
-                    self.emit(format!("# cellscript entry abi: scalar param {} -> a{} size={}", param.name, abi_index, width));
-                    self.emit_entry_witness_scalar_load(
-                        &format!("a{}", abi_index),
-                        ENTRY_WITNESS_BUFFER_OFFSET + ENTRY_WITNESS_HEADER_SIZE + payload_cursor,
-                        width,
-                    );
+                    self.emit(format!(
+                        "# cellscript entry abi: scalar param {} -> {} size={}",
+                        param.name,
+                        abi_arg_label(abi_index),
+                        width
+                    ));
+                    let stack_offset = ENTRY_WITNESS_BUFFER_OFFSET + ENTRY_WITNESS_HEADER_SIZE + payload_cursor;
+                    if abi_index < 8 {
+                        self.emit_entry_witness_scalar_load(&format!("a{}", abi_index), stack_offset, width);
+                    } else {
+                        let caller_stack_offset = (abi_index - 8) * 8;
+                        self.emit_entry_witness_scalar_load("t3", stack_offset, width);
+                        self.emit(format!(
+                            "# cellscript entry abi: scalar param {} stored to caller stack +{}",
+                            param.name, caller_stack_offset
+                        ));
+                        self.emit(format!("sd t3, {}(sp)", caller_stack_offset));
+                    }
                     payload_cursor += width;
                     abi_index += 1;
                 } else {
@@ -713,7 +812,14 @@ impl CodeGenerator {
     }
 
     fn emit_entry_abi_zero_arg(&mut self, abi_index: usize) {
-        self.emit(format!("li a{}, 0", abi_index));
+        if abi_index < 8 {
+            self.emit(format!("li a{}, 0", abi_index));
+        } else {
+            let caller_stack_offset = (abi_index - 8) * 8;
+            self.emit(format!("# cellscript entry abi: stack arg{} <- 0", abi_index));
+            self.emit("li t0, 0");
+            self.emit(format!("sd t0, {}(sp)", caller_stack_offset));
+        }
     }
 
     fn emit_entry_witness_scalar_load(&mut self, dest_reg: &str, stack_offset: usize, width: usize) {
@@ -756,14 +862,21 @@ impl CodeGenerator {
         let fields = type_def
             .fields
             .iter()
-            .map(|field| {
+            .enumerate()
+            .map(|(index, field)| {
                 let fixed_enum_size = match &field.ty {
                     IrType::Named(name) => self.enum_fixed_sizes.get(name).copied(),
                     _ => None,
                 };
                 (
                     field.name.clone(),
-                    SchemaFieldLayout { offset: field.offset, ty: field.ty.clone(), fixed_size: field.fixed_size, fixed_enum_size },
+                    SchemaFieldLayout {
+                        index,
+                        offset: field.offset,
+                        ty: field.ty.clone(),
+                        fixed_size: field.fixed_size,
+                        fixed_enum_size,
+                    },
                 )
             })
             .collect();
@@ -821,6 +934,7 @@ impl CodeGenerator {
 
     fn generate_action(&mut self, action: &IrAction) -> Result<()> {
         self.current_function = Some(action.name.clone());
+        self.bind_readonly_schema_params = true;
         self.fail_handler_codes.clear();
         self.prepare_function_layout(&action.body, &action.params);
         self.next_virtual_output = 0;
@@ -830,6 +944,8 @@ impl CodeGenerator {
         self.set_pointer_aliases(&action.body);
         self.set_schema_field_value_sources(&action.body);
         self.set_verified_operation_outputs(&action.body);
+        self.set_constructed_byte_vectors(&action.body);
+        self.set_verified_collection_push_values(&action.body);
 
         if !action.params.is_empty() {
             self.emit_entry_abi_marker(&action.name);
@@ -844,6 +960,7 @@ impl CodeGenerator {
         self.emit_shared_epilogue();
 
         self.current_function = None;
+        self.bind_readonly_schema_params = false;
         self.schema_pointer_vars.clear();
         self.schema_pointer_size_offsets.clear();
         self.fixed_byte_param_size_offsets.clear();
@@ -861,12 +978,16 @@ impl CodeGenerator {
         self.prelude_fixed_byte_constants.clear();
         self.operation_output_indices.clear();
         self.verified_operation_outputs.clear();
+        self.verified_collection_push_values.clear();
+        self.constructed_byte_vectors.clear();
+        self.verified_collection_construction_values.clear();
         self.param_vars.clear();
         Ok(())
     }
 
     fn generate_pure_fn(&mut self, function: &IrPureFn) -> Result<()> {
         self.current_function = Some(function.name.clone());
+        self.bind_readonly_schema_params = false;
         self.fail_handler_codes.clear();
         self.prepare_function_layout(&function.body, &function.params);
         self.next_virtual_output = 0;
@@ -876,6 +997,8 @@ impl CodeGenerator {
         self.set_pointer_aliases(&function.body);
         self.set_schema_field_value_sources(&function.body);
         self.set_verified_operation_outputs(&function.body);
+        self.set_constructed_byte_vectors(&function.body);
+        self.set_verified_collection_push_values(&function.body);
 
         self.emit_global(&function.name);
         self.emit_label(&function.name);
@@ -903,12 +1026,16 @@ impl CodeGenerator {
         self.prelude_fixed_byte_constants.clear();
         self.operation_output_indices.clear();
         self.verified_operation_outputs.clear();
+        self.verified_collection_push_values.clear();
+        self.constructed_byte_vectors.clear();
+        self.verified_collection_construction_values.clear();
         self.param_vars.clear();
         Ok(())
     }
 
     fn generate_lock(&mut self, lock: &IrLock) -> Result<()> {
         self.current_function = Some(lock.name.clone());
+        self.bind_readonly_schema_params = true;
         self.fail_handler_codes.clear();
         self.prepare_function_layout(&lock.body, &lock.params);
         self.next_virtual_output = 0;
@@ -918,6 +1045,8 @@ impl CodeGenerator {
         self.set_pointer_aliases(&lock.body);
         self.set_schema_field_value_sources(&lock.body);
         self.set_verified_operation_outputs(&lock.body);
+        self.set_constructed_byte_vectors(&lock.body);
+        self.set_verified_collection_push_values(&lock.body);
 
         if !lock.params.is_empty() {
             self.emit_entry_abi_marker(&lock.name);
@@ -932,6 +1061,7 @@ impl CodeGenerator {
         self.emit_shared_epilogue();
 
         self.current_function = None;
+        self.bind_readonly_schema_params = false;
         self.schema_pointer_vars.clear();
         self.schema_pointer_size_offsets.clear();
         self.fixed_byte_param_size_offsets.clear();
@@ -949,6 +1079,9 @@ impl CodeGenerator {
         self.prelude_fixed_byte_constants.clear();
         self.operation_output_indices.clear();
         self.verified_operation_outputs.clear();
+        self.verified_collection_push_values.clear();
+        self.constructed_byte_vectors.clear();
+        self.verified_collection_construction_values.clear();
         self.param_vars.clear();
         Ok(())
     }
@@ -961,7 +1094,7 @@ impl CodeGenerator {
             self.param_vars.insert(param.binding.id);
             if named_type_name(&param.ty).is_some() {
                 self.schema_pointer_vars.insert(param.binding.id);
-            } else if fixed_aggregate_pointer_param_width(&param.ty).is_some() {
+            } else if fixed_byte_pointer_param_width(&param.ty).is_some() || fixed_aggregate_pointer_param_width(&param.ty).is_some() {
                 self.aggregate_pointer_sources.insert(param.binding.id, AggregatePointerSource { ty: param.ty.clone() });
             }
         }
@@ -1019,6 +1152,14 @@ impl CodeGenerator {
                         if self.fixed_byte_param_size_offsets.insert(dest.id, size_offset) != Some(size_offset) {
                             changed = true;
                         }
+                    }
+                    if let Some(size_offset) = self.dynamic_value_size_offsets.get(&src.id).copied() {
+                        if self.dynamic_value_size_offsets.insert(dest.id, size_offset) != Some(size_offset) {
+                            changed = true;
+                        }
+                    }
+                    if self.empty_molecule_vector_vars.contains(&src.id) && self.empty_molecule_vector_vars.insert(dest.id) {
+                        changed = true;
                     }
                     if let Some(source) = self.aggregate_pointer_sources.get(&src.id).cloned() {
                         if self.aggregate_pointer_sources.insert(dest.id, source).is_none() {
@@ -1161,6 +1302,19 @@ impl CodeGenerator {
                     {
                         self.prelude_u64_value_sources.insert(dest.id, PreludeU64ValueSource::StackVar(dest.id));
                     }
+                    IrInstruction::Length { dest, operand }
+                        if dest.ty == IrType::U64
+                            && (self.static_length(operand).is_some()
+                                || self.dynamic_length_from_size_offset(operand).is_some()
+                                || matches!(
+                                    operand,
+                                    IrOperand::Var(var)
+                                        if self.dynamic_value_size_offsets.contains_key(&var.id)
+                                            || self.schema_pointer_size_offsets.contains_key(&var.id)
+                                )) =>
+                    {
+                        self.prelude_u64_value_sources.insert(dest.id, PreludeU64ValueSource::StackVar(dest.id));
+                    }
                     IrInstruction::Move { dest, src } if dest.ty == IrType::U64 => {
                         let Some(source) = self.prelude_u64_value_source(src) else {
                             continue;
@@ -1175,6 +1329,12 @@ impl CodeGenerator {
                     IrInstruction::Move { dest, src } if fixed_byte_width(&dest.ty, type_static_length(&dest.ty)).is_some() => {
                         if let Some(bytes) = self.prelude_fixed_byte_constant(src) {
                             self.prelude_fixed_byte_constants.insert(dest.id, bytes);
+                        }
+                    }
+                    IrInstruction::Move { dest, src: IrOperand::Var(src) }
+                    | IrInstruction::Unary { dest, op: UnaryOp::Ref | UnaryOp::Deref, operand: IrOperand::Var(src) } => {
+                        if let Some(source) = self.schema_field_value_sources.get(&src.id).cloned() {
+                            self.schema_field_value_sources.insert(dest.id, source);
                         }
                     }
                     _ => {}
@@ -1206,6 +1366,104 @@ impl CodeGenerator {
                     IrInstruction::Settle { dest, .. } => {
                         self.record_verified_operation_output(body, output_index, dest, "settle");
                         output_index += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn set_verified_collection_push_values(&mut self, body: &IrBody) {
+        self.verified_collection_push_values.clear();
+        for pattern in &body.mutate_set {
+            for transition in &pattern.transitions {
+                if transition.op != MutateTransitionOp::Append {
+                    continue;
+                }
+                let IrOperand::Var(var) = &transition.operand else {
+                    continue;
+                };
+                let Some(layout) = self.type_layouts.get(&pattern.ty).and_then(|fields| fields.get(&transition.field)) else {
+                    continue;
+                };
+                let Some(element_width) =
+                    molecule_vector_element_fixed_width(&layout.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
+                else {
+                    continue;
+                };
+                if self.fixed_append_fields(&transition.operand, element_width).is_some() {
+                    self.verified_collection_push_values.insert(var.id);
+                }
+            }
+        }
+    }
+
+    fn set_constructed_byte_vectors(&mut self, body: &IrBody) {
+        self.constructed_byte_vectors.clear();
+        self.verified_collection_construction_values.clear();
+        let mut named_vectors = HashMap::<String, usize>::new();
+        let mut loaded_vector_names = HashMap::<usize, String>::new();
+        for block in &body.blocks {
+            for instruction in &block.instructions {
+                match instruction {
+                    IrInstruction::StoreVar { name, src: IrOperand::Var(src) } => {
+                        if self.constructed_byte_vectors.contains_key(&src.id) {
+                            named_vectors.insert(name.clone(), src.id);
+                        }
+                    }
+                    IrInstruction::LoadVar { dest, name } => {
+                        if let Some(source_id) = named_vectors.get(name).copied() {
+                            if let Some(bytes) = self.constructed_byte_vectors.get(&source_id).cloned() {
+                                self.constructed_byte_vectors.insert(dest.id, bytes);
+                                loaded_vector_names.insert(dest.id, name.clone());
+                            }
+                        }
+                    }
+                    IrInstruction::CollectionNew { dest, .. } => {
+                        self.constructed_byte_vectors.insert(dest.id, Vec::new());
+                    }
+                    IrInstruction::CollectionPush { collection: IrOperand::Var(collection), value } => {
+                        let width = constructed_byte_vector_part_width(value);
+                        let source_available = width == Some(1) && self.expected_fixed_byte_source(value, 1).is_some();
+                        if let Some(bytes) = self.constructed_byte_vectors.get_mut(&collection.id) {
+                            if source_available {
+                                bytes.push(value.clone());
+                                if let IrOperand::Var(var) = value {
+                                    self.verified_collection_construction_values.insert(var.id);
+                                }
+                                if let Some(name) = loaded_vector_names.get(&collection.id).cloned() {
+                                    named_vectors.insert(name, collection.id);
+                                }
+                            } else {
+                                self.constructed_byte_vectors.remove(&collection.id);
+                            }
+                        }
+                    }
+                    IrInstruction::CollectionExtend { collection: IrOperand::Var(collection), slice } => {
+                        let Some(width) = operand_fixed_byte_width(slice) else {
+                            self.constructed_byte_vectors.remove(&collection.id);
+                            continue;
+                        };
+                        let source_available = self.expected_fixed_byte_source(slice, width).is_some();
+                        if let Some(bytes) = self.constructed_byte_vectors.get_mut(&collection.id) {
+                            if source_available {
+                                bytes.push(slice.clone());
+                                if let IrOperand::Var(var) = slice {
+                                    self.verified_collection_construction_values.insert(var.id);
+                                }
+                                if let Some(name) = loaded_vector_names.get(&collection.id).cloned() {
+                                    named_vectors.insert(name, collection.id);
+                                }
+                            } else {
+                                self.constructed_byte_vectors.remove(&collection.id);
+                            }
+                        }
+                    }
+                    IrInstruction::Move { dest, src: IrOperand::Var(src) }
+                    | IrInstruction::Unary { dest, op: UnaryOp::Ref | UnaryOp::Deref, operand: IrOperand::Var(src) } => {
+                        if let Some(bytes) = self.constructed_byte_vectors.get(&src.id).cloned() {
+                            self.constructed_byte_vectors.insert(dest.id, bytes);
+                        }
                     }
                     _ => {}
                 }
@@ -1276,12 +1534,20 @@ impl CodeGenerator {
     }
 
     fn generate_body(&mut self, body: &IrBody) -> Result<()> {
+        self.emit_read_ref_parameter_bindings();
+
         for (index, pattern) in body.consume_set.iter().enumerate() {
             self.generate_consume(pattern, index)?;
         }
         self.emit_pool_seed_token_pair_identity_check(body);
 
-        for (index, pattern) in body.read_refs.iter().enumerate() {
+        let mut read_ref_index = 0usize;
+        for pattern in &body.read_refs {
+            if self.read_ref_param_ids.contains_key(&pattern.binding) {
+                continue;
+            }
+            let index = read_ref_index;
+            read_ref_index += 1;
             self.generate_read_ref(pattern, index)?;
         }
 
@@ -1303,6 +1569,37 @@ impl CodeGenerator {
         }
 
         Ok(())
+    }
+
+    fn emit_read_ref_parameter_bindings(&mut self) {
+        let mut bindings = self
+            .read_ref_param_ids
+            .iter()
+            .filter_map(|(binding, var_id)| {
+                self.read_ref_param_input_indices.get(var_id).copied().map(|input_index| (input_index, binding.clone(), *var_id))
+            })
+            .collect::<Vec<_>>();
+        bindings.sort_by_key(|(input_index, _, _)| *input_index);
+        for (input_index, binding, var_id) in bindings {
+            let Some(size_offset) = self.cell_buffer_size_offsets.get(&var_id).copied() else {
+                continue;
+            };
+            let Some(buffer_offset) = self.cell_buffer_offsets.get(&var_id).copied() else {
+                continue;
+            };
+            self.emit(format!("# cellscript abi: bind read-only param {} to Input#{} cell data", binding, input_index));
+            self.emit_load_cell_data_syscall_to_offsets(
+                "read_ref_param_input",
+                CKB_SOURCE_INPUT,
+                input_index,
+                size_offset,
+                buffer_offset,
+                RUNTIME_CELL_BUFFER_SIZE,
+            );
+            self.emit_return_on_syscall_error(1);
+            self.emit_sp_addi("t0", buffer_offset);
+            self.emit(format!("sd t0, {}(sp)", var_id * 8));
+        }
     }
 
     fn generate_consume(&mut self, pattern: &CellPattern, index: usize) -> Result<()> {
@@ -1689,12 +1986,18 @@ impl CodeGenerator {
         let locals_size = max_var_id.map(|id| (id + 1) * 8).unwrap_or(0);
         self.cell_buffer_offsets.clear();
         self.cell_buffer_size_offsets.clear();
+        self.dynamic_value_size_offsets.clear();
+        self.empty_molecule_vector_vars.clear();
+        self.constructed_byte_vectors.clear();
+        self.verified_collection_construction_values.clear();
         self.output_type_hash_sources.clear();
         self.consume_order.clear();
         self.consume_indices.clear();
         self.consume_type_names.clear();
         self.read_ref_order.clear();
         self.read_ref_indices.clear();
+        self.read_ref_param_ids.clear();
+        self.read_ref_param_input_indices.clear();
         self.mutate_param_ids.clear();
         self.schema_pointer_size_offsets.clear();
         self.fixed_byte_param_size_offsets.clear();
@@ -1734,6 +2037,34 @@ impl CodeGenerator {
                 next_cell_slot += 8;
                 self.param_type_hash_size_offsets.insert(param.binding.id, next_cell_slot);
                 next_cell_slot += 8;
+            }
+        }
+
+        if self.bind_readonly_schema_params {
+            let consumed_param_ids = body
+                .blocks
+                .iter()
+                .flat_map(|block| block.instructions.iter())
+                .filter_map(consumed_operand_var)
+                .map(|var| var.id)
+                .collect::<BTreeSet<_>>();
+            let mutate_param_names = body.mutate_set.iter().map(|pattern| pattern.binding.as_str()).collect::<BTreeSet<_>>();
+            let mut read_ref_param_index = 0usize;
+            for param in params {
+                if named_type_name(&param.ty).is_none() {
+                    continue;
+                }
+                if mutate_param_names.contains(param.name.as_str()) || consumed_param_ids.contains(&param.binding.id) {
+                    continue;
+                }
+                let input_index = body.consume_set.len() + body.mutate_set.len() + read_ref_param_index;
+                self.read_ref_param_ids.insert(param.name.clone(), param.binding.id);
+                self.read_ref_param_input_indices.insert(param.binding.id, input_index);
+                self.schema_pointer_size_offsets.insert(param.binding.id, next_cell_slot);
+                self.cell_buffer_size_offsets.insert(param.binding.id, next_cell_slot);
+                self.cell_buffer_offsets.insert(param.binding.id, next_cell_slot + 8);
+                next_cell_slot += RUNTIME_CELL_SLOT_SIZE;
+                read_ref_param_index += 1;
             }
         }
 
@@ -1786,6 +2117,25 @@ impl CodeGenerator {
         for block in &body.blocks {
             for instruction in &block.instructions {
                 match instruction {
+                    IrInstruction::FieldAccess { dest, obj: IrOperand::Var(obj), field } => {
+                        if named_type_name(&dest.ty).is_some()
+                            && named_type_name(&obj.ty)
+                                .and_then(|type_name| self.type_layouts.get(type_name))
+                                .and_then(|fields| fields.get(field))
+                                .is_some_and(|layout| {
+                                    layout_fixed_byte_width(layout).is_none()
+                                        && molecule_vector_element_fixed_width(
+                                            &layout.ty,
+                                            &self.type_fixed_sizes,
+                                            &self.enum_fixed_sizes,
+                                        )
+                                        .is_some()
+                                })
+                        {
+                            self.dynamic_value_size_offsets.insert(dest.id, next_cell_slot);
+                            next_cell_slot += 8;
+                        }
+                    }
                     IrInstruction::Create { dest, .. } => {
                         create_dest_outputs.insert(dest.id, create_index);
                         create_index += 1;
@@ -1991,6 +2341,101 @@ impl CodeGenerator {
         self.emit(format!("beqz a0, {}", ok_label));
         self.emit_fail(4);
         self.emit_label(&ok_label);
+    }
+
+    fn emit_molecule_table_field_bounds_to_t5(
+        &mut self,
+        base_reg: &str,
+        size_offset: usize,
+        field_index: usize,
+        field_width: usize,
+        context: &str,
+    ) {
+        self.emit(format!("# cellscript abi: molecule table field {} index={} min_width={}", context, field_index, field_width));
+        let field_count = field_index + 1;
+        let header_size = 4 + 4 * field_count;
+        self.emit_loaded_schema_bounds_check(size_offset, header_size, context);
+
+        self.emit_stack_ld("a0", size_offset);
+        let total_ok = self.fresh_label("molecule_table_total_ok");
+        self.emit_unaligned_scalar_load(base_reg, "t0", "t2", 0, 4);
+        self.emit("sub t2, t0, a0");
+        self.emit(format!("beqz t2, {}", total_ok));
+        self.emit_fail(2);
+        self.emit_label(&total_ok);
+
+        self.emit_unaligned_scalar_load(base_reg, "t5", "t2", 4 + 4 * field_index, 4);
+        self.emit(format!("li t1, {}", header_size));
+        self.emit("sltu t2, t5, t1");
+        let start_ok = self.fresh_label("molecule_table_start_ok");
+        self.emit(format!("beqz t2, {}", start_ok));
+        self.emit_fail(2);
+        self.emit_label(&start_ok);
+
+        if field_width > 0 {
+            self.emit(format!("li t1, {}", field_width));
+            self.emit("add t3, t5, t1");
+            self.emit("sltu t2, t3, t5");
+            let overflow_ok = self.fresh_label("molecule_table_field_overflow_ok");
+            self.emit(format!("beqz t2, {}", overflow_ok));
+            self.emit_fail(2);
+            self.emit_label(&overflow_ok);
+            self.emit("sltu t2, a0, t3");
+            let end_ok = self.fresh_label("molecule_table_end_ok");
+            self.emit(format!("beqz t2, {}", end_ok));
+            self.emit_fail(2);
+            self.emit_label(&end_ok);
+        }
+    }
+
+    fn emit_molecule_table_field_span_to_t5_t6(
+        &mut self,
+        base_reg: &str,
+        size_offset: usize,
+        field_index: usize,
+        field_count: usize,
+        context: &str,
+    ) {
+        self.emit(format!(
+            "# cellscript abi: molecule table dynamic field {} index={} field_count={}",
+            context, field_index, field_count
+        ));
+        let header_size = 4 + 4 * field_count;
+        self.emit_loaded_schema_bounds_check(size_offset, header_size, context);
+
+        self.emit_stack_ld("a0", size_offset);
+        let total_ok = self.fresh_label("molecule_table_total_ok");
+        self.emit_unaligned_scalar_load(base_reg, "t0", "t2", 0, 4);
+        self.emit("sub t2, t0, a0");
+        self.emit(format!("beqz t2, {}", total_ok));
+        self.emit_fail(2);
+        self.emit_label(&total_ok);
+
+        self.emit_unaligned_scalar_load(base_reg, "t5", "t2", 4 + 4 * field_index, 4);
+        if field_index + 1 < field_count {
+            self.emit_unaligned_scalar_load(base_reg, "t6", "t2", 4 + 4 * (field_index + 1), 4);
+        } else {
+            self.emit("add t6, a0, zero");
+        }
+
+        self.emit(format!("li t1, {}", header_size));
+        self.emit("sltu t2, t5, t1");
+        let start_ok = self.fresh_label("molecule_table_start_ok");
+        self.emit(format!("beqz t2, {}", start_ok));
+        self.emit_fail(2);
+        self.emit_label(&start_ok);
+
+        self.emit("sltu t2, t6, t5");
+        let order_ok = self.fresh_label("molecule_table_order_ok");
+        self.emit(format!("beqz t2, {}", order_ok));
+        self.emit_fail(2);
+        self.emit_label(&order_ok);
+
+        self.emit("sltu t2, a0, t6");
+        let end_ok = self.fresh_label("molecule_table_end_ok");
+        self.emit(format!("beqz t2, {}", end_ok));
+        self.emit_fail(2);
+        self.emit_label(&end_ok);
     }
 
     fn emit_mutate_replacement_field_hash_check(
@@ -2350,6 +2795,9 @@ impl CodeGenerator {
     fn emit_mutate_replacement_preserved_field_checks(&mut self, pattern: &MutatePattern) {
         let preserved_fields = self.mutate_preserved_field_layouts(pattern);
         if !pattern.preserved_fields.is_empty() && preserved_fields.len() != pattern.preserved_fields.len() {
+            if self.emit_mutate_replacement_dynamic_table_preserved_field_checks(pattern) {
+                return;
+            }
             if self.emit_mutate_replacement_data_except_transition_checks(pattern) {
                 return;
             }
@@ -2409,6 +2857,440 @@ impl CodeGenerator {
             }
             self.emit_fixed_byte_mismatch_fail(&mismatch_label, 13);
         }
+    }
+
+    fn emit_mutate_replacement_dynamic_table_preserved_field_checks(&mut self, pattern: &MutatePattern) -> bool {
+        if self.type_fixed_sizes.contains_key(&pattern.ty) || pattern.preserved_fields.is_empty() {
+            return false;
+        }
+        let Some(layouts) = self.type_layouts.get(&pattern.ty).cloned() else {
+            return false;
+        };
+        let field_count = layouts.len();
+        if field_count == 0 || !pattern.preserved_fields.iter().all(|field| layouts.contains_key(field)) {
+            return false;
+        }
+
+        let input_size_offset = self.runtime_scratch_size_offset();
+        let input_buffer_offset = self.runtime_scratch_buffer_offset();
+        let output_size_offset = self.runtime_scratch2_size_offset();
+        let output_buffer_offset = self.runtime_scratch2_buffer_offset();
+        self.emit_load_cell_data_syscall_to_offsets(
+            "mutate_input_table_preserved",
+            CKB_SOURCE_INPUT,
+            pattern.input_index,
+            input_size_offset,
+            input_buffer_offset,
+            RUNTIME_SCRATCH_BUFFER_SIZE,
+        );
+        self.emit_return_on_syscall_error(1);
+        self.emit_load_cell_data_syscall_to_offsets(
+            "mutate_output_table_preserved",
+            CKB_SOURCE_OUTPUT,
+            pattern.output_index,
+            output_size_offset,
+            output_buffer_offset,
+            RUNTIME_SCRATCH_BUFFER_SIZE,
+        );
+        self.emit_return_on_syscall_error(1);
+        self.emit(format!(
+            "# cellscript abi: verify mutate preserved Molecule table fields {} Input#{} == Output#{}",
+            pattern.ty, pattern.input_index, pattern.output_index
+        ));
+        for field in &pattern.preserved_fields {
+            let Some(layout) = layouts.get(field).cloned() else {
+                return false;
+            };
+            self.emit_dynamic_table_field_equality_check(
+                &pattern.ty,
+                field,
+                &layout,
+                field_count,
+                input_size_offset,
+                input_buffer_offset,
+                output_size_offset,
+                output_buffer_offset,
+                13,
+            );
+        }
+        true
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_dynamic_table_field_equality_check(
+        &mut self,
+        type_name: &str,
+        field: &str,
+        layout: &SchemaFieldLayout,
+        field_count: usize,
+        input_size_offset: usize,
+        input_buffer_offset: usize,
+        output_size_offset: usize,
+        output_buffer_offset: usize,
+        fail_code: u64,
+    ) {
+        let start_offset = self.runtime_expr_temp_offset(0).expect("runtime temp slot 0");
+        let len_offset = self.runtime_expr_temp_offset(1).expect("runtime temp slot 1");
+        let output_start_offset = self.runtime_expr_temp_offset(2).expect("runtime temp slot 2");
+        if let Some(width) = layout_fixed_byte_width(layout) {
+            self.emit_dynamic_table_fixed_field_pointer_to_stack(
+                input_size_offset,
+                input_buffer_offset,
+                layout,
+                width,
+                &format!("{} input.{}", type_name, field),
+                start_offset,
+            );
+            self.emit_dynamic_table_fixed_field_pointer_to_stack(
+                output_size_offset,
+                output_buffer_offset,
+                layout,
+                width,
+                &format!("{} output.{}", type_name, field),
+                output_start_offset,
+            );
+            self.emit(format!("li t0, {}", width));
+            self.emit_stack_sd("t0", len_offset);
+        } else {
+            self.emit_dynamic_table_field_span_to_stack(
+                input_size_offset,
+                input_buffer_offset,
+                layout.index,
+                field_count,
+                &format!("{} input.{}", type_name, field),
+                start_offset,
+                len_offset,
+            );
+            self.emit_dynamic_table_field_span_to_stack(
+                output_size_offset,
+                output_buffer_offset,
+                layout.index,
+                field_count,
+                &format!("{} output.{}", type_name, field),
+                output_start_offset,
+                self.runtime_expr_temp_offset(3).expect("runtime temp slot 3"),
+            );
+            self.emit_stack_ld("t0", len_offset);
+            self.emit_stack_ld("t1", self.runtime_expr_temp_offset(3).expect("runtime temp slot 3"));
+            self.emit("sub t2, t0, t1");
+            let len_ok = self.fresh_label("mutate_table_field_len_ok");
+            self.emit(format!("beqz t2, {}", len_ok));
+            self.emit_fail(fail_code);
+            self.emit_label(&len_ok);
+        }
+
+        self.emit(format!(
+            "# cellscript abi: verify mutate preserved Molecule table field {}.{} Input#{} == Output#{}",
+            type_name, field, 0, 1
+        ));
+        let mismatch_label = self.fresh_label("mutate_table_field_mismatch");
+        self.emit_stack_ld("a0", start_offset);
+        self.emit_stack_ld("a1", output_start_offset);
+        self.emit_stack_ld("a2", len_offset);
+        self.emit("call __cellscript_memcmp_fixed");
+        self.emit(format!("bnez a0, {}", mismatch_label));
+        self.emit_fixed_byte_mismatch_fail(&mismatch_label, fail_code);
+    }
+
+    fn emit_dynamic_table_field_span_to_stack(
+        &mut self,
+        size_offset: usize,
+        buffer_offset: usize,
+        field_index: usize,
+        field_count: usize,
+        context: &str,
+        start_stack_offset: usize,
+        len_stack_offset: usize,
+    ) {
+        self.emit_sp_addi("t4", buffer_offset);
+        self.emit_molecule_table_field_span_to_t5_t6("t4", size_offset, field_index, field_count, context);
+        self.emit_sp_addi("t4", buffer_offset);
+        self.emit("add t5, t4, t5");
+        self.emit("add t6, t4, t6");
+        self.emit("sub t0, t6, t5");
+        self.emit_stack_sd("t5", start_stack_offset);
+        self.emit_stack_sd("t0", len_stack_offset);
+    }
+
+    fn emit_dynamic_table_fixed_field_pointer_to_stack(
+        &mut self,
+        size_offset: usize,
+        buffer_offset: usize,
+        layout: &SchemaFieldLayout,
+        width: usize,
+        context: &str,
+        start_stack_offset: usize,
+    ) {
+        self.emit_sp_addi("t4", buffer_offset);
+        self.emit_molecule_table_field_bounds_to_t5("t4", size_offset, layout.index, width, context);
+        self.emit_sp_addi("t4", buffer_offset);
+        self.emit("add t5, t4, t5");
+        self.emit_stack_sd("t5", start_stack_offset);
+    }
+
+    fn emit_mutate_replacement_dynamic_table_append_checks(&mut self, pattern: &MutatePattern) -> bool {
+        if self.type_fixed_sizes.contains_key(&pattern.ty) || pattern.transitions.is_empty() {
+            return false;
+        }
+        let Some(layouts) = self.type_layouts.get(&pattern.ty).cloned() else {
+            return false;
+        };
+        let field_count = layouts.len();
+        let appends = pattern
+            .transitions
+            .iter()
+            .filter_map(|transition| {
+                if transition.op != MutateTransitionOp::Append {
+                    return None;
+                }
+                let layout = layouts.get(&transition.field).cloned()?;
+                let element_width = molecule_vector_element_fixed_width(&layout.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)?;
+                self.fixed_append_fields(&transition.operand, element_width)
+                    .map(|fields| (transition.clone(), layout, element_width, fields))
+            })
+            .collect::<Vec<_>>();
+        if appends.len() != pattern.transitions.len() {
+            return false;
+        }
+
+        let input_size_offset = self.runtime_scratch_size_offset();
+        let input_buffer_offset = self.runtime_scratch_buffer_offset();
+        let output_size_offset = self.runtime_scratch2_size_offset();
+        let output_buffer_offset = self.runtime_scratch2_buffer_offset();
+        self.emit_load_cell_data_syscall_to_offsets(
+            "mutate_input_table_append",
+            CKB_SOURCE_INPUT,
+            pattern.input_index,
+            input_size_offset,
+            input_buffer_offset,
+            RUNTIME_SCRATCH_BUFFER_SIZE,
+        );
+        self.emit_return_on_syscall_error(1);
+        self.emit_load_cell_data_syscall_to_offsets(
+            "mutate_output_table_append",
+            CKB_SOURCE_OUTPUT,
+            pattern.output_index,
+            output_size_offset,
+            output_buffer_offset,
+            RUNTIME_SCRATCH_BUFFER_SIZE,
+        );
+        self.emit_return_on_syscall_error(1);
+        self.emit(format!(
+            "# cellscript abi: verify mutate Molecule table append fields {} Input#{} -> Output#{}",
+            pattern.ty, pattern.input_index, pattern.output_index
+        ));
+        for (transition, layout, element_width, fields) in appends {
+            self.emit_dynamic_table_vector_append_check(
+                &pattern.ty,
+                &transition.field,
+                &layout,
+                field_count,
+                element_width,
+                &fields,
+                input_size_offset,
+                input_buffer_offset,
+                output_size_offset,
+                output_buffer_offset,
+            );
+        }
+        true
+    }
+
+    fn fixed_append_fields(&self, operand: &IrOperand, expected_width: usize) -> Option<Vec<(IrOperand, SchemaFieldLayout, usize)>> {
+        if self.expected_fixed_byte_source(operand, expected_width).is_some() {
+            let ty = match operand {
+                IrOperand::Var(var) => var.ty.clone(),
+                IrOperand::Const(IrConst::Address(_)) => IrType::Address,
+                IrOperand::Const(IrConst::Hash(_)) => IrType::Hash,
+                IrOperand::Const(IrConst::Array(items)) => IrType::Array(Box::new(IrType::U8), items.len()),
+                IrOperand::Const(_) => return None,
+            };
+            return Some(vec![(
+                operand.clone(),
+                SchemaFieldLayout { index: 0, offset: 0, ty, fixed_size: Some(expected_width), fixed_enum_size: None },
+                expected_width,
+            )]);
+        }
+        let IrOperand::Var(var) = operand else {
+            return None;
+        };
+        let fields = self.tuple_aggregate_fields.get(&var.id)?;
+        let type_name = named_type_name(&var.ty)?;
+        let mut layouts = self.type_layouts.get(type_name)?.values().cloned().collect::<Vec<_>>();
+        layouts.sort_by_key(|layout| layout.offset);
+        if layouts.len() != fields.len() {
+            return None;
+        }
+        let total_width = self.type_fixed_sizes.get(type_name).copied()?;
+        if total_width != expected_width {
+            return None;
+        }
+        fields
+            .iter()
+            .cloned()
+            .zip(layouts)
+            .map(|(field_operand, layout)| {
+                let width = layout_fixed_byte_width(&layout)?;
+                self.expected_fixed_byte_source(&field_operand, width)?;
+                Some((field_operand, layout, width))
+            })
+            .collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_dynamic_table_vector_append_check(
+        &mut self,
+        type_name: &str,
+        field: &str,
+        layout: &SchemaFieldLayout,
+        field_count: usize,
+        element_width: usize,
+        fields: &[(IrOperand, SchemaFieldLayout, usize)],
+        input_size_offset: usize,
+        input_buffer_offset: usize,
+        output_size_offset: usize,
+        output_buffer_offset: usize,
+    ) {
+        let input_start_offset = self.runtime_expr_temp_offset(0).expect("runtime temp slot 0");
+        let input_len_offset = self.runtime_expr_temp_offset(1).expect("runtime temp slot 1");
+        let output_start_offset = self.runtime_expr_temp_offset(2).expect("runtime temp slot 2");
+        let output_len_offset = self.runtime_expr_temp_offset(3).expect("runtime temp slot 3");
+        self.emit_dynamic_table_field_span_to_stack(
+            input_size_offset,
+            input_buffer_offset,
+            layout.index,
+            field_count,
+            &format!("{} input.{}", type_name, field),
+            input_start_offset,
+            input_len_offset,
+        );
+        self.emit_dynamic_table_field_span_to_stack(
+            output_size_offset,
+            output_buffer_offset,
+            layout.index,
+            field_count,
+            &format!("{} output.{}", type_name, field),
+            output_start_offset,
+            output_len_offset,
+        );
+        self.emit(format!(
+            "# cellscript abi: verify mutate Molecule vector append {}.{} element_size={}",
+            type_name, field, element_width
+        ));
+        self.emit_loaded_schema_bounds_check(input_len_offset, 4, &format!("{} input.{} vector", type_name, field));
+        self.emit_loaded_schema_bounds_check(output_len_offset, 4 + element_width, &format!("{} output.{} vector", type_name, field));
+
+        self.emit_stack_ld("t4", input_start_offset);
+        self.emit_unaligned_scalar_load("t4", "t0", "t2", 0, 4);
+        self.emit_stack_ld("t1", input_len_offset);
+        self.emit(format!("li t2, {}", element_width));
+        self.emit("mul t3, t0, t2");
+        self.emit("addi t3, t3, 4");
+        self.emit("sub t2, t1, t3");
+        let input_size_ok = self.fresh_label("molecule_append_input_size_ok");
+        self.emit(format!("beqz t2, {}", input_size_ok));
+        self.emit_fail(14);
+        self.emit_label(&input_size_ok);
+
+        self.emit_stack_ld("t4", output_start_offset);
+        self.emit_unaligned_scalar_load("t4", "t1", "t2", 0, 4);
+        self.emit("addi t0, t0, 1");
+        self.emit("sub t2, t1, t0");
+        let count_ok = self.fresh_label("molecule_append_count_ok");
+        self.emit(format!("beqz t2, {}", count_ok));
+        self.emit_fail(14);
+        self.emit_label(&count_ok);
+
+        self.emit_stack_ld("t0", input_len_offset);
+        self.emit(format!("li t1, {}", element_width));
+        self.emit("add t0, t0, t1");
+        self.emit_stack_ld("t1", output_len_offset);
+        self.emit("sub t2, t1, t0");
+        let len_ok = self.fresh_label("molecule_append_len_ok");
+        self.emit(format!("beqz t2, {}", len_ok));
+        self.emit_fail(14);
+        self.emit_label(&len_ok);
+
+        let prefix_ok = self.fresh_label("molecule_append_prefix_ok");
+        self.emit_stack_ld("a0", input_start_offset);
+        self.emit("addi a0, a0, 4");
+        self.emit_stack_ld("a1", output_start_offset);
+        self.emit("addi a1, a1, 4");
+        self.emit_stack_ld("a2", input_len_offset);
+        self.emit("addi a2, a2, -4");
+        self.emit("call __cellscript_memcmp_fixed");
+        self.emit(format!("beqz a0, {}", prefix_ok));
+        self.emit_fail(14);
+        self.emit_label(&prefix_ok);
+
+        self.emit_stack_ld("t0", output_start_offset);
+        self.emit_stack_ld("t1", input_len_offset);
+        self.emit("add t0, t0, t1");
+        self.emit_stack_sd("t0", output_start_offset);
+        for (operand, field_layout, width) in fields {
+            let Some(source) = self.expected_fixed_byte_source(operand, *width) else {
+                self.emit_fail(14);
+                continue;
+            };
+            self.emit_prepare_fixed_byte_source(&source, *width, &format!("append {}.{}", type_name, field));
+            self.emit_pointer_fixed_bytes_against_source(output_start_offset, field_layout.offset, &source, *width, 14);
+        }
+    }
+
+    fn emit_pointer_fixed_bytes_against_source(
+        &mut self,
+        output_pointer_stack_offset: usize,
+        output_field_offset: usize,
+        source: &ExpectedFixedByteSource,
+        width: usize,
+        fail_code: u64,
+    ) {
+        let mismatch_label = self.fresh_label("fixed_byte_mismatch");
+        match source {
+            ExpectedFixedByteSource::Const(bytes) => {
+                self.emit_stack_ld("t4", output_pointer_stack_offset);
+                for (byte_index, byte) in bytes.iter().take(width).enumerate() {
+                    self.emit(format!("lbu t0, {}(t4)", output_field_offset + byte_index));
+                    self.emit(format!("li t1, {}", byte));
+                    self.emit("sub t2, t0, t1");
+                    self.emit(format!("bnez t2, {}", mismatch_label));
+                }
+            }
+            ExpectedFixedByteSource::SchemaField(source) => {
+                if self.emit_schema_field_source_pointer_to("a1", source, width) {
+                    self.emit_stack_ld("a0", output_pointer_stack_offset);
+                    if output_field_offset != 0 {
+                        self.emit_large_addi("a0", "a0", output_field_offset as i64);
+                    }
+                    self.emit(format!("li a2, {}", width));
+                    self.emit("call __cellscript_memcmp_fixed");
+                    self.emit(format!("bnez a0, {}", mismatch_label));
+                } else {
+                    self.emit_fail(16);
+                }
+            }
+            ExpectedFixedByteSource::StackSlot { var_id, .. } => {
+                self.emit_stack_ld("a0", output_pointer_stack_offset);
+                if output_field_offset != 0 {
+                    self.emit_large_addi("a0", "a0", output_field_offset as i64);
+                }
+                self.emit_sp_addi("a1", var_id * 8);
+                self.emit(format!("li a2, {}", width));
+                self.emit("call __cellscript_memcmp_fixed");
+                self.emit(format!("bnez a0, {}", mismatch_label));
+            }
+            ExpectedFixedByteSource::ParamBytes { var_id, .. } | ExpectedFixedByteSource::LoadedBytes { var_id, .. } => {
+                self.emit_stack_ld("a0", output_pointer_stack_offset);
+                if output_field_offset != 0 {
+                    self.emit_large_addi("a0", "a0", output_field_offset as i64);
+                }
+                self.emit(format!("ld a1, {}(sp)", var_id * 8));
+                self.emit(format!("li a2, {}", width));
+                self.emit("call __cellscript_memcmp_fixed");
+                self.emit(format!("bnez a0, {}", mismatch_label));
+            }
+        }
+        self.emit_fixed_byte_mismatch_fail(&mismatch_label, fail_code);
     }
 
     fn emit_mutate_replacement_data_except_transition_checks(&mut self, pattern: &MutatePattern) -> bool {
@@ -2578,6 +3460,12 @@ impl CodeGenerator {
     }
 
     fn emit_mutate_replacement_transition_checks(&mut self, pattern: &MutatePattern) {
+        if self.emit_mutate_replacement_dynamic_table_append_checks(pattern) {
+            return;
+        }
+        if self.emit_mutate_replacement_dynamic_table_transition_checks(pattern) {
+            return;
+        }
         let transitions = self.mutate_transition_layouts(pattern);
         if transitions.is_empty() {
             return;
@@ -2640,22 +3528,130 @@ impl CodeGenerator {
             ));
             self.emit_sp_addi("t4", input_buffer_offset);
             self.emit_unaligned_scalar_load("t4", "t0", "t2", layout.offset, width);
+            let input_value_offset = self.runtime_expr_temp_offset(RUNTIME_EXPR_TEMP_SLOTS - 2).expect("runtime temp slot");
+            self.emit("# cellscript abi: preserve mutate input scalar before transition expression");
+            self.emit_stack_sd("t0", input_value_offset);
             self.emit_prelude_u64_operand_source_to_t1(&delta);
+            self.emit_stack_ld("t0", input_value_offset);
             match transition.op {
                 MutateTransitionOp::Add => self.emit("add t1, t0, t1"),
                 MutateTransitionOp::Sub => self.emit("sub t1, t0, t1"),
                 MutateTransitionOp::Set => {
                     unreachable!("set transitions are verified by emit_mutate_replacement_set_transition_checks")
                 }
+                MutateTransitionOp::Append => {
+                    unreachable!("append transitions are verified by emit_mutate_replacement_dynamic_table_append_checks")
+                }
             }
+            let expected_value_offset = self.runtime_expr_temp_offset(RUNTIME_EXPR_TEMP_SLOTS - 1).expect("runtime temp slot");
+            self.emit("# cellscript abi: preserve mutate expected scalar across output field load");
+            self.emit_stack_sd("t1", expected_value_offset);
             self.emit_sp_addi("t4", output_buffer_offset);
             self.emit_unaligned_scalar_load("t4", "t0", "t2", layout.offset, width);
+            self.emit_stack_ld("t1", expected_value_offset);
             self.emit("sub t2, t0, t1");
             let ok_label = self.fresh_label("mutate_transition_ok");
             self.emit(format!("beqz t2, {}", ok_label));
             self.emit_fail(14);
             self.emit_label(&ok_label);
         }
+    }
+
+    fn emit_mutate_replacement_dynamic_table_transition_checks(&mut self, pattern: &MutatePattern) -> bool {
+        if self.type_fixed_sizes.contains_key(&pattern.ty) || pattern.transitions.is_empty() {
+            return false;
+        }
+        let Some(layouts) = self.type_layouts.get(&pattern.ty).cloned() else {
+            return false;
+        };
+        let field_count = layouts.len();
+        let transitions = pattern
+            .transitions
+            .iter()
+            .filter_map(|transition| {
+                let layout = layouts.get(&transition.field).cloned()?;
+                let width = layout_fixed_scalar_width(&layout)?;
+                (width <= 8 && self.prelude_u64_operand_source(&transition.operand).is_some())
+                    .then(|| (transition.clone(), layout, width))
+            })
+            .collect::<Vec<_>>();
+        if transitions.len() != pattern.transitions.len() {
+            return false;
+        }
+
+        let input_size_offset = self.runtime_scratch_size_offset();
+        let input_buffer_offset = self.runtime_scratch_buffer_offset();
+        let output_size_offset = self.runtime_scratch2_size_offset();
+        let output_buffer_offset = self.runtime_scratch2_buffer_offset();
+        self.emit_load_cell_data_syscall_to_offsets(
+            "mutate_input_table_transition",
+            CKB_SOURCE_INPUT,
+            pattern.input_index,
+            input_size_offset,
+            input_buffer_offset,
+            RUNTIME_SCRATCH_BUFFER_SIZE,
+        );
+        self.emit_return_on_syscall_error(1);
+        self.emit_load_cell_data_syscall_to_offsets(
+            "mutate_output_table_transition",
+            CKB_SOURCE_OUTPUT,
+            pattern.output_index,
+            output_size_offset,
+            output_buffer_offset,
+            RUNTIME_SCRATCH_BUFFER_SIZE,
+        );
+        self.emit_return_on_syscall_error(1);
+        self.emit(format!(
+            "# cellscript abi: verify mutate Molecule table transition fields {} Input#{} -> Output#{}",
+            pattern.ty, pattern.input_index, pattern.output_index
+        ));
+        for (transition, layout, width) in transitions {
+            let Some(delta) = self.prelude_u64_operand_source(&transition.operand) else {
+                continue;
+            };
+            self.emit_sp_addi("t4", input_buffer_offset);
+            self.emit_molecule_table_field_bounds_to_t5(
+                "t4",
+                input_size_offset,
+                layout.index,
+                width,
+                &format!("{} input.{}", pattern.ty, transition.field),
+            );
+            self.emit("add t4, t4, t5");
+            self.emit_unaligned_scalar_load("t4", "t0", "t2", 0, width);
+            let input_value_offset = self.runtime_expr_temp_offset(RUNTIME_EXPR_TEMP_SLOTS - 2).expect("runtime temp slot");
+            self.emit("# cellscript abi: preserve mutate table input scalar before transition expression");
+            self.emit_stack_sd("t0", input_value_offset);
+            self.emit_prelude_u64_operand_source_to_t1(&delta);
+            self.emit_stack_ld("t0", input_value_offset);
+            match transition.op {
+                MutateTransitionOp::Add => self.emit("add t1, t0, t1"),
+                MutateTransitionOp::Sub => self.emit("sub t1, t0, t1"),
+                MutateTransitionOp::Set => {}
+                MutateTransitionOp::Append => {}
+            }
+            let expected_value_offset = self.runtime_expr_temp_offset(RUNTIME_EXPR_TEMP_SLOTS - 1).expect("runtime temp slot");
+            self.emit("# cellscript abi: preserve mutate table expected scalar across output field load");
+            self.emit_stack_sd("t1", expected_value_offset);
+            self.emit_sp_addi("t4", output_buffer_offset);
+            self.emit_molecule_table_field_bounds_to_t5(
+                "t4",
+                output_size_offset,
+                layout.index,
+                width,
+                &format!("{} output.{}", pattern.ty, transition.field),
+            );
+            self.emit("add t4, t4, t5");
+            self.emit_unaligned_scalar_load("t4", "t0", "t2", 0, width);
+            self.emit_stack_ld("t1", expected_value_offset);
+            self.emit("sub t2, t0, t1");
+            let ok_label = self.fresh_label("mutate_table_transition_ok");
+            self.emit(format!("beqz t2, {}", ok_label));
+            self.emit_fail(14);
+            self.emit_label(&ok_label);
+        }
+        let _ = field_count;
+        true
     }
 
     fn emit_mutate_replacement_set_transition_checks(&mut self, pattern: &MutatePattern) {
@@ -2796,6 +3792,9 @@ impl CodeGenerator {
                 MutateTransitionOp::Set => {
                     unreachable!("set transitions are verified by emit_mutate_replacement_set_transition_checks")
                 }
+                MutateTransitionOp::Append => {
+                    unreachable!("append transitions are verified by emit_mutate_replacement_dynamic_table_append_checks")
+                }
             }
 
             // Load actual output low 64 bits into t0, high 64 bits into t3
@@ -2829,7 +3828,11 @@ impl CodeGenerator {
         self.emit(format!("# cellscript abi: verify output field {} offset={} size={}", context, layout.offset, width));
         self.emit_sp_addi("t4", buffer_offset);
         self.emit_unaligned_scalar_load("t4", "t0", "t2", layout.offset, width);
+        let actual_value_offset = self.runtime_expr_temp_offset(RUNTIME_EXPR_TEMP_SLOTS - 1).expect("runtime temp slot");
+        self.emit("# cellscript abi: preserve output scalar before expected expression");
+        self.emit_stack_sd("t0", actual_value_offset);
         self.emit_expected_operand_to_t1(expected);
+        self.emit_stack_ld("t0", actual_value_offset);
         self.emit("sub t2, t0, t1");
         let ok_label = self.fresh_label("output_field_ok");
         self.emit(format!("beqz t2, {}", ok_label));
@@ -2849,13 +3852,15 @@ impl CodeGenerator {
         self.emit_sp_addi("t4", output_buffer_offset);
         match source {
             ExpectedFixedByteSource::SchemaField(source) => {
-                self.emit_loaded_fixed_bytes_helper_call(
-                    output_buffer_offset,
-                    output_field_offset,
-                    SourcePointer::LoadedStackPointer { var_id: source.obj_var_id, offset: source.layout.offset },
-                    width,
-                    &mismatch_label,
-                );
+                if self.emit_schema_field_source_pointer_to("a1", source, width) {
+                    self.emit_sp_addi("a0", output_buffer_offset + output_field_offset);
+                    self.emit(format!("li a2, {}", width));
+                    self.emit("call __cellscript_memcmp_fixed");
+                    self.emit(format!("bnez a0, {}", mismatch_label));
+                } else {
+                    self.emit("# cellscript abi: fail closed because schema field byte source is not addressable");
+                    self.emit_fail(16);
+                }
             }
             ExpectedFixedByteSource::Const(bytes) => {
                 if width >= 8 && bytes.iter().take(width).all(|byte| *byte == 0) {
@@ -3024,16 +4029,7 @@ impl CodeGenerator {
     fn emit_prepare_fixed_byte_source(&mut self, source: &ExpectedFixedByteSource, width: usize, context: &str) {
         match source {
             ExpectedFixedByteSource::SchemaField(source) => {
-                if let Some(source_size_offset) = self.schema_pointer_size_offsets.get(&source.obj_var_id).copied() {
-                    if let Some(expected_size) = self.type_fixed_sizes.get(&source.type_name).copied() {
-                        self.emit_loaded_schema_exact_size_check(source_size_offset, expected_size, &source.type_name);
-                    }
-                    self.emit_loaded_schema_bounds_check(
-                        source_size_offset,
-                        source.layout.offset + width,
-                        &format!("{}.{}", source.type_name, source.field),
-                    );
-                }
+                self.emit_prepare_schema_field_source(source, width);
             }
             ExpectedFixedByteSource::ParamBytes { var_id, size_offset, width } => {
                 self.emit_loaded_schema_exact_size_check(*size_offset, *width, &format!("{} param var{}", context, var_id));
@@ -3048,8 +4044,12 @@ impl CodeGenerator {
     fn emit_fixed_byte_source_byte_to(&mut self, dest_reg: &str, base_reg: &str, source: &ExpectedFixedByteSource, byte_index: usize) {
         match source {
             ExpectedFixedByteSource::SchemaField(source) => {
-                self.emit(format!("ld {}, {}(sp)", base_reg, source.obj_var_id * 8));
-                self.emit(format!("lbu {}, {}({})", dest_reg, source.layout.offset + byte_index, base_reg));
+                if self.emit_schema_field_source_pointer_to(base_reg, source, byte_index + 1) {
+                    self.emit(format!("lbu {}, {}({})", dest_reg, byte_index, base_reg));
+                } else {
+                    self.emit("# cellscript abi: fail closed because schema field byte source is not addressable");
+                    self.emit_fail(16);
+                }
             }
             ExpectedFixedByteSource::Const(bytes) => {
                 self.emit(format!("li {}, {}", dest_reg, bytes[byte_index]));
@@ -3068,11 +4068,10 @@ impl CodeGenerator {
     fn emit_fixed_byte_source_pointer_to(&mut self, dest_reg: &str, source: &ExpectedFixedByteSource) -> bool {
         match source {
             ExpectedFixedByteSource::SchemaField(source) => {
-                self.emit(format!("ld {}, {}(sp)", dest_reg, source.obj_var_id * 8));
-                if source.layout.offset != 0 {
-                    self.emit_large_addi(dest_reg, dest_reg, source.layout.offset as i64);
-                }
-                true
+                let Some(width) = layout_fixed_byte_width(&source.layout) else {
+                    return false;
+                };
+                self.emit_schema_field_source_pointer_to(dest_reg, source, width)
             }
             ExpectedFixedByteSource::StackSlot { var_id, .. } => {
                 self.emit_sp_addi(dest_reg, var_id * 8);
@@ -3160,9 +4159,14 @@ impl CodeGenerator {
                 if !self.emit_fixed_byte_source_pointer_to("a0", left_source) {
                     return false;
                 }
+                let Some(left_pointer_offset) = self.runtime_expr_temp_offset(0) else {
+                    return false;
+                };
+                self.emit_stack_sd("a0", left_pointer_offset);
                 if !self.emit_fixed_byte_source_pointer_to("a1", right_source) {
                     return false;
                 }
+                self.emit_stack_ld("a0", left_pointer_offset);
                 self.emit(format!("li a2, {}", width));
                 self.emit("call __cellscript_memcmp_fixed");
             }
@@ -3195,10 +4199,12 @@ impl CodeGenerator {
                         return Some(ExpectedFixedByteSource::Const(bytes));
                     }
                 }
-                if self.param_vars.contains(&var.id) && expected_width <= 8 {
-                    if var_width == expected_width {
-                        return Some(ExpectedFixedByteSource::StackSlot { var_id: var.id, width: expected_width });
-                    }
+                if expected_width <= 8
+                    && (fixed_scalar_width(&var.ty, type_static_length(&var.ty)).is_some()
+                        || (var_width == expected_width && fixed_byte_width(&var.ty, type_static_length(&var.ty)).is_some()))
+                    && expected_width <= var_width
+                {
+                    return Some(ExpectedFixedByteSource::StackSlot { var_id: var.id, width: expected_width });
                 }
                 if self.param_vars.contains(&var.id) {
                     if var_width == expected_width {
@@ -3348,12 +4354,14 @@ impl CodeGenerator {
             IrOperand::Const(IrConst::U32(n)) => self.emit(format!("li t1, {}", n)),
             IrOperand::Const(IrConst::U64(n)) => self.emit(format!("li t1, {}", n)),
             IrOperand::Var(var) => {
-                if let Some(value) = self.prelude_scalar_immediates.get(&var.id).copied() {
-                    self.emit(format!("li t1, {}", value));
-                } else if let Some(source) = self.schema_field_value_sources.get(&var.id).cloned() {
+                if let Some(source) = self.schema_field_value_sources.get(&var.id).cloned() {
                     self.emit_schema_field_source_to_t1(&source);
                 } else if let Some(source) = self.prelude_u64_value_sources.get(&var.id).cloned() {
                     self.emit_prelude_u64_value_source_to_t1(&source);
+                } else if matches!(var.ty, IrType::Bool | IrType::U8 | IrType::U16 | IrType::U32 | IrType::U64) {
+                    self.emit(format!("ld t1, {}(sp)", var.id * 8));
+                } else if let Some(value) = self.prelude_scalar_immediates.get(&var.id).copied() {
+                    self.emit(format!("li t1, {}", value));
                 } else {
                     self.emit(format!("ld t1, {}(sp)", var.id * 8));
                 }
@@ -3431,6 +4439,15 @@ impl CodeGenerator {
             self.emit("li t1, 0");
             return;
         };
+        if !self.type_fixed_sizes.contains_key(&source.type_name) {
+            if self.emit_schema_field_source_pointer_to("t4", source, width) {
+                self.emit(format!("# cellscript abi: expected table field {} index={} size={}", context, source.layout.index, width));
+                self.emit_unaligned_scalar_load("t4", "t1", "t2", 0, width);
+            } else {
+                self.emit("li t1, 0");
+            }
+            return;
+        }
         if let Some(size_offset) = self.schema_pointer_size_offsets.get(&source.obj_var_id).copied() {
             if let Some(expected_size) = self.type_fixed_sizes.get(&source.type_name).copied() {
                 self.emit_loaded_schema_exact_size_check(size_offset, expected_size, &source.type_name);
@@ -3440,6 +4457,53 @@ impl CodeGenerator {
         self.emit(format!("# cellscript abi: expected field {} offset={} size={}", context, source.layout.offset, width));
         self.emit(format!("ld t4, {}(sp)", source.obj_var_id * 8));
         self.emit_unaligned_scalar_load("t4", "t1", "t2", source.layout.offset, width);
+    }
+
+    fn emit_prepare_schema_field_source(&mut self, source: &SchemaFieldValueSource, width: usize) {
+        let context = format!("{}.{}", source.type_name, source.field);
+        let Some(size_offset) = self.schema_pointer_size_offsets.get(&source.obj_var_id).copied() else {
+            return;
+        };
+        if let Some(expected_size) = self.type_fixed_sizes.get(&source.type_name).copied() {
+            self.emit_loaded_schema_exact_size_check(size_offset, expected_size, &source.type_name);
+            self.emit_loaded_schema_bounds_check(size_offset, source.layout.offset + width, &context);
+        } else {
+            self.emit(format!("ld t4, {}(sp)", source.obj_var_id * 8));
+            self.emit_molecule_table_field_bounds_to_t5("t4", size_offset, source.layout.index, width, &context);
+        }
+    }
+
+    fn emit_schema_field_source_pointer_to(&mut self, dest_reg: &str, source: &SchemaFieldValueSource, width: usize) -> bool {
+        let context = format!("{}.{}", source.type_name, source.field);
+        if let Some(size_offset) = self.schema_pointer_size_offsets.get(&source.obj_var_id).copied() {
+            if let Some(expected_size) = self.type_fixed_sizes.get(&source.type_name).copied() {
+                self.emit_loaded_schema_exact_size_check(size_offset, expected_size, &source.type_name);
+                self.emit_loaded_schema_bounds_check(size_offset, source.layout.offset + width, &context);
+                self.emit(format!("ld {}, {}(sp)", dest_reg, source.obj_var_id * 8));
+                if source.layout.offset != 0 {
+                    self.emit_large_addi(dest_reg, dest_reg, source.layout.offset as i64);
+                }
+            } else {
+                self.emit(format!("ld t4, {}(sp)", source.obj_var_id * 8));
+                self.emit_molecule_table_field_bounds_to_t5("t4", size_offset, source.layout.index, width, &context);
+                self.emit(format!("add {}, t4, t5", dest_reg));
+            }
+            true
+        } else if self.aggregate_pointer_sources.contains_key(&source.obj_var_id) {
+            self.emit(format!("ld {}, {}(sp)", dest_reg, source.obj_var_id * 8));
+            if source.layout.offset != 0 {
+                self.emit_large_addi(dest_reg, dest_reg, source.layout.offset as i64);
+            }
+            true
+        } else if self.type_fixed_sizes.contains_key(&source.type_name) {
+            self.emit(format!("ld {}, {}(sp)", dest_reg, source.obj_var_id * 8));
+            if source.layout.offset != 0 {
+                self.emit_large_addi(dest_reg, dest_reg, source.layout.offset as i64);
+            }
+            true
+        } else {
+            false
+        }
     }
 
     fn can_verify_create_output_fields(&self, pattern: &CreatePattern) -> bool {
@@ -3455,9 +4519,23 @@ impl CodeGenerator {
         }
         pattern.fields.iter().all(|(field, value)| {
             layouts.get(field).is_some_and(|layout| {
-                layout_fixed_byte_width(&layout).is_some_and(|width| self.is_prelude_available_fixed_value(value, width))
+                if let Some(width) = layout_fixed_byte_width(&layout) {
+                    self.is_prelude_available_fixed_value(value, width)
+                } else {
+                    self.can_verify_dynamic_create_output_field_value(value, &layout)
+                }
             })
         })
+    }
+
+    fn can_verify_dynamic_create_output_field_value(&self, value: &IrOperand, layout: &SchemaFieldLayout) -> bool {
+        let IrOperand::Var(var) = value else {
+            return false;
+        };
+        (self.schema_pointer_vars.contains(&var.id) && self.schema_pointer_size_offsets.contains_key(&var.id))
+            || self.constructed_byte_vectors.contains_key(&var.id)
+            || (self.empty_molecule_vector_vars.contains(&var.id)
+                && molecule_vector_element_fixed_width(&layout.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes).is_some())
     }
 
     fn can_verify_output_lock(&self, pattern: &CreatePattern) -> bool {
@@ -3470,6 +4548,7 @@ impl CodeGenerator {
     fn emit_create_output_checks(&mut self, pattern: &CreatePattern) {
         let size_offset = self.runtime_scratch_size_offset();
         let buffer_offset = self.runtime_scratch_buffer_offset();
+        let is_fixed_type = self.type_fixed_sizes.contains_key(&pattern.ty);
         if let Some(expected_size) = self.type_fixed_sizes.get(&pattern.ty).copied() {
             self.emit_loaded_schema_exact_size_check(size_offset, expected_size, &pattern.ty);
         }
@@ -3477,18 +4556,258 @@ impl CodeGenerator {
             let Some(layout) = self.type_layouts.get(&pattern.ty).and_then(|fields| fields.get(field)).cloned() else {
                 continue;
             };
-            self.emit_loaded_field_bytes_equals_expected(
-                size_offset,
-                buffer_offset,
-                &layout,
-                value,
-                &format!("{}.{}", pattern.ty, field),
-            );
+            if layout_fixed_byte_width(&layout).is_some() {
+                if is_fixed_type {
+                    self.emit_loaded_field_bytes_equals_expected(
+                        size_offset,
+                        buffer_offset,
+                        &layout,
+                        value,
+                        &format!("{}.{}", pattern.ty, field),
+                    );
+                } else {
+                    let Some(field_count) = self.type_layouts.get(&pattern.ty).map(|fields| fields.len()) else {
+                        self.emit_fail(5);
+                        continue;
+                    };
+                    if !self.emit_dynamic_create_output_fixed_field_equals_expected(
+                        size_offset,
+                        buffer_offset,
+                        &pattern.ty,
+                        field,
+                        &layout,
+                        field_count,
+                        value,
+                    ) {
+                        self.emit_fail(5);
+                    }
+                }
+            } else {
+                let Some(field_count) = self.type_layouts.get(&pattern.ty).map(|fields| fields.len()) else {
+                    self.emit_fail(5);
+                    continue;
+                };
+                if !self.emit_dynamic_create_output_field_equals_expected(
+                    size_offset,
+                    buffer_offset,
+                    &pattern.ty,
+                    field,
+                    &layout,
+                    field_count,
+                    value,
+                ) {
+                    self.emit_fail(5);
+                }
+            }
         }
         if pattern.operation == "settle" {
             self.emit_settle_final_state_check(pattern, size_offset, buffer_offset);
         } else {
             self.emit_lifecycle_transition_check(pattern, size_offset, buffer_offset);
+        }
+    }
+
+    fn emit_dynamic_create_output_fixed_field_equals_expected(
+        &mut self,
+        output_size_offset: usize,
+        output_buffer_offset: usize,
+        type_name: &str,
+        field: &str,
+        layout: &SchemaFieldLayout,
+        field_count: usize,
+        expected: &IrOperand,
+    ) -> bool {
+        let Some(width) = layout_fixed_byte_width(layout) else {
+            return false;
+        };
+        let output_start_offset = self.runtime_expr_temp_offset(0).expect("runtime temp slot 0");
+        let output_len_offset = self.runtime_expr_temp_offset(1).expect("runtime temp slot 1");
+        self.emit_dynamic_table_field_span_to_stack(
+            output_size_offset,
+            output_buffer_offset,
+            layout.index,
+            field_count,
+            &format!("{}.{}", type_name, field),
+            output_start_offset,
+            output_len_offset,
+        );
+        self.emit_stack_ld("t0", output_len_offset);
+        self.emit(format!("li t1, {}", width));
+        self.emit("sub t2, t0, t1");
+        let len_ok = self.fresh_label("create_fixed_table_field_len_ok");
+        self.emit(format!("beqz t2, {}", len_ok));
+        self.emit_fail(3);
+        self.emit_label(&len_ok);
+
+        if layout_fixed_scalar_width(layout).is_some() {
+            self.emit(format!(
+                "# cellscript abi: verify output Molecule table scalar field {}.{} index={} size={}",
+                type_name, field, layout.index, width
+            ));
+            self.emit_stack_ld("t4", output_start_offset);
+            self.emit_unaligned_scalar_load("t4", "t0", "t2", 0, width);
+            let actual_value_offset = self.runtime_expr_temp_offset(RUNTIME_EXPR_TEMP_SLOTS - 1).expect("runtime temp slot");
+            self.emit("# cellscript abi: preserve output table scalar before expected expression");
+            self.emit_stack_sd("t0", actual_value_offset);
+            self.emit_expected_operand_to_t1(expected);
+            self.emit_stack_ld("t0", actual_value_offset);
+            self.emit("sub t2, t0, t1");
+            let ok_label = self.fresh_label("output_table_field_ok");
+            self.emit(format!("beqz t2, {}", ok_label));
+            self.emit_fail(3);
+            self.emit_label(&ok_label);
+            return true;
+        }
+
+        let Some(source) = self.expected_fixed_byte_source(expected, width) else {
+            return false;
+        };
+        self.emit(format!(
+            "# cellscript abi: verify output Molecule table bytes field {}.{} index={} size={}",
+            type_name, field, layout.index, width
+        ));
+        self.emit_prepare_fixed_byte_source(&source, width, &format!("{}.{}", type_name, field));
+        self.emit_pointer_fixed_bytes_against_source(output_start_offset, 0, &source, width, 3);
+        true
+    }
+
+    fn emit_dynamic_create_output_field_equals_expected(
+        &mut self,
+        output_size_offset: usize,
+        output_buffer_offset: usize,
+        type_name: &str,
+        field: &str,
+        layout: &SchemaFieldLayout,
+        field_count: usize,
+        expected: &IrOperand,
+    ) -> bool {
+        let IrOperand::Var(var) = expected else {
+            return false;
+        };
+        let output_start_offset = self.runtime_expr_temp_offset(0).expect("runtime temp slot 0");
+        let output_len_offset = self.runtime_expr_temp_offset(1).expect("runtime temp slot 1");
+        self.emit_dynamic_table_field_span_to_stack(
+            output_size_offset,
+            output_buffer_offset,
+            layout.index,
+            field_count,
+            &format!("{}.{}", type_name, field),
+            output_start_offset,
+            output_len_offset,
+        );
+        if let Some(parts) = self.constructed_byte_vectors.get(&var.id).cloned() {
+            if molecule_vector_element_fixed_width(&layout.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes) == Some(1) {
+                self.emit_constructed_byte_vector_field_check(type_name, field, output_start_offset, output_len_offset, &parts);
+                return true;
+            }
+        }
+        if self.empty_molecule_vector_vars.contains(&var.id)
+            && molecule_vector_element_fixed_width(&layout.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes).is_some()
+        {
+            self.emit_empty_molecule_vector_field_check(type_name, field, output_start_offset, output_len_offset);
+            return true;
+        }
+        if !self.schema_pointer_vars.contains(&var.id) {
+            return false;
+        }
+        let Some(expected_size_offset) = self.schema_pointer_size_offsets.get(&var.id).copied() else {
+            return false;
+        };
+        self.emit_stack_ld("t0", output_len_offset);
+        self.emit_stack_ld("t1", expected_size_offset);
+        self.emit("sub t2, t0, t1");
+        let len_ok = self.fresh_label("create_dynamic_field_len_ok");
+        self.emit(format!("beqz t2, {}", len_ok));
+        self.emit_fail(3);
+        self.emit_label(&len_ok);
+
+        self.emit(format!("# cellscript abi: verify output dynamic field {}.{} as Molecule bytes", type_name, field));
+        let mismatch_label = self.fresh_label("create_dynamic_field_mismatch");
+        self.emit_stack_ld("a0", output_start_offset);
+        self.emit(format!("ld a1, {}(sp)", var.id * 8));
+        self.emit_stack_ld("a2", output_len_offset);
+        self.emit("call __cellscript_memcmp_fixed");
+        self.emit(format!("bnez a0, {}", mismatch_label));
+        self.emit_fixed_byte_mismatch_fail(&mismatch_label, 3);
+        true
+    }
+
+    fn emit_empty_molecule_vector_field_check(
+        &mut self,
+        type_name: &str,
+        field: &str,
+        output_start_offset: usize,
+        output_len_offset: usize,
+    ) {
+        self.emit(format!("# cellscript abi: verify output dynamic field {}.{} as empty Molecule vector", type_name, field));
+        self.emit_stack_ld("t0", output_len_offset);
+        self.emit("li t1, 4");
+        self.emit("sub t2, t0, t1");
+        let len_ok = self.fresh_label("create_empty_vector_len_ok");
+        self.emit(format!("beqz t2, {}", len_ok));
+        self.emit_fail(3);
+        self.emit_label(&len_ok);
+        self.emit_stack_ld("t0", output_start_offset);
+        for offset in 0..4 {
+            self.emit(format!("lbu t1, {}(t0)", offset));
+            let byte_ok = self.fresh_label("create_empty_vector_byte_ok");
+            self.emit(format!("beqz t1, {}", byte_ok));
+            self.emit_fail(3);
+            self.emit_label(&byte_ok);
+        }
+    }
+
+    fn emit_constructed_byte_vector_field_check(
+        &mut self,
+        type_name: &str,
+        field: &str,
+        output_start_offset: usize,
+        output_len_offset: usize,
+        parts: &[IrOperand],
+    ) {
+        let Some(expected_count) =
+            parts.iter().try_fold(0usize, |acc, part| constructed_byte_vector_part_width(part).map(|width| acc + width))
+        else {
+            self.emit_fail(3);
+            return;
+        };
+        let expected_len = 4 + expected_count;
+        self.emit(format!(
+            "# cellscript abi: verify output dynamic field {}.{} as constructed Molecule byte vector len={}",
+            type_name, field, expected_count
+        ));
+        self.emit_stack_ld("t0", output_len_offset);
+        self.emit(format!("li t1, {}", expected_len));
+        self.emit("sub t2, t0, t1");
+        let len_ok = self.fresh_label("create_constructed_vector_len_ok");
+        self.emit(format!("beqz t2, {}", len_ok));
+        self.emit_fail(3);
+        self.emit_label(&len_ok);
+
+        self.emit_stack_ld("t4", output_start_offset);
+        for (offset, byte) in (expected_count as u32).to_le_bytes().iter().enumerate() {
+            self.emit(format!("lbu t0, {}(t4)", offset));
+            self.emit(format!("li t1, {}", byte));
+            self.emit("sub t2, t0, t1");
+            let byte_ok = self.fresh_label("create_constructed_vector_count_ok");
+            self.emit(format!("beqz t2, {}", byte_ok));
+            self.emit_fail(3);
+            self.emit_label(&byte_ok);
+        }
+
+        let mut cursor = 4usize;
+        for part in parts {
+            let Some(width) = constructed_byte_vector_part_width(part) else {
+                self.emit_fail(3);
+                continue;
+            };
+            let Some(source) = self.expected_fixed_byte_source(part, width) else {
+                self.emit_fail(3);
+                continue;
+            };
+            self.emit_prepare_fixed_byte_source(&source, width, &format!("constructed {}.{}", type_name, field));
+            self.emit_pointer_fixed_bytes_against_source(output_start_offset, cursor, &source, width, 3);
+            cursor += width;
         }
     }
 
@@ -3510,7 +4829,7 @@ impl CodeGenerator {
         self.emit_return_on_syscall_error(1);
         self.emit_loaded_schema_exact_size_check(size_offset, 32, "output lock hash");
         self.emit("# cellscript abi: verify output lock hash offset=0 size=32");
-        let layout = SchemaFieldLayout { offset: 0, ty: IrType::Hash, fixed_size: Some(32), fixed_enum_size: None };
+        let layout = SchemaFieldLayout { index: 0, offset: 0, ty: IrType::Hash, fixed_size: Some(32), fixed_enum_size: None };
         self.emit_loaded_field_bytes_equals_expected(size_offset, buffer_offset, &layout, expected, "output lock hash")
     }
 
@@ -3969,24 +5288,80 @@ impl CodeGenerator {
             return false;
         };
         let Some(width) = layout_fixed_byte_width(&layout) else {
-            return false;
+            return self.emit_dynamic_schema_field_access(dest, var, type_name, field, &layout);
         };
 
         self.emit(format!("# field access .{}", field));
         self.emit(format!("# cellscript abi: schema field {}.{} offset={} size={}", type_name, field, layout.offset, width));
+        self.emit(format!("ld t4, {}(sp)", var.id * 8));
         if let Some(size_offset) = self.schema_pointer_size_offsets.get(&var.id).copied() {
             if let Some(expected_size) = self.type_fixed_sizes.get(type_name).copied() {
                 self.emit_loaded_schema_exact_size_check(size_offset, expected_size, type_name);
+                self.emit_loaded_schema_bounds_check(size_offset, layout.offset + width, &format!("{}.{}", type_name, field));
+                if layout_fixed_scalar_width(&layout).is_some() {
+                    self.emit_unaligned_scalar_load("t4", "t0", "t2", layout.offset, width);
+                } else {
+                    self.emit(format!("addi t0, t4, {}", layout.offset));
+                }
+            } else {
+                self.emit_molecule_table_field_bounds_to_t5(
+                    "t4",
+                    size_offset,
+                    layout.index,
+                    width,
+                    &format!("{}.{}", type_name, field),
+                );
+                self.emit("add t4, t4, t5");
+                if layout_fixed_scalar_width(&layout).is_some() {
+                    self.emit_unaligned_scalar_load("t4", "t0", "t2", 0, width);
+                } else {
+                    self.emit("addi t0, t4, 0");
+                }
             }
-            self.emit_loaded_schema_bounds_check(size_offset, layout.offset + width, &format!("{}.{}", type_name, field));
-        }
-        self.emit(format!("ld t4, {}(sp)", var.id * 8));
-        if layout_fixed_scalar_width(&layout).is_some() {
-            self.emit_unaligned_scalar_load("t4", "t0", "t2", layout.offset, width);
         } else {
-            self.emit(format!("addi t0, t4, {}", layout.offset));
+            if !self.type_fixed_sizes.contains_key(type_name) {
+                return false;
+            }
+            if layout_fixed_scalar_width(&layout).is_some() {
+                self.emit_unaligned_scalar_load("t4", "t0", "t2", layout.offset, width);
+            } else {
+                self.emit(format!("addi t0, t4, {}", layout.offset));
+            }
         }
         self.emit(format!("sd t0, {}(sp)", dest.id * 8));
+        true
+    }
+
+    fn emit_dynamic_schema_field_access(
+        &mut self,
+        dest: &IrVar,
+        obj: &IrVar,
+        type_name: &str,
+        field: &str,
+        layout: &SchemaFieldLayout,
+    ) -> bool {
+        if molecule_vector_element_fixed_width(&layout.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes).is_none() {
+            return false;
+        }
+        let Some(size_offset) = self.schema_pointer_size_offsets.get(&obj.id).copied() else {
+            return false;
+        };
+        let Some(dest_size_offset) = self.dynamic_value_size_offsets.get(&dest.id).copied() else {
+            return false;
+        };
+        let Some(field_count) = self.type_layouts.get(type_name).map(|fields| fields.len()) else {
+            return false;
+        };
+
+        let context = format!("{}.{}", type_name, field);
+        self.emit(format!("# field access .{}", field));
+        self.emit(format!("# cellscript abi: dynamic schema field {} index={} as Molecule vector bytes", context, layout.index));
+        self.emit(format!("ld t4, {}(sp)", obj.id * 8));
+        self.emit_molecule_table_field_span_to_t5_t6("t4", size_offset, layout.index, field_count, &context);
+        self.emit("add t0, t4, t5");
+        self.emit("sub t1, t6, t5");
+        self.emit(format!("sd t0, {}(sp)", dest.id * 8));
+        self.emit_stack_sd("t1", dest_size_offset);
         true
     }
 
@@ -4050,6 +5425,9 @@ impl CodeGenerator {
         let Some(type_name) = named_type_name(&var.ty) else {
             return false;
         };
+        if !self.type_fixed_sizes.contains_key(type_name) {
+            return false;
+        }
         let Some(layout) = self.type_layouts.get(type_name).and_then(|fields| fields.get(field)).cloned() else {
             return false;
         };
@@ -4081,6 +5459,9 @@ impl CodeGenerator {
 
     fn emit_index(&mut self, dest: &IrVar, arr: &IrOperand, idx: &IrOperand) -> Result<()> {
         if self.emit_fixed_aggregate_index(dest, arr, idx) {
+            return Ok(());
+        }
+        if self.emit_dynamic_molecule_vector_index(dest, arr, idx) {
             return Ok(());
         }
         if self.emit_dynamic_index_access(dest, arr, idx) {
@@ -4124,6 +5505,70 @@ impl CodeGenerator {
             self.emit_unaligned_scalar_load("t4", "t0", "t2", offset, width);
         } else {
             self.emit(format!("addi t0, t4, {}", offset));
+        }
+        self.emit(format!("sd t0, {}(sp)", dest.id * 8));
+        true
+    }
+
+    fn emit_dynamic_molecule_vector_index(&mut self, dest: &IrVar, arr: &IrOperand, idx: &IrOperand) -> bool {
+        let IrOperand::Var(arr_var) = arr else {
+            return false;
+        };
+        let Some(size_offset) = self
+            .dynamic_value_size_offsets
+            .get(&arr_var.id)
+            .copied()
+            .or_else(|| self.schema_pointer_size_offsets.get(&arr_var.id).copied())
+        else {
+            return false;
+        };
+        let Some(element_width) = molecule_vector_element_fixed_width(&arr_var.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
+        else {
+            return false;
+        };
+
+        self.emit("# index access");
+        self.emit(format!(
+            "# cellscript abi: dynamic Molecule vector index element_size={} size_offset={}",
+            element_width, size_offset
+        ));
+        self.emit_loaded_schema_bounds_check(size_offset, 4, "dynamic Molecule vector index");
+        self.emit(format!("ld t4, {}(sp)", arr_var.id * 8));
+        self.emit_unaligned_scalar_load("t4", "t0", "t2", 0, 4);
+
+        self.emit_stack_ld("t3", size_offset);
+        self.emit(format!("li t2, {}", element_width));
+        self.emit("mul t5, t0, t2");
+        self.emit("addi t5, t5, 4");
+        self.emit("sub t2, t3, t5");
+        let size_ok = self.fresh_label("molecule_vector_index_size_ok");
+        self.emit(format!("beqz t2, {}", size_ok));
+        self.emit_fail(2);
+        self.emit_label(&size_ok);
+
+        match idx {
+            IrOperand::Var(v) => self.emit(format!("ld t1, {}(sp)", v.id * 8)),
+            IrOperand::Const(IrConst::U8(n)) => self.emit(format!("li t1, {}", n)),
+            IrOperand::Const(IrConst::U16(n)) => self.emit(format!("li t1, {}", n)),
+            IrOperand::Const(IrConst::U32(n)) => self.emit(format!("li t1, {}", n)),
+            IrOperand::Const(IrConst::U64(n)) => self.emit(format!("li t1, {}", n)),
+            _ => self.emit("li t1, 0"),
+        }
+
+        let bounds_ok = self.fresh_label("molecule_vector_index_bounds_ok");
+        self.emit("sltu t2, t1, t0");
+        self.emit(format!("bnez t2, {}", bounds_ok));
+        self.emit_fail(2);
+        self.emit_label(&bounds_ok);
+
+        self.emit(format!("li t2, {}", element_width));
+        self.emit("mul t1, t1, t2");
+        self.emit("addi t1, t1, 4");
+        self.emit("add t4, t4, t1");
+        if fixed_scalar_width(&dest.ty, Some(element_width)).is_some() {
+            self.emit_unaligned_scalar_load("t4", "t0", "t2", 0, element_width.min(8));
+        } else {
+            self.emit("addi t0, t4, 0");
         }
         self.emit(format!("sd t0, {}(sp)", dest.id * 8));
         true
@@ -4195,6 +5640,7 @@ impl CodeGenerator {
         self.emit("# length");
         if let Some(static_len) = self.static_length(operand) {
             self.emit(format!("li t0, {}", static_len));
+        } else if self.emit_dynamic_molecule_vector_length(operand) {
         } else if let Some(size_offset) = self.dynamic_length_from_size_offset(operand) {
             // For schema-backed or fixed-byte params, the actual size word is already
             // stored at the size offset; load it directly.
@@ -4207,6 +5653,39 @@ impl CodeGenerator {
         }
         self.emit(format!("sd t0, {}(sp)", dest.id * 8));
         Ok(())
+    }
+
+    fn emit_dynamic_molecule_vector_length(&mut self, operand: &IrOperand) -> bool {
+        let IrOperand::Var(var) = operand else {
+            return false;
+        };
+        let Some(size_offset) =
+            self.dynamic_value_size_offsets.get(&var.id).copied().or_else(|| self.schema_pointer_size_offsets.get(&var.id).copied())
+        else {
+            return false;
+        };
+        let Some(element_width) = molecule_vector_element_fixed_width(&var.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes) else {
+            return false;
+        };
+
+        self.emit(format!(
+            "# cellscript abi: dynamic Molecule vector length element_size={} size_offset={}",
+            element_width, size_offset
+        ));
+        self.emit_loaded_schema_bounds_check(size_offset, 4, "dynamic Molecule vector length");
+        self.emit(format!("ld t4, {}(sp)", var.id * 8));
+        self.emit_unaligned_scalar_load("t4", "t0", "t2", 0, 4);
+
+        self.emit_stack_ld("t1", size_offset);
+        self.emit(format!("li t2, {}", element_width));
+        self.emit("mul t3, t0, t2");
+        self.emit("addi t3, t3, 4");
+        self.emit("sub t2, t1, t3");
+        let size_ok = self.fresh_label("molecule_vector_size_ok");
+        self.emit(format!("beqz t2, {}", size_ok));
+        self.emit_fail(2);
+        self.emit_label(&size_ok);
+        true
     }
 
     /// Try to obtain the size offset for a dynamically-sized operand.
@@ -4338,6 +5817,7 @@ impl CodeGenerator {
         self.emit_stack_sd("zero", length_offset);
         self.emit_sp_addi("t0", buffer_offset);
         self.emit(format!("sd t0, {}(sp)", dest.id * 8));
+        self.empty_molecule_vector_vars.insert(dest.id);
         self.next_collection_slot += 1;
         Ok(())
     }
@@ -4346,6 +5826,14 @@ impl CodeGenerator {
         self.emit("# collection push");
         self.emit_symbolic_operand_comment("collection", collection);
         self.emit_symbolic_operand_comment("value", value);
+        if matches!(value, IrOperand::Var(var) if self.verified_collection_push_values.contains(&var.id)) {
+            self.emit("# cellscript abi: collection push is covered by mutate append verifier");
+            return Ok(());
+        }
+        if matches!(value, IrOperand::Var(var) if self.verified_collection_construction_values.contains(&var.id)) {
+            self.emit("# cellscript abi: collection push is covered by create-output vector verifier");
+            return Ok(());
+        }
         // In the verifier context, collection push is used for building output data.
         // The verifier doesn't need to actually build the data; it needs to verify
         // that the output cell data matches expectations. The collection operations
@@ -4362,6 +5850,10 @@ impl CodeGenerator {
         self.emit("# collection extend_from_slice");
         self.emit_symbolic_operand_comment("collection", collection);
         self.emit_symbolic_operand_comment("slice", slice);
+        if matches!(slice, IrOperand::Var(var) if self.verified_collection_construction_values.contains(&var.id)) {
+            self.emit("# cellscript abi: collection extend is covered by create-output vector verifier");
+            return Ok(());
+        }
         self.emit("# cellscript abi: collection extend is not needed for verifier execution");
         self.emit("# cellscript abi: if this path is reached, the source program uses dynamic collections");
         self.emit_fail(21);
@@ -4736,9 +6228,10 @@ impl CodeGenerator {
     /// destroy
     fn emit_destroy(&mut self, operand: &IrOperand) -> Result<()> {
         self.emit("# destroy");
-        if let IrOperand::Var(var) = operand {
-            self.emit(format!("sd zero, {}(sp)", var.id * 8));
+        if let IrOperand::Var(_) = operand {
+            self.emit_symbolic_operand_comment("destroyed input retained for verifier field checks", operand);
             self.emit("# cellscript abi: destroy consumed input is checked by Output absence scan");
+            self.emit("# cellscript abi: retain consumed input pointer for post-destroy output verification");
             return Ok(());
         }
         // Non-Var destroy: this should not happen in valid IR, fail with specific error.
@@ -4839,6 +6332,18 @@ impl CodeGenerator {
             0,
             self.options.target_profile != TargetProfile::Ckb,
             "env::current_daa_score is rejected by ckb target-profile policy",
+        );
+        let (timepoint_field_name, timepoint_field_id) = if self.options.target_profile == TargetProfile::Ckb {
+            ("ckb_epoch_number", CKB_HEADER_FIELD_EPOCH_NUMBER)
+        } else {
+            ("daa_score", 0)
+        };
+        self.emit_runtime_header_field_u64(
+            "__env_current_timepoint",
+            timepoint_field_name,
+            timepoint_field_id,
+            true,
+            "env::current_timepoint is unavailable for this target profile",
         );
         self.emit_runtime_header_field_u64(
             "__ckb_header_epoch_number",
@@ -5041,22 +6546,6 @@ fn first_entrypoint(ir: &IrModule) -> Option<(&str, &[IrParam])> {
         }
     }
     None
-}
-
-fn entry_witness_abi_arg_count(params: &[IrParam], type_hash_param_indices: &BTreeSet<usize>) -> usize {
-    params
-        .iter()
-        .enumerate()
-        .map(|(index, param)| {
-            if named_type_name(&param.ty).is_some() {
-                2 + usize::from(type_hash_param_indices.contains(&index)) * 2
-            } else if fixed_byte_pointer_param_width(&param.ty).is_some() || fixed_aggregate_pointer_param_width(&param.ty).is_some() {
-                2
-            } else {
-                1
-            }
-        })
-        .sum()
 }
 
 fn entry_witness_payload_layout(params: &[IrParam]) -> Vec<EntryWitnessPayloadArg> {
@@ -6760,6 +8249,7 @@ fn is_runtime_header_u64_call(func: &str) -> bool {
     matches!(
         func,
         "__env_current_daa_score"
+            | "__env_current_timepoint"
             | "__ckb_header_epoch_number"
             | "__ckb_header_epoch_start_block_number"
             | "__ckb_header_epoch_length"
