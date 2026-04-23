@@ -1367,7 +1367,24 @@ impl IrGenerator {
                 let block = self.block_mut(blocks, active);
                 if let (BindingPattern::Name(name), Some(declared_ty)) = (&let_stmt.pattern, &let_stmt.ty) {
                     let declared_ty = self.convert_type(declared_ty);
-                    let var = self.materialize_operand_with_type(name, lowered.operand, declared_ty, block);
+                    let var = if let_stmt.is_mut {
+                        let owned = self.materialize_owned_operand(name, lowered.operand, block);
+                        if owned.ty == declared_ty {
+                            owned
+                        } else {
+                            self.materialize_operand_with_type(name, IrOperand::Var(owned), declared_ty, block)
+                        }
+                    } else {
+                        self.materialize_operand_with_type(name, lowered.operand, declared_ty, block)
+                    };
+                    if transition_coverable && var.ty == IrType::U64 {
+                        self.transition_coverable_value_ids.insert(var.id);
+                    }
+                    vars.insert(name.clone(), var);
+                    return Some(active);
+                }
+                if let (BindingPattern::Name(name), true) = (&let_stmt.pattern, let_stmt.is_mut) {
+                    let var = self.materialize_owned_operand(name, lowered.operand, block);
                     if transition_coverable && var.ty == IrType::U64 {
                         self.transition_coverable_value_ids.insert(var.id);
                     }
@@ -1471,6 +1488,22 @@ impl IrGenerator {
                 dest
             }
             IrOperand::Const(value) => {
+                let dest = self.new_var(name.to_string(), ty);
+                block.instructions.push(IrInstruction::LoadConst { dest: dest.clone(), value });
+                dest
+            }
+        }
+    }
+
+    fn materialize_owned_operand(&mut self, name: &str, operand: IrOperand, block: &mut IrBlock) -> IrVar {
+        match operand {
+            IrOperand::Var(var) => {
+                let dest = self.new_var(name.to_string(), var.ty.clone());
+                block.instructions.push(IrInstruction::Move { dest: dest.clone(), src: IrOperand::Var(var) });
+                dest
+            }
+            IrOperand::Const(value) => {
+                let ty = self.const_type(&value);
                 let dest = self.new_var(name.to_string(), ty);
                 block.instructions.push(IrInstruction::LoadConst { dest: dest.clone(), value });
                 dest

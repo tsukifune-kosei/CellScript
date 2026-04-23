@@ -111,6 +111,7 @@ action revoke_grant(
     admin: Address
 ) -> (Token, Token) {
     assert_invariant(config.revocable, "not revocable")
+    assert_invariant(admin == config.admin, "not admin")
     assert_invariant(grant.state < 2, "already fully claimed")
     
     let now = env::current_timepoint()
