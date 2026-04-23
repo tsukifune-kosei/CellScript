@@ -279,9 +279,18 @@ cellc build --target riscv64-elf --target-profile spora
 
 ```bash
 cellc metadata examples/token.cell --target riscv64-elf --target-profile spora
+cellc constraints examples/token.cell --target-profile ckb --entry-action mint
 cellc examples/token.cell --target riscv64-elf --target-profile spora
 cellc verify-artifact examples/token.elf --metadata examples/token.elf.meta.json
 ```
+
+`cellc constraints` 会输出 production constraints report；同一份内容也会写入
+compile metadata。它会按 target profile 报告 entry ABI slot usage、寄存器和
+stack-spill 布局、witness byte bounds、artifact/backend-shape metrics、CKB
+cycle/block limit 配置、CKB code-cell capacity lower bounds，以及 Spora v0
+mass estimates。CKB dry-run cycles、serialized transaction size、完整 occupied
+capacity 和实测 Spora mass 仍需要 builder 或 acceptance 层补齐；compiler 会在
+未本地实测的字段上明确标注。
 
 ## Manifest
 
@@ -338,6 +347,7 @@ fail-closed；registry protocol 仍属于 post-v1 工作。
 | `cellc build` | 编译包并写入 artifact 和 metadata。 |
 | `cellc check` | 类型检查和 lowering，不写入 artifact。 |
 | `cellc metadata` | 输出 lowering、runtime、scheduler、source 和 schema metadata。 |
+| `cellc constraints` | 输出 profile-aware ABI、artifact、CKB 和 Spora production constraints。 |
 | `cellc verify-artifact` | 用 metadata sidecar 和可选 source hashes 校验 artifact。 |
 | `cellc test` | 运行 `.cell` 源码和注释驱动诊断的编译器测试。 |
 | `cellc doc` | 生成 API 和 audit 文档。 |

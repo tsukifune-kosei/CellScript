@@ -33,6 +33,7 @@ pub enum Command {
     Repl,
     Check(CheckArgs),
     Metadata(MetadataArgs),
+    Constraints(ConstraintsArgs),
     /// Encode generated entry wrapper witness bytes
     EntryWitness(EntryWitnessArgs),
     VerifyArtifact(VerifyArtifactArgs),
@@ -149,6 +150,16 @@ pub struct MetadataArgs {
     pub target_profile: Option<String>,
 }
 
+#[derive(Debug, Default)]
+pub struct ConstraintsArgs {
+    pub input: Option<PathBuf>,
+    pub output: Option<PathBuf>,
+    pub target: Option<String>,
+    pub target_profile: Option<String>,
+    pub entry_action: Option<String>,
+    pub entry_lock: Option<String>,
+}
+
 /// Entry witness encoding arguments
 #[derive(Debug, Default)]
 pub struct EntryWitnessArgs {
@@ -225,6 +236,7 @@ impl CommandExecutor {
             Command::Repl => Self::repl(),
             Command::Check(args) => Self::check(args),
             Command::Metadata(args) => Self::metadata(args),
+            Command::Constraints(args) => Self::constraints(args),
             Command::EntryWitness(args) => Self::entry_witness(args),
             Command::VerifyArtifact(args) => Self::verify_artifact(args),
             Command::Run(args) => Self::run(args),
@@ -307,6 +319,7 @@ impl CommandExecutor {
                 "pool_runtime_input_requirements": pool_runtime_input_requirement_count(&result.metadata),
                 "pool_runtime_input_requirement_summaries": pool_runtime_input_requirement_summaries(&result.metadata),
                 "policy_verified": policy_verified,
+                "constraints": &result.metadata.constraints,
             });
             let json = serde_json::to_string_pretty(&summary)
                 .map_err(|error| crate::error::CompileError::without_span(format!("failed to serialize build summary: {}", error)))?;
@@ -820,6 +833,7 @@ impl CommandExecutor {
                 "runtime_required_pool_invariant_blocker_class_summaries": pool_invariant_family_blocker_class_summaries(&result.metadata, "runtime-required"),
                 "pool_runtime_input_requirements": pool_runtime_input_requirement_count(&result.metadata),
                 "pool_runtime_input_requirement_summaries": pool_runtime_input_requirement_summaries(&result.metadata),
+                "constraints": &result.metadata.constraints,
             }));
             checked_targets.push(target_label);
         }
@@ -871,6 +885,39 @@ impl CommandExecutor {
             }
             std::fs::write(&output_path, json)?;
             println!("{}", "Metadata generated".green());
+            println!("  Output: {}", output_path.display());
+        } else {
+            println!("{}", json);
+        }
+        Ok(())
+    }
+
+    fn constraints(args: ConstraintsArgs) -> Result<()> {
+        if args.entry_action.is_some() && args.entry_lock.is_some() {
+            return Err(crate::error::CompileError::without_span(
+                "constraints accepts either --entry-action or --entry-lock, not both",
+            ));
+        }
+        let input_path = args.input.unwrap_or_else(|| PathBuf::from("."));
+        let input = Utf8Path::from_path(&input_path)
+            .ok_or_else(|| crate::error::CompileError::without_span(format!("path '{}' is not valid UTF-8", input_path.display())))?;
+        let options =
+            CompileOptions { opt_level: 0, output: None, debug: false, target: args.target, target_profile: args.target_profile };
+        let result = match (args.entry_action.as_deref(), args.entry_lock.as_deref()) {
+            (Some(action), None) => compile_path_with_entry_action(input, options, action),
+            (None, Some(lock)) => compile_path_with_entry_lock(input, options, lock),
+            (None, None) => compile_path(input, options),
+            (Some(_), Some(_)) => unreachable!("validated above"),
+        }?;
+        let json = serde_json::to_string_pretty(&result.metadata.constraints)
+            .map_err(|error| crate::error::CompileError::without_span(format!("failed to serialize constraints: {}", error)))?;
+
+        if let Some(output_path) = args.output {
+            if let Some(parent) = output_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&output_path, json)?;
+            println!("{}", "Constraints generated".green());
             println!("  Output: {}", output_path.display());
         } else {
             println!("{}", json);
@@ -1066,6 +1113,7 @@ impl CommandExecutor {
                 "expected_target_profile_verified": expected_target_profile_verified,
                 "expected_hashes_verified": expected_hashes_verified,
                 "policy_verified": policy_verified,
+                "constraints": &result.metadata.constraints,
             });
             let json = serde_json::to_string_pretty(&summary).map_err(|error| {
                 crate::error::CompileError::without_span(format!("failed to serialize verification summary: {}", error))
@@ -2993,6 +3041,26 @@ impl CliParser {
                     ),
             )
             .subcommand(
+                ClapCommand::new("constraints")
+                    .about("Emit profile-aware production constraints for compiler, builder, CI, and acceptance gates")
+                    .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
+                    .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON constraints to a file"))
+                    .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
+                    .arg(
+                        Arg::new("target-profile")
+                            .long("target-profile")
+                            .value_name("PROFILE")
+                            .help("Target profile: spora, ckb, or portable-cell"),
+                    )
+                    .arg(
+                        Arg::new("entry-action")
+                            .long("entry-action")
+                            .value_name("ACTION")
+                            .help("Report constraints for this action entry"),
+                    )
+                    .arg(Arg::new("entry-lock").long("entry-lock").value_name("LOCK").help("Report constraints for this lock entry")),
+            )
+            .subcommand(
                 ClapCommand::new("entry-witness")
                     .about("Encode witness bytes for the generated _cellscript_entry wrapper")
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
@@ -3213,6 +3281,14 @@ impl CliParser {
                 output: m.get_one::<String>("output").map(PathBuf::from),
                 target: m.get_one::<String>("target").cloned(),
                 target_profile: m.get_one::<String>("target-profile").cloned(),
+            }),
+            Some(("constraints", m)) => Command::Constraints(ConstraintsArgs {
+                input: m.get_one::<String>("input").map(PathBuf::from),
+                output: m.get_one::<String>("output").map(PathBuf::from),
+                target: m.get_one::<String>("target").cloned(),
+                target_profile: m.get_one::<String>("target-profile").cloned(),
+                entry_action: m.get_one::<String>("entry-action").cloned(),
+                entry_lock: m.get_one::<String>("entry-lock").cloned(),
             }),
             Some(("entry-witness", m)) => Command::EntryWitness(EntryWitnessArgs {
                 input: m.get_one::<String>("input").map(PathBuf::from),

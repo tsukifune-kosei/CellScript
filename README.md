@@ -290,9 +290,19 @@ Emit metadata:
 
 ```bash
 cellc metadata examples/token.cell --target riscv64-elf --target-profile spora
+cellc constraints examples/token.cell --target-profile ckb --entry-action mint
 cellc examples/token.cell --target riscv64-elf --target-profile spora
 cellc verify-artifact examples/token.elf --metadata examples/token.elf.meta.json
 ```
+
+`cellc constraints` emits the production constraints report that is also stored
+inside compile metadata. It is target-profile aware and reports entry ABI slot
+usage, register and stack-spill placement, witness byte bounds, artifact and
+backend-shape metrics, CKB cycle/block limit configuration, CKB code-cell
+capacity lower bounds, and Spora v0 mass estimates. CKB dry-run cycles,
+serialized transaction size, full occupied capacity, and measured Spora mass
+remain builder or acceptance responsibilities; the compiler marks those fields
+explicitly when they are not measured locally.
 
 ## Manifest
 
@@ -351,6 +361,7 @@ Still beta:
 | `cellc build` | Compile the package and write artifacts plus metadata. |
 | `cellc check` | Type-check and lower without writing artifacts. |
 | `cellc metadata` | Emit lowering, runtime, scheduler, source, and schema metadata. |
+| `cellc constraints` | Emit profile-aware ABI, artifact, CKB, and Spora production constraints. |
 | `cellc verify-artifact` | Verify an artifact against its metadata sidecar and optional source hashes. |
 | `cellc test` | Run compiler tests for `.cell` sources and directive-driven diagnostics. |
 | `cellc doc` | Generate API and audit documentation. |

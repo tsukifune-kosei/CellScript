@@ -494,6 +494,11 @@ fn bundled_examples_compile_to_non_empty_assembly() {
         assert!(!result.artifact_bytes.is_empty(), "empty artifact for {}", example);
         assert!(result.metadata.artifact_hash_blake3.is_some(), "missing artifact hash metadata for {}", example);
         assert!(result.metadata.artifact_size_bytes.is_some(), "missing artifact size metadata for {}", example);
+        assert_eq!(result.metadata.constraints.target_profile, "spora", "missing Spora constraints profile for {}", example);
+        assert!(result.metadata.constraints.artifact.artifact_size_bytes > 0, "missing artifact constraints size for {}", example);
+        assert!(!result.metadata.constraints.entry_abi.is_empty(), "missing entry ABI constraints for {}", example);
+        assert!(result.metadata.constraints.spora.is_some(), "missing Spora mass constraints for {}", example);
+        assert!(result.metadata.constraints.ckb.is_none(), "unexpected CKB constraints for Spora example {}", example);
         assert!(!result.metadata.actions.is_empty(), "missing action metadata for {}", example);
         assert!(
             result.metadata.actions.iter().all(|action| {
@@ -547,6 +552,13 @@ fn ckb_scoped_entry_keeps_called_action_helpers() {
         !assembly.contains("unresolved call isqrt fail-closed stub"),
         "scoped seed_pool artifact must not replace isqrt with a fail-closed unresolved-call stub"
     );
+    assert_eq!(result.metadata.constraints.target_profile, "ckb");
+    assert!(result.metadata.constraints.ckb.is_some(), "CKB scoped artifact should expose CKB production constraints");
+    assert!(result.metadata.constraints.spora.is_none(), "CKB scoped artifact should not report Spora mass constraints");
+    let ckb = result.metadata.constraints.ckb.as_ref().unwrap();
+    assert!(ckb.max_tx_verify_cycles > 0);
+    assert!(ckb.min_code_cell_data_capacity_shannons > 0);
+    assert!(ckb.dry_run_required_for_production);
 }
 
 #[test]
