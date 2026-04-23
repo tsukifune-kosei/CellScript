@@ -1,7 +1,7 @@
 use camino::Utf8PathBuf;
 use cellscript::{
     codegen::{analyze_backend_shape, BackendShapeMetrics},
-    compile_file, ArtifactFormat, CompileOptions, PoolPrimitiveMetadata,
+    compile_file, compile_file_with_entry_action, ArtifactFormat, CompileOptions, PoolPrimitiveMetadata,
 };
 
 const BUNDLED_EXAMPLES: [&str; 7] =
@@ -529,6 +529,27 @@ fn bundled_examples_compile_to_elf() {
 }
 
 #[test]
+fn ckb_scoped_entry_keeps_called_action_helpers() {
+    let result = compile_file_with_entry_action(
+        example_path("amm_pool.cell"),
+        CompileOptions {
+            target: Some("riscv64-asm".to_string()),
+            target_profile: Some("ckb".to_string()),
+            ..CompileOptions::default()
+        },
+        "seed_pool",
+    )
+    .expect("seed_pool scoped CKB artifact should compile");
+    let assembly = std::str::from_utf8(&result.artifact_bytes).expect("assembly should be utf-8");
+
+    assert!(assembly.contains("\nisqrt:\n"), "scoped seed_pool artifact should retain called action helper isqrt");
+    assert!(
+        !assembly.contains("unresolved call isqrt fail-closed stub"),
+        "scoped seed_pool artifact must not replace isqrt with a fail-closed unresolved-call stub"
+    );
+}
+
+#[test]
 fn bundled_examples_stay_within_backend_shape_budgets() {
     for row in bundled_example_backend_shape_report_rows() {
         let example = row.example;
@@ -772,16 +793,16 @@ fn vesting_phase2_remaining_obligations_are_explicit() {
         .find(|obligation| {
             obligation.category == "transaction-invariant"
                 && obligation.feature == "claim-conditions:VestingGrant"
-                && obligation.status == "runtime-required"
+                && obligation.status == "checked-runtime"
         })
         .expect("claim_vested should expose receipt claim condition obligation");
     assert!(
         claim_conditions.detail.contains("daa-cliff-reached=checked-runtime")
             && claim_conditions.detail.contains("state-not-fully-claimed=checked-runtime")
             && claim_conditions.detail.contains("positive-claimable=checked-runtime")
-            && claim_conditions.detail.contains("claim-witness-format=checked-runtime")
-            && claim_conditions.detail.contains("claim-authorization-domain=checked-runtime"),
-        "claim_vested should surface checked source predicates without closing authorization: {}",
+            && claim_conditions.detail.contains("claim-input-lock-hash=checked-runtime")
+            && claim_conditions.detail.contains("claim-lock-hash-field-binding=checked-runtime"),
+        "claim_vested should surface checked source predicates and CKB-compatible lock authorization: {}",
         claim_conditions.detail
     );
     assert!(
@@ -794,19 +815,16 @@ fn vesting_phase2_remaining_obligations_are_explicit() {
     assert!(
         claim_vested.transaction_runtime_input_requirements.iter().any(|requirement| {
             requirement.feature == "claim-conditions:VestingGrant"
-                && requirement.status == "runtime-required"
-                && requirement.component == "claim-witness-signature"
-                && requirement.source == "Witness"
-                && requirement.field.as_deref() == Some("signature")
-                && requirement.abi == "claim-witness-signature-65"
-                && requirement.byte_len == Some(65)
-                && requirement.blocker.as_deref()
-                    == Some(
-                        "claim lowering checks witness shape but has no verifier-coverable signer key binding or secp256k1 verification call"
-                    )
-                && requirement.blocker_class.as_deref() == Some("witness-verification-gap")
+                && requirement.status == "checked-runtime"
+                && requirement.component == "claim-input-lock-hash"
+                && requirement.source == "Input"
+                && requirement.field.as_deref() == Some("lock_hash")
+                && requirement.abi == "claim-input-lock-hash-32"
+                && requirement.byte_len == Some(32)
+                && requirement.blocker.is_none()
+                && requirement.blocker_class.is_none()
         }),
-        "claim_vested should expose structured witness/signature runtime input requirements: {:?}",
+        "claim_vested should expose structured input lock-hash authorization requirements: {:?}",
         claim_vested.transaction_runtime_input_requirements
     );
     assert!(
@@ -829,11 +847,11 @@ fn vesting_phase2_remaining_obligations_are_explicit() {
             requirement.scope == "action:claim_vested"
                 && requirement.feature == "claim-conditions:VestingGrant"
                 && requirement.status == "checked-runtime"
-                && requirement.component == "claim-authorization-domain"
+                && requirement.component == "claim-input-lock-hash"
                 && requirement.blocker.is_none()
                 && requirement.blocker_class.is_none()
         }),
-        "module runtime metadata should aggregate checked claim authorization runtime input requirements: {:?}",
+        "module runtime metadata should aggregate checked claim lock-hash authorization runtime input requirements: {:?}",
         result.metadata.runtime.transaction_runtime_input_requirements
     );
 
@@ -1281,14 +1299,14 @@ fn amm_pool_mutable_shared_params_are_scheduler_visible() {
     assert!(!seed_pool.parallelizable, "new shared Pool creation should not be marked parallelizable");
     assert!(
         seed_pool.fail_closed_runtime_features.is_empty(),
-        "seed_pool should verify the created Pool output type hash and LPReceipt fields without fail-closed debt: {:?}",
+        "seed_pool should not carry generic fail-closed debt; unresolved AMM production policy is reported through pool-pattern obligations: {:?}",
         seed_pool.fail_closed_runtime_features
     );
     assert!(
         seed_pool.verifier_obligations.iter().any(|obligation| {
             obligation.category == "pool-pattern"
                 && obligation.feature == "pool-create:Pool"
-                && obligation.status == "runtime-required"
+                && obligation.status == "checked-runtime"
                 && obligation.detail.contains("ordinary shared Cell creation")
                 && obligation.detail.contains("pool_primitives[].invariant_families")
         }),
@@ -1301,7 +1319,7 @@ fn amm_pool_mutable_shared_params_are_scheduler_visible() {
         .find(|primitive| primitive.feature == "pool-create:Pool")
         .expect("seed_pool should expose structured Pool creation metadata");
     assert_eq!(seed_pool_primitive.operation, "create");
-    assert_eq!(seed_pool_primitive.status, "runtime-required");
+    assert_eq!(seed_pool_primitive.status, "checked-runtime");
     assert_eq!(seed_pool_primitive.binding.as_deref(), Some("create_Pool"));
     assert_eq!(seed_pool_primitive.output_source.as_deref(), Some("Output"));
     assert_eq!(seed_pool_primitive.output_index, Some(0));
@@ -1432,7 +1450,7 @@ fn amm_pool_mutable_shared_params_are_scheduler_visible() {
         expected_invariant_count,
         expected_source_invariants,
         expected_runtime_family,
-        expected_runtime_source,
+        _expected_runtime_source,
     ) in [
         (
             "swap_a_for_b",
@@ -1604,15 +1622,15 @@ fn amm_pool_mutable_shared_params_are_scheduler_visible() {
             action_name,
             action.verifier_obligations
         );
+        let expected_pool_status = "checked-runtime";
         assert!(
             action.verifier_obligations.iter().any(|obligation| {
                 obligation.category == "pool-pattern"
                     && obligation.feature == "pool-mutation-invariants:Pool"
-                    && obligation.status == "runtime-required"
+                    && obligation.status == expected_pool_status
                     && obligation.detail.contains("Generic shared mutation checks")
-                    && obligation.detail.contains("pool_primitives[].invariant_families")
             }),
-            "{} should keep pool-pattern invariant/admission semantics separate from checked shared mutation: {:?}",
+            "{} should keep pool-pattern invariant/admission semantics explicit: {:?}",
             action_name,
             action.verifier_obligations
         );
@@ -1622,7 +1640,7 @@ fn amm_pool_mutable_shared_params_are_scheduler_visible() {
             .find(|primitive| primitive.feature == "pool-mutation-invariants:Pool")
             .expect("AMM action should expose structured Pool mutation primitive metadata");
         assert_eq!(pool_primitive.operation, "mutation-invariants");
-        assert_eq!(pool_primitive.status, "runtime-required");
+        assert_eq!(pool_primitive.status, expected_pool_status);
         assert_eq!(pool_primitive.binding.as_deref(), Some("pool"));
         assert_eq!(pool_primitive.input_source.as_deref(), Some("Input"));
         assert_eq!(pool_primitive.input_index, Some(expected_input_index));
@@ -1636,21 +1654,28 @@ fn amm_pool_mutable_shared_params_are_scheduler_visible() {
             assert_pool_component(pool_primitive, &format!("source-invariant:{}=checked-runtime", source_invariant), action_name);
             assert_pool_invariant_family(pool_primitive, source_invariant, "checked-runtime", "assert-invariant-cfg", action_name);
         }
-        assert_pool_invariant_family(
-            pool_primitive,
-            expected_runtime_family,
-            "runtime-required",
-            expected_runtime_source,
-            action_name,
-        );
-        let expected_runtime_blocker_class = match expected_runtime_family {
-            "constant-product-pricing" => "phase2-deferred-amm-pricing",
-            "proportional-liquidity-accounting" => "phase2-deferred-amm-liquidity-accounting",
-            "proportional-withdrawal-accounting" => "phase2-deferred-amm-withdrawal-accounting",
-            other => panic!("unexpected AMM runtime family: {}", other),
-        };
-        assert_pool_invariant_blocker_class(pool_primitive, expected_runtime_family, expected_runtime_blocker_class, action_name);
-        assert_pool_runtime_input_blocker_class(pool_primitive, expected_runtime_family, expected_runtime_blocker_class, action_name);
+        if matches!(action_name, "swap_a_for_b" | "add_liquidity" | "remove_liquidity") {
+            let checked_component = match action_name {
+                "swap_a_for_b" => "pool-protocol:constant-product-pricing=checked-runtime",
+                "add_liquidity" => "pool-protocol:proportional-liquidity-accounting=checked-runtime",
+                "remove_liquidity" => "pool-protocol:proportional-withdrawal-accounting=checked-runtime",
+                _ => unreachable!("unexpected AMM action"),
+            };
+            assert_pool_component(pool_primitive, checked_component, action_name);
+            assert_pool_invariant_family(
+                pool_primitive,
+                expected_runtime_family,
+                "checked-runtime",
+                "assert-invariant-cfg+create-output-fields",
+                action_name,
+            );
+            assert!(
+                pool_primitive.runtime_required_components.iter().all(|component| component != expected_runtime_family),
+                "{} should discharge AMM accounting through verifier-computed Pool transitions and output fields: {:?}",
+                action_name,
+                pool_primitive.runtime_required_components
+            );
+        }
         assert_pool_invariant_family(pool_primitive, "reserve-conservation", "checked-runtime", "transition-formula", action_name);
         assert!(
             !pool_primitive.runtime_required_components.iter().any(|component| component == "reserve-conservation"),
@@ -1658,56 +1683,23 @@ fn amm_pool_mutable_shared_params_are_scheduler_visible() {
             action_name,
             pool_primitive.runtime_required_components
         );
-        assert_pool_invariant_family(
-            pool_primitive,
-            "pool-specific-admission",
-            "runtime-required",
-            "pool-specific-admission-abi",
-            action_name,
-        );
-        assert_pool_invariant_blocker_class(pool_primitive, "pool-specific-admission", "phase2-deferred-pool-admission", action_name);
-        assert_pool_runtime_input_blocker_class(
-            pool_primitive,
-            "pool-specific-admission",
-            "phase2-deferred-pool-admission",
-            action_name,
-        );
-        for field in ["token_a_symbol", "token_b_symbol"] {
-            assert_pool_runtime_input_requirement(
+        if matches!(action_name, "swap_a_for_b" | "add_liquidity" | "remove_liquidity") {
+            assert_pool_component(pool_primitive, "pool-protocol:pool-specific-admission=checked-runtime", action_name);
+            assert_pool_invariant_family(
                 pool_primitive,
                 "pool-specific-admission",
-                "Input",
-                expected_input_index,
-                "pool",
-                Some(field),
-                "mutate-input-field-bytes-8",
-                8,
+                "checked-runtime",
+                "assert-invariant-cfg+create-output-fields",
                 action_name,
+            );
+            assert!(
+                pool_primitive.runtime_required_components.iter().all(|component| component != "pool-specific-admission"),
+                "{} should discharge token/pool/receipt admission through source guards, preserved Pool symbols, and checked output fields: {:?}",
+                action_name,
+                pool_primitive.runtime_required_components
             );
         }
         if action_name == "swap_a_for_b" {
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "pool-specific-admission",
-                "Input",
-                0,
-                "input",
-                Some("symbol"),
-                "input-cell-field-bytes-8",
-                8,
-                action_name,
-            );
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "pool-specific-admission",
-                "Output",
-                0,
-                "create_Token",
-                Some("symbol"),
-                "create-output-field-bytes-8",
-                8,
-                action_name,
-            );
             assert_pool_component(pool_primitive, "pool-protocol:lp-supply-consistency=checked-runtime", action_name);
             assert_pool_invariant_family(
                 pool_primitive,
@@ -1735,347 +1727,61 @@ fn amm_pool_mutable_shared_params_are_scheduler_visible() {
                 action_name,
                 pool_primitive.runtime_input_requirements
             );
-            assert_pool_invariant_family(pool_primitive, "fee-accounting", "runtime-required", "swap-fee-accounting-abi", action_name);
-            assert_pool_invariant_blocker_class(pool_primitive, "fee-accounting", "phase2-deferred-pool-fee-policy", action_name);
-            assert_pool_runtime_input_blocker_class(pool_primitive, "fee-accounting", "phase2-deferred-pool-fee-policy", action_name);
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "fee-accounting",
-                "Input",
-                0,
-                "input",
-                Some("amount"),
-                "input-cell-field-u64",
-                8,
-                action_name,
-            );
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "fee-accounting",
-                "Input",
-                expected_input_index,
-                "pool",
-                Some("fee_rate_bps"),
-                "mutate-input-field-u16",
-                2,
-                action_name,
-            );
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "constant-product-pricing",
-                "Input",
-                0,
-                "input",
-                Some("amount"),
-                "input-cell-field-u64",
-                8,
-                action_name,
-            );
-            for field in ["reserve_a", "reserve_b"] {
-                assert_pool_runtime_input_requirement(
-                    pool_primitive,
-                    "constant-product-pricing",
-                    "Input",
-                    expected_input_index,
-                    "pool",
-                    Some(field),
-                    "mutate-input-field-u64",
-                    8,
-                    action_name,
-                );
-                assert_pool_runtime_input_requirement(
-                    pool_primitive,
-                    "constant-product-pricing",
-                    "Output",
-                    expected_output_index,
-                    "pool",
-                    Some(field),
-                    "mutate-output-field-u64",
-                    8,
-                    action_name,
-                );
-            }
-        }
-        if action_name == "add_liquidity" {
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "pool-specific-admission",
-                "Input",
-                0,
-                "token_a",
-                Some("symbol"),
-                "input-cell-field-bytes-8",
-                8,
-                action_name,
-            );
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "pool-specific-admission",
-                "Input",
-                1,
-                "token_b",
-                Some("symbol"),
-                "input-cell-field-bytes-8",
-                8,
-                action_name,
-            );
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "pool-specific-admission",
-                "Input",
-                expected_input_index,
-                "pool",
-                Some("type_hash"),
-                "mutate-input-type-id-32",
-                32,
-                action_name,
-            );
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "pool-specific-admission",
-                "Output",
-                0,
-                "create_LPReceipt",
-                Some("pool_id"),
-                "create-output-field-hash-32",
-                32,
-                action_name,
-            );
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "proportional-liquidity-accounting",
-                "Input",
-                0,
-                "token_a",
-                Some("amount"),
-                "input-cell-field-u64",
-                8,
-                action_name,
-            );
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "proportional-liquidity-accounting",
-                "Input",
-                1,
-                "token_b",
-                Some("amount"),
-                "input-cell-field-u64",
-                8,
-                action_name,
-            );
-            for field in ["reserve_a", "reserve_b", "total_lp"] {
-                assert_pool_runtime_input_requirement(
-                    pool_primitive,
-                    "proportional-liquidity-accounting",
-                    "Input",
-                    expected_input_index,
-                    "pool",
-                    Some(field),
-                    "mutate-input-field-u64",
-                    8,
-                    action_name,
-                );
-                assert_pool_runtime_input_requirement(
-                    pool_primitive,
-                    "proportional-liquidity-accounting",
-                    "Output",
-                    expected_output_index,
-                    "pool",
-                    Some(field),
-                    "mutate-output-field-u64",
-                    8,
-                    action_name,
-                );
-            }
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "proportional-liquidity-accounting",
-                "Output",
-                0,
-                "create_LPReceipt",
-                Some("lp_amount"),
-                "create-output-field-u64",
-                8,
-                action_name,
-            );
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "lp-supply-consistency",
-                "Output",
-                0,
-                "create_LPReceipt",
-                Some("lp_amount"),
-                "create-output-field-u64",
-                8,
-                action_name,
-            );
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "lp-supply-consistency",
-                "Input",
-                expected_input_index,
-                "pool",
-                Some("total_lp"),
-                "mutate-input-field-u64",
-                8,
-                action_name,
-            );
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "lp-supply-consistency",
-                "Output",
-                expected_output_index,
-                "pool",
-                Some("total_lp"),
-                "mutate-output-field-u64",
-                8,
-                action_name,
-            );
-        }
-        if action_name == "remove_liquidity" {
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "pool-specific-admission",
-                "Input",
-                0,
-                "receipt",
-                Some("pool_id"),
-                "input-cell-field-hash-32",
-                32,
-                action_name,
-            );
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "pool-specific-admission",
-                "Input",
-                expected_input_index,
-                "pool",
-                Some("type_hash"),
-                "mutate-input-type-id-32",
-                32,
-                action_name,
-            );
-            for index in [0, 1] {
-                assert_pool_runtime_input_requirement(
-                    pool_primitive,
-                    "pool-specific-admission",
-                    "Output",
-                    index,
-                    "create_Token",
-                    Some("symbol"),
-                    "create-output-field-bytes-8",
-                    8,
-                    action_name,
-                );
-            }
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "proportional-withdrawal-accounting",
-                "Input",
-                0,
-                "receipt",
-                Some("lp_amount"),
-                "input-cell-field-u64",
-                8,
-                action_name,
-            );
-            for field in ["reserve_a", "reserve_b", "total_lp"] {
-                assert_pool_runtime_input_requirement(
-                    pool_primitive,
-                    "proportional-withdrawal-accounting",
-                    "Input",
-                    expected_input_index,
-                    "pool",
-                    Some(field),
-                    "mutate-input-field-u64",
-                    8,
-                    action_name,
-                );
-            }
-            for field in ["reserve_a", "reserve_b"] {
-                assert_pool_runtime_input_requirement(
-                    pool_primitive,
-                    "proportional-withdrawal-accounting",
-                    "Output",
-                    expected_output_index,
-                    "pool",
-                    Some(field),
-                    "mutate-output-field-u64",
-                    8,
-                    action_name,
-                );
-            }
-            for index in [0, 1] {
-                assert_pool_runtime_input_requirement(
-                    pool_primitive,
-                    "proportional-withdrawal-accounting",
-                    "Output",
-                    index,
-                    "create_Token",
-                    Some("amount"),
-                    "create-output-field-u64",
-                    8,
-                    action_name,
-                );
-            }
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "lp-supply-consistency",
-                "Input",
-                0,
-                "receipt",
-                Some("lp_amount"),
-                "input-cell-field-u64",
-                8,
-                action_name,
-            );
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "lp-supply-consistency",
-                "Input",
-                expected_input_index,
-                "pool",
-                Some("total_lp"),
-                "mutate-input-field-u64",
-                8,
-                action_name,
-            );
-            assert_pool_runtime_input_requirement(
-                pool_primitive,
-                "lp-supply-consistency",
-                "Output",
-                expected_output_index,
-                "pool",
-                Some("total_lp"),
-                "mutate-output-field-u64",
-                8,
-                action_name,
-            );
-        }
-        if action_name != "swap_a_for_b" {
+            assert_pool_component(pool_primitive, "pool-protocol:fee-accounting=checked-runtime", action_name);
             assert_pool_invariant_family(
                 pool_primitive,
-                "lp-supply-consistency",
-                "runtime-required",
-                "pool-lp-supply-consistency-abi",
+                "fee-accounting",
+                "checked-runtime",
+                "assert-invariant-cfg+create-output-fields",
                 action_name,
             );
-            assert_pool_invariant_blocker_class(
+            assert_pool_invariant_family(
                 pool_primitive,
-                "lp-supply-consistency",
-                "phase2-deferred-lp-supply-policy",
-                action_name,
-            );
-            assert_pool_runtime_input_blocker_class(
-                pool_primitive,
-                "lp-supply-consistency",
-                "phase2-deferred-lp-supply-policy",
+                "constant-product-pricing",
+                "checked-runtime",
+                "assert-invariant-cfg+create-output-fields",
                 action_name,
             );
             assert!(
-                pool_primitive.runtime_required_components.iter().any(|component| component == "lp-supply-consistency"),
-                "{} should keep LP supply consistency as a Pool primitive runtime requirement",
-                action_name
+                pool_primitive.runtime_input_requirements.is_empty(),
+                "{} checked swap metadata should not retain pool runtime inputs: {:?}",
+                action_name,
+                pool_primitive.runtime_input_requirements
+            );
+            assert!(
+                action.verifier_obligations.iter().any(|obligation| {
+                    obligation.category == "transaction-invariant"
+                        && obligation.feature == "resource-conservation:Token"
+                        && obligation.status == "checked-runtime"
+                }),
+                "{} AMM swap resource conservation should be checked by protocol formulas: {:?}",
+                action_name,
+                action.verifier_obligations
+            );
+            assert!(
+                action.verifier_obligations.iter().all(|obligation| obligation.status != "runtime-required"),
+                "{} checked swap action should not retain runtime-required verifier obligations: {:?}",
+                action_name,
+                action.verifier_obligations
+            );
+            assert!(
+                action.transaction_runtime_input_requirements.iter().all(|requirement| requirement.status != "runtime-required"),
+                "{} checked swap action should not retain runtime-required transaction inputs: {:?}",
+                action_name,
+                action.transaction_runtime_input_requirements
+            );
+        }
+        if matches!(action_name, "add_liquidity" | "remove_liquidity") {
+            assert_pool_component(pool_primitive, "pool-protocol:lp-supply-consistency=checked-runtime", action_name);
+            assert!(
+                pool_primitive.runtime_input_requirements.iter().all(|requirement| {
+                    requirement.component != "pool-specific-admission"
+                        && requirement.component != "proportional-liquidity-accounting"
+                        && requirement.component != "lp-supply-consistency"
+                }),
+                "{} checked AMM liquidity metadata should not retain admission/accounting/LP runtime inputs: {:?}",
+                action_name,
+                pool_primitive.runtime_input_requirements
             );
         }
     }
@@ -2165,7 +1871,7 @@ fn launch_seed_pool_composition_is_scheduler_visible() {
             obligation.category == "pool-pattern"
                 && obligation.feature == "pool-composition:Pool"
                 && obligation.status == "runtime-required"
-                && obligation.detail.contains("launch-builder/pool-pattern composition")
+                && obligation.detail.contains("unresolved components:")
         }),
         "launch_token should inherit explicit pool-pattern obligations from seed_pool composition: {:?}",
         launch_token.verifier_obligations

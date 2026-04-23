@@ -53,6 +53,7 @@ const ENTRY_WITNESS_BUFFER_OFFSET: usize = 8;
 const ENTRY_WITNESS_RA_OFFSET: usize = ENTRY_WITNESS_FRAME_SIZE - 8;
 const CLAIM_SIGNER_PUBKEY_HASH_FIELDS: [&str; 5] =
     ["signer_pubkey_hash", "claim_pubkey_hash", "owner_pubkey_hash", "beneficiary_pubkey_hash", "pubkey_hash"];
+const CLAIM_AUTH_LOCK_HASH_FIELDS: [&str; 5] = ["beneficiary", "owner", "recipient", "authority", "admin"];
 
 #[derive(Debug, Clone, Copy)]
 struct RuntimeSyscallAbi {
@@ -719,26 +720,10 @@ impl CodeGenerator {
             for (param_index, param) in params.iter().enumerate() {
                 if named_type_name(&param.ty).is_some() {
                     self.emit(format!("# cellscript entry abi: schema param {} is runtime-loaded; pass null ABI bytes", param.name));
-                    if abi_index + 1 >= 8 {
-                        self.emit(format!(
-                            "# cellscript entry abi: schema param {} requires pointer/length beyond a0-a7; fail closed",
-                            param.name
-                        ));
-                        self.emit(format!("j {}", fail_label));
-                        break;
-                    }
                     self.emit_entry_abi_zero_arg(abi_index);
                     self.emit_entry_abi_zero_arg(abi_index + 1);
                     abi_index += 2;
                     if type_hash_param_indices.contains(&param_index) {
-                        if abi_index + 1 >= 8 {
-                            self.emit(format!(
-                                "# cellscript entry abi: schema param {} TypeHash requires pointer/length beyond a0-a7; fail closed",
-                                param.name
-                            ));
-                            self.emit(format!("j {}", fail_label));
-                            break;
-                        }
                         self.emit(format!(
                             "# cellscript entry abi: schema param {} TypeHash witness bytes unavailable; pass null ABI bytes",
                             param.name
@@ -750,26 +735,18 @@ impl CodeGenerator {
                 } else if let Some(width) =
                     fixed_byte_pointer_param_width(&param.ty).or_else(|| fixed_aggregate_pointer_param_width(&param.ty))
                 {
-                    if abi_index + 1 >= 8 {
-                        self.emit(format!(
-                            "# cellscript entry abi: fixed-byte param {} requires pointer/length beyond a0-a7; fail closed",
-                            param.name
-                        ));
-                        self.emit(format!("j {}", fail_label));
-                        break;
-                    }
                     self.emit(format!(
-                        "# cellscript entry abi: fixed-byte param {} pointer=a{} length=a{} size={}",
+                        "# cellscript entry abi: fixed-byte param {} pointer={} length={} size={}",
                         param.name,
-                        abi_index,
-                        abi_index + 1,
+                        abi_arg_label(abi_index),
+                        abi_arg_label(abi_index + 1),
                         width
                     ));
-                    self.emit_sp_addi(
-                        &format!("a{}", abi_index),
+                    self.emit_entry_abi_pointer_arg(
+                        abi_index,
                         ENTRY_WITNESS_BUFFER_OFFSET + ENTRY_WITNESS_HEADER_SIZE + payload_cursor,
                     );
-                    self.emit(format!("li a{}, {}", abi_index + 1, width));
+                    self.emit_entry_abi_immediate_arg(abi_index + 1, width as u64);
                     payload_cursor += width;
                     abi_index += 2;
                 } else if let Some(width) = entry_witness_register_param_width(&param.ty) {
@@ -812,12 +789,27 @@ impl CodeGenerator {
     }
 
     fn emit_entry_abi_zero_arg(&mut self, abi_index: usize) {
+        self.emit_entry_abi_immediate_arg(abi_index, 0);
+    }
+
+    fn emit_entry_abi_immediate_arg(&mut self, abi_index: usize, value: u64) {
         if abi_index < 8 {
-            self.emit(format!("li a{}, 0", abi_index));
+            self.emit(format!("li a{}, {}", abi_index, value));
         } else {
             let caller_stack_offset = (abi_index - 8) * 8;
-            self.emit(format!("# cellscript entry abi: stack arg{} <- 0", abi_index));
-            self.emit("li t0, 0");
+            self.emit(format!("# cellscript entry abi: stack arg{} <- {}", abi_index, value));
+            self.emit(format!("li t0, {}", value));
+            self.emit(format!("sd t0, {}(sp)", caller_stack_offset));
+        }
+    }
+
+    fn emit_entry_abi_pointer_arg(&mut self, abi_index: usize, stack_offset: usize) {
+        if abi_index < 8 {
+            self.emit_sp_addi(&format!("a{}", abi_index), stack_offset);
+        } else {
+            let caller_stack_offset = (abi_index - 8) * 8;
+            self.emit(format!("# cellscript entry abi: stack arg{} <- sp+{}", abi_index, stack_offset));
+            self.emit_sp_addi("t0", stack_offset);
             self.emit(format!("sd t0, {}(sp)", caller_stack_offset));
         }
     }
@@ -1316,10 +1308,9 @@ impl CodeGenerator {
                         self.prelude_u64_value_sources.insert(dest.id, PreludeU64ValueSource::StackVar(dest.id));
                     }
                     IrInstruction::Move { dest, src } if dest.ty == IrType::U64 => {
-                        let Some(source) = self.prelude_u64_value_source(src) else {
-                            continue;
-                        };
-                        self.prelude_u64_value_sources.insert(dest.id, source);
+                        if self.prelude_u64_value_source(src).is_some() {
+                            self.prelude_u64_value_sources.insert(dest.id, PreludeU64ValueSource::StackVar(dest.id));
+                        }
                     }
                     IrInstruction::Move { dest, src } if matches!(dest.ty, IrType::Bool | IrType::U8 | IrType::U16 | IrType::U32) => {
                         if let Some(value) = self.prelude_scalar_immediate(src) {
@@ -1623,6 +1614,12 @@ impl CodeGenerator {
                 if self.should_emit_claim_witness_authorization_domain_check(pattern, var_id) {
                     let signer_source = self.claim_signer_pubkey_hash_source(var_id);
                     self.emit_claim_witness_authorization_domain_check(input_index, &pattern.binding, signer_source.as_ref());
+                } else if pattern.operation == "consume"
+                    && self.current_function.as_deref().is_some_and(|name| name.starts_with("claim"))
+                {
+                    if let Some(lock_hash_source) = self.claim_auth_lock_hash_source(var_id) {
+                        self.emit_claim_input_lock_hash_binding_check(input_index, &pattern.binding, &lock_hash_source);
+                    }
                 }
                 if pattern.operation == "destroy" {
                     self.emit_destroy_group_output_absence_scan(pattern, input_index);
@@ -2146,6 +2143,13 @@ impl CodeGenerator {
                             self.cell_buffer_size_offsets.insert(dest.id, next_cell_slot);
                             self.cell_buffer_offsets.insert(dest.id, next_cell_slot + 8);
                             next_cell_slot += RUNTIME_CELL_SLOT_SIZE;
+                        } else if self.consume_indices.contains_key(&var.id)
+                            || self.read_ref_indices.contains_key(&var.id)
+                            || self.read_ref_param_input_indices.contains_key(&var.id)
+                        {
+                            self.cell_buffer_size_offsets.insert(dest.id, next_cell_slot);
+                            self.cell_buffer_offsets.insert(dest.id, next_cell_slot + 8);
+                            next_cell_slot += RUNTIME_CELL_SLOT_SIZE;
                         }
                     }
                     _ => {}
@@ -2500,7 +2504,7 @@ impl CodeGenerator {
         if !self.current_function.as_deref().is_some_and(|name| name.starts_with("claim")) {
             return false;
         }
-        self.consume_type_names.get(&var_id).is_some_and(|type_name| self.receipt_type_names.contains(type_name))
+        self.claim_signer_pubkey_hash_source(var_id).is_some()
     }
 
     fn claim_signer_pubkey_hash_source(&self, var_id: usize) -> Option<SchemaFieldValueSource> {
@@ -2518,6 +2522,55 @@ impl CodeGenerator {
                 layout,
             })
         })
+    }
+
+    fn claim_auth_lock_hash_source(&self, var_id: usize) -> Option<SchemaFieldValueSource> {
+        let type_name = self.consume_type_names.get(&var_id)?;
+        if !self.receipt_type_names.contains(type_name) {
+            return None;
+        }
+        let fields = self.type_layouts.get(type_name)?;
+        CLAIM_AUTH_LOCK_HASH_FIELDS.iter().find_map(|field| {
+            let layout = fields.get(*field)?.clone();
+            (layout_fixed_byte_width(&layout) == Some(32)).then(|| SchemaFieldValueSource {
+                obj_var_id: var_id,
+                type_name: type_name.clone(),
+                field: (*field).to_string(),
+                layout,
+            })
+        })
+    }
+
+    fn emit_claim_input_lock_hash_binding_check(&mut self, input_index: usize, binding: &str, source: &SchemaFieldValueSource) {
+        let size_offset = self.runtime_scratch_size_offset();
+        let buffer_offset = self.runtime_scratch_buffer_offset();
+        self.emit(format!(
+            "# cellscript abi: claim input lock-hash binding binding={} source=Input index={} field={}.{}",
+            binding, input_index, source.type_name, source.field
+        ));
+        self.emit_load_cell_by_field_syscall_to_offsets(
+            "claim_input_lock_hash",
+            CKB_SOURCE_INPUT,
+            input_index,
+            CKB_CELL_FIELD_LOCK_HASH,
+            size_offset,
+            buffer_offset,
+            RUNTIME_SCRATCH_BUFFER_SIZE,
+        );
+        self.emit_return_on_syscall_error(1);
+        self.emit_loaded_schema_exact_size_check(size_offset, 32, "claim input lock hash");
+        self.emit("# cellscript abi: verify claim input lock hash offset=0 size=32");
+        if self.emit_schema_field_source_pointer_to("a1", source, 32) {
+            self.emit_sp_addi("a0", buffer_offset);
+            self.emit("li a2, 32");
+            self.emit("call __cellscript_memcmp_fixed");
+            let ok_label = self.fresh_label("claim_input_lock_hash_ok");
+            self.emit(format!("beqz a0, {}", ok_label));
+            self.emit_fail(20);
+            self.emit_label(&ok_label);
+        } else {
+            self.emit_fail(20);
+        }
     }
 
     fn emit_claim_witness_authorization_domain_check(
@@ -4214,7 +4267,7 @@ impl CodeGenerator {
                     }
                 }
                 if let Some(size_offset) = self.cell_buffer_size_offsets.get(&var.id).copied() {
-                    if self.output_type_hash_sources.contains_key(&var.id) && var_width == expected_width {
+                    if var_width == expected_width {
                         return Some(ExpectedFixedByteSource::LoadedBytes { var_id: var.id, size_offset, width: expected_width });
                     }
                 }
@@ -4374,7 +4427,7 @@ impl CodeGenerator {
         self.emit_prelude_u64_value_source_to_t1_at_depth(source, 0);
     }
 
-    fn emit_prelude_u64_value_source_to_t1_at_depth(&mut self, source: &PreludeU64ValueSource, depth: usize) {
+    fn emit_prelude_u64_value_source_to_t1_at_depth(&mut self, source: &PreludeU64ValueSource, _depth: usize) {
         match source {
             PreludeU64ValueSource::Const(n) => self.emit(format!("li t1, {}", n)),
             PreludeU64ValueSource::ParamVar(var_id) => self.emit(format!("ld t1, {}(sp)", var_id * 8)),
@@ -4382,14 +4435,14 @@ impl CodeGenerator {
             PreludeU64ValueSource::Field(source) => self.emit_schema_field_source_to_t1(source),
             PreludeU64ValueSource::Binary { op, left, right } => {
                 self.emit(format!("# cellscript abi: expected expression u64 {:?}", op));
-                let Some(temp_offset) = self.runtime_expr_temp_offset(depth) else {
+                let Some(temp_offset) = self.runtime_expr_temp_offset(_depth) else {
                     self.emit("# cellscript abi: fail closed because expression verifier temp stack is exhausted");
                     self.emit_fail(15);
                     return;
                 };
-                self.emit_prelude_u64_value_source_to_t1_at_depth(left, depth + 1);
+                self.emit_prelude_u64_value_source_to_t1_at_depth(left, _depth + 1);
                 self.emit_stack_sd("t1", temp_offset);
-                self.emit_prelude_u64_operand_source_to_t1_at_depth(right, depth + 1);
+                self.emit_prelude_u64_operand_source_to_t1_at_depth(right, _depth + 1);
                 self.emit_stack_ld("t3", temp_offset);
                 match op {
                     BinaryOp::Add => self.emit("add t1, t3, t1"),
@@ -4401,14 +4454,14 @@ impl CodeGenerator {
             }
             PreludeU64ValueSource::Min { left, right } => {
                 self.emit("# cellscript abi: expected expression u64 min");
-                let Some(temp_offset) = self.runtime_expr_temp_offset(depth) else {
+                let Some(temp_offset) = self.runtime_expr_temp_offset(_depth) else {
                     self.emit("# cellscript abi: fail closed because expression verifier temp stack is exhausted");
                     self.emit_fail(15);
                     return;
                 };
-                self.emit_prelude_u64_value_source_to_t1_at_depth(left, depth + 1);
+                self.emit_prelude_u64_value_source_to_t1_at_depth(left, _depth + 1);
                 self.emit_stack_sd("t1", temp_offset);
-                self.emit_prelude_u64_operand_source_to_t1_at_depth(right, depth + 1);
+                self.emit_prelude_u64_operand_source_to_t1_at_depth(right, _depth + 1);
                 self.emit_stack_ld("t3", temp_offset);
                 self.emit("slt t2, t3, t1");
                 let right_ok_label = self.fresh_label("prelude_min_right_ok");
@@ -4423,13 +4476,13 @@ impl CodeGenerator {
         self.emit_prelude_u64_operand_source_to_t1_at_depth(source, 0);
     }
 
-    fn emit_prelude_u64_operand_source_to_t1_at_depth(&mut self, source: &PreludeU64OperandSource, depth: usize) {
+    fn emit_prelude_u64_operand_source_to_t1_at_depth(&mut self, source: &PreludeU64OperandSource, _depth: usize) {
         match source {
             PreludeU64OperandSource::Const(n) => self.emit(format!("li t1, {}", n)),
             PreludeU64OperandSource::ParamVar(var_id) => self.emit(format!("ld t1, {}(sp)", var_id * 8)),
             PreludeU64OperandSource::StackVar(var_id) => self.emit(format!("ld t1, {}(sp)", var_id * 8)),
             PreludeU64OperandSource::Field(source) => self.emit_schema_field_source_to_t1(source),
-            PreludeU64OperandSource::Expr(source) => self.emit_prelude_u64_value_source_to_t1_at_depth(source, depth),
+            PreludeU64OperandSource::Expr(source) => self.emit_prelude_u64_value_source_to_t1_at_depth(source, _depth),
         }
     }
 
@@ -4667,7 +4720,7 @@ impl CodeGenerator {
             type_name, field, layout.index, width
         ));
         self.emit_prepare_fixed_byte_source(&source, width, &format!("{}.{}", type_name, field));
-        self.emit_pointer_fixed_bytes_against_source(output_start_offset, 0, &source, width, 3);
+        self.emit_pointer_fixed_bytes_against_source(output_start_offset, 0, &source, width, 32);
         true
     }
 
@@ -5733,6 +5786,9 @@ impl CodeGenerator {
             self.emit(format!("sd t0, {}(sp)", dest.id * 8));
             return Ok(());
         }
+        if self.emit_runtime_type_hash(dest, operand) {
+            return Ok(());
+        }
         if let Some(param_id) = self.param_type_hash_sources.get(&dest.id).copied() {
             let Some(pointer_offset) = self.param_type_hash_pointer_offsets.get(&param_id).copied() else {
                 return Ok(());
@@ -5745,11 +5801,6 @@ impl CodeGenerator {
             self.emit_loaded_schema_exact_size_check(size_offset, 32, "param type hash");
             self.emit_stack_ld("t0", pointer_offset);
             self.emit(format!("sd t0, {}(sp)", dest.id * 8));
-            return Ok(());
-        }
-        // Runtime fallback: load the type hash from the cell via LOAD_CELL_BY_FIELD syscall.
-        // We need to determine which cell the operand refers to.
-        if self.emit_runtime_type_hash(dest, operand) {
             return Ok(());
         }
 
@@ -5777,8 +5828,8 @@ impl CodeGenerator {
             return false;
         };
 
-        let size_offset = self.runtime_scratch_size_offset();
-        let buffer_offset = self.runtime_scratch_buffer_offset();
+        let size_offset = self.cell_buffer_size_offsets.get(&dest.id).copied().unwrap_or_else(|| self.runtime_scratch_size_offset());
+        let buffer_offset = self.cell_buffer_offsets.get(&dest.id).copied().unwrap_or_else(|| self.runtime_scratch_buffer_offset());
 
         self.emit("# type_hash");
         self.emit_symbolic_operand_comment("type_hash source", operand);

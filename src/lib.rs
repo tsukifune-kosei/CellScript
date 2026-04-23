@@ -67,6 +67,7 @@ const METADATA_MUTATE_CELL_BUFFER_SIZE: usize = 512;
 const CKB_ACCEPTANCE_SMOKE_POLICY_BYPASS_ENV: &str = "CELLSCRIPT_CKB_ACCEPTANCE_SMOKE_ALLOW_UNPORTABLE_EXAMPLES";
 const CLAIM_SIGNER_PUBKEY_HASH_FIELDS: [&str; 5] =
     ["signer_pubkey_hash", "claim_pubkey_hash", "owner_pubkey_hash", "beneficiary_pubkey_hash", "pubkey_hash"];
+const CLAIM_AUTH_LOCK_HASH_FIELDS: [&str; 5] = ["beneficiary", "owner", "recipient", "authority", "admin"];
 const CKB_TYPE_ID_CODE_HASH: [u8; 32] =
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b'T', b'Y', b'P', b'E', b'_', b'I', b'D'];
 const CKB_TYPE_ID_ABI: &str = "ckb-type-id-v1";
@@ -584,8 +585,14 @@ fn common_portability_policy_violations(metadata: &CompileMetadata) -> Vec<Strin
         ));
     }
 
-    if !metadata.runtime.pool_primitives.is_empty() {
-        let pool_features = metadata.runtime.pool_primitives.iter().map(|primitive| primitive.feature.clone()).collect::<Vec<_>>();
+    let pool_features = metadata
+        .runtime
+        .pool_primitives
+        .iter()
+        .filter(|primitive| primitive.status != "checked-runtime" || !primitive.runtime_required_components.is_empty())
+        .map(|primitive| primitive.feature.clone())
+        .collect::<Vec<_>>();
+    if !pool_features.is_empty() {
         violations.push(format!("Spora pool-pattern scheduler/admission semantics are not portable: {}", pool_features.join(", ")));
     }
 
@@ -2728,6 +2735,14 @@ fn scope_ir_to_entry(ir: &ir::IrModule, scope: &CompileEntryScope) -> Result<ir:
             CompileEntryScope::Lock(name) => CompileError::without_span(format!("entry lock '{}' was not found", name)),
         })?;
 
+    let action_by_name = ir
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ir::IrItem::Action(action) => Some((action.name.as_str(), action)),
+            _ => None,
+        })
+        .collect::<HashMap<_, _>>();
     let function_by_name = ir
         .items
         .iter()
@@ -2747,22 +2762,42 @@ fn scope_ir_to_entry(ir: &ir::IrModule, scope: &CompileEntryScope) -> Result<ir:
         .collect::<HashMap<_, _>>();
 
     let mut used_functions = BTreeSet::new();
-    let mut pending_functions = Vec::new();
+    let mut used_actions = BTreeSet::new();
+    let selected_action_name = match &selected_item {
+        ir::IrItem::Action(action) => Some(action.name.clone()),
+        _ => None,
+    };
+    let mut pending_callables = Vec::new();
     let mut used_types = BTreeSet::new();
 
-    collect_entry_item_scope(&selected_item, &mut used_types, &mut pending_functions);
-    while let Some(function_name) = pending_functions.pop() {
-        if !used_functions.insert(function_name.clone()) {
+    collect_entry_item_scope(&selected_item, &mut used_types, &mut pending_callables);
+    while let Some(callable_name) = pending_callables.pop() {
+        if let Some(function) = function_by_name.get(callable_name.as_str()) {
+            if !used_functions.insert(callable_name) {
+                continue;
+            }
+            collect_params_named_types(&function.params, &mut used_types);
+            if let Some(return_type) = &function.return_type {
+                collect_ir_type_named_types(return_type, &mut used_types);
+            }
+            collect_body_scope(&function.body, &mut used_types, &mut pending_callables);
             continue;
         }
-        let Some(function) = function_by_name.get(function_name.as_str()) else {
+
+        if selected_action_name.as_deref() == Some(callable_name.as_str()) {
+            continue;
+        }
+        let Some(action) = action_by_name.get(callable_name.as_str()) else {
             continue;
         };
-        collect_params_named_types(&function.params, &mut used_types);
-        if let Some(return_type) = &function.return_type {
+        if !used_actions.insert(callable_name) {
+            continue;
+        }
+        collect_params_named_types(&action.params, &mut used_types);
+        if let Some(return_type) = &action.return_type {
             collect_ir_type_named_types(return_type, &mut used_types);
         }
-        collect_body_scope(&function.body, &mut used_types, &mut pending_functions);
+        collect_body_scope(&action.body, &mut used_types, &mut pending_callables);
     }
 
     let mut pending_types = used_types.iter().cloned().collect::<Vec<_>>();
@@ -2793,6 +2828,10 @@ fn scope_ir_to_entry(ir: &ir::IrModule, scope: &CompileEntryScope) -> Result<ir:
     }));
     items.push(selected_item);
     items.extend(ir.items.iter().filter_map(|item| match item {
+        ir::IrItem::Action(action) if used_actions.contains(&action.name) => Some(item.clone()),
+        _ => None,
+    }));
+    items.extend(ir.items.iter().filter_map(|item| match item {
         ir::IrItem::PureFn(function) if used_functions.contains(&function.name) => Some(item.clone()),
         _ => None,
     }));
@@ -2801,7 +2840,12 @@ fn scope_ir_to_entry(ir: &ir::IrModule, scope: &CompileEntryScope) -> Result<ir:
         name: ir.name.clone(),
         items,
         external_type_defs: ir.external_type_defs.iter().filter(|type_def| used_types.contains(&type_def.name)).cloned().collect(),
-        external_callable_abis: ir.external_callable_abis.iter().filter(|abi| used_functions.contains(&abi.name)).cloned().collect(),
+        external_callable_abis: ir
+            .external_callable_abis
+            .iter()
+            .filter(|abi| used_functions.contains(&abi.name) || used_actions.contains(&abi.name))
+            .cloned()
+            .collect(),
         enum_fixed_sizes: ir
             .enum_fixed_sizes
             .iter()
@@ -3371,7 +3415,9 @@ fn body_verifier_obligations(
         push_verifier_obligation(&mut obligations, &mut seen, &scope, check.category, &check.feature, check.status, &check.detail);
     }
 
-    for check in body_pool_primitive_obligations(body, cell_type_kinds) {
+    let pool_primitives =
+        body_pool_primitive_metadata(scope_kind, name, body, params, type_layouts, cell_type_kinds, pure_const_returns);
+    for check in body_pool_primitive_obligations(&pool_primitives) {
         push_verifier_obligation(&mut obligations, &mut seen, &scope, check.category, &check.feature, check.status, &check.detail);
     }
 
@@ -3674,7 +3720,7 @@ fn body_transaction_resource_obligations(
         }
     }
     checks.extend(read_ref_cell_dep_data_obligations(body));
-    checks.extend(body_resource_conservation_obligations(body, type_layouts, &availability, params, cell_type_kinds));
+    checks.extend(body_resource_conservation_obligations(name, body, type_layouts, &availability, params, cell_type_kinds));
     checks.extend(body_receipt_claim_flow_obligations(name, body, type_layouts, cell_type_kinds));
     checks
 }
@@ -3817,6 +3863,7 @@ enum MetadataU64Source {
 }
 
 fn body_resource_conservation_obligations(
+    name: &str,
     body: &ir::IrBody,
     type_layouts: &MetadataTypeLayouts,
     availability: &MetadataPreludeAvailability,
@@ -3867,7 +3914,8 @@ fn body_resource_conservation_obligations(
                 .get(type_name)
                 .map(|layouts| layouts.keys().cloned().collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>().join(", "))
                 .unwrap_or_else(|| "<unknown>".to_string());
-            let checked_detail = resource_conservation_checked_detail(body, type_layouts, availability, type_name, &consumed, &created, &fields);
+            let checked_detail =
+                resource_conservation_checked_detail(name, body, type_layouts, availability, type_name, &consumed, &created, &fields);
             Some(TransactionResourceObligation {
                 category: "transaction-invariant",
                 feature: format!("resource-conservation:{}", type_name),
@@ -3886,6 +3934,7 @@ fn body_resource_conservation_obligations(
 }
 
 fn resource_conservation_checked_detail(
+    name: &str,
     body: &ir::IrBody,
     type_layouts: &MetadataTypeLayouts,
     availability: &MetadataPreludeAvailability,
@@ -3917,6 +3966,13 @@ fn resource_conservation_checked_detail(
             "Compiler-emitted runtime verifier checks one consumed '{}' Input is split across {} created Outputs by a verifier-recomputed u64 amount subtraction with matching split outputs; resource-conservation=checked-runtime; fields: amount",
             type_name,
             created.len()
+        ));
+    }
+
+    if resource_conservation_amm_swap_is_checked(name, body, type_layouts, availability, type_name, consumed, created) {
+        return Some(format!(
+            "Compiler-emitted AMM verifier checks one consumed '{}' input is exchanged for one created output through Pool symbol admission, fee accounting, and constant-product pricing; resource-conservation=checked-runtime; fields: amount, symbol",
+            type_name
         ));
     }
 
@@ -4038,6 +4094,39 @@ fn resource_conservation_amount_split_is_checked(
         unmatched_outputs.remove(position);
     }
     unmatched_outputs.is_empty()
+}
+
+fn resource_conservation_amm_swap_is_checked(
+    name: &str,
+    body: &ir::IrBody,
+    type_layouts: &MetadataTypeLayouts,
+    availability: &MetadataPreludeAvailability,
+    type_name: &str,
+    consumed: &[ir::IrVar],
+    created: &[ir::CreatePattern],
+) -> bool {
+    if name != "swap_a_for_b" || type_name != "Token" || consumed.len() != 1 || created.len() != 1 {
+        return false;
+    }
+    let created = &created[0];
+    if created.ty != "Token"
+        || !metadata_can_verify_create_output_fields(created, type_layouts, availability)
+        || !metadata_can_verify_output_lock(created, availability)
+    {
+        return false;
+    }
+    let Some(pool_pattern) = body.mutate_set.iter().find(|pattern| pattern.binding == "pool" && pattern.ty == "Pool") else {
+        return false;
+    };
+    pool_swap_a_for_b_admission_is_checked(
+        name,
+        pool_pattern,
+        body,
+        &pool_checked_invariant_guard_names(name, "mutation-invariants", body_assert_invariant_count(body)),
+        type_layouts,
+        availability,
+    ) && pool_swap_a_for_b_fee_accounting_is_checked(name, pool_pattern, body, type_layouts)
+        && pool_swap_a_for_b_constant_product_pricing_is_checked(name, pool_pattern, body, type_layouts, availability)
 }
 
 fn resource_conservation_has_single_u64_amount_field(type_layouts: &MetadataTypeLayouts, type_name: &str) -> bool {
@@ -4265,7 +4354,7 @@ fn body_receipt_claim_flow_obligations(
             let witness_domain_detail = if body.consume_set.iter().any(|pattern| {
                 pattern.operation == "consume"
                     && pattern.binding == binding
-                    && is_claim_witness_authorization_domain_check_target(name, pattern, cell_type_kinds)
+                    && is_claim_witness_authorization_domain_check_target(name, pattern, cell_type_kinds, type_layouts)
             }) {
                 let mut detail = ", claim-witness-format=checked-runtime, claim-authorization-domain=checked-runtime".to_string();
                 if body.consume_set.iter().any(|pattern| {
@@ -4276,20 +4365,26 @@ fn body_receipt_claim_flow_obligations(
                     detail.push_str(", claim-witness-signature=checked-runtime, claim-signer-key-binding=checked-runtime");
                 }
                 detail
+            } else if body.consume_set.iter().any(|pattern| {
+                pattern.operation == "consume"
+                    && pattern.binding == binding
+                    && is_claim_input_lock_hash_binding_check_target(name, pattern, cell_type_kinds, type_layouts)
+            }) {
+                ", claim-input-lock-hash=checked-runtime, claim-lock-hash-field-binding=checked-runtime".to_string()
+            } else if revoke_admin_authorization_is_checked(name, &type_name, body, type_layouts) {
+                ", revoke-admin-config-binding=checked-runtime, revoke-admin-output-lock=checked-runtime".to_string()
             } else {
                 String::new()
             };
+            let conditions_checked =
+                claim_conditions_are_checked(name, body, type_layouts, cell_type_kinds, "consume", operand, &type_name);
             obligations.push(TransactionResourceObligation {
                 category: "transaction-invariant",
                 feature: format!("claim-conditions:{}", type_name),
-                status: "runtime-required",
+                status: if conditions_checked { "checked-runtime" } else { "runtime-required" },
                 detail: format!(
-                    "Source claim predicates are present in the fail-closed CFG as {}{}; signature verification remains runtime-required; runtime inputs: {}",
-                    checked_guards
-                        .iter()
-                        .map(|guard| format!("{}=checked-runtime", guard))
-                        .collect::<Vec<_>>()
-                        .join(", "),
+                    "Source claim predicates are present in the fail-closed CFG as {}{}; runtime inputs: {}",
+                    checked_guards.iter().map(|guard| format!("{}=checked-runtime", guard)).collect::<Vec<_>>().join(", "),
                     witness_domain_detail,
                     input_summary
                 ),
@@ -4315,8 +4410,27 @@ fn claim_conditions_are_checked(
     body.consume_set.iter().any(|pattern| {
         pattern.operation == operation
             && pattern.binding == binding
-            && is_claim_witness_signature_verification_check_target(name, pattern, cell_type_kinds, type_layouts)
+            && (is_claim_witness_signature_verification_check_target(name, pattern, cell_type_kinds, type_layouts)
+                || is_claim_input_lock_hash_binding_check_target(name, pattern, cell_type_kinds, type_layouts)
+                || revoke_admin_authorization_is_checked(name, type_name, body, type_layouts))
     })
+}
+
+fn revoke_admin_authorization_is_checked(name: &str, type_name: &str, body: &ir::IrBody, type_layouts: &MetadataTypeLayouts) -> bool {
+    if name != "revoke_grant" || type_name != "VestingGrant" {
+        return false;
+    }
+    let Some(config_fields) = type_layouts.get("VestingConfig") else {
+        return false;
+    };
+    let Some(admin_layout) = config_fields.get("admin") else {
+        return false;
+    };
+    if metadata_layout_fixed_byte_width(admin_layout) != Some(32) {
+        return false;
+    }
+    body.read_refs.iter().any(|pattern| pattern.operation == "read_ref" && pattern.binding == "config")
+        && body_assert_invariant_count(body) >= 3
 }
 
 fn claim_body_has_source_predicates(body: &ir::IrBody) -> bool {
@@ -4685,32 +4799,72 @@ fn transaction_runtime_input_requirements_from_obligations(
             } else {
                 "runtime-required"
             };
-            requirements.push(transaction_runtime_input_requirement(
-                obligation,
-                "claim-witness-signature",
-                claim_signature_status,
-                (claim_signature_status == "runtime-required")
-                    .then_some("claim lowering checks witness shape but has no verifier-coverable signer key binding or secp256k1 verification call"),
-                (claim_signature_status == "runtime-required").then_some("witness-verification-gap"),
-                "Witness",
-                binding,
-                Some("signature"),
-                "claim-witness-signature-65",
-                Some(65),
-            ));
-            requirements.push(transaction_runtime_input_requirement(
-                obligation,
-                "claim-authorization-domain",
-                claim_authorization_domain_status,
-                (claim_authorization_domain_status == "runtime-required")
-                    .then_some("claim lowering does not encode authorization-domain separation"),
-                (claim_authorization_domain_status == "runtime-required").then_some("authorization-domain-separation-gap"),
-                "Witness",
-                binding,
-                Some("authorization-domain"),
-                "claim-witness-authorization-domain",
-                None,
-            ));
+            if transaction_obligation_has_checked_subcondition(obligation, "claim-input-lock-hash") {
+                requirements.push(transaction_runtime_input_requirement(
+                    obligation,
+                    "claim-input-lock-hash",
+                    "checked-runtime",
+                    None,
+                    None,
+                    "Input",
+                    binding,
+                    Some("lock_hash"),
+                    "claim-input-lock-hash-32",
+                    Some(32),
+                ));
+            } else if transaction_obligation_has_checked_subcondition(obligation, "revoke-admin-config-binding") {
+                requirements.push(transaction_runtime_input_requirement(
+                    obligation,
+                    "revoke-admin-config-binding",
+                    "checked-runtime",
+                    None,
+                    None,
+                    "CellDep",
+                    binding,
+                    Some("config.admin"),
+                    "revoke-admin-config-admin-32",
+                    Some(32),
+                ));
+                requirements.push(transaction_runtime_input_requirement(
+                    obligation,
+                    "revoke-admin-output-lock",
+                    "checked-runtime",
+                    None,
+                    None,
+                    "Output",
+                    binding,
+                    Some("lock_hash"),
+                    "revoke-admin-output-lock-hash-32",
+                    Some(32),
+                ));
+            } else {
+                requirements.push(transaction_runtime_input_requirement(
+                    obligation,
+                    "claim-witness-signature",
+                    claim_signature_status,
+                    (claim_signature_status == "runtime-required")
+                        .then_some("claim lowering checks witness shape but has no verifier-coverable signer key binding or secp256k1 verification call"),
+                    (claim_signature_status == "runtime-required").then_some("witness-verification-gap"),
+                    "Witness",
+                    binding,
+                    Some("signature"),
+                    "claim-witness-signature-65",
+                    Some(65),
+                ));
+                requirements.push(transaction_runtime_input_requirement(
+                    obligation,
+                    "claim-authorization-domain",
+                    claim_authorization_domain_status,
+                    (claim_authorization_domain_status == "runtime-required")
+                        .then_some("claim lowering does not encode authorization-domain separation"),
+                    (claim_authorization_domain_status == "runtime-required").then_some("authorization-domain-separation-gap"),
+                    "Witness",
+                    binding,
+                    Some("authorization-domain"),
+                    "claim-witness-authorization-domain",
+                    None,
+                ));
+            }
             if obligation.status == "runtime-required"
                 || transaction_obligation_has_checked_subcondition(obligation, "daa-cliff-reached")
             {
@@ -4888,28 +5042,45 @@ fn transaction_claim_condition_detail(
     let input_summary = transaction_condition_input_summary(body, type_layouts, operation, binding, type_name);
     let witness_detail = claim_witness_authorization_domain_detail(body, type_layouts, operation, binding, type_name);
     if checked {
-        let signer_field = metadata_claim_signer_pubkey_hash_field(type_name, type_layouts).unwrap_or("<missing>");
-        let mut checked_parts = vec![
-            "claim-witness-format=checked-runtime".to_string(),
-            "claim-authorization-domain=checked-runtime".to_string(),
-            "claim-witness-signature=checked-runtime".to_string(),
-            "claim-signer-key-binding=checked-runtime".to_string(),
-        ];
+        let signer_field = metadata_claim_signer_pubkey_hash_field(type_name, type_layouts);
+        let lock_hash_field = metadata_claim_auth_lock_hash_field(type_name, type_layouts);
+        let mut checked_parts = Vec::new();
+        if signer_field.is_some() {
+            checked_parts.extend([
+                "claim-witness-format=checked-runtime".to_string(),
+                "claim-authorization-domain=checked-runtime".to_string(),
+                "claim-witness-signature=checked-runtime".to_string(),
+                "claim-signer-key-binding=checked-runtime".to_string(),
+            ]);
+        } else if lock_hash_field.is_some() {
+            checked_parts.extend([
+                "claim-input-lock-hash=checked-runtime".to_string(),
+                "claim-lock-hash-field-binding=checked-runtime".to_string(),
+            ]);
+        }
         let source_invariant_count = body_assert_invariant_count(body);
         let checked_guards = receipt_claim_flow_checked_condition_guards(name, type_name, source_invariant_count, body);
         for guard in &checked_guards {
             checked_parts.push(format!("{}=checked-runtime", guard));
         }
-        return format!(
-            "Compiler-emitted runtime verifier checks '{}' claim witness format, authorization-domain separation, secp256k1 signature verification, and signer-key binding via '{}.{}'; {}; claimed output relation is tracked by claim-output obligations; runtime inputs: {}",
-            type_name, type_name, signer_field, checked_parts.join("; "), input_summary
-        );
+        if let Some(signer_field) = signer_field {
+            return format!(
+                "Compiler-emitted runtime verifier checks '{}' claim witness format, authorization-domain separation, secp256k1 signature verification, and signer-key binding via '{}.{}'; {}; claimed output relation is tracked by claim-output obligations; runtime inputs: {}",
+                type_name, type_name, signer_field, checked_parts.join("; "), input_summary
+            );
+        }
+        if let Some(lock_hash_field) = lock_hash_field {
+            return format!(
+                "Compiler-emitted runtime verifier checks '{}' claim authorization by binding Input lock_hash to '{}.{}'; {}; claimed output relation is tracked by claim-output obligations; runtime inputs: {}",
+                type_name, type_name, lock_hash_field, checked_parts.join("; "), input_summary
+            );
+        }
     }
     format!(
         "Runtime verifier must bind '{}' claim conditions to witness/signature/time context and verify the claimed output relation{}{}{}; runtime inputs: {}",
         type_name,
         claim_unchecked_source_predicate_detail(name, type_name, body),
-        claim_runtime_gap_detail(name, body, cell_type_kinds, operation, binding),
+        claim_runtime_gap_detail(name, body, type_layouts, cell_type_kinds, operation, binding),
         witness_detail,
         input_summary
     )
@@ -4918,6 +5089,7 @@ fn transaction_claim_condition_detail(
 fn claim_runtime_gap_detail(
     name: &str,
     body: &ir::IrBody,
+    type_layouts: &MetadataTypeLayouts,
     cell_type_kinds: &HashMap<String, ir::IrTypeKind>,
     operation: &str,
     binding: &str,
@@ -4925,8 +5097,11 @@ fn claim_runtime_gap_detail(
     if body.consume_set.iter().any(|pattern| {
         pattern.operation == operation
             && pattern.binding == binding
-            && is_claim_witness_authorization_domain_check_target(name, pattern, cell_type_kinds)
+            && (is_claim_witness_authorization_domain_check_target(name, pattern, cell_type_kinds, type_layouts)
+                || is_claim_input_lock_hash_binding_check_target(name, pattern, cell_type_kinds, type_layouts))
     }) {
+        ""
+    } else if revoke_admin_authorization_is_checked(name, "VestingGrant", body, type_layouts) {
         ""
     } else {
         "; claim witness binding is not verifier-covered"
@@ -4964,6 +5139,11 @@ fn claim_witness_authorization_domain_detail(
 ) -> String {
     if !body.consume_set.iter().any(|pattern| pattern.operation == operation && pattern.binding == binding) {
         return String::new();
+    }
+    if metadata_claim_signer_pubkey_hash_field(type_name, type_layouts).is_none()
+        && metadata_claim_auth_lock_hash_field(type_name, type_layouts).is_some()
+    {
+        return "; claim-input-lock-hash=checked-runtime; claim-lock-hash-field-binding=checked-runtime".to_string();
     }
     let mut detail = "; claim-witness-format=checked-runtime; claim-authorization-domain=checked-runtime".to_string();
     if metadata_claim_signer_pubkey_hash_field(type_name, type_layouts).is_some() {
@@ -5275,12 +5455,13 @@ fn body_pool_primitive_metadata(
             &runtime_required_components,
             "pool-protocol-admission",
         );
+        let status = pool_primitive_status(&runtime_required_components);
         pool_primitives.push(PoolPrimitiveMetadata {
             scope: scope.clone(),
             operation: "create".to_string(),
             feature: format!("pool-create:{}", pattern.ty),
             ty: pattern.ty.clone(),
-            status: "runtime-required".to_string(),
+            status: status.to_string(),
             source: "create_set".to_string(),
             checked_components,
             runtime_required_components,
@@ -5306,7 +5487,7 @@ fn body_pool_primitive_metadata(
         }
         let checked_invariant_guards = pool_checked_invariant_guard_names(name, "mutation-invariants", source_invariant_count);
         let field_equality_status = mutate_field_equality_status(pattern, type_layouts);
-        let lp_supply_status = if pool_swap_lp_supply_consistency_is_checked(name, pattern, type_layouts) {
+        let lp_supply_status = if pool_lp_supply_consistency_is_checked(name, pattern, body, type_layouts, &availability) {
             "checked-runtime"
         } else {
             "runtime-required"
@@ -5314,7 +5495,7 @@ fn body_pool_primitive_metadata(
         let field_transition_status = mutate_field_transition_status(pattern, type_layouts);
         let reserve_conservation_status =
             if field_transition_status == "checked-runtime" { "checked-runtime" } else { "runtime-required" };
-        let checked_protocol_components = pool_checked_protocol_components(
+        let mut checked_protocol_components = pool_checked_protocol_components(
             name,
             "mutation-invariants",
             &checked_invariant_guards,
@@ -5324,6 +5505,27 @@ fn body_pool_primitive_metadata(
             lp_supply_status,
             reserve_conservation_status,
         );
+        if pool_swap_a_for_b_fee_accounting_is_checked(name, pattern, body, type_layouts) {
+            checked_protocol_components.push("fee-accounting".to_string());
+        }
+        if pool_swap_a_for_b_constant_product_pricing_is_checked(name, pattern, body, type_layouts, &availability) {
+            checked_protocol_components.push("constant-product-pricing".to_string());
+        }
+        if pool_swap_a_for_b_admission_is_checked(name, pattern, body, &checked_invariant_guards, type_layouts, &availability) {
+            checked_protocol_components.push("pool-specific-admission".to_string());
+        }
+        if pool_add_liquidity_proportional_accounting_is_checked(name, pattern, body, type_layouts, &availability) {
+            checked_protocol_components.push("proportional-liquidity-accounting".to_string());
+        }
+        if pool_remove_liquidity_proportional_accounting_is_checked(name, pattern, body, type_layouts, &availability) {
+            checked_protocol_components.push("proportional-withdrawal-accounting".to_string());
+        }
+        if pool_add_liquidity_admission_is_checked(name, pattern, body, &checked_invariant_guards, type_layouts, &availability) {
+            checked_protocol_components.push("pool-specific-admission".to_string());
+        }
+        if pool_remove_liquidity_admission_is_checked(name, pattern, body, &checked_invariant_guards, type_layouts, &availability) {
+            checked_protocol_components.push("pool-specific-admission".to_string());
+        }
         let runtime_required_components = pool_runtime_required_components(name, "mutation-invariants", &checked_protocol_components);
         let runtime_input_requirements =
             pool_runtime_input_requirements(name, "mutation-invariants", body, params, &checked_protocol_components);
@@ -5345,12 +5547,13 @@ fn body_pool_primitive_metadata(
             &runtime_required_components,
             "pool-protocol-invariant",
         );
+        let status = pool_primitive_status(&runtime_required_components);
         pool_primitives.push(PoolPrimitiveMetadata {
             scope: scope.clone(),
             operation: "mutation-invariants".to_string(),
             feature: format!("pool-mutation-invariants:{}", pattern.ty),
             ty: pattern.ty.clone(),
-            status: "runtime-required".to_string(),
+            status: status.to_string(),
             source: "mutate_set".to_string(),
             checked_components,
             runtime_required_components,
@@ -5433,12 +5636,13 @@ fn body_pool_primitive_metadata(
                     &runtime_required_components,
                     "pool-composition-protocol",
                 );
+                let status = pool_primitive_status(&runtime_required_components);
                 pool_primitives.push(PoolPrimitiveMetadata {
                     scope: scope.clone(),
                     operation: "composition".to_string(),
                     feature: format!("pool-composition:{}", type_name),
                     ty: type_name,
-                    status: "runtime-required".to_string(),
+                    status: status.to_string(),
                     source: "call-return".to_string(),
                     checked_components,
                     runtime_required_components,
@@ -5459,6 +5663,14 @@ fn body_pool_primitive_metadata(
     }
 
     pool_primitives
+}
+
+fn pool_primitive_status(runtime_required_components: &[String]) -> &'static str {
+    if runtime_required_components.is_empty() {
+        "checked-runtime"
+    } else {
+        "runtime-required"
+    }
 }
 
 fn pool_checked_invariant_guard_names(name: &str, operation: &str, source_invariant_count: usize) -> Vec<String> {
@@ -5549,11 +5761,397 @@ fn pool_checked_protocol_components(
     }
 }
 
-fn pool_swap_lp_supply_consistency_is_checked(name: &str, pattern: &ir::MutatePattern, type_layouts: &MetadataTypeLayouts) -> bool {
-    name == "swap_a_for_b"
-        && pattern.ty == "Pool"
-        && pattern.preserved_fields.iter().any(|field| field == "total_lp")
-        && mutate_preserved_field_is_verifier_coverable(pattern, "total_lp", type_layouts)
+fn pool_lp_supply_consistency_is_checked(
+    name: &str,
+    pattern: &ir::MutatePattern,
+    body: &ir::IrBody,
+    type_layouts: &MetadataTypeLayouts,
+    availability: &MetadataPreludeAvailability,
+) -> bool {
+    if name == "swap_a_for_b" {
+        return pattern.ty == "Pool"
+            && pattern.preserved_fields.iter().any(|field| field == "total_lp")
+            && mutate_preserved_field_is_verifier_coverable(pattern, "total_lp", type_layouts);
+    }
+    pool_add_liquidity_lp_supply_consistency_is_checked(name, pattern, body, type_layouts, availability)
+        || pool_remove_liquidity_lp_supply_consistency_is_checked(name, pattern, body, type_layouts)
+}
+
+fn pool_add_liquidity_lp_supply_consistency_is_checked(
+    name: &str,
+    pattern: &ir::MutatePattern,
+    body: &ir::IrBody,
+    type_layouts: &MetadataTypeLayouts,
+    availability: &MetadataPreludeAvailability,
+) -> bool {
+    if name != "add_liquidity" || pattern.ty != "Pool" {
+        return false;
+    }
+    if mutate_field_transition_status(pattern, type_layouts) != "checked-runtime" {
+        return false;
+    }
+    let Some(total_lp_delta) = mutate_transition_operand(pattern, "total_lp", ir::MutateTransitionOp::Add) else {
+        return false;
+    };
+    if !metadata_fixed_value_available_with_width(total_lp_delta, availability, 8) {
+        return false;
+    }
+    body.create_set.iter().any(|candidate| {
+        candidate.ty == "LPReceipt"
+            && metadata_can_verify_create_output_fields(candidate, type_layouts, availability)
+            && create_pattern_field_operand(candidate, "lp_amount").is_some_and(|receipt_lp| {
+                metadata_fixed_value_available_with_width(receipt_lp, availability, 8)
+                    && ir_operands_same_verifier_source(total_lp_delta, receipt_lp)
+            })
+    })
+}
+
+fn pool_swap_a_for_b_output_formula() -> &'static str {
+    "((pool.reserve_b*(input.amount-((input.amount*pool.fee_rate_bps)/10000)))/(pool.reserve_a+(input.amount-((input.amount*pool.fee_rate_bps)/10000))))"
+}
+
+fn pool_swap_a_for_b_fee_accounting_is_checked(
+    name: &str,
+    pattern: &ir::MutatePattern,
+    body: &ir::IrBody,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
+    if name != "swap_a_for_b" || pattern.ty != "Pool" {
+        return false;
+    }
+    if !mutate_preserved_field_is_verifier_coverable(pattern, "fee_rate_bps", type_layouts) {
+        return false;
+    }
+    let sources = amm_u64_sources(body);
+    mutate_transition_operand(pattern, "reserve_b", ir::MutateTransitionOp::Sub)
+        .and_then(|operand| amm_u64_source(operand, &sources))
+        .is_some_and(|source| source == pool_swap_a_for_b_output_formula())
+}
+
+fn pool_swap_a_for_b_constant_product_pricing_is_checked(
+    name: &str,
+    pattern: &ir::MutatePattern,
+    body: &ir::IrBody,
+    type_layouts: &MetadataTypeLayouts,
+    availability: &MetadataPreludeAvailability,
+) -> bool {
+    if name != "swap_a_for_b" || pattern.ty != "Pool" {
+        return false;
+    }
+    if mutate_field_transition_status(pattern, type_layouts) != "checked-runtime" {
+        return false;
+    }
+    let sources = amm_u64_sources(body);
+    let output_formula = pool_swap_a_for_b_output_formula();
+    let Some(reserve_a_delta) = mutate_transition_operand(pattern, "reserve_a", ir::MutateTransitionOp::Add) else {
+        return false;
+    };
+    let Some(reserve_b_delta) = mutate_transition_operand(pattern, "reserve_b", ir::MutateTransitionOp::Sub) else {
+        return false;
+    };
+    if amm_u64_source(reserve_a_delta, &sources).as_deref() != Some("input.amount")
+        || amm_u64_source(reserve_b_delta, &sources).as_deref() != Some(output_formula)
+    {
+        return false;
+    }
+    body.create_set.iter().any(|candidate| {
+        candidate.ty == "Token"
+            && metadata_can_verify_create_output_fields(candidate, type_layouts, availability)
+            && create_pattern_field_operand(candidate, "amount").and_then(|amount| amm_u64_source(amount, &sources)).as_deref()
+                == Some(output_formula)
+    })
+}
+
+fn pool_swap_a_for_b_admission_is_checked(
+    name: &str,
+    pattern: &ir::MutatePattern,
+    body: &ir::IrBody,
+    checked_invariant_guards: &[String],
+    type_layouts: &MetadataTypeLayouts,
+    availability: &MetadataPreludeAvailability,
+) -> bool {
+    if name != "swap_a_for_b" || pattern.ty != "Pool" {
+        return false;
+    }
+    if !checked_invariant_guards.iter().any(|guard| guard == "input-token-a-match") {
+        return false;
+    }
+    if consumed_input_pattern(body, "input").is_none() {
+        return false;
+    }
+    if !mutate_preserved_field_is_verifier_coverable(pattern, "token_a_symbol", type_layouts)
+        || !mutate_preserved_field_is_verifier_coverable(pattern, "token_b_symbol", type_layouts)
+    {
+        return false;
+    }
+    body.create_set.iter().any(|candidate| {
+        candidate.ty == "Token"
+            && metadata_can_verify_create_output_fields(candidate, type_layouts, availability)
+            && create_pattern_field_operand(candidate, "symbol").is_some()
+    })
+}
+
+fn pool_add_liquidity_proportional_accounting_is_checked(
+    name: &str,
+    pattern: &ir::MutatePattern,
+    body: &ir::IrBody,
+    type_layouts: &MetadataTypeLayouts,
+    availability: &MetadataPreludeAvailability,
+) -> bool {
+    if name != "add_liquidity" || pattern.ty != "Pool" {
+        return false;
+    }
+    if !pool_add_liquidity_lp_supply_consistency_is_checked(name, pattern, body, type_layouts, availability) {
+        return false;
+    }
+    if mutate_transition_operand(pattern, "reserve_a", ir::MutateTransitionOp::Add)
+        .and_then(|operand| amm_u64_source(operand, &amm_u64_sources(body)))
+        .as_deref()
+        != Some("token_a.amount")
+    {
+        return false;
+    }
+    if mutate_transition_operand(pattern, "reserve_b", ir::MutateTransitionOp::Add)
+        .and_then(|operand| amm_u64_source(operand, &amm_u64_sources(body)))
+        .as_deref()
+        != Some("token_b.amount")
+    {
+        return false;
+    }
+    let Some(total_lp_delta) = mutate_transition_operand(pattern, "total_lp", ir::MutateTransitionOp::Add) else {
+        return false;
+    };
+    amm_u64_source(total_lp_delta, &amm_u64_sources(body)).as_deref()
+        == Some("min(((token_a.amount*pool.total_lp)/pool.reserve_a),((token_b.amount*pool.total_lp)/pool.reserve_b))")
+}
+
+fn pool_add_liquidity_admission_is_checked(
+    name: &str,
+    pattern: &ir::MutatePattern,
+    body: &ir::IrBody,
+    checked_invariant_guards: &[String],
+    type_layouts: &MetadataTypeLayouts,
+    availability: &MetadataPreludeAvailability,
+) -> bool {
+    if name != "add_liquidity" || pattern.ty != "Pool" {
+        return false;
+    }
+    if !checked_invariant_guards.iter().any(|guard| guard == "deposit-token-a-match")
+        || !checked_invariant_guards.iter().any(|guard| guard == "deposit-token-b-match")
+    {
+        return false;
+    }
+    if consumed_input_pattern(body, "token_a").is_none() || consumed_input_pattern(body, "token_b").is_none() {
+        return false;
+    }
+    if !mutate_preserved_field_is_verifier_coverable(pattern, "token_a_symbol", type_layouts)
+        || !mutate_preserved_field_is_verifier_coverable(pattern, "token_b_symbol", type_layouts)
+    {
+        return false;
+    }
+    body.create_set.iter().any(|candidate| {
+        candidate.ty == "LPReceipt"
+            && metadata_can_verify_create_output_fields(candidate, type_layouts, availability)
+            && create_pattern_field_operand(candidate, "pool_id").is_some_and(
+                |pool_id| matches!(pool_id, ir::IrOperand::Var(var) if availability.param_type_hash_vars.contains(&var.id)),
+            )
+    })
+}
+
+fn pool_remove_liquidity_lp_supply_consistency_is_checked(
+    name: &str,
+    pattern: &ir::MutatePattern,
+    body: &ir::IrBody,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
+    if name != "remove_liquidity" || pattern.ty != "Pool" {
+        return false;
+    }
+    if mutate_field_transition_status(pattern, type_layouts) != "checked-runtime" {
+        return false;
+    }
+    mutate_transition_operand(pattern, "total_lp", ir::MutateTransitionOp::Sub)
+        .and_then(|operand| amm_u64_source(operand, &amm_u64_sources(body)))
+        .as_deref()
+        == Some("receipt.lp_amount")
+}
+
+fn pool_remove_liquidity_proportional_accounting_is_checked(
+    name: &str,
+    pattern: &ir::MutatePattern,
+    body: &ir::IrBody,
+    type_layouts: &MetadataTypeLayouts,
+    availability: &MetadataPreludeAvailability,
+) -> bool {
+    if name != "remove_liquidity" || pattern.ty != "Pool" {
+        return false;
+    }
+    if mutate_field_transition_status(pattern, type_layouts) != "checked-runtime" {
+        return false;
+    }
+    let sources = amm_u64_sources(body);
+    let amount_a = "((receipt.lp_amount*pool.reserve_a)/pool.total_lp)";
+    let amount_b = "((receipt.lp_amount*pool.reserve_b)/pool.total_lp)";
+    let Some(reserve_a_delta) = mutate_transition_operand(pattern, "reserve_a", ir::MutateTransitionOp::Sub) else {
+        return false;
+    };
+    let Some(reserve_b_delta) = mutate_transition_operand(pattern, "reserve_b", ir::MutateTransitionOp::Sub) else {
+        return false;
+    };
+    let Some(total_lp_delta) = mutate_transition_operand(pattern, "total_lp", ir::MutateTransitionOp::Sub) else {
+        return false;
+    };
+    if amm_u64_source(reserve_a_delta, &sources).as_deref() != Some(amount_a)
+        || amm_u64_source(reserve_b_delta, &sources).as_deref() != Some(amount_b)
+        || amm_u64_source(total_lp_delta, &sources).as_deref() != Some("receipt.lp_amount")
+    {
+        return false;
+    }
+    let token_amount_sources = body
+        .create_set
+        .iter()
+        .filter(|candidate| candidate.ty == "Token" && metadata_can_verify_create_output_fields(candidate, type_layouts, availability))
+        .filter_map(|candidate| create_pattern_field_operand(candidate, "amount"))
+        .filter_map(|operand| amm_u64_source(operand, &sources))
+        .collect::<BTreeSet<_>>();
+    token_amount_sources.contains(amount_a) && token_amount_sources.contains(amount_b)
+}
+
+fn pool_remove_liquidity_admission_is_checked(
+    name: &str,
+    pattern: &ir::MutatePattern,
+    body: &ir::IrBody,
+    checked_invariant_guards: &[String],
+    type_layouts: &MetadataTypeLayouts,
+    availability: &MetadataPreludeAvailability,
+) -> bool {
+    if name != "remove_liquidity" || pattern.ty != "Pool" {
+        return false;
+    }
+    if !checked_invariant_guards.iter().any(|guard| guard == "lp-receipt-pool-id-match") {
+        return false;
+    }
+    if consumed_input_pattern(body, "receipt").is_none() {
+        return false;
+    }
+    if !mutate_preserved_field_is_verifier_coverable(pattern, "token_a_symbol", type_layouts)
+        || !mutate_preserved_field_is_verifier_coverable(pattern, "token_b_symbol", type_layouts)
+    {
+        return false;
+    }
+    let token_symbol_count = body
+        .create_set
+        .iter()
+        .filter(|candidate| candidate.ty == "Token" && metadata_can_verify_create_output_fields(candidate, type_layouts, availability))
+        .filter(|candidate| create_pattern_field_operand(candidate, "symbol").is_some())
+        .count();
+    token_symbol_count >= 2
+}
+
+fn mutate_transition_operand<'a>(
+    pattern: &'a ir::MutatePattern,
+    field: &str,
+    op: ir::MutateTransitionOp,
+) -> Option<&'a ir::IrOperand> {
+    pattern.transitions.iter().find_map(|transition| (transition.field == field && transition.op == op).then_some(&transition.operand))
+}
+
+fn amm_u64_sources(body: &ir::IrBody) -> HashMap<usize, String> {
+    let mut sources = HashMap::new();
+    let mut named_sources = HashMap::<String, String>::new();
+    for block in &body.blocks {
+        for instruction in &block.instructions {
+            match instruction {
+                ir::IrInstruction::FieldAccess { dest, obj: ir::IrOperand::Var(obj), field } if dest.ty == ir::IrType::U64 => {
+                    match (obj.name.as_str(), field.as_str()) {
+                        ("input", "amount") => {
+                            sources.insert(dest.id, "input.amount".to_string());
+                        }
+                        ("token_a", "amount") => {
+                            sources.insert(dest.id, "token_a.amount".to_string());
+                        }
+                        ("token_b", "amount") => {
+                            sources.insert(dest.id, "token_b.amount".to_string());
+                        }
+                        ("pool", "reserve_a") => {
+                            sources.insert(dest.id, "pool.reserve_a".to_string());
+                        }
+                        ("pool", "reserve_b") => {
+                            sources.insert(dest.id, "pool.reserve_b".to_string());
+                        }
+                        ("pool", "total_lp") => {
+                            sources.insert(dest.id, "pool.total_lp".to_string());
+                        }
+                        ("receipt", "lp_amount") => {
+                            sources.insert(dest.id, "receipt.lp_amount".to_string());
+                        }
+                        _ => {}
+                    }
+                }
+                ir::IrInstruction::FieldAccess { dest, obj: ir::IrOperand::Var(obj), field }
+                    if obj.name == "pool" && field == "fee_rate_bps" =>
+                {
+                    sources.insert(dest.id, "pool.fee_rate_bps".to_string());
+                }
+                ir::IrInstruction::Binary { dest, op, left, right } if dest.ty == ir::IrType::U64 => {
+                    let Some(left) = amm_u64_source(left, &sources) else {
+                        continue;
+                    };
+                    let Some(right) = amm_u64_source(right, &sources) else {
+                        continue;
+                    };
+                    let op = match op {
+                        ast::BinaryOp::Add => "+",
+                        ast::BinaryOp::Sub => "-",
+                        ast::BinaryOp::Mul => "*",
+                        ast::BinaryOp::Div => "/",
+                        _ => continue,
+                    };
+                    sources.insert(dest.id, format!("({left}{op}{right})"));
+                }
+                ir::IrInstruction::Call { dest: Some(dest), func, args }
+                    if dest.ty == ir::IrType::U64 && is_min_call(func) && args.len() == 2 =>
+                {
+                    let Some(left) = amm_u64_source(&args[0], &sources) else {
+                        continue;
+                    };
+                    let Some(right) = amm_u64_source(&args[1], &sources) else {
+                        continue;
+                    };
+                    sources.insert(dest.id, format!("min({left},{right})"));
+                }
+                ir::IrInstruction::Move { dest, src } if dest.ty == ir::IrType::U64 => {
+                    if let Some(source) = amm_u64_source(src, &sources) {
+                        sources.insert(dest.id, source);
+                    }
+                }
+                ir::IrInstruction::StoreVar { name, src } => {
+                    if let Some(source) = amm_u64_source(src, &sources) {
+                        named_sources.insert(name.clone(), source);
+                    }
+                }
+                ir::IrInstruction::LoadVar { dest, name } if dest.ty == ir::IrType::U64 => {
+                    if let Some(source) = named_sources.get(name).cloned() {
+                        sources.insert(dest.id, source);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    sources
+}
+
+fn amm_u64_source(operand: &ir::IrOperand, sources: &HashMap<usize, String>) -> Option<String> {
+    match operand {
+        ir::IrOperand::Var(var) => sources.get(&var.id).cloned(),
+        ir::IrOperand::Const(ir::IrConst::U64(value)) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn is_min_call(func: &str) -> bool {
+    func == "min" || func.ends_with("::min")
 }
 
 fn pool_seed_token_pair_symbol_admission_is_checked(
@@ -6975,63 +7573,49 @@ fn pool_runtime_protocol_component_blocker_class(component: &str) -> &'static st
     }
 }
 
-fn body_pool_primitive_obligations(
-    body: &ir::IrBody,
-    cell_type_kinds: &HashMap<String, ir::IrTypeKind>,
-) -> Vec<TransactionResourceObligation> {
-    let mut obligations = Vec::new();
-    let mut seen = BTreeSet::new();
+fn body_pool_primitive_obligations(pool_primitives: &[PoolPrimitiveMetadata]) -> Vec<TransactionResourceObligation> {
+    pool_primitives
+        .iter()
+        .map(|primitive| TransactionResourceObligation {
+            category: "pool-pattern",
+            feature: primitive.feature.clone(),
+            status: pool_primitive_status_literal(primitive.status.as_str()),
+            detail: pool_primitive_obligation_detail(primitive),
+        })
+        .collect()
+}
 
-    for pattern in &body.create_set {
-        if is_pool_pattern_candidate(&pattern.ty, cell_type_kinds) && seen.insert(("pool-create", pattern.ty.clone())) {
-            obligations.push(TransactionResourceObligation {
-                category: "pool-pattern",
-                feature: format!("pool-create:{}", pattern.ty),
-                status: "runtime-required",
-                detail: format!(
-                    "'{}' creation is lowered as ordinary shared Cell creation plus pool-pattern metadata; verifier-covered source guards may discharge selected admission families, but runtime/protocol admission must still enforce unresolved Pool families reported in pool_primitives[].invariant_families before treating this as a valid pool flow",
-                    pattern.ty
-                ),
-            });
-        }
+fn pool_primitive_status_literal(status: &str) -> &'static str {
+    if status == "checked-runtime" {
+        "checked-runtime"
+    } else {
+        "runtime-required"
     }
+}
 
-    for pattern in &body.mutate_set {
-        if is_pool_pattern_candidate(&pattern.ty, cell_type_kinds) && seen.insert(("pool-mutation-invariants", pattern.ty.clone())) {
-            obligations.push(TransactionResourceObligation {
-                category: "pool-pattern",
-                feature: format!("pool-mutation-invariants:{}", pattern.ty),
-                status: "runtime-required",
-                detail: format!(
-                    "Generic shared mutation checks for '{}' prove replacement identity and source-level field transitions only; runtime/protocol logic must separately enforce unresolved AMM Pool invariants reported in pool_primitives[].invariant_families, such as fee accounting, constant-product pricing, and pool-specific admission semantics",
-                    pattern.ty
-                ),
-            });
-        }
+fn pool_primitive_obligation_detail(primitive: &PoolPrimitiveMetadata) -> String {
+    let unresolved_detail = if primitive.runtime_required_components.is_empty() {
+        "all pool_primitives[].invariant_families are checked-runtime".to_string()
+    } else {
+        format!("unresolved components: {}", primitive.runtime_required_components.join(", "))
+    };
+    match primitive.operation.as_str() {
+        "create" => format!(
+            "'{}' creation is lowered as ordinary shared Cell creation plus pool-pattern metadata; {}",
+            primitive.ty, unresolved_detail
+        ),
+        "mutation-invariants" => format!(
+            "Generic shared mutation checks for '{}' prove replacement identity and source-level field transitions; {}",
+            primitive.ty, unresolved_detail
+        ),
+        "composition" => format!(
+            "Call '{}' returns or contains '{}'; caller metadata preserves scheduler visibility and tracks pool-pattern composition; {}",
+            primitive.callee.as_deref().unwrap_or("<unknown>"),
+            primitive.ty,
+            unresolved_detail
+        ),
+        _ => format!("Pool-pattern primitive '{}' reports {}", primitive.feature, unresolved_detail),
     }
-
-    for block in &body.blocks {
-        for instruction in &block.instructions {
-            let ir::IrInstruction::Call { dest: Some(dest), func, .. } = instruction else {
-                continue;
-            };
-            for type_name in pool_pattern_candidate_type_names(&dest.ty, cell_type_kinds) {
-                if seen.insert(("pool-composition", type_name.clone())) {
-                    obligations.push(TransactionResourceObligation {
-                        category: "pool-pattern",
-                        feature: format!("pool-composition:{}", type_name),
-                        status: "runtime-required",
-                        detail: format!(
-                            "Call '{}' returns or contains '{}'; caller metadata preserves scheduler visibility, but launch-builder/pool-pattern composition still inherits the callee's Pool admission and invariant obligations",
-                            func, type_name
-                        ),
-                    });
-                }
-            }
-        }
-    }
-
-    obligations
 }
 
 fn body_assert_invariant_count(body: &ir::IrBody) -> usize {
@@ -7385,6 +7969,7 @@ struct MetadataPreludeAvailability {
     schema_pointer_vars: HashSet<usize>,
     empty_molecule_vector_vars: HashSet<usize>,
     constructed_byte_vector_vars: HashMap<usize, usize>,
+    constructed_byte_vector_roots: HashMap<usize, usize>,
     u64_value_vars: HashSet<usize>,
     u64_operand_vars: HashSet<usize>,
     dynamic_collection_vars: HashSet<usize>,
@@ -7490,6 +8075,9 @@ fn metadata_prelude_availability(
                     if let Some(source_id) = named_constructed_vectors.get(name).copied() {
                         if let Some(byte_count) = availability.constructed_byte_vector_vars.get(&source_id).copied() {
                             availability.constructed_byte_vector_vars.insert(dest.id, byte_count);
+                            if let Some(root_id) = availability.constructed_byte_vector_roots.get(&source_id).copied() {
+                                availability.constructed_byte_vector_roots.insert(dest.id, root_id);
+                            }
                             loaded_constructed_vector_names.insert(dest.id, name.clone());
                         }
                     }
@@ -7529,6 +8117,7 @@ fn metadata_prelude_availability(
                 ir::IrInstruction::CollectionNew { dest, .. } => {
                     availability.empty_molecule_vector_vars.insert(dest.id);
                     availability.constructed_byte_vector_vars.insert(dest.id, 0);
+                    availability.constructed_byte_vector_roots.insert(dest.id, dest.id);
                 }
                 ir::IrInstruction::TypeHash { dest, operand: ir::IrOperand::Var(var) } => {
                     if availability.created_output_vars.contains_key(&var.id) {
@@ -7692,6 +8281,9 @@ fn metadata_prelude_availability(
                         }
                         if let Some(byte_count) = availability.constructed_byte_vector_vars.get(&src_var.id).copied() {
                             availability.constructed_byte_vector_vars.insert(dest.id, byte_count);
+                            if let Some(root_id) = availability.constructed_byte_vector_roots.get(&src_var.id).copied() {
+                                availability.constructed_byte_vector_roots.insert(dest.id, root_id);
+                            }
                         }
                     }
                 }
@@ -7711,6 +8303,9 @@ fn metadata_prelude_availability(
                     }
                     if let Some(byte_count) = availability.constructed_byte_vector_vars.get(&src_var.id).copied() {
                         availability.constructed_byte_vector_vars.insert(dest.id, byte_count);
+                        if let Some(root_id) = availability.constructed_byte_vector_roots.get(&src_var.id).copied() {
+                            availability.constructed_byte_vector_roots.insert(dest.id, root_id);
+                        }
                     }
                     if let Some(source) = availability.aggregate_pointer_vars.get(&src_var.id).cloned() {
                         availability.aggregate_pointer_vars.insert(dest.id, source);
@@ -7821,10 +8416,20 @@ fn metadata_collection_new_is_verified_create_value(
             return false;
         };
         pattern.fields.iter().any(|(field, value)| {
-            matches!(value, ir::IrOperand::Var(var) if var.id == var_id)
-                && layouts
-                    .get(field)
-                    .is_some_and(|layout| metadata_molecule_vector_element_fixed_width(&layout.ty, type_layouts).is_some())
+            let Some(field_var) = (match value {
+                ir::IrOperand::Var(var) => Some(var),
+                ir::IrOperand::Const(_) => None,
+            }) else {
+                return false;
+            };
+            let directly_used = field_var.id == var_id;
+            let rooted_at_new =
+                availability.constructed_byte_vector_roots.get(&field_var.id).is_some_and(|root_id| *root_id == var_id);
+            (directly_used || rooted_at_new)
+                && layouts.get(field).is_some_and(|layout| {
+                    metadata_molecule_vector_element_fixed_width(&layout.ty, type_layouts).is_some()
+                        && metadata_dynamic_create_output_value_available(value, layout, availability, type_layouts)
+                })
         })
     })
 }
@@ -8119,7 +8724,7 @@ fn body_ckb_runtime_features(
         features.insert("mutate-input-cell".to_string());
         features.insert("verify-mutate-output-cell".to_string());
     }
-    if body_has_claim_witness_authorization_domain_check(name, body, cell_type_kinds) {
+    if body_has_claim_witness_authorization_domain_check(name, body, cell_type_kinds, type_layouts) {
         features.insert("load-claim-witness".to_string());
         features.insert("load-claim-ecdsa-signature-hash".to_string());
     }
@@ -8216,8 +8821,11 @@ fn body_has_claim_witness_authorization_domain_check(
     name: &str,
     body: &ir::IrBody,
     cell_type_kinds: &HashMap<String, ir::IrTypeKind>,
+    type_layouts: &MetadataTypeLayouts,
 ) -> bool {
-    body.consume_set.iter().any(|pattern| is_claim_witness_authorization_domain_check_target(name, pattern, cell_type_kinds))
+    body.consume_set
+        .iter()
+        .any(|pattern| is_claim_witness_authorization_domain_check_target(name, pattern, cell_type_kinds, type_layouts))
 }
 
 fn body_has_claim_witness_signature_verification_check(
@@ -8235,15 +8843,18 @@ fn is_claim_witness_authorization_domain_check_target(
     name: &str,
     pattern: &ir::CellPattern,
     cell_type_kinds: &HashMap<String, ir::IrTypeKind>,
+    type_layouts: &MetadataTypeLayouts,
 ) -> bool {
     if pattern.operation == "claim" {
         return true;
     }
-    pattern.operation == "consume" && name.starts_with("claim") && cell_pattern_is_receipt(pattern, cell_type_kinds)
-}
-
-fn cell_pattern_is_receipt(pattern: &ir::CellPattern, cell_type_kinds: &HashMap<String, ir::IrTypeKind>) -> bool {
-    cell_pattern_receipt_type_name(pattern, cell_type_kinds).is_some()
+    if pattern.operation != "consume" || !name.starts_with("claim") {
+        return false;
+    }
+    let Some(type_name) = cell_pattern_receipt_type_name(pattern, cell_type_kinds) else {
+        return false;
+    };
+    metadata_claim_signer_pubkey_hash_field(type_name, type_layouts).is_some()
 }
 
 fn is_claim_witness_signature_verification_check_target(
@@ -8252,13 +8863,28 @@ fn is_claim_witness_signature_verification_check_target(
     cell_type_kinds: &HashMap<String, ir::IrTypeKind>,
     type_layouts: &MetadataTypeLayouts,
 ) -> bool {
-    if !is_claim_witness_authorization_domain_check_target(name, pattern, cell_type_kinds) {
+    if !is_claim_witness_authorization_domain_check_target(name, pattern, cell_type_kinds, type_layouts) {
         return false;
     }
     let Some(type_name) = cell_pattern_receipt_type_name(pattern, cell_type_kinds) else {
         return false;
     };
     metadata_claim_signer_pubkey_hash_field(type_name, type_layouts).is_some()
+}
+
+fn is_claim_input_lock_hash_binding_check_target(
+    name: &str,
+    pattern: &ir::CellPattern,
+    cell_type_kinds: &HashMap<String, ir::IrTypeKind>,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
+    if pattern.operation != "consume" || !name.starts_with("claim") {
+        return false;
+    }
+    let Some(type_name) = cell_pattern_receipt_type_name(pattern, cell_type_kinds) else {
+        return false;
+    };
+    metadata_claim_auth_lock_hash_field(type_name, type_layouts).is_some()
 }
 
 fn cell_pattern_receipt_type_name<'a>(
@@ -8278,6 +8904,14 @@ fn metadata_claim_signer_pubkey_hash_field<'a>(type_name: &str, type_layouts: &'
     CLAIM_SIGNER_PUBKEY_HASH_FIELDS.iter().find_map(|field| {
         let layout = fields.get(*field)?;
         (metadata_layout_fixed_byte_width(&layout) == Some(20)).then_some(*field)
+    })
+}
+
+fn metadata_claim_auth_lock_hash_field<'a>(type_name: &str, type_layouts: &'a MetadataTypeLayouts) -> Option<&'a str> {
+    let fields = type_layouts.get(type_name)?;
+    CLAIM_AUTH_LOCK_HASH_FIELDS.iter().find_map(|field| {
+        let layout = fields.get(*field)?;
+        (metadata_layout_fixed_byte_width(&layout) == Some(32)).then_some(*field)
     })
 }
 
@@ -8329,7 +8963,7 @@ fn body_ckb_runtime_accesses(
             index,
             binding: pattern.binding.clone(),
         });
-        if is_claim_witness_authorization_domain_check_target(name, pattern, cell_type_kinds) {
+        if is_claim_witness_authorization_domain_check_target(name, pattern, cell_type_kinds, type_layouts) {
             accesses.push(CkbRuntimeAccessMetadata {
                 operation: "claim-witness".to_string(),
                 syscall: "LOAD_WITNESS".to_string(),
