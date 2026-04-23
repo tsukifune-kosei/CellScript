@@ -18,6 +18,8 @@
   kept scheduler witness metadata Molecule-only.
 - Marked Wasm report output as audit-only and excluded standalone docs from the
   crates.io package contents.
+- Stripped externally-linked RISC-V ELF artifacts when an external toolchain is
+  available, matching the internal production artifact surface more closely.
 - Removed empty module doc comments and simplified duplicated verifier branches
   reported by clippy.
 - Clarified README CLI docs that `cellc test` is a compiler/policy harness, not
