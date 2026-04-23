@@ -10,13 +10,13 @@ const BUNDLED_EXAMPLES: [&str; 7] =
     ["amm_pool.cell", "launch.cell", "multisig.cell", "nft.cell", "timelock.cell", "token.cell", "vesting.cell"];
 
 const BUNDLED_EXAMPLE_ELF_SIZE_BUDGETS: [(&str, usize); 7] = [
-    ("amm_pool.cell", 56 * 1024),
-    ("launch.cell", 48 * 1024),
+    ("amm_pool.cell", 40 * 1024),
+    ("launch.cell", 28 * 1024),
     ("multisig.cell", 80 * 1024),
-    ("nft.cell", 64 * 1024),
-    ("timelock.cell", 40 * 1024),
-    ("token.cell", 24 * 1024),
-    ("vesting.cell", 36 * 1024),
+    ("nft.cell", 54 * 1024),
+    ("timelock.cell", 44 * 1024),
+    ("token.cell", 16 * 1024),
+    ("vesting.cell", 20 * 1024),
 ];
 
 const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
@@ -71,33 +71,33 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
     (
         "nft.cell",
         AssemblyShapeBudget {
-            max_lines: 11_500,
+            max_lines: 13_000,
             max_fail_handlers: 64,
             max_shared_epilogues: 18,
-            max_text_bytes: 45 * 1024,
+            max_text_bytes: 48 * 1024,
             max_relaxed_branches: 4,
-            max_cond_branch_abs_distance: 4_096,
-            max_machine_blocks: 2_300,
+            max_cond_branch_abs_distance: 6_000,
+            max_machine_blocks: 2_500,
             max_machine_block_bytes: 256,
-            max_cfg_edges: 3_800,
-            max_call_edges: 290,
-            max_unreachable_machine_blocks: 1_850,
+            max_cfg_edges: 4_100,
+            max_call_edges: 330,
+            max_unreachable_machine_blocks: 2_100,
         },
     ),
     (
         "timelock.cell",
         AssemblyShapeBudget {
-            max_lines: 9_500,
+            max_lines: 10_500,
             max_fail_handlers: 64,
             max_shared_epilogues: 22,
-            max_text_bytes: 36 * 1024,
+            max_text_bytes: 40 * 1024,
             max_relaxed_branches: 4,
-            max_cond_branch_abs_distance: 2_700,
-            max_machine_blocks: 1_800,
+            max_cond_branch_abs_distance: 3_600,
+            max_machine_blocks: 1_900,
             max_machine_block_bytes: 320,
-            max_cfg_edges: 3_000,
-            max_call_edges: 215,
-            max_unreachable_machine_blocks: 1_750,
+            max_cfg_edges: 3_100,
+            max_call_edges: 260,
+            max_unreachable_machine_blocks: 1_800,
         },
     ),
     (
@@ -354,68 +354,6 @@ fn assert_pool_invariant_family(primitive: &PoolPrimitiveMetadata, name: &str, s
         status,
         source,
         primitive.invariant_families
-    );
-}
-
-fn assert_pool_invariant_blocker_class(primitive: &PoolPrimitiveMetadata, name: &str, blocker_class: &str, context: &str) {
-    assert!(
-        primitive
-            .invariant_families
-            .iter()
-            .any(|family| family.name == name && family.blocker_class.as_deref() == Some(blocker_class)),
-        "{} should classify Pool invariant '{}' with blocker class '{}': {:?}",
-        context,
-        name,
-        blocker_class,
-        primitive.invariant_families
-    );
-}
-
-fn assert_pool_runtime_input_blocker_class(primitive: &PoolPrimitiveMetadata, component: &str, blocker_class: &str, context: &str) {
-    assert!(
-        primitive
-            .runtime_input_requirements
-            .iter()
-            .any(|requirement| requirement.component == component && requirement.blocker_class.as_deref() == Some(blocker_class)),
-        "{} should classify Pool runtime inputs for '{}' with blocker class '{}': {:?}",
-        context,
-        component,
-        blocker_class,
-        primitive.runtime_input_requirements
-    );
-}
-
-fn assert_pool_runtime_input_requirement(
-    primitive: &PoolPrimitiveMetadata,
-    component: &str,
-    source: &str,
-    index: usize,
-    binding: &str,
-    field: Option<&str>,
-    abi: &str,
-    byte_len: usize,
-    context: &str,
-) {
-    assert!(
-        primitive.runtime_input_requirements.iter().any(|requirement| {
-            requirement.component == component
-                && requirement.source == source
-                && requirement.index == index
-                && requirement.binding == binding
-                && requirement.field.as_deref() == field
-                && requirement.abi == abi
-                && requirement.byte_len == byte_len
-        }),
-        "{} should expose runtime input requirement {} {}#{}:{}{:?} {}[{}]: {:?}",
-        context,
-        component,
-        source,
-        index,
-        binding,
-        field,
-        abi,
-        byte_len,
-        primitive.runtime_input_requirements
     );
 }
 
@@ -1885,10 +1823,9 @@ fn launch_seed_pool_composition_is_scheduler_visible() {
         launch_token.verifier_obligations.iter().any(|obligation| {
             obligation.category == "pool-pattern"
                 && obligation.feature == "pool-composition:Pool"
-                && obligation.status == "runtime-required"
-                && obligation.detail.contains("unresolved components:")
+                && obligation.status == "checked-runtime"
         }),
-        "launch_token should inherit explicit pool-pattern obligations from seed_pool composition: {:?}",
+        "launch_token should discharge explicit pool-pattern obligations from seed_pool composition: {:?}",
         launch_token.verifier_obligations
     );
     let launch_pool_primitive = launch_token
@@ -1897,7 +1834,7 @@ fn launch_seed_pool_composition_is_scheduler_visible() {
         .find(|primitive| primitive.feature == "pool-composition:Pool")
         .expect("launch_token should expose structured Pool composition primitive metadata");
     assert_eq!(launch_pool_primitive.operation, "composition");
-    assert_eq!(launch_pool_primitive.status, "runtime-required");
+    assert_eq!(launch_pool_primitive.status, "checked-runtime");
     assert!(launch_pool_primitive.callee.as_deref().is_some_and(|callee| callee.contains("seed_pool")));
     assert_eq!(launch_pool_primitive.source_invariant_count, 3);
     assert_pool_component(launch_pool_primitive, "shared-touch-propagation=checked-metadata", "launch_token");
@@ -1922,39 +1859,15 @@ fn launch_seed_pool_composition_is_scheduler_visible() {
     assert_pool_invariant_family(
         launch_pool_primitive,
         "callee-pool-admission",
-        "runtime-required",
-        "pool-composition-callee-admission-abi",
+        "checked-runtime",
+        "assert-invariant-cfg+create-output-fields",
         "launch_token",
     );
     assert_pool_invariant_family(
         launch_pool_primitive,
         "launch-pool-atomicity",
-        "runtime-required",
-        "launch-pool-atomicity-abi",
-        "launch_token",
-    );
-    assert_pool_invariant_blocker_class(
-        launch_pool_primitive,
-        "callee-pool-admission",
-        "phase2-deferred-pool-admission",
-        "launch_token",
-    );
-    assert_pool_runtime_input_blocker_class(
-        launch_pool_primitive,
-        "callee-pool-admission",
-        "phase2-deferred-pool-admission",
-        "launch_token",
-    );
-    assert_pool_invariant_blocker_class(
-        launch_pool_primitive,
-        "launch-pool-atomicity",
-        "phase2-deferred-launch-atomicity",
-        "launch_token",
-    );
-    assert_pool_runtime_input_blocker_class(
-        launch_pool_primitive,
-        "launch-pool-atomicity",
-        "phase2-deferred-launch-atomicity",
+        "checked-runtime",
+        "assert-invariant-cfg+create-output-fields",
         "launch_token",
     );
     assert_pool_invariant_family(
@@ -1964,148 +1877,14 @@ fn launch_seed_pool_composition_is_scheduler_visible() {
         "callee-output-field-coupling+tuple-return-abi",
         "launch_token",
     );
-    assert!(launch_pool_primitive.runtime_required_components.iter().any(|component| component == "callee-pool-admission"));
-    assert!(launch_pool_primitive.runtime_required_components.iter().any(|component| component == "launch-pool-atomicity"));
     assert!(
-        launch_pool_primitive.runtime_required_components.iter().all(|component| component != "pool-id-continuity"),
-        "pool-id-continuity should be discharged for the controlled seed_pool tuple return path: {:?}",
+        launch_pool_primitive.runtime_required_components.is_empty(),
+        "controlled launch_token -> seed_pool composition should discharge all runtime-required Pool components: {:?}",
         launch_pool_primitive.runtime_required_components
     );
-    assert_pool_runtime_input_requirement(
-        launch_pool_primitive,
-        "callee-pool-admission",
-        "Output",
-        5,
-        "create_Token",
-        Some("type_hash"),
-        "create-output-type-id-32",
-        32,
-        "launch_token",
-    );
-    assert_pool_runtime_input_requirement(
-        launch_pool_primitive,
-        "callee-pool-admission",
-        "Param",
-        4,
-        "pool_paired_token",
-        Some("type_hash"),
-        "schema-param-type-id-32",
-        32,
-        "launch_token",
-    );
-    assert_pool_runtime_input_requirement(
-        launch_pool_primitive,
-        "callee-pool-admission",
-        "Param",
-        4,
-        "pool_paired_token",
-        Some("symbol"),
-        "schema-param-field-bytes-8",
-        8,
-        "launch_token",
-    );
-    assert_pool_runtime_input_requirement(
-        launch_pool_primitive,
-        "callee-pool-admission",
-        "Output",
-        5,
-        "create_Token",
-        Some("symbol"),
-        "create-output-field-bytes-8",
-        8,
-        "launch_token",
-    );
-    assert_pool_runtime_input_requirement(
-        launch_pool_primitive,
-        "callee-pool-admission",
-        "Param",
-        5,
-        "fee_rate_bps",
-        None,
-        "param-u16",
-        2,
-        "launch_token",
-    );
-    assert_pool_runtime_input_requirement(
-        launch_pool_primitive,
-        "launch-pool-atomicity",
-        "Param",
-        2,
-        "initial_mint",
-        None,
-        "param-u64",
-        8,
-        "launch_token",
-    );
-    assert_pool_runtime_input_requirement(
-        launch_pool_primitive,
-        "launch-pool-atomicity",
-        "Param",
-        3,
-        "pool_seed_amount",
-        None,
-        "param-u64",
-        8,
-        "launch_token",
-    );
-    assert_pool_runtime_input_requirement(
-        launch_pool_primitive,
-        "launch-pool-atomicity",
-        "Param",
-        7,
-        "distribution",
-        None,
-        "param-fixed-array-bytes-160",
-        160,
-        "launch_token",
-    );
-    assert_pool_runtime_input_requirement(
-        launch_pool_primitive,
-        "launch-pool-atomicity",
-        "Output",
-        0,
-        "create_MintAuthority",
-        Some("minted"),
-        "create-output-field-u64",
-        8,
-        "launch_token",
-    );
-    assert_pool_runtime_input_requirement(
-        launch_pool_primitive,
-        "launch-pool-atomicity",
-        "Output",
-        0,
-        "create_MintAuthority",
-        Some("token_symbol"),
-        "create-output-field-bytes-8",
-        8,
-        "launch_token",
-    );
-    assert_pool_runtime_input_requirement(
-        launch_pool_primitive,
-        "launch-pool-atomicity",
-        "Output",
-        5,
-        "create_Token",
-        Some("amount"),
-        "create-output-field-u64",
-        8,
-        "launch_token",
-    );
-    assert_pool_runtime_input_requirement(
-        launch_pool_primitive,
-        "launch-pool-atomicity",
-        "Output",
-        5,
-        "create_Token",
-        Some("symbol"),
-        "create-output-field-bytes-8",
-        8,
-        "launch_token",
-    );
     assert!(
-        launch_pool_primitive.runtime_input_requirements.iter().all(|requirement| requirement.component != "pool-id-continuity"),
-        "pool-id-continuity runtime inputs should be discharged by tuple return ABI metadata: {:?}",
+        launch_pool_primitive.runtime_input_requirements.is_empty(),
+        "runtime inputs should be discharged by launch/pool verifier metadata: {:?}",
         launch_pool_primitive.runtime_input_requirements
     );
     assert!(

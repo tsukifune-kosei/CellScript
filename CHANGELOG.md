@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.11.0 - 2026-04-23
+
+- Release CellScript 0.11.0 as the standalone dual-chain compiler package.
+- Close the current CKB bundled-example production acceptance suite: all seven
+  examples strict-admit, all 43 actions and 15 locks strict-compile, and every
+  bundled business action has an original-scoped on-chain production harness.
+- Keep Spora compatibility intact while documenting the remaining Spora
+  production hardening track around action builders, malformed matrices, and
+  measured mass/cycle constraints.
+- Preserve the production safety gates added in the 2026-04-23 development
+  log: no CKB smoke policy bypass, no unresolved-call ELF stubs, audit-only
+  Wasm, tightened backend shape reporting, narrowed crates.io packaging, and
+  explicit profile-aware constraints metadata.
+
 ## 2026-04-23
 
 - Marked Wasm output as audit-only instead of metadata-only production output.

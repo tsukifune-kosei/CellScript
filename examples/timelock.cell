@@ -275,28 +275,48 @@ action extend_lock(
 #[effect(Creating)]
 #[scheduler_hint(sequential, estimated_cycles = 15000)]
 action batch_create_locks(
-    owners: Vec<Address>,
-    unlock_heights: Vec<u64>,
+    owners: [Address; 4],
+    unlock_heights: [u64; 4],
     current_height: u64,
-) -> Vec<TimeLock> {
-    assert!(
-        owners.len() == unlock_heights.len(),
-        "Owners and heights count mismatch"
-    );
-    
-    let mut locks = Vec::new();
-    
-    for i in 0..owners.len() {
-        let lock = create TimeLock {
-            owner: owners[i],
-            lock_type: LockType::Absolute,
-            unlock_height: unlock_heights[i],
-            created_at: current_height,
-        };
-        locks.push(lock);
-    }
-    
-    locks
+) -> (TimeLock, TimeLock, TimeLock, TimeLock) {
+    assert!(unlock_heights[0] > current_height + MIN_LOCK_PERIOD, "Unlock height too close");
+    assert!(unlock_heights[1] > current_height + MIN_LOCK_PERIOD, "Unlock height too close");
+    assert!(unlock_heights[2] > current_height + MIN_LOCK_PERIOD, "Unlock height too close");
+    assert!(unlock_heights[3] > current_height + MIN_LOCK_PERIOD, "Unlock height too close");
+    assert!(unlock_heights[0] <= current_height + MAX_LOCK_PERIOD, "Unlock height too far");
+    assert!(unlock_heights[1] <= current_height + MAX_LOCK_PERIOD, "Unlock height too far");
+    assert!(unlock_heights[2] <= current_height + MAX_LOCK_PERIOD, "Unlock height too far");
+    assert!(unlock_heights[3] <= current_height + MAX_LOCK_PERIOD, "Unlock height too far");
+
+    let lock0 = create TimeLock {
+        owner: owners[0],
+        lock_type: LockType::Absolute,
+        unlock_height: unlock_heights[0],
+        created_at: current_height,
+    };
+
+    let lock1 = create TimeLock {
+        owner: owners[1],
+        lock_type: LockType::Absolute,
+        unlock_height: unlock_heights[1],
+        created_at: current_height,
+    };
+
+    let lock2 = create TimeLock {
+        owner: owners[2],
+        lock_type: LockType::Absolute,
+        unlock_height: unlock_heights[2],
+        created_at: current_height,
+    };
+
+    let lock3 = create TimeLock {
+        owner: owners[3],
+        lock_type: LockType::Absolute,
+        unlock_height: unlock_heights[3],
+        created_at: current_height,
+    };
+
+    (lock0, lock1, lock2, lock3)
 }
 
 

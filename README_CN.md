@@ -299,7 +299,7 @@ capacity 和实测 Spora mass 仍需要 builder 或 acceptance 层补齐；compi
 ```toml
 [package]
 name = "token"
-version = "0.1.0"
+version = "0.11.0"
 entry = "src/main.cell"
 source_roots = ["src"]
 

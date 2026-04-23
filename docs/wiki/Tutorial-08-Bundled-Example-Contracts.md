@@ -101,11 +101,14 @@ cellc build --target riscv64-elf --target-profile spora --production
 cellc verify-artifact build/main.elf --verify-sources --expect-target-profile spora --production
 ```
 
-For CKB:
+For CKB, run the same production gate only for whole examples or scoped entries
+that are admitted by the CKB profile. If a bundled example contains a
+CKB-incompatible action, compile the admitted action explicitly and keep the
+whole-file rejection as a policy signal:
 
 ```bash
 cellc check --target-profile ckb --production
 cellc build --target riscv64-elf --target-profile ckb --production
 cellc verify-artifact build/main.elf --verify-sources --expect-target-profile ckb --production
+cellc examples/nft.cell --entry-action transfer --target riscv64-elf --target-profile ckb --production
 ```
-

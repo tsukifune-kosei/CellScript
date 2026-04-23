@@ -213,35 +213,51 @@ action burn(nft: NFT) {
 #[scheduler_hint(sequential, estimated_cycles = 20000)]
 action batch_mint(
     collection: &mut Collection,
-    recipients: Vec<Address>,
-    metadata_hashes: Vec<Hash>,
-) -> Vec<NFT> {
+    recipients: [Address; 4],
+    metadata_hashes: [Hash; 4],
+) -> (NFT, NFT, NFT, NFT) {
     assert!(
-        recipients.len() == metadata_hashes.len(),
-        "Recipients and metadata count mismatch"
+        collection.total_supply + 4 <= collection.max_supply,
+        "Max supply would be exceeded"
     );
-    
-    let mut nfts = Vec::new();
-    
-    for i in 0..recipients.len() {
-        let token_id = collection.total_supply + 1 + i as u64;
-        
-        assert!(token_id <= collection.max_supply, "Max supply would be exceeded");
-        
-        let nft = create NFT {
-            token_id: token_id,
-            owner: recipients[i],
-            metadata_hash: metadata_hashes[i],
-            royalty_recipient: collection.creator,
-            royalty_bps: ROYALTY_BASIS_POINTS,
-        };
-        
-        nfts.push(nft);
-    }
-    
-    collection.total_supply += recipients.len() as u64;
-    
-    nfts
+
+    let first_token_id = collection.total_supply + 1;
+
+    let nft0 = create NFT {
+        token_id: first_token_id,
+        owner: recipients[0],
+        metadata_hash: metadata_hashes[0],
+        royalty_recipient: collection.creator,
+        royalty_bps: ROYALTY_BASIS_POINTS,
+    };
+
+    let nft1 = create NFT {
+        token_id: first_token_id + 1,
+        owner: recipients[1],
+        metadata_hash: metadata_hashes[1],
+        royalty_recipient: collection.creator,
+        royalty_bps: ROYALTY_BASIS_POINTS,
+    };
+
+    let nft2 = create NFT {
+        token_id: first_token_id + 2,
+        owner: recipients[2],
+        metadata_hash: metadata_hashes[2],
+        royalty_recipient: collection.creator,
+        royalty_bps: ROYALTY_BASIS_POINTS,
+    };
+
+    let nft3 = create NFT {
+        token_id: first_token_id + 3,
+        owner: recipients[3],
+        metadata_hash: metadata_hashes[3],
+        royalty_recipient: collection.creator,
+        royalty_bps: ROYALTY_BASIS_POINTS,
+    };
+
+    collection.total_supply = collection.total_supply + 4;
+
+    (nft0, nft1, nft2, nft3)
 }
 
 

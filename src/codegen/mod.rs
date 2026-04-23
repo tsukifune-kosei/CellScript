@@ -127,6 +127,7 @@ enum ExpectedFixedByteSource {
     SchemaField(SchemaFieldValueSource),
     Const(Vec<u8>),
     StackSlot { var_id: usize, width: usize },
+    PointerBytes { var_id: usize, width: usize },
     ParamBytes { var_id: usize, size_offset: usize, width: usize },
     LoadedBytes { var_id: usize, size_offset: usize, width: usize },
 }
@@ -3327,7 +3328,9 @@ impl CodeGenerator {
                 self.emit("call __cellscript_memcmp_fixed");
                 self.emit(format!("bnez a0, {}", mismatch_label));
             }
-            ExpectedFixedByteSource::ParamBytes { var_id, .. } | ExpectedFixedByteSource::LoadedBytes { var_id, .. } => {
+            ExpectedFixedByteSource::PointerBytes { var_id, .. }
+            | ExpectedFixedByteSource::ParamBytes { var_id, .. }
+            | ExpectedFixedByteSource::LoadedBytes { var_id, .. } => {
                 self.emit_stack_ld("a0", output_pointer_stack_offset);
                 if output_field_offset != 0 {
                     self.emit_large_addi("a0", "a0", output_field_offset as i64);
@@ -3930,7 +3933,9 @@ impl CodeGenerator {
                     &mismatch_label,
                 );
             }
-            ExpectedFixedByteSource::ParamBytes { var_id, .. } | ExpectedFixedByteSource::LoadedBytes { var_id, .. } => {
+            ExpectedFixedByteSource::PointerBytes { var_id, .. }
+            | ExpectedFixedByteSource::ParamBytes { var_id, .. }
+            | ExpectedFixedByteSource::LoadedBytes { var_id, .. } => {
                 self.emit_loaded_fixed_bytes_helper_call(
                     output_buffer_offset,
                     output_field_offset,
@@ -4038,6 +4043,19 @@ impl CodeGenerator {
                     3,
                 );
             }
+            ExpectedFixedByteSource::PointerBytes { var_id, width } => {
+                self.emit(format!(
+                    "# cellscript abi: verify output bytes field {} offset={} size={} against pointer var{}",
+                    context, layout.offset, width, var_id
+                ));
+                self.emit_loaded_fixed_bytes_against_source(
+                    buffer_offset,
+                    layout.offset,
+                    &ExpectedFixedByteSource::PointerBytes { var_id, width },
+                    width,
+                    3,
+                );
+            }
             ExpectedFixedByteSource::ParamBytes { var_id, size_offset, width } => {
                 self.emit_loaded_schema_exact_size_check(size_offset, width, &format!("param var{}", var_id));
                 self.emit(format!(
@@ -4081,7 +4099,9 @@ impl CodeGenerator {
             ExpectedFixedByteSource::LoadedBytes { var_id, size_offset, width } => {
                 self.emit_loaded_schema_exact_size_check(*size_offset, *width, &format!("{} loaded bytes var{}", context, var_id));
             }
-            ExpectedFixedByteSource::Const(_) | ExpectedFixedByteSource::StackSlot { .. } => {}
+            ExpectedFixedByteSource::Const(_)
+            | ExpectedFixedByteSource::StackSlot { .. }
+            | ExpectedFixedByteSource::PointerBytes { .. } => {}
         }
     }
 
@@ -4102,7 +4122,9 @@ impl CodeGenerator {
                 self.emit_sp_addi(base_reg, var_id * 8);
                 self.emit(format!("lbu {}, {}({})", dest_reg, byte_index, base_reg));
             }
-            ExpectedFixedByteSource::ParamBytes { var_id, .. } | ExpectedFixedByteSource::LoadedBytes { var_id, .. } => {
+            ExpectedFixedByteSource::PointerBytes { var_id, .. }
+            | ExpectedFixedByteSource::ParamBytes { var_id, .. }
+            | ExpectedFixedByteSource::LoadedBytes { var_id, .. } => {
                 self.emit(format!("ld {}, {}(sp)", base_reg, var_id * 8));
                 self.emit(format!("lbu {}, {}({})", dest_reg, byte_index, base_reg));
             }
@@ -4121,7 +4143,9 @@ impl CodeGenerator {
                 self.emit_sp_addi(dest_reg, var_id * 8);
                 true
             }
-            ExpectedFixedByteSource::ParamBytes { var_id, .. } | ExpectedFixedByteSource::LoadedBytes { var_id, .. } => {
+            ExpectedFixedByteSource::PointerBytes { var_id, .. }
+            | ExpectedFixedByteSource::ParamBytes { var_id, .. }
+            | ExpectedFixedByteSource::LoadedBytes { var_id, .. } => {
                 self.emit(format!("ld {}, {}(sp)", dest_reg, var_id * 8));
                 true
             }
@@ -4249,6 +4273,9 @@ impl CodeGenerator {
                     && expected_width <= var_width
                 {
                     return Some(ExpectedFixedByteSource::StackSlot { var_id: var.id, width: expected_width });
+                }
+                if self.aggregate_pointer_sources.contains_key(&var.id) && var_width == expected_width {
+                    return Some(ExpectedFixedByteSource::PointerBytes { var_id: var.id, width: expected_width });
                 }
                 if self.param_vars.contains(&var.id) && var_width == expected_width {
                     if let Some(size_offset) = self.fixed_byte_param_size_offsets.get(&var.id).copied() {
@@ -6638,7 +6665,8 @@ const ELF_HEADER_SIZE: usize = 64;
 const ELF_PROGRAM_HEADER_SIZE: usize = 56;
 const ELF_SEGMENT_ALIGN: usize = 0x1000;
 const ELF_BASE_ADDR: u64 = 0x10000;
-const START_TRAMPOLINE_SIZE: usize = 20;
+const START_TRAMPOLINE_SIZE: usize = 28;
+const CKB_SCRIPT_STACK_TOP: i64 = 0x3f0000;
 const EXIT_SYSCALL_NUMBER: i64 = 93;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -6855,13 +6883,13 @@ fn assemble_elf_internal(lines: &[String]) -> Result<Vec<u8>> {
     let text_user_size = plan.metrics.text_size;
     let rodata_size = plan.metrics.rodata_size;
     let rodata_offset = layout.rodata_offset()?;
-
     let mut text_bytes = Vec::with_capacity(START_TRAMPOLINE_SIZE + text_user_size);
+    encode_li_sequence(&mut text_bytes, 2, CKB_SCRIPT_STACK_TOP)?;
     if entry_requires_explicit_parameter_abi(lines, entry_label) {
         encode_li_sequence(&mut text_bytes, 10, 25)?;
     } else {
         let entry_addr = parsed.symbol_address(entry_label, &layout)?;
-        encode_call_sequence(&mut text_bytes, layout.text_base, entry_addr)?;
+        encode_call_sequence(&mut text_bytes, layout.text_base + 8, entry_addr)?;
     }
     encode_li_sequence(&mut text_bytes, 17, EXIT_SYSCALL_NUMBER)?;
     text_bytes.extend_from_slice(&encode_ecall().to_le_bytes());
@@ -6870,23 +6898,25 @@ fn assemble_elf_internal(lines: &[String]) -> Result<Vec<u8>> {
     let mut rodata_bytes = Vec::with_capacity(rodata_size);
     parsed.encode_section(SectionKind::Rodata, &mut rodata_bytes, &layout, 0)?;
 
-    let segment_size = rodata_offset + rodata_bytes.len();
+    let segment_file_payload_size = rodata_offset + rodata_bytes.len();
     let segment_file_offset = align_up(ELF_HEADER_SIZE + ELF_PROGRAM_HEADER_SIZE, ELF_SEGMENT_ALIGN);
     let load_segment_offset = 0u64;
     let load_segment_vaddr = layout.text_base.checked_sub(segment_file_offset as u64).ok_or_else(|| {
         CompileError::new("ELF text base is smaller than the load segment file offset", crate::error::Span::default())
     })?;
-    let load_segment_size = segment_file_offset + segment_size;
-    let mut elf = vec![0u8; load_segment_size];
-    write_elf_header(&mut elf[..ELF_HEADER_SIZE], layout.text_base)?;
+    let load_segment_file_size = segment_file_offset + segment_file_payload_size;
+    let mut elf = vec![0u8; load_segment_file_size];
+    write_elf_header(&mut elf[..ELF_HEADER_SIZE], layout.text_base, 1)?;
     write_program_header(
         &mut elf[ELF_HEADER_SIZE..ELF_HEADER_SIZE + ELF_PROGRAM_HEADER_SIZE],
+        5,
         load_segment_offset,
         load_segment_vaddr,
-        load_segment_size as u64,
+        load_segment_file_size as u64,
+        load_segment_file_size as u64,
     )?;
 
-    let segment = &mut elf[segment_file_offset..segment_file_offset + segment_size];
+    let segment = &mut elf[segment_file_offset..segment_file_offset + segment_file_payload_size];
     segment[..text_bytes.len()].copy_from_slice(&text_bytes);
     segment[rodata_offset..rodata_offset + rodata_bytes.len()].copy_from_slice(&rodata_bytes);
     Ok(elf)
@@ -6976,6 +7006,7 @@ fn try_external_elf_toolchain(lines: &[String]) -> Result<Option<Vec<u8>>> {
 fn render_external_assembly(lines: &[String], entry_label: &str) -> String {
     let mut rendered =
         vec![".section .text".to_string(), ".global _start".to_string(), ".type _start, @function".to_string(), "_start:".to_string()];
+    rendered.push(format!("    li sp, {}", CKB_SCRIPT_STACK_TOP));
     if entry_requires_explicit_parameter_abi(lines, entry_label) {
         rendered.push("    li a0, 25".to_string());
     } else {
@@ -7932,7 +7963,7 @@ fn li_sequence_size(imm: i64) -> usize {
     }
 }
 
-fn write_elf_header(out: &mut [u8], entry: u64) -> Result<()> {
+fn write_elf_header(out: &mut [u8], entry: u64, program_header_count: u16) -> Result<()> {
     if out.len() != ELF_HEADER_SIZE {
         return Err(CompileError::new("invalid ELF header buffer size", crate::error::Span::default()));
     }
@@ -7950,22 +7981,22 @@ fn write_elf_header(out: &mut [u8], entry: u64) -> Result<()> {
     out[48..52].copy_from_slice(&0u32.to_le_bytes());
     out[52..54].copy_from_slice(&(ELF_HEADER_SIZE as u16).to_le_bytes());
     out[54..56].copy_from_slice(&(ELF_PROGRAM_HEADER_SIZE as u16).to_le_bytes());
-    out[56..58].copy_from_slice(&1u16.to_le_bytes());
+    out[56..58].copy_from_slice(&program_header_count.to_le_bytes());
     Ok(())
 }
 
-fn write_program_header(out: &mut [u8], offset: u64, vaddr: u64, size: u64) -> Result<()> {
+fn write_program_header(out: &mut [u8], flags: u32, offset: u64, vaddr: u64, file_size: u64, memory_size: u64) -> Result<()> {
     if out.len() != ELF_PROGRAM_HEADER_SIZE {
         return Err(CompileError::new("invalid ELF program header buffer size", crate::error::Span::default()));
     }
     out.fill(0);
     out[0..4].copy_from_slice(&1u32.to_le_bytes());
-    out[4..8].copy_from_slice(&5u32.to_le_bytes());
+    out[4..8].copy_from_slice(&flags.to_le_bytes());
     out[8..16].copy_from_slice(&offset.to_le_bytes());
     out[16..24].copy_from_slice(&vaddr.to_le_bytes());
     out[24..32].copy_from_slice(&vaddr.to_le_bytes());
-    out[32..40].copy_from_slice(&size.to_le_bytes());
-    out[40..48].copy_from_slice(&size.to_le_bytes());
+    out[32..40].copy_from_slice(&file_size.to_le_bytes());
+    out[40..48].copy_from_slice(&memory_size.to_le_bytes());
     out[48..56].copy_from_slice(&(ELF_SEGMENT_ALIGN as u64).to_le_bytes());
     Ok(())
 }

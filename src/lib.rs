@@ -5963,6 +5963,18 @@ fn body_pool_primitive_metadata(
                 if pool_launch_token_pool_id_continuity_equality_is_checked(name, body, type_layouts, func, dest) {
                     checked_protocol_components.push("pool-id-continuity".to_string());
                 }
+                let launch_atomicity_components =
+                    pool_launch_token_atomicity_checked_components(name, body, params, type_layouts, &availability);
+                if launch_atomicity_components.len() == 4 {
+                    checked_protocol_components.push("launch-pool-atomicity".to_string());
+                }
+                let callee_admission_components =
+                    pool_launch_token_callee_admission_checked_components(name, body, params, type_layouts, &availability, func, args);
+                if callee_admission_components.len() == 3 {
+                    checked_protocol_components.push("callee-pool-admission".to_string());
+                }
+                let pool_id_continuity_components =
+                    pool_launch_token_pool_id_continuity_checked_components(name, body, type_layouts, func, dest);
                 let runtime_required_components = pool_runtime_required_components(name, "composition", &checked_protocol_components);
                 let runtime_input_requirements =
                     pool_runtime_input_requirements(name, "composition", body, params, &checked_protocol_components);
@@ -5971,29 +5983,9 @@ fn body_pool_primitive_metadata(
                 if source_invariant_count > 0 {
                     checked_components.push(format!("assert-invariant-cfg={}", source_invariant_count));
                 }
-                checked_components.extend(pool_launch_token_atomicity_checked_components(
-                    name,
-                    body,
-                    params,
-                    type_layouts,
-                    &availability,
-                ));
-                checked_components.extend(pool_launch_token_callee_admission_checked_components(
-                    name,
-                    body,
-                    params,
-                    type_layouts,
-                    &availability,
-                    func,
-                    args,
-                ));
-                checked_components.extend(pool_launch_token_pool_id_continuity_checked_components(
-                    name,
-                    body,
-                    type_layouts,
-                    func,
-                    dest,
-                ));
+                checked_components.extend(launch_atomicity_components);
+                checked_components.extend(callee_admission_components);
+                checked_components.extend(pool_id_continuity_components);
                 checked_components
                     .extend(checked_invariant_guards.iter().map(|guard| format!("source-invariant:{}=checked-runtime", guard)));
                 checked_components.extend(
@@ -8583,6 +8575,8 @@ fn metadata_prelude_availability(
                                         availability.u64_value_vars.insert(dest.id);
                                         availability.u64_operand_vars.insert(dest.id);
                                     }
+                                } else if metadata_fixed_byte_width(element_ty, fixed_size).is_some() && element_ty == &dest.ty {
+                                    availability.fixed_value_vars.insert(dest.id);
                                 } else {
                                     availability
                                         .aggregate_pointer_vars
@@ -14612,8 +14606,8 @@ action activate(ticket: Ticket) -> Ticket {
             asm
         );
         assert!(
-            asm.contains("# cellscript abi: verify output bytes field output lock hash offset=0 size=32 against fixed-byte param"),
-            "Address lock parameter should be compared byte-by-byte:\n{}",
+            asm.contains("# cellscript abi: verify output bytes field output lock hash offset=0 size=32 against pointer var"),
+            "Address lock parameter should be compared through the fixed-byte pointer source:\n{}",
             asm
         );
         assert!(
@@ -18687,8 +18681,8 @@ action transfer(nft: &mut NFT, to: Address) {
             asm
         );
         assert!(
-            asm.contains("# cellscript abi: verify output bytes field NFT set.owner offset=8 size=32 against fixed-byte param"),
-            "fixed-byte set transition should compare the output field to the Address parameter:\n{}",
+            asm.contains("# cellscript abi: verify output bytes field NFT set.owner offset=8 size=32 against pointer var"),
+            "fixed-byte set transition should compare the output field to the Address pointer source:\n{}",
             asm
         );
         assert!(
