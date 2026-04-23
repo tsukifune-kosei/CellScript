@@ -2,6 +2,16 @@
 
 ## 2026-04-23
 
+- Removed the old CKB acceptance policy exception path so the CKB target
+  profile now rejects unportable artifacts through the normal production policy
+  gate.
+- Removed unresolved-call ELF stub generation; production ELF emission now
+  fails when a generated call target has not been lowered.
+- Added executable cross-module callable linking for resolver-backed imports,
+  so `launch.cell` links the real `seed_pool` callee and its transitive `isqrt`
+  helper instead of relying on a synthetic fail-closed stub.
+- Tightened launch example regression coverage to ensure imported callees are
+  linked without pulling unrelated AMM actions into the artifact.
 - Added `env::current_timepoint()` as a chain-neutral runtime time source:
   Spora lowers it to DAA score and CKB lowers it to header epoch number.
 - Switched bundled `vesting.cell` to the chain-neutral timepoint API, allowing

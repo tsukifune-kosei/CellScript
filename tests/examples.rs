@@ -37,16 +37,16 @@ const BUNDLED_EXAMPLE_ASM_SHAPE_BUDGETS: [(&str, AssemblyShapeBudget); 7] = [
     (
         "launch.cell",
         AssemblyShapeBudget {
-            max_lines: 5_000,
+            max_lines: 6_300,
             max_fail_handlers: 16,
             max_shared_epilogues: 4,
-            max_text_bytes: 20 * 1024,
+            max_text_bytes: 24 * 1024,
             max_relaxed_branches: 4,
             max_cond_branch_abs_distance: 2_500,
-            max_machine_blocks: 700,
+            max_machine_blocks: 860,
             max_machine_block_bytes: 1_152,
-            max_cfg_edges: 1_200,
-            max_call_edges: 200,
+            max_cfg_edges: 1_500,
+            max_call_edges: 250,
             max_unreachable_machine_blocks: 600,
         },
     ),
@@ -548,10 +548,6 @@ fn ckb_scoped_entry_keeps_called_action_helpers() {
     let assembly = std::str::from_utf8(&result.artifact_bytes).expect("assembly should be utf-8");
 
     assert!(assembly.contains("\nisqrt:\n"), "scoped seed_pool artifact should retain called action helper isqrt");
-    assert!(
-        !assembly.contains("unresolved call isqrt fail-closed stub"),
-        "scoped seed_pool artifact must not replace isqrt with a fail-closed unresolved-call stub"
-    );
     assert_eq!(result.metadata.constraints.target_profile, "ckb");
     assert!(result.metadata.constraints.ckb.is_some(), "CKB scoped artifact should expose CKB production constraints");
     assert!(result.metadata.constraints.spora.is_none(), "CKB scoped artifact should not report Spora mass constraints");
@@ -1833,6 +1829,11 @@ fn launch_seed_pool_composition_is_scheduler_visible() {
     let result = compile_file(example_path("launch.cell"), CompileOptions::default()).expect("launch example should compile");
     let asm = String::from_utf8(result.artifact_bytes.clone()).expect("launch asm should be utf8");
     let launch_token = result.metadata.actions.iter().find(|action| action.name == "launch_token").expect("launch_token metadata");
+
+    assert!(asm.contains("\nseed_pool:\n"), "launch_token must link the imported seed_pool callee into production assembly");
+    assert!(asm.contains("\nisqrt:\n"), "launch_token must link seed_pool's transitive isqrt helper");
+    assert!(!asm.contains("\nadd_liquidity:\n"), "launch_token should not link unrelated AMM actions");
+    assert!(!asm.contains("\nremove_liquidity:\n"), "launch_token should not link unrelated AMM actions");
 
     assert!(
         !launch_token.touches_shared.is_empty(),

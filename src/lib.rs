@@ -64,7 +64,6 @@ pub const METADATA_SCHEMA_VERSION: u32 = 27;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
 const METADATA_MUTATE_CELL_BUFFER_SIZE: usize = 512;
-const CKB_ACCEPTANCE_SMOKE_POLICY_BYPASS_ENV: &str = "CELLSCRIPT_CKB_ACCEPTANCE_SMOKE_ALLOW_UNPORTABLE_EXAMPLES";
 const CLAIM_SIGNER_PUBKEY_HASH_FIELDS: [&str; 5] =
     ["signer_pubkey_hash", "claim_pubkey_hash", "owner_pubkey_hash", "beneficiary_pubkey_hash", "pubkey_hash"];
 const CLAIM_AUTH_LOCK_HASH_FIELDS: [&str; 5] = ["beneficiary", "owner", "recipient", "authority", "admin"];
@@ -583,25 +582,6 @@ fn target_profile_artifact_policy_violations(metadata: &CompileMetadata, profile
             vec!["portable-cell is a source compatibility profile; compile with 'spora' or 'ckb' to produce artifacts".to_string()]
         }
     }
-}
-
-fn ckb_acceptance_smoke_policy_bypass_allowed(ast: &ast::Module, profile: TargetProfile) -> bool {
-    let env_value = std::env::var(CKB_ACCEPTANCE_SMOKE_POLICY_BYPASS_ENV).ok();
-    ckb_acceptance_smoke_policy_bypass_allowed_for_env(ast, profile, env_value.as_deref())
-}
-
-fn ckb_acceptance_smoke_policy_bypass_allowed_for_env(ast: &ast::Module, profile: TargetProfile, env_value: Option<&str>) -> bool {
-    profile == TargetProfile::Ckb && env_value == Some("1") && module_has_no_arg_u64_main(ast)
-}
-
-fn module_has_no_arg_u64_main(ast: &ast::Module) -> bool {
-    ast.items.iter().any(|item| {
-        matches!(
-            item,
-            ast::Item::Action(action)
-                if action.name == "main" && action.params.is_empty() && action.return_type == Some(ast::Type::U64)
-        )
-    })
 }
 
 fn spora_target_profile_policy_violations(metadata: &CompileMetadata) -> Vec<String> {
@@ -2286,8 +2266,7 @@ fn compile_ast_with_build(
 
     let mut metadata = compile_metadata_from_ir(&ir, artifact_format, target_profile);
     let target_policy_violations = target_profile_artifact_policy_violations(&metadata, target_profile);
-    let allow_ckb_acceptance_smoke_policy_bypass = ckb_acceptance_smoke_policy_bypass_allowed(lowering_ast, target_profile);
-    if !target_policy_violations.is_empty() && !allow_ckb_acceptance_smoke_policy_bypass {
+    if !target_policy_violations.is_empty() {
         return Err(CompileError::without_span(format!(
             "target profile policy failed for '{}':\n  - {}",
             target_profile.name(),
@@ -15535,7 +15514,7 @@ action create_listing(nft: &NFT, price: u64) -> Listing {
                     requirement.feature == "resource-conservation:Token" && requirement.component == "resource-conservation-proof"
                 })
                 .all(|requirement| requirement.status == "checked-runtime" && requirement.blocker_class.is_none()),
-            "token merge should no longer require a CKB policy bypass: {:?}",
+            "token merge should no longer require a CKB policy exception: {:?}",
             merge.transaction_runtime_input_requirements
         );
     }
@@ -16450,40 +16429,21 @@ action now() -> u64 {
     }
 
     #[test]
-    fn ckb_acceptance_smoke_policy_bypass_requires_explicit_env_and_no_arg_u64_main() {
-        let no_main = parse_module_for_test(
-            r#"
-module test
-
-action uses_spora_time() -> u64 {
-    env::current_daa_score()
-}
-"#,
-        );
-        assert!(!crate::ckb_acceptance_smoke_policy_bypass_allowed_for_env(&no_main, crate::TargetProfile::Ckb, Some("1")));
-
-        let unit_main = parse_module_for_test(
-            r#"
-module test
-
-action main() {
-}
-"#,
-        );
-        assert!(!crate::ckb_acceptance_smoke_policy_bypass_allowed_for_env(&unit_main, crate::TargetProfile::Ckb, Some("1")));
-
-        let smoke_main = parse_module_for_test(
+    fn ckb_target_profile_has_no_policy_exception() {
+        let err = compile(
             r#"
 module test
 
 action main() -> u64 {
-    0
+    return env::current_daa_score()
 }
 "#,
-        );
-        assert!(!crate::ckb_acceptance_smoke_policy_bypass_allowed_for_env(&smoke_main, crate::TargetProfile::Ckb, Some("true")));
-        assert!(!crate::ckb_acceptance_smoke_policy_bypass_allowed_for_env(&smoke_main, crate::TargetProfile::Spora, Some("1")));
-        assert!(crate::ckb_acceptance_smoke_policy_bypass_allowed_for_env(&smoke_main, crate::TargetProfile::Ckb, Some("1")));
+            CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
+        )
+        .unwrap_err();
+
+        assert!(err.message.contains("target profile policy failed for 'ckb'"), "unexpected error: {}", err.message);
+        assert!(err.message.contains("DAA/header assumptions are Spora-specific"), "unexpected error: {}", err.message);
     }
 
     #[test]
@@ -19470,7 +19430,7 @@ struct TokenSnapshot {
     #[test]
     fn compiled_riscv_elf_contains_start_trampoline() {
         let program = r#"
-module vm::smoke
+module vm::minimal
 
 action main() -> u64 {
     return 0

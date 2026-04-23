@@ -3191,6 +3191,15 @@ pub fn generate(ast: &Module) -> Result<IrModule> {
 }
 
 pub fn generate_with_resolver(ast: &Module, resolver: &ModuleResolver, module_name: &str) -> Result<IrModule> {
+    generate_with_resolver_inner(ast, resolver, module_name, true)
+}
+
+fn generate_with_resolver_inner(
+    ast: &Module,
+    resolver: &ModuleResolver,
+    module_name: &str,
+    include_external_callables: bool,
+) -> Result<IrModule> {
     let mut type_fields = HashMap::new();
     let mut type_kinds = HashMap::new();
     let mut receipt_claim_outputs = HashMap::new();
@@ -3250,7 +3259,108 @@ pub fn generate_with_resolver(ast: &Module, resolver: &ModuleResolver, module_na
     let mut ir = generator.generate(ast)?;
     ir.external_type_defs = external_type_defs;
     ir.external_callable_abis = external_callable_abis;
+    if include_external_callables {
+        append_external_callable_bodies(&mut ir, ast, resolver, module_name)?;
+    }
     Ok(ir)
+}
+
+fn append_external_callable_bodies(ir: &mut IrModule, ast: &Module, resolver: &ModuleResolver, module_name: &str) -> Result<()> {
+    let mut known_callables = ir_callable_names(ir);
+    let mut imported_callables = HashSet::new();
+    let mut pending = collect_call_names(ast).into_iter().collect::<Vec<_>>();
+
+    while let Some(call_name) = pending.pop() {
+        let symbol = call_name.rsplit("::").next().unwrap_or(&call_name).to_string();
+        if known_callables.contains(&symbol) {
+            continue;
+        }
+
+        let Some((owner_module, _)) = resolver.resolve_function_with_module(module_name, &call_name) else {
+            continue;
+        };
+        let import_key = format!("{}::{}", owner_module, symbol);
+        if owner_module == module_name || !imported_callables.insert(import_key) {
+            continue;
+        }
+
+        let Some(owner_ast) = resolver.module(&owner_module) else {
+            continue;
+        };
+        let external_ir = generate_with_resolver_inner(owner_ast, resolver, &owner_module, false)?;
+        merge_external_type_defs(ir, &external_ir);
+        merge_external_callable_abis(ir, &external_ir);
+        for (name, size) in external_ir.enum_fixed_sizes {
+            ir.enum_fixed_sizes.entry(name).or_insert(size);
+        }
+
+        if let Some(item) = external_ir.items.into_iter().find(|item| ir_item_callable_name(item).is_some_and(|name| name == symbol)) {
+            if known_callables.insert(symbol) {
+                collect_ir_item_call_names(&item, &mut pending);
+                ir.items.push(item);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn ir_callable_names(ir: &IrModule) -> HashSet<String> {
+    ir.items.iter().filter_map(ir_item_callable_name).map(str::to_string).collect()
+}
+
+fn ir_item_callable_name(item: &IrItem) -> Option<&str> {
+    match item {
+        IrItem::Action(action) => Some(&action.name),
+        IrItem::PureFn(function) => Some(&function.name),
+        IrItem::Lock(lock) => Some(&lock.name),
+        IrItem::TypeDef(_) => None,
+    }
+}
+
+fn merge_external_type_defs(ir: &mut IrModule, external_ir: &IrModule) {
+    let mut names = ir.external_type_defs.iter().map(|type_def| type_def.name.clone()).collect::<HashSet<_>>();
+    for type_def in &external_ir.external_type_defs {
+        if names.insert(type_def.name.clone()) {
+            ir.external_type_defs.push(type_def.clone());
+        }
+    }
+    for item in &external_ir.items {
+        let IrItem::TypeDef(type_def) = item else {
+            continue;
+        };
+        if names.insert(type_def.name.clone()) {
+            ir.external_type_defs.push(type_def.clone());
+        }
+    }
+}
+
+fn merge_external_callable_abis(ir: &mut IrModule, external_ir: &IrModule) {
+    let mut names = ir.external_callable_abis.iter().map(|abi| abi.name.clone()).collect::<HashSet<_>>();
+    for abi in &external_ir.external_callable_abis {
+        if names.insert(abi.name.clone()) {
+            ir.external_callable_abis.push(abi.clone());
+        }
+    }
+}
+
+fn collect_ir_item_call_names(item: &IrItem, pending: &mut Vec<String>) {
+    match item {
+        IrItem::Action(action) => collect_ir_body_call_names(&action.body, pending),
+        IrItem::PureFn(function) => collect_ir_body_call_names(&function.body, pending),
+        IrItem::Lock(lock) => collect_ir_body_call_names(&lock.body, pending),
+        IrItem::TypeDef(_) => {}
+    }
+}
+
+fn collect_ir_body_call_names(body: &IrBody, pending: &mut Vec<String>) {
+    for block in &body.blocks {
+        for instruction in &block.instructions {
+            if let IrInstruction::Call { func, .. } = instruction {
+                pending.push(func.clone());
+            }
+        }
+    }
 }
 
 fn push_external_callable_abi(

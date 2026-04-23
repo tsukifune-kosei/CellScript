@@ -22,7 +22,7 @@ CellScript must continue to support both target profiles:
 
 The CKB profile remains bounded by target-profile policy. Stateful examples that
 are not yet admitted to the CKB v1 subset must fail closed for policy reasons,
-while smoke artifacts and pure baseline artifacts must still compile and verify.
+while minimal pure baseline artifacts must still compile and verify.
 
 ## Local Validation
 

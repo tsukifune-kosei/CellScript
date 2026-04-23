@@ -190,30 +190,31 @@ impl ModuleResolver {
     }
 
     pub fn resolve_function(&self, module: &str, name: &str) -> Option<FunctionDef> {
+        self.resolve_function_with_module(module, name).map(|(_, function)| function)
+    }
+
+    pub fn resolve_function_with_module(&self, module: &str, name: &str) -> Option<(String, FunctionDef)> {
         if let Some((target_module, symbol)) = name.rsplit_once("::") {
             if let Some(table) = self.symbol_tables.get(target_module) {
-                return table.functions.get(symbol).cloned();
+                return table.functions.get(symbol).cloned().map(|function| (target_module.to_string(), function));
             }
         }
 
         if let Some(table) = self.symbol_tables.get(module) {
             if let Some(func) = table.functions.get(name) {
-                return Some(func.clone());
+                return Some((module.to_string(), func.clone()));
             }
 
             if let Some(full_path) = table.imported.get(name) {
-                let parts: Vec<&str> = full_path.split("::").collect();
-                if let Some(func_name) = parts.last() {
-                    for (mod_name, table) in &self.symbol_tables {
-                        if full_path.starts_with(mod_name) {
-                            return table.functions.get(*func_name).cloned();
-                        }
+                if let Some((target_module, symbol)) = full_path.rsplit_once("::") {
+                    if let Some(target_table) = self.symbol_tables.get(target_module) {
+                        return target_table.functions.get(symbol).cloned().map(|function| (target_module.to_string(), function));
                     }
                 }
             }
         }
 
-        self.resolve_function_global(name)
+        self.resolve_function_global_with_module(name)
     }
 
     pub fn resolve_constant(&self, module: &str, name: &str) -> Option<ConstantDef> {
@@ -246,8 +247,14 @@ impl ModuleResolver {
     }
 
     pub fn resolve_function_global(&self, name: &str) -> Option<FunctionDef> {
+        self.resolve_function_global_with_module(name).map(|(_, function)| function)
+    }
+
+    pub fn resolve_function_global_with_module(&self, name: &str) -> Option<(String, FunctionDef)> {
         let symbol = name.rsplit("::").next().unwrap_or(name);
-        self.symbol_tables.values().find_map(|table| table.functions.get(symbol).cloned())
+        self.symbol_tables
+            .iter()
+            .find_map(|(module, table)| table.functions.get(symbol).cloned().map(|function| (module.clone(), function)))
     }
 
     pub fn resolve_constant_global(&self, name: &str) -> Option<ConstantDef> {
@@ -257,6 +264,10 @@ impl ModuleResolver {
 
     pub fn imports_for_module(&self, module: &str) -> Vec<ImportItem> {
         self.imports.get(module).cloned().unwrap_or_default()
+    }
+
+    pub fn module(&self, module: &str) -> Option<&Module> {
+        self.modules.get(module)
     }
 
     pub fn type_is_linear(&self, module: &str, name: &str) -> bool {

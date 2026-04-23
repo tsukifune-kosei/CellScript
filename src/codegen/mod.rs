@@ -6802,15 +6802,14 @@ enum Instruction {
 }
 
 fn assemble_elf(lines: &[String]) -> Result<Vec<u8>> {
-    let stubbed_lines = assembly_with_external_call_stubs(lines);
-    let assembly = stubbed_lines.as_deref().unwrap_or(lines);
-    if let Some(external) = try_external_elf_toolchain(assembly)? {
+    reject_unresolved_calls(lines)?;
+    if let Some(external) = try_external_elf_toolchain(lines)? {
         return Ok(external);
     }
-    assemble_elf_internal(assembly)
+    assemble_elf_internal(lines)
 }
 
-fn assembly_with_external_call_stubs(lines: &[String]) -> Option<Vec<String>> {
+fn reject_unresolved_calls(lines: &[String]) -> Result<()> {
     let mut labels = BTreeSet::new();
     let mut calls = BTreeSet::new();
 
@@ -6832,20 +6831,13 @@ fn assembly_with_external_call_stubs(lines: &[String]) -> Option<Vec<String>> {
 
     let missing = calls.difference(&labels).cloned().collect::<Vec<_>>();
     if missing.is_empty() {
-        return None;
+        return Ok(());
     }
 
-    let mut stubbed = lines.to_vec();
-    stubbed.push(".section .text".to_string());
-    for label in missing {
-        stubbed.push(format!("# cellscript abi: unresolved call {} fail-closed stub", label));
-        stubbed.push(format!(".global {}", label));
-        stubbed.push(format!(".type {}, @function", label));
-        stubbed.push(format!("{}:", label));
-        stubbed.push("    addi a0, zero, 23".to_string());
-        stubbed.push("    ret".to_string());
-    }
-    Some(stubbed)
+    Err(CompileError::without_span(format!(
+        "unresolved call target(s) in generated assembly: {}; production ELF emission requires all call targets to be lowered",
+        missing.join(", ")
+    )))
 }
 
 fn assemble_elf_internal(lines: &[String]) -> Result<Vec<u8>> {
