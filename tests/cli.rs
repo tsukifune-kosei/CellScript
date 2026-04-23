@@ -39,6 +39,46 @@ action add(x: u64, y: u64) -> u64 {
     assert!(metadata.contains("\"source_units\""));
     assert!(metadata.contains("\"target_profile\""));
     assert!(metadata.contains("\"target_chain\""));
+    assert!(metadata.contains("\"constraints\""));
+    assert!(metadata.contains("\"entry_abi\""));
+    assert!(metadata.contains("\"artifact\""));
+}
+
+#[test]
+fn cellc_constraints_subcommand_emits_profile_constraints_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("sample.cell");
+    let output = dir.path().join("constraints.json");
+    let source = r#"
+module test
+
+action add(x: u64, y: u64) -> u64 {
+    x + y
+}
+"#;
+    std::fs::write(&input, source).unwrap();
+
+    let run = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .arg("constraints")
+        .arg(&input)
+        .arg("--target-profile")
+        .arg("spora")
+        .arg("--entry-action")
+        .arg("add")
+        .arg("--output")
+        .arg(&output)
+        .output()
+        .unwrap();
+
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let constraints: serde_json::Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+    assert_eq!(constraints["target_profile"], "spora");
+    assert_eq!(constraints["status"], "pass");
+    assert_eq!(constraints["entry_abi"][0]["entry_name"], "add");
+    assert_eq!(constraints["entry_abi"][0]["register_slots_used"], 2);
+    assert!(constraints["artifact"]["artifact_size_bytes"].as_u64().unwrap() > 0);
+    assert!(constraints["spora"]["estimated_storage_mass"].as_u64().unwrap() > 0);
+    assert!(constraints["ckb"].is_null());
 }
 
 #[test]
@@ -780,6 +820,10 @@ action ping() -> u64 {
     assert!(stdout["metadata"].as_str().unwrap().ends_with("build/main.s.meta.json"));
     assert!(stdout["artifact_hash_blake3"].as_str().unwrap().len() == 64);
     assert!(stdout["source_content_hash_blake3"].as_str().unwrap().len() == 64);
+    assert_eq!(stdout["constraints"]["target_profile"], "spora");
+    assert_eq!(stdout["constraints"]["status"], "pass");
+    assert!(stdout["constraints"]["artifact"]["artifact_size_bytes"].as_u64().unwrap() > 0);
+    assert!(stdout["constraints"]["spora"]["estimated_storage_mass"].as_u64().unwrap() > 0);
 }
 
 #[test]
@@ -1043,6 +1087,8 @@ action add(x: u64, y: u64) -> u64 {
     assert_eq!(checked_targets.len(), 1);
     assert_eq!(checked_targets[0]["target_profile"], "portable-cell");
     assert_eq!(checked_targets[0]["compiled_target_profile"], "spora");
+    assert_eq!(checked_targets[0]["constraints"]["target_profile"], "spora");
+    assert!(checked_targets[0]["constraints"]["artifact"]["artifact_size_bytes"].as_u64().unwrap() > 0);
 }
 
 #[test]
@@ -1227,7 +1273,7 @@ action value() -> u64 {
 }
 
 #[test]
-fn cellc_check_rejects_portable_profile_persistent_cell_types_without_molecule_schema() {
+fn cellc_check_accepts_portable_profile_dynamic_persistent_molecule_table_schema() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
 
@@ -1270,11 +1316,13 @@ action value() -> u64 {
         .output()
         .unwrap();
 
-    assert!(!output.status.success(), "unexpected success: {}", String::from_utf8_lossy(&output.stdout));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("target profile policy failed for 'portable-cell'"), "unexpected stderr: {}", stderr);
-    assert!(stderr.contains("generated Molecule schemas are required"), "unexpected stderr: {}", stderr);
-    assert!(stderr.contains("Bag (Resource)"), "unexpected stderr: {}", stderr);
+    assert!(
+        output.status.success(),
+        "dynamic persistent Molecule table schemas should be portable now: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Target profile: portable-cell"), "unexpected stdout: {}", stdout);
 }
 
 #[test]
@@ -1564,32 +1612,23 @@ action claim_vested(grant: VestingGrant) -> (Token, VestingGrant) {
     assert!(json_output.status.success(), "unexpected failure: {}", String::from_utf8_lossy(&json_output.stderr));
     let stdout: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
     let target = &stdout["checked_targets"][0];
-    assert!(target["runtime_required_transaction_invariants"].as_u64().unwrap() > 0, "unexpected stdout: {}", stdout);
-    assert_eq!(target["runtime_required_transaction_invariant_checked_subconditions"], 5, "unexpected stdout: {}", stdout);
-    assert_eq!(target["transaction_runtime_input_requirements"], 8, "unexpected stdout: {}", stdout);
-    assert_eq!(target["runtime_required_transaction_runtime_input_requirements"], 1, "unexpected stdout: {}", stdout);
+    assert_eq!(target["runtime_required_transaction_invariants"], 0, "unexpected stdout: {}", stdout);
+    assert_eq!(target["runtime_required_transaction_invariant_checked_subconditions"], 0, "unexpected stdout: {}", stdout);
+    assert_eq!(target["transaction_runtime_input_requirements"], 7, "unexpected stdout: {}", stdout);
+    assert_eq!(target["runtime_required_transaction_runtime_input_requirements"], 0, "unexpected stdout: {}", stdout);
     assert_eq!(target["checked_transaction_runtime_input_requirements"], 7, "unexpected stdout: {}", stdout);
-    assert_eq!(target["runtime_required_transaction_runtime_input_blockers"], 1, "unexpected stdout: {}", stdout);
-    assert_eq!(target["runtime_required_transaction_runtime_input_blocker_classes"], 1, "unexpected stdout: {}", stdout);
+    assert_eq!(target["runtime_required_transaction_runtime_input_blockers"], 0, "unexpected stdout: {}", stdout);
+    assert_eq!(target["runtime_required_transaction_runtime_input_blocker_classes"], 0, "unexpected stdout: {}", stdout);
     let summaries = target["runtime_required_transaction_invariant_checked_subcondition_summaries"]
         .as_array()
         .expect("transaction invariant summaries array");
-    assert!(
-        summaries.iter().any(|value| value.as_str().is_some_and(|summary| {
-            summary.contains("action:claim_vested:claim-conditions:VestingGrant")
-                && summary.contains("daa-cliff-reached")
-                && summary.contains("state-not-fully-claimed")
-                && summary.contains("positive-claimable")
-        })),
-        "unexpected transaction invariant summaries: {}",
-        stdout
-    );
+    assert!(summaries.is_empty(), "claim guards should be checked-runtime now: {}", stdout);
     let runtime_inputs =
         target["transaction_runtime_input_requirement_summaries"].as_array().expect("transaction runtime input summaries array");
     assert!(
         runtime_inputs.iter().any(|value| value.as_str().is_some_and(|summary| {
-            summary.contains("claim-conditions:VestingGrant:claim-witness-signature=Witness:VestingGrant.signature")
-                && summary.contains("claim-witness-signature-65[65]")
+            summary.contains("claim-conditions:VestingGrant:claim-input-lock-hash=Input:VestingGrant.lock_hash")
+                && summary.contains("claim-input-lock-hash-32[32]")
         })),
         "unexpected transaction runtime input summaries: {}",
         stdout
@@ -1643,8 +1682,8 @@ action claim_vested(grant: VestingGrant) -> (Token, VestingGrant) {
     );
     assert!(
         checked_runtime_inputs.iter().any(|value| value.as_str().is_some_and(|summary| {
-            summary.contains("claim-conditions:VestingGrant:claim-authorization-domain=Witness:VestingGrant.authorization-domain")
-                && summary.contains("claim-witness-authorization-domain")
+            summary.contains("claim-conditions:VestingGrant:claim-input-lock-hash=Input:VestingGrant.lock_hash")
+                && summary.contains("claim-input-lock-hash-32[32]")
                 && summary.contains("(checked-runtime)")
                 && !summary.contains("blocker=")
                 && !summary.contains("blocker_class=")
@@ -1655,74 +1694,23 @@ action claim_vested(grant: VestingGrant) -> (Token, VestingGrant) {
     let runtime_required_inputs = target["runtime_required_transaction_runtime_input_requirement_summaries"]
         .as_array()
         .expect("runtime-required transaction runtime input summaries array");
-    assert!(
-        runtime_required_inputs.iter().any(|value| value.as_str().is_some_and(|summary| {
-            summary.contains("claim-conditions:VestingGrant:claim-witness-signature=Witness:VestingGrant.signature")
-                && summary.contains("claim-witness-signature-65[65]")
-                && summary.contains("(runtime-required)")
-                && summary.contains(
-                    "blocker=claim lowering checks witness shape but has no verifier-coverable signer key binding or secp256k1 verification call"
-                )
-                && summary.contains("blocker_class=witness-verification-gap")
-        })),
-        "unexpected runtime-required transaction runtime input summaries: {}",
-        stdout
-    );
+    assert!(runtime_required_inputs.is_empty(), "claim input requirements should be checked-runtime now: {}", stdout);
     let runtime_input_blockers = target["runtime_required_transaction_runtime_input_blocker_summaries"]
         .as_array()
         .expect("runtime-required transaction runtime input blocker summaries array");
-    assert!(
-        runtime_input_blockers.iter().any(|value| value.as_str().is_some_and(|summary| {
-            summary.contains("claim-conditions:VestingGrant:claim-witness-signature")
-                && summary.contains(
-                    "blocker=claim lowering checks witness shape but has no verifier-coverable signer key binding or secp256k1 verification call"
-                )
-                && summary.contains("blocker_class=witness-verification-gap")
-        })),
-        "unexpected runtime-required transaction runtime input blocker summaries: {}",
-        stdout
-    );
+    assert!(runtime_input_blockers.is_empty(), "claim blockers should be checked-runtime now: {}", stdout);
     let runtime_input_blocker_classes = target["runtime_required_transaction_runtime_input_blocker_class_summaries"]
         .as_array()
         .expect("runtime-required transaction runtime input blocker class summaries array");
-    assert!(
-        runtime_input_blocker_classes.iter().any(|value| value.as_str().is_some_and(|summary| {
-            summary.contains("claim-conditions:VestingGrant:claim-witness-signature")
-                && summary.contains("blocker_class=witness-verification-gap")
-        })),
-        "unexpected runtime-required transaction runtime input blocker class summaries: {}",
-        stdout
-    );
+    assert!(runtime_input_blocker_classes.is_empty(), "claim blocker classes should be checked-runtime now: {}", stdout);
 
     let output =
         Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("check").arg("--deny-runtime-obligations").output().unwrap();
-    assert!(!output.status.success(), "unexpected success: {}", String::from_utf8_lossy(&output.stdout));
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("check policy failed"), "unexpected stderr: {}", stderr);
-    assert!(stderr.contains("runtime-required transaction invariants with checked subconditions"), "unexpected stderr: {}", stderr);
-    assert!(stderr.contains("runtime-required transaction runtime input requirements"), "unexpected stderr: {}", stderr);
-    assert!(stderr.contains("runtime-required transaction runtime input blockers"), "unexpected stderr: {}", stderr);
-    assert!(stderr.contains("runtime-required transaction runtime input blocker classes"), "unexpected stderr: {}", stderr);
-    assert!(stderr.contains("claim-conditions:VestingGrant"), "unexpected stderr: {}", stderr);
-    assert!(stderr.contains("claim-witness-signature"), "unexpected stderr: {}", stderr);
     assert!(
-        stderr.contains(
-            "claim lowering checks witness shape but has no verifier-coverable signer key binding or secp256k1 verification call"
-        ),
-        "unexpected stderr: {}",
-        stderr
+        output.status.success(),
+        "checked claim conditions should satisfy deny-runtime-obligations: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    assert!(stderr.contains("witness-verification-gap"), "unexpected stderr: {}", stderr);
-    assert!(
-        !stderr.contains("claim-authorization-domain=Witness"),
-        "checked authorization-domain runtime input should not be reported as runtime-required: {}",
-        stderr
-    );
-    assert!(!stderr.contains("authorization-domain-separation-gap"), "unexpected stderr: {}", stderr);
-    assert!(!stderr.contains("claim-time-context"), "checked runtime input should not be reported as runtime-required: {}", stderr);
-    assert!(stderr.contains("daa-cliff-reached"), "unexpected stderr: {}", stderr);
-    assert!(stderr.contains("positive-claimable"), "unexpected stderr: {}", stderr);
 }
 
 #[test]
@@ -2296,24 +2284,15 @@ action seed_pool(token_a: Token, token_b: Token, fee_rate_bps: u16, provider: Ad
 
     let output =
         Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("check").arg("--deny-runtime-obligations").output().unwrap();
-    assert!(!output.status.success(), "unexpected success: {}", String::from_utf8_lossy(&output.stdout));
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("check policy failed"), "unexpected stderr: {}", stderr);
-    assert!(stderr.contains("runtime-required verifier obligations"), "unexpected stderr: {}", stderr);
-    assert!(stderr.contains("pool-create:Pool"), "unexpected stderr: {}", stderr);
-    assert!(!stderr.contains("runtime-required Pool invariant families"), "unexpected stderr: {}", stderr);
-    assert!(!stderr.contains("runtime-required Pool runtime input requirements"), "unexpected stderr: {}", stderr);
-    assert!(!stderr.contains("token-pair-identity-admission=Input#0:token_a"), "unexpected stderr: {}", stderr);
-    assert!(!stderr.contains("token-input-type-id-abi"), "unexpected stderr: {}", stderr);
-    assert!(!stderr.contains("token-pair-symbol-admission"), "unexpected stderr: {}", stderr);
-    assert!(!stderr.contains("positive-reserve-admission"), "unexpected stderr: {}", stderr);
-    assert!(!stderr.contains("fee-policy"), "unexpected stderr: {}", stderr);
-    assert!(!stderr.contains("lp-supply-invariant"), "unexpected stderr: {}", stderr);
+    assert!(
+        output.status.success(),
+        "checked seed_pool identity should satisfy deny-runtime-obligations: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
-fn cellc_check_reports_runtime_required_pool_blocker_classes() {
+fn cellc_check_reports_checked_pool_invariant_families_without_runtime_blockers() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -2337,19 +2316,13 @@ version = "0.1.0"
     assert!(json_output.status.success(), "unexpected failure: {}", String::from_utf8_lossy(&json_output.stderr));
     let stdout: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
     let target = &stdout["checked_targets"][0];
-    assert!(target["runtime_required_pool_invariant_families"].as_u64().unwrap() > 0, "unexpected stdout: {}", stdout);
-    assert!(target["runtime_required_pool_invariant_blocker_classes"].as_u64().unwrap() > 0, "unexpected stdout: {}", stdout);
+    assert!(target["checked_pool_invariant_families"].as_u64().unwrap() > 0, "unexpected stdout: {}", stdout);
+    assert_eq!(target["runtime_required_pool_invariant_families"].as_u64().unwrap(), 0, "unexpected stdout: {}", stdout);
+    assert_eq!(target["runtime_required_pool_invariant_blocker_classes"].as_u64().unwrap(), 0, "unexpected stdout: {}", stdout);
     let blocker_classes = target["runtime_required_pool_invariant_blocker_class_summaries"]
         .as_array()
         .expect("runtime-required Pool invariant blocker class summaries array");
-    assert!(
-        blocker_classes.iter().any(|value| value.as_str().is_some_and(|summary| {
-            summary.contains("pool-mutation-invariants:Pool:pool-specific-admission")
-                && summary.contains("blocker_class=phase2-deferred-pool-admission")
-        })),
-        "unexpected Pool blocker class summaries: {}",
-        stdout
-    );
+    assert!(blocker_classes.is_empty(), "Pool invariant blockers should be checked-runtime now: {}", stdout);
     assert!(
         !blocker_classes.iter().any(|value| value
             .as_str()
@@ -2366,11 +2339,11 @@ version = "0.1.0"
 
     let output =
         Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("check").arg("--deny-runtime-obligations").output().unwrap();
-    assert!(!output.status.success(), "unexpected success: {}", String::from_utf8_lossy(&output.stdout));
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("runtime-required Pool invariant blocker classes"), "unexpected stderr: {}", stderr);
-    assert!(stderr.contains("phase2-deferred-pool-admission"), "unexpected stderr: {}", stderr);
+    assert!(
+        output.status.success(),
+        "checked AMM invariant coverage should satisfy deny-runtime-obligations: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

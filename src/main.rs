@@ -67,6 +67,7 @@ fn main() {
                     | "repl"
                     | "check"
                     | "metadata"
+                    | "constraints"
                     | "entry-witness"
                     | "verify-artifact"
                     | "run"

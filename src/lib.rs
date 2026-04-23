@@ -60,7 +60,7 @@ fn validate_compile_options(options: &CompileOptions) -> Result<()> {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "spora";
-pub const METADATA_SCHEMA_VERSION: u32 = 26;
+pub const METADATA_SCHEMA_VERSION: u32 = 27;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
 const METADATA_MUTATE_CELL_BUFFER_SIZE: usize = 512;
@@ -250,6 +250,8 @@ pub struct CompileMetadata {
     pub source_units: Vec<SourceUnitMetadata>,
     pub lowering: LoweringMetadata,
     pub runtime: RuntimeMetadata,
+    #[serde(default)]
+    pub constraints: ConstraintsMetadata,
     pub types: Vec<TypeMetadata>,
     pub actions: Vec<ActionMetadata>,
     pub functions: Vec<FunctionMetadata>,
@@ -257,6 +259,104 @@ pub struct CompileMetadata {
     /// Embedded DWARF debug section names (non-empty when debug mode is enabled for ELF artifacts)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub debug_info_sections: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ConstraintsMetadata {
+    pub target_profile: String,
+    pub status: String,
+    pub entry_abi: Vec<EntryAbiConstraintsMetadata>,
+    pub artifact: ArtifactConstraintsMetadata,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ckb: Option<CkbConstraintsMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spora: Option<SporaConstraintsMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failures: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EntryAbiConstraintsMetadata {
+    pub entry_kind: String,
+    pub entry_name: String,
+    pub param_count: usize,
+    pub abi_slots_used: usize,
+    pub register_slots_used: usize,
+    pub stack_spill_slots: usize,
+    pub stack_spill_bytes: usize,
+    pub witness_payload_bytes: usize,
+    pub min_witness_bytes: usize,
+    pub unsupported: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_reasons: Vec<String>,
+    pub params: Vec<ParamAbiConstraintsMetadata>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ParamAbiConstraintsMetadata {
+    pub name: String,
+    pub ty: String,
+    pub abi_kind: String,
+    pub abi_slots: usize,
+    pub slot_start: usize,
+    pub slot_end: usize,
+    pub register_slots: usize,
+    pub stack_spill_slots: usize,
+    pub stack_spill_bytes: usize,
+    pub witness_bytes: usize,
+    pub pointer_length_pair: bool,
+    pub pointer_pair_crosses_register_boundary: bool,
+    pub supported: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unsupported_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ArtifactConstraintsMetadata {
+    pub format: String,
+    pub artifact_size_bytes: usize,
+    pub text_bytes: Option<usize>,
+    pub rodata_bytes: Option<usize>,
+    pub relaxed_branch_count: Option<usize>,
+    pub max_cond_branch_abs_distance: Option<u64>,
+    pub machine_block_count: Option<usize>,
+    pub machine_cfg_edge_count: Option<usize>,
+    pub machine_call_edge_count: Option<usize>,
+    pub unreachable_machine_block_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CkbConstraintsMetadata {
+    pub limits_source: String,
+    pub max_tx_verify_cycles: u64,
+    pub max_block_cycles: u64,
+    pub max_block_bytes: u64,
+    pub estimated_cycles: Option<u64>,
+    pub measured_cycles: Option<u64>,
+    pub cycles_status: String,
+    pub min_code_cell_data_capacity_shannons: u64,
+    pub recommended_code_cell_capacity_shannons: u64,
+    pub min_witness_bytes: usize,
+    pub max_entry_witness_bytes: usize,
+    pub dry_run_required_for_production: bool,
+    pub tx_size_bytes: Option<usize>,
+    pub tx_size_status: String,
+    pub capacity_status: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SporaConstraintsMetadata {
+    pub limits_source: String,
+    pub estimated_compute_mass: u64,
+    pub estimated_storage_mass: u64,
+    pub estimated_transient_mass: u64,
+    pub estimated_code_deployment_mass: u64,
+    pub max_block_mass: u64,
+    pub requires_relaxed_mass_policy: bool,
+    pub mass_status: String,
+    pub estimator: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -649,6 +749,269 @@ fn is_canonical_blake3_hex(hash: &str) -> bool {
 fn bind_artifact_metadata(metadata: &mut CompileMetadata, artifact_bytes: &[u8], artifact_hash: &[u8; 32]) {
     metadata.artifact_hash_blake3 = Some(hex_encode(artifact_hash));
     metadata.artifact_size_bytes = Some(artifact_bytes.len());
+}
+
+const CKB_SHANNONS_PER_CKB: u64 = 100_000_000;
+const CKB_DEFAULT_MAX_TX_VERIFY_CYCLES: u64 = 70_000_000;
+const CKB_DEFAULT_MAX_BLOCK_CYCLES: u64 = 10_000_000_000;
+const CKB_DEFAULT_MAX_BLOCK_BYTES: u64 = 597_000;
+const SPORA_DEFAULT_MAX_BLOCK_MASS: u64 = 100_000_000;
+
+fn bind_constraints_metadata(
+    metadata: &mut CompileMetadata,
+    artifact_bytes: &[u8],
+    artifact_format: ArtifactFormat,
+    target_profile: TargetProfile,
+    ir: &ir::IrModule,
+    codegen_options: &codegen::CodegenOptions,
+) -> Result<()> {
+    let assembly_for_shape = if artifact_format == ArtifactFormat::RiscvAssembly {
+        std::str::from_utf8(artifact_bytes).ok().map(str::to_string)
+    } else {
+        codegen::generate(ir, codegen_options, ArtifactFormat::RiscvAssembly).ok().and_then(|bytes| String::from_utf8(bytes).ok())
+    };
+    let backend_shape = assembly_for_shape.as_deref().and_then(|assembly| codegen::analyze_backend_shape(assembly).ok());
+    metadata.constraints =
+        constraints_metadata(metadata, artifact_bytes.len(), artifact_format, target_profile, backend_shape.as_ref());
+    Ok(())
+}
+
+fn constraints_metadata(
+    metadata: &CompileMetadata,
+    artifact_size_bytes: usize,
+    artifact_format: ArtifactFormat,
+    target_profile: TargetProfile,
+    backend_shape: Option<&codegen::BackendShapeMetrics>,
+) -> ConstraintsMetadata {
+    let mut warnings = Vec::new();
+    let mut failures = Vec::new();
+    let mut entry_abi = Vec::new();
+    entry_abi.extend(metadata.actions.iter().map(|action| entry_abi_constraints("action", &action.name, &action.params)));
+    entry_abi.extend(metadata.locks.iter().map(|lock| entry_abi_constraints("lock", &lock.name, &lock.params)));
+    for entry in &entry_abi {
+        if entry.unsupported {
+            failures.push(format!(
+                "{} '{}' has unsupported entry ABI: {}",
+                entry.entry_kind,
+                entry.entry_name,
+                entry.unsupported_reasons.join("; ")
+            ));
+        }
+        for param in &entry.params {
+            if param.pointer_pair_crosses_register_boundary {
+                warnings.push(format!(
+                    "{} '{}' parameter '{}' pointer/length ABI pair crosses a0-a7 boundary at slots {}..{}",
+                    entry.entry_kind, entry.entry_name, param.name, param.slot_start, param.slot_end
+                ));
+            }
+        }
+    }
+
+    let artifact = ArtifactConstraintsMetadata {
+        format: artifact_format.display_name().to_string(),
+        artifact_size_bytes,
+        text_bytes: backend_shape.map(|shape| shape.text_size),
+        rodata_bytes: backend_shape.map(|shape| shape.rodata_size),
+        relaxed_branch_count: backend_shape.map(|shape| shape.relaxed_branch_count),
+        max_cond_branch_abs_distance: backend_shape.map(|shape| shape.max_cond_branch_abs_distance),
+        machine_block_count: backend_shape.map(|shape| shape.machine_block_count),
+        machine_cfg_edge_count: backend_shape.map(|shape| shape.machine_cfg_edge_count),
+        machine_call_edge_count: backend_shape.map(|shape| shape.machine_call_edge_count),
+        unreachable_machine_block_count: backend_shape.map(|shape| shape.unreachable_machine_block_count),
+    };
+    if backend_shape.is_none() {
+        warnings.push("backend shape metrics were not available for this artifact".to_string());
+    }
+
+    let max_entry_witness_bytes = entry_abi.iter().map(|entry| entry.min_witness_bytes).max().unwrap_or(0);
+    let estimated_cycles = metadata.actions.iter().map(|action| action.estimated_cycles).chain(metadata.locks.iter().map(|_| 0)).max();
+    let ckb = (target_profile == TargetProfile::Ckb).then(|| {
+        warnings.push(
+            "CKB cycles and transaction size are not measured by the compiler; require builder dry-run for production".to_string(),
+        );
+        ckb_constraints(artifact_size_bytes, max_entry_witness_bytes, estimated_cycles)
+    });
+    let spora = (target_profile == TargetProfile::Spora)
+        .then(|| spora_constraints(artifact_size_bytes, max_entry_witness_bytes, estimated_cycles));
+
+    let status = if !failures.is_empty() {
+        "fail"
+    } else if !warnings.is_empty() {
+        "warn"
+    } else {
+        "pass"
+    }
+    .to_string();
+
+    ConstraintsMetadata {
+        target_profile: metadata.target_profile.name.clone(),
+        status,
+        entry_abi,
+        artifact,
+        ckb,
+        spora,
+        warnings,
+        failures,
+    }
+}
+
+fn entry_abi_constraints(entry_kind: &str, entry_name: &str, params: &[ParamMetadata]) -> EntryAbiConstraintsMetadata {
+    let mut abi_index = 0usize;
+    let mut witness_payload_bytes = 0usize;
+    let mut unsupported_reasons = Vec::new();
+    let mut param_constraints = Vec::new();
+
+    for param in params {
+        let mut abi_slots = 0usize;
+        let mut witness_bytes = 0usize;
+        let mut abi_kind = "unsupported".to_string();
+        let mut supported = true;
+        let mut unsupported_reason = None;
+        let pointer_length_pair;
+
+        if param.schema_pointer_abi || param.schema_length_abi {
+            abi_kind = if param.type_hash_pointer_abi || param.type_hash_length_abi {
+                "schema-pointer+type-hash-pointer".to_string()
+            } else {
+                "schema-pointer".to_string()
+            };
+            abi_slots = 2 + usize::from(param.type_hash_pointer_abi || param.type_hash_length_abi) * 2;
+            pointer_length_pair = true;
+        } else if param.fixed_byte_pointer_abi || param.fixed_byte_length_abi {
+            abi_kind = "fixed-byte-pointer".to_string();
+            abi_slots = 2;
+            witness_bytes = param.fixed_byte_len.unwrap_or_default();
+            pointer_length_pair = true;
+        } else if let Some(width) = entry_witness_scalar_param_width(&param.ty) {
+            abi_kind = "scalar".to_string();
+            abi_slots = 1;
+            witness_bytes = width;
+            pointer_length_pair = false;
+        } else {
+            supported = false;
+            unsupported_reason = Some(format!("unsupported entry witness parameter type '{}'", param.ty));
+            unsupported_reasons.push(format!("parameter '{}': unsupported type '{}'", param.name, param.ty));
+            pointer_length_pair = false;
+        }
+
+        let slot_start = abi_index;
+        let slot_end = abi_index.saturating_add(abi_slots).saturating_sub(1);
+        let register_slots = (slot_start..slot_start + abi_slots).filter(|slot| *slot < 8).count();
+        let stack_spill_slots = abi_slots.saturating_sub(register_slots);
+        let pointer_pair_crosses_register_boundary = pointer_length_pair && slot_start < 8 && slot_start + abi_slots > 8;
+        witness_payload_bytes += witness_bytes;
+        param_constraints.push(ParamAbiConstraintsMetadata {
+            name: param.name.clone(),
+            ty: param.ty.clone(),
+            abi_kind,
+            abi_slots,
+            slot_start,
+            slot_end,
+            register_slots,
+            stack_spill_slots,
+            stack_spill_bytes: stack_spill_slots * 8,
+            witness_bytes,
+            pointer_length_pair,
+            pointer_pair_crosses_register_boundary,
+            supported,
+            unsupported_reason,
+        });
+        abi_index += abi_slots;
+    }
+
+    let register_slots_used = abi_index.min(8);
+    let stack_spill_slots = abi_index.saturating_sub(8);
+    EntryAbiConstraintsMetadata {
+        entry_kind: entry_kind.to_string(),
+        entry_name: entry_name.to_string(),
+        param_count: params.len(),
+        abi_slots_used: abi_index,
+        register_slots_used,
+        stack_spill_slots,
+        stack_spill_bytes: stack_spill_slots * 8,
+        witness_payload_bytes,
+        min_witness_bytes: ENTRY_WITNESS_ABI_MAGIC.len() + witness_payload_bytes,
+        unsupported: !unsupported_reasons.is_empty(),
+        unsupported_reasons,
+        params: param_constraints,
+    }
+}
+
+fn ckb_constraints(
+    artifact_size_bytes: usize,
+    max_entry_witness_bytes: usize,
+    estimated_cycles: Option<u64>,
+) -> CkbConstraintsMetadata {
+    let max_tx_verify_cycles = env_u64("CELLSCRIPT_CKB_MAX_TX_VERIFY_CYCLES").unwrap_or(CKB_DEFAULT_MAX_TX_VERIFY_CYCLES);
+    let max_block_cycles = env_u64("CELLSCRIPT_CKB_MAX_BLOCK_CYCLES").unwrap_or(CKB_DEFAULT_MAX_BLOCK_CYCLES);
+    let max_block_bytes = env_u64("CELLSCRIPT_CKB_MAX_BLOCK_BYTES").unwrap_or(CKB_DEFAULT_MAX_BLOCK_BYTES);
+    let min_code_cell_data_capacity_shannons = (artifact_size_bytes as u64 + 8) * CKB_SHANNONS_PER_CKB;
+    let recommended_code_cell_capacity_shannons = (artifact_size_bytes as u64 + 1_000) * CKB_SHANNONS_PER_CKB;
+    CkbConstraintsMetadata {
+        limits_source: ckb_limits_source(),
+        max_tx_verify_cycles,
+        max_block_cycles,
+        max_block_bytes,
+        estimated_cycles,
+        measured_cycles: None,
+        cycles_status: "not-measured-by-compiler".to_string(),
+        min_code_cell_data_capacity_shannons,
+        recommended_code_cell_capacity_shannons,
+        min_witness_bytes: ENTRY_WITNESS_ABI_MAGIC.len(),
+        max_entry_witness_bytes,
+        dry_run_required_for_production: true,
+        tx_size_bytes: None,
+        tx_size_status: "builder-required".to_string(),
+        capacity_status: "code-cell-data-lower-bound".to_string(),
+    }
+}
+
+fn spora_constraints(
+    artifact_size_bytes: usize,
+    max_entry_witness_bytes: usize,
+    estimated_cycles: Option<u64>,
+) -> SporaConstraintsMetadata {
+    let max_block_mass = env_u64("CELLSCRIPT_SPORA_MAX_BLOCK_MASS").unwrap_or(SPORA_DEFAULT_MAX_BLOCK_MASS);
+    let estimated_compute_mass = estimated_cycles.unwrap_or_default();
+    let estimated_storage_mass = artifact_size_bytes as u64;
+    let estimated_transient_mass = max_entry_witness_bytes as u64;
+    let estimated_code_deployment_mass = estimated_storage_mass + estimated_transient_mass;
+    SporaConstraintsMetadata {
+        limits_source: spora_limits_source(),
+        estimated_compute_mass,
+        estimated_storage_mass,
+        estimated_transient_mass,
+        estimated_code_deployment_mass,
+        max_block_mass,
+        requires_relaxed_mass_policy: estimated_compute_mass + estimated_storage_mass + estimated_transient_mass > max_block_mass,
+        mass_status: "compiler-estimate-requires-devnet-or-builder-confirmation".to_string(),
+        estimator: "v0: estimated_cycles + artifact bytes + max entry witness bytes".to_string(),
+    }
+}
+
+fn env_u64(name: &str) -> Option<u64> {
+    std::env::var(name).ok().and_then(|value| value.parse::<u64>().ok())
+}
+
+fn ckb_limits_source() -> String {
+    let overridden = ["CELLSCRIPT_CKB_MAX_TX_VERIFY_CYCLES", "CELLSCRIPT_CKB_MAX_BLOCK_CYCLES", "CELLSCRIPT_CKB_MAX_BLOCK_BYTES"]
+        .iter()
+        .filter(|name| std::env::var(name).is_ok())
+        .copied()
+        .collect::<Vec<_>>();
+    if overridden.is_empty() {
+        "builtin-ckb-defaults".to_string()
+    } else {
+        format!("environment:{}", overridden.join(","))
+    }
+}
+
+fn spora_limits_source() -> String {
+    if std::env::var("CELLSCRIPT_SPORA_MAX_BLOCK_MASS").is_ok() {
+        "environment:CELLSCRIPT_SPORA_MAX_BLOCK_MASS".to_string()
+    } else {
+        "builtin-spora-defaults".to_string()
+    }
 }
 
 /// Extract the span from an AST statement, for debug info line table generation.
@@ -1965,6 +2328,7 @@ fn compile_ast_with_build(
     }
     let artifact_hash = *blake3::hash(&artifact_bytes).as_bytes();
     bind_artifact_metadata(&mut metadata, &artifact_bytes, &artifact_hash);
+    bind_constraints_metadata(&mut metadata, &artifact_bytes, artifact_format, target_profile, &ir, &codegen_options)?;
 
     let result = CompileResult { artifact_bytes, artifact_format, artifact_hash, metadata, ast: ast.clone() };
     result.validate()?;
@@ -2463,6 +2827,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
             transaction_runtime_input_requirements,
             pool_primitives,
         },
+        constraints: ConstraintsMetadata::default(),
         types: {
             let mut types =
                 ir.external_type_defs.iter().map(|type_def| type_metadata(type_def, &type_defs, target_profile)).collect::<Vec<_>>();
