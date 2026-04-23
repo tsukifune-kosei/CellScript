@@ -48,6 +48,7 @@ jobs:
       - name: Run tests
         run: |
           mkdir -p "$(dirname "$CELLSCRIPT_BACKEND_SHAPE_REPORT")"
+          printf '{"status":"not-generated","reason":"test suite did not reach backend shape report generation"}\n' > "$CELLSCRIPT_BACKEND_SHAPE_REPORT"
           cargo test --locked --manifest-path Cargo.toml -- --test-threads=1
 
       - name: Upload backend shape report

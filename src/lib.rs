@@ -16793,9 +16793,10 @@ struct TokenSnapshot {
     }
 
     #[test]
-    fn compile_emits_elf_with_fail_closed_for_symbolic_cell_runtime_programs() {
-        // Collection operations and other operations without real verifier lowering
-        // now compile to ELF with fail-closed runtime traps instead of blocking emission.
+    fn compile_does_not_report_verified_collection_push_as_gap() {
+        // The scalar push itself is verifier-covered for this local Vec path.
+        // Collection construction/indexing still fail closed until their full
+        // local runtime representation is executable.
         let collection_program = r#"
 module test
 
@@ -16810,8 +16811,11 @@ action use_collection() -> u64 {
                 .unwrap();
         assert_eq!(result.artifact_format, ArtifactFormat::RiscvElf);
         assert!(result.artifact_bytes.starts_with(b"\x7fELF"));
-        // Collection push/extend are fail-closed at runtime
-        assert!(result.metadata.runtime.fail_closed_runtime_features.contains(&"collection-push".to_string()));
+        assert!(
+            !result.metadata.runtime.fail_closed_runtime_features.contains(&"collection-push".to_string()),
+            "verified collection push should not be reported as a fail-closed runtime feature: {:?}",
+            result.metadata.runtime.fail_closed_runtime_features
+        );
     }
 
     #[test]
@@ -18820,19 +18824,12 @@ resource Token has destroy {
     amount: u64,
 }
 
-resource Collection {
-    name: String,
-}
-
 action burn(token: Token) {
     destroy token
 }
 
-action unsupported_collection(name: String) -> Collection {
-    let collection = create Collection {
-        name: name,
-    };
-    collection
+action unsupported_daa() -> u64 {
+    return env::current_daa_score()
 }
 "#;
         let temp = tempdir().unwrap();
@@ -18842,7 +18839,7 @@ action unsupported_collection(name: String) -> Collection {
         let full = compile_file(&entry, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() })
             .unwrap_err()
             .to_string();
-        assert!(full.contains("Collection"), "full CKB compile should reject the unselected dynamic resource: {}", full);
+        assert!(full.contains("DAA/header assumptions are Spora-specific"), "full CKB compile should reject unselected DAA: {}", full);
 
         let scoped = compile_file_with_entry_action(
             &entry,
@@ -18857,7 +18854,7 @@ action unsupported_collection(name: String) -> Collection {
         assert_eq!(scoped.metadata.actions.len(), 1);
         assert_eq!(scoped.metadata.actions[0].name, "burn");
         assert!(scoped.metadata.types.iter().any(|ty| ty.name == "Token"));
-        assert!(!scoped.metadata.types.iter().any(|ty| ty.name == "Collection"));
+        assert!(!scoped.metadata.actions.iter().any(|action| action.name == "unsupported_daa"));
         assert!(scoped.artifact_bytes.starts_with(b"\x7fELF"));
         assert_eq!(scoped.metadata.target_profile.name, "ckb");
     }
@@ -19021,13 +19018,10 @@ lock asset_matches(locked_asset: &LockedAsset, expected: Hash) -> bool {
             "payload enum fields must not be represented as one-byte enum tags"
         );
 
-        let ckb_err = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() })
-            .unwrap_err()
-            .to_string();
+        let ckb = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() }).unwrap();
         assert!(
-            !ckb_err.contains("generated Molecule schemas are required"),
-            "CKB policy should not fail solely because payload enum table metadata is missing: {}",
-            ckb_err
+            ckb.metadata.types.iter().any(|ty| ty.name == "LockedAsset" && ty.molecule_schema.is_some()),
+            "CKB policy should accept payload enum table metadata"
         );
 
         let temp = tempdir().unwrap();
@@ -19178,7 +19172,7 @@ lock signer(wallet: &Wallet, addr: Address) -> bool {
     }
 
     #[test]
-    fn dynamic_mutable_schema_transitions_are_runtime_required_until_table_decoding_exists() {
+    fn dynamic_mutable_schema_transitions_are_checked_after_table_decoding() {
         let source = r#"
 module dynamic_mutation
 
@@ -19202,19 +19196,17 @@ action mint(collection: &mut Collection) {
         let action = result.metadata.actions.iter().find(|action| action.name == "mint").expect("mint metadata");
         let mutation = action.mutate_set.iter().find(|mutation| mutation.ty == "Collection").expect("mutation metadata");
 
-        assert_eq!(mutation.field_equality_status, "runtime-required");
-        assert_eq!(mutation.field_transition_status, "runtime-required");
+        assert_eq!(mutation.field_equality_status, "checked-runtime");
+        assert_eq!(mutation.field_transition_status, "checked-runtime");
         assert!(!action.fail_closed_runtime_features.contains(&"field-access".to_string()));
-        assert!(action.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "mutable-cell:Collection"
-                && requirement.component == "mutate-field-equality"
-                && requirement.status == "runtime-required"
-        }));
-        assert!(action.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "mutable-cell:Collection"
-                && requirement.component == "mutate-field-transition"
-                && requirement.status == "runtime-required"
-        }));
+        assert!(
+            !action.transaction_runtime_input_requirements.iter().any(|requirement| {
+                requirement.feature == "mutable-cell:Collection"
+                    && matches!(requirement.component.as_str(), "mutate-field-equality" | "mutate-field-transition")
+            }),
+            "checked mutable table transitions should not leave runtime input blockers: {:?}",
+            action.transaction_runtime_input_requirements
+        );
     }
 
     #[test]

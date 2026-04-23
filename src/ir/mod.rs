@@ -1484,7 +1484,9 @@ impl IrGenerator {
             IrOperand::Var(var) if var.ty == ty => var,
             IrOperand::Var(var) => {
                 let dest = self.new_var(name.to_string(), ty);
-                block.instructions.push(IrInstruction::Move { dest: dest.clone(), src: IrOperand::Var(var) });
+                let source = IrOperand::Var(var);
+                block.instructions.push(IrInstruction::Move { dest: dest.clone(), src: source.clone() });
+                self.copy_aggregate_metadata(&source, dest.id);
                 dest
             }
             IrOperand::Const(value) => {
@@ -1499,7 +1501,9 @@ impl IrGenerator {
         match operand {
             IrOperand::Var(var) => {
                 let dest = self.new_var(name.to_string(), var.ty.clone());
-                block.instructions.push(IrInstruction::Move { dest: dest.clone(), src: IrOperand::Var(var) });
+                let source = IrOperand::Var(var);
+                block.instructions.push(IrInstruction::Move { dest: dest.clone(), src: source.clone() });
+                self.copy_aggregate_metadata(&source, dest.id);
                 dest
             }
             IrOperand::Const(value) => {
