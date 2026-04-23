@@ -345,7 +345,6 @@ impl WasmCompiler {
                 _ => instrs.push(WasmInstr::I64Const(0)),
             },
             crate::ir::IrOperand::Var(v) => {
-                let _ = v; // Variable access needs local tracking; use placeholder
                 instrs.push(WasmInstr::LocalGet(v.id as u32));
             }
         }

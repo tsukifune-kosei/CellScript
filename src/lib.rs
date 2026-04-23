@@ -1467,9 +1467,8 @@ pub fn validate_compile_result(result: &CompileResult) -> Result<()> {
 pub fn validate_artifact_metadata(artifact_bytes: Vec<u8>, metadata: CompileMetadata) -> Result<CompileResult> {
     let artifact_format = ArtifactFormat::from_display_name(&metadata.artifact_format)?;
     let artifact_hash = *blake3::hash(&artifact_bytes).as_bytes();
-    // Rebuild minimal AST (validate_artifact_metadata doesn't need full AST)
-    let placeholder_source = format!("module {}", metadata.module);
-    let tokens = crate::lexer::lex(&placeholder_source)?;
+    let metadata_module_source = format!("module {}", metadata.module);
+    let tokens = crate::lexer::lex(&metadata_module_source)?;
     let ast = crate::parser::parse(&tokens)?;
     let result = CompileResult { artifact_bytes, artifact_format, artifact_hash, metadata, ast };
     result.validate()?;
