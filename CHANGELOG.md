@@ -11,6 +11,13 @@
 - Cleaned remaining clippy mechanical warnings and documented the intentional
   broad compiler-helper signature allowances so `cargo clippy --locked
   --all-targets -- -D warnings` is a release gate.
+- Removed the remaining placeholder artifact-validation surface by returning a
+  source-free `ValidatedArtifact` for metadata verification instead of building
+  a synthetic AST.
+- Removed the private legacy scheduler witness Borsh metadata/test helper and
+  kept scheduler witness metadata Molecule-only.
+- Marked Wasm report output as audit-only and excluded standalone docs from the
+  crates.io package contents.
 - Removed empty module doc comments and simplified duplicated verifier branches
   reported by clippy.
 - Clarified README CLI docs that `cellc test` is a compiler/policy harness, not

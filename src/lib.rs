@@ -225,6 +225,19 @@ pub struct CompileResult {
     pub ast: crate::ast::Module,
 }
 
+/// Validated artifact/metadata pair loaded from disk.
+#[derive(Debug, Clone)]
+pub struct ValidatedArtifact {
+    /// Artifact bytes read from disk
+    pub artifact_bytes: Vec<u8>,
+    /// Artifact format declared by metadata
+    pub artifact_format: ArtifactFormat,
+    /// Computed artifact hash
+    pub artifact_hash: [u8; 32],
+    /// Compile metadata bound to the artifact
+    pub metadata: CompileMetadata,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompileMetadata {
     pub metadata_schema_version: u32,
@@ -1458,13 +1471,10 @@ pub fn validate_compile_result(result: &CompileResult) -> Result<()> {
     Ok(())
 }
 
-pub fn validate_artifact_metadata(artifact_bytes: Vec<u8>, metadata: CompileMetadata) -> Result<CompileResult> {
+pub fn validate_artifact_metadata(artifact_bytes: Vec<u8>, metadata: CompileMetadata) -> Result<ValidatedArtifact> {
     let artifact_format = ArtifactFormat::from_display_name(&metadata.artifact_format)?;
     let artifact_hash = *blake3::hash(&artifact_bytes).as_bytes();
-    let metadata_module_source = format!("module {}", metadata.module);
-    let tokens = crate::lexer::lex(&metadata_module_source)?;
-    let ast = crate::parser::parse(&tokens)?;
-    let result = CompileResult { artifact_bytes, artifact_format, artifact_hash, metadata, ast };
+    let result = ValidatedArtifact { artifact_bytes, artifact_format, artifact_hash, metadata };
     result.validate()?;
     Ok(result)
 }
@@ -1640,8 +1650,6 @@ pub struct ActionMetadata {
     pub scheduler_witness_hex: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     scheduler_witness_molecule_hex: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    scheduler_witness_borsh_hex: String,
     pub consume_set: Vec<CellPatternMetadata>,
     pub read_refs: Vec<CellPatternMetadata>,
     pub create_set: Vec<CreatePatternMetadata>,
@@ -1672,11 +1680,8 @@ impl ActionMetadata {
     /// Transaction builders can pass the returned bytes to
     /// `CellTx::push_cellscript_compiled_scheduler_witness` and use the returned
     /// access summary as the trusted scheduler policy input. Public scheduler
-    /// witness bytes are Molecule-only; legacy Borsh metadata is migration-only.
+    /// witness bytes are Molecule-only.
     pub fn scheduler_witness_bytes(&self) -> Result<Vec<u8>> {
-        if !self.scheduler_witness_borsh_hex.is_empty() {
-            return Err(CompileError::without_span("legacy scheduler_witness_borsh_hex is not public scheduler witness metadata"));
-        }
         let scheduler_witness_hex = non_empty_metadata_field(&self.scheduler_witness_hex);
         let scheduler_witness_molecule_hex = non_empty_metadata_field(&self.scheduler_witness_molecule_hex);
         if let (Some(primary), Some(alias)) = (scheduler_witness_hex, scheduler_witness_molecule_hex) {
@@ -2125,6 +2130,37 @@ impl CompileResult {
             .map_err(|e| CompileError::new(format!("failed to serialize metadata: {}", e), error::Span::default()))?;
         std::fs::write(output_path, json)
             .map_err(|e| CompileError::new(format!("failed to write metadata '{}': {}", output_path, e), error::Span::default()))
+    }
+}
+
+impl ValidatedArtifact {
+    /// Validate that artifact bytes, hash, format, and metadata agree.
+    pub fn validate(&self) -> Result<()> {
+        validate_compile_metadata(&self.metadata, self.artifact_format)?;
+
+        if self.artifact_bytes.is_empty() {
+            return Err(CompileError::without_span("artifact bytes are empty"));
+        }
+
+        let computed_hash = *blake3::hash(&self.artifact_bytes).as_bytes();
+        if computed_hash != self.artifact_hash {
+            return Err(CompileError::without_span("artifact_hash does not match artifact_bytes"));
+        }
+        let computed_hash_hex = hex_encode(&computed_hash);
+        match &self.metadata.artifact_hash_blake3 {
+            Some(metadata_hash) if metadata_hash == &computed_hash_hex => {}
+            Some(metadata_hash) => {
+                return Err(CompileError::without_span(format!(
+                    "metadata artifact_hash_blake3 '{}' does not match artifact bytes '{}'",
+                    metadata_hash, computed_hash_hex
+                )));
+            }
+            None => {
+                return Err(CompileError::without_span("metadata is missing artifact_hash_blake3"));
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -2882,7 +2918,6 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         scheduler_witness_abi: SCHEDULER_WITNESS_ABI_MOLECULE.to_string(),
                         scheduler_witness_hex: scheduler_witness_molecule_hex.clone(),
                         scheduler_witness_molecule_hex: String::new(),
-                        scheduler_witness_borsh_hex: String::new(),
                         consume_set: action.body.consume_set.iter().map(cell_pattern_metadata).collect(),
                         read_refs: action.body.read_refs.iter().map(cell_pattern_metadata).collect(),
                         create_set: action
@@ -10649,8 +10684,8 @@ mod tests {
     use super::{
         compile, compile_file, compile_file_with_entry_action, compile_file_with_entry_lock, compile_path,
         decode_scheduler_witness_hex, default_output_path_for_input, encode_entry_witness_args_for_params, load_modules_for_input,
-        resolve_input_path, ActionMetadata, ArtifactFormat, CompileError, CompileOptions, EntryWitnessArg, Result,
-        ENTRY_WITNESS_ABI_MAGIC, SCHEDULER_WITNESS_ABI_MOLECULE,
+        resolve_input_path, ActionMetadata, ArtifactFormat, CompileOptions, EntryWitnessArg, ENTRY_WITNESS_ABI_MAGIC,
+        SCHEDULER_WITNESS_ABI_MOLECULE,
     };
     use crate::{ir, lexer, parser};
     use camino::{Utf8Path, Utf8PathBuf};
@@ -18337,8 +18372,6 @@ source_roots = ["src", "shared"]
         assert!(!action.scheduler_witness_hex.is_empty());
         assert!(!action.scheduler_witness_hex.starts_with("11ce"));
         assert!(action.scheduler_witness_molecule_hex.is_empty());
-        assert!(action.scheduler_witness_borsh_hex.is_empty());
-        assert!(decode_legacy_scheduler_witness_borsh_for_regression(action).is_err());
         assert_eq!(
             action.scheduler_witness_bytes().expect("scheduler witness hex should decode"),
             decode_scheduler_witness_hex(&action.scheduler_witness_hex).expect("scheduler witness hex should decode")
@@ -18407,13 +18440,9 @@ source_roots = ["src", "shared"]
         assert!(invalid.message.contains("invalid scheduler witness hex byte"));
     }
 
-    fn action_metadata_with_scheduler_fields(
-        scheduler_witness_hex: &str,
-        scheduler_witness_molecule_hex: &str,
-        scheduler_witness_borsh_hex: &str,
-    ) -> ActionMetadata {
+    fn action_metadata_with_scheduler_fields(scheduler_witness_hex: &str, scheduler_witness_molecule_hex: &str) -> ActionMetadata {
         ActionMetadata {
-            name: "legacy".to_string(),
+            name: "scheduler".to_string(),
             params: vec![],
             effect_class: "Pure".to_string(),
             parallelizable: false,
@@ -18422,7 +18451,6 @@ source_roots = ["src", "shared"]
             scheduler_witness_abi: SCHEDULER_WITNESS_ABI_MOLECULE.to_string(),
             scheduler_witness_hex: scheduler_witness_hex.to_string(),
             scheduler_witness_molecule_hex: scheduler_witness_molecule_hex.to_string(),
-            scheduler_witness_borsh_hex: scheduler_witness_borsh_hex.to_string(),
             consume_set: vec![],
             read_refs: vec![],
             create_set: vec![],
@@ -18440,35 +18468,9 @@ source_roots = ["src", "shared"]
         }
     }
 
-    fn decode_legacy_scheduler_witness_borsh_for_regression(action: &ActionMetadata) -> Result<Vec<u8>> {
-        if action.scheduler_witness_borsh_hex.is_empty() {
-            return Err(CompileError::without_span("legacy scheduler_witness_borsh_hex is not present in this metadata"));
-        }
-        decode_scheduler_witness_hex(&action.scheduler_witness_borsh_hex)
-    }
-
-    #[test]
-    fn action_scheduler_witness_bytes_rejects_legacy_borsh_default_path() {
-        let action = action_metadata_with_scheduler_fields("", "", "11ce01");
-
-        let public_error = action.scheduler_witness_bytes().unwrap_err();
-        assert!(public_error.message.contains("not public scheduler witness metadata"));
-        assert_eq!(decode_legacy_scheduler_witness_borsh_for_regression(&action).unwrap(), vec![0x11, 0xce, 0x01]);
-    }
-
-    #[test]
-    fn action_scheduler_witness_bytes_rejects_legacy_borsh_even_with_public_hex() {
-        let action = action_metadata_with_scheduler_fields("11ce01", "", "11ce01");
-
-        let public_error = action.scheduler_witness_bytes().unwrap_err();
-
-        assert!(public_error.message.contains("not public scheduler witness metadata"));
-        assert_eq!(decode_legacy_scheduler_witness_borsh_for_regression(&action).unwrap(), vec![0x11, 0xce, 0x01]);
-    }
-
     #[test]
     fn action_scheduler_witness_bytes_rejects_conflicting_molecule_alias() {
-        let action = action_metadata_with_scheduler_fields("11ce01", "11ce02", "");
+        let action = action_metadata_with_scheduler_fields("11ce01", "11ce02");
 
         let public_error = action.scheduler_witness_bytes().unwrap_err();
 

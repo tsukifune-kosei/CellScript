@@ -1,6 +1,6 @@
 //! Explicitly fail-closed WebAssembly target scaffolding.
 //! This module is intentionally compiled and tested even though Wasm is not a
-//! supported CellScript backend yet. Keeping the module in the build prevents a
+//! supported CellScript backend. Keeping the module in the build prevents a
 //! stale, hidden backend from drifting away from the current IR.
 
 use crate::error::{CompileError, Result};
@@ -15,14 +15,14 @@ pub struct WasmCompileReport {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WasmSupportStatus {
-    MetadataOnly,
+    AuditOnly,
     UnsupportedProgram,
 }
 
 /// Wasm target gate.
 ///
-/// It emits metadata-only modules for type-only IR and rejects executable
-/// CellScript entries until a real Wasm backend exists.
+/// It emits audit-only modules for type-only IR and rejects executable
+/// CellScript entries because CellScript has no production Wasm backend.
 pub struct WasmCompiler {
     module: WasmModule,
 }
@@ -178,7 +178,7 @@ impl WasmCompiler {
         self.module.customs.clear();
         self.module.customs.push(WasmCustom {
             name: "cellscript.wasm.status".to_string(),
-            data: if report.status == WasmSupportStatus::MetadataOnly { b"metadata-only".to_vec() } else { b"executable".to_vec() },
+            data: if report.status == WasmSupportStatus::AuditOnly { b"audit-only".to_vec() } else { b"executable".to_vec() },
         });
 
         Ok(self.module.clone())
@@ -367,7 +367,7 @@ pub fn audit_module(ir: &IrModule) -> WasmCompileReport {
 
     WasmCompileReport {
         module: ir.name.clone(),
-        status: if blockers.is_empty() { WasmSupportStatus::MetadataOnly } else { WasmSupportStatus::UnsupportedProgram },
+        status: if blockers.is_empty() { WasmSupportStatus::AuditOnly } else { WasmSupportStatus::UnsupportedProgram },
         blockers,
     }
 }
@@ -562,7 +562,7 @@ mod tests {
             enum_fixed_sizes: Default::default(),
         };
         let report = audit_module(&ir);
-        assert_eq!(report.status, WasmSupportStatus::MetadataOnly);
+        assert_eq!(report.status, WasmSupportStatus::AuditOnly);
         assert!(report.blockers.is_empty());
     }
 

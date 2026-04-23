@@ -29,7 +29,6 @@ action add(x: u64, y: u64) -> u64 {
     assert!(metadata.contains("\"scheduler_witness_abi\""));
     assert!(metadata.contains("\"scheduler_witness_hex\""));
     assert!(!metadata.contains("\"scheduler_witness_molecule_hex\""));
-    assert!(!metadata.contains("\"scheduler_witness_borsh_hex\""));
     assert!(metadata.contains("\"metadata_schema_version\""));
     assert!(metadata.contains("\"compiler_version\""));
     assert!(metadata.contains("\"artifact_hash_blake3\""));
@@ -805,7 +804,6 @@ action ping() -> u64 {
     assert!(metadata.contains("\"scheduler_witness_abi\""));
     assert!(metadata.contains("\"scheduler_witness_hex\""));
     assert!(!metadata.contains("\"scheduler_witness_molecule_hex\""));
-    assert!(!metadata.contains("\"scheduler_witness_borsh_hex\""));
 
     let output = Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("build").arg("--json").output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
