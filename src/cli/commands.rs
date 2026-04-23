@@ -339,12 +339,10 @@ impl CommandExecutor {
         } else {
             None
         };
-        if args.doc {
-            if !args.json {
-                println!("{}", "Documentation generated".green());
-                if let Some(output) = &doc_output {
-                    println!("  Output: {}", output.display());
-                }
+        if args.doc && !args.json {
+            println!("{}", "Documentation generated".green());
+            if let Some(output) = &doc_output {
+                println!("  Output: {}", output.display());
             }
         }
 
@@ -1340,7 +1338,7 @@ impl CommandExecutor {
 
         if let Some(git_url) = &args.git {
             let crate_name = args.crate_name.clone().unwrap_or_else(|| {
-                git_url.trim_end_matches('/').trim_end_matches(".git").split('/').last().unwrap_or("unknown").to_string()
+                git_url.trim_end_matches('/').trim_end_matches(".git").split('/').next_back().unwrap_or("unknown").to_string()
             });
 
             let dep = DetailedDependency {
@@ -3256,7 +3254,6 @@ impl CliParser {
                 git: m.get_one::<String>("git").cloned(),
                 path: m.get_one::<String>("path").map(PathBuf::from),
                 json: m.get_flag("json"),
-                ..Default::default()
             }),
             Some(("remove", m)) => Command::Remove(RemoveArgs {
                 crates: m.get_many::<String>("crates").map(|v| v.cloned().collect()).unwrap_or_default(),

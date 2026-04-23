@@ -445,6 +445,12 @@ pub struct DependencyGraph {
     edges: HashMap<String, Vec<String>>,
 }
 
+impl Default for DependencyGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DependencyGraph {
     pub fn new() -> Self {
         Self { nodes: Vec::new(), edges: HashMap::new() }
@@ -696,12 +702,12 @@ pub mod version {
             return Ok(VersionReq::Any);
         }
 
-        if req.starts_with('^') {
-            return Ok(VersionReq::Compatible(req[1..].to_string()));
+        if let Some(stripped) = req.strip_prefix('^') {
+            return Ok(VersionReq::Compatible(stripped.to_string()));
         }
 
-        if req.starts_with('=') {
-            return Ok(VersionReq::Exact(req[1..].to_string()));
+        if let Some(stripped) = req.strip_prefix('=') {
+            return Ok(VersionReq::Exact(stripped.to_string()));
         }
 
         if req.contains(',') || req.contains('>') || req.contains('<') {

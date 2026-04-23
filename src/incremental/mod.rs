@@ -222,6 +222,12 @@ pub struct CacheStats {
     pub total_size: u64,
 }
 
+impl Default for ChangeDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ChangeDetector {
     pub fn new() -> Self {
         Self { snapshots: HashMap::new() }

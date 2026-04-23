@@ -85,6 +85,12 @@ pub struct LifecycleInfo {
     pub final_states: Vec<String>,
 }
 
+impl Default for LifecycleChecker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LifecycleChecker {
     pub fn new() -> Self {
         Self { states: HashMap::new(), transitions: HashMap::new() }

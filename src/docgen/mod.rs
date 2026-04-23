@@ -9,17 +9,12 @@ use crate::{
 use serde::Serialize;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OutputFormat {
+    #[default]
     Html,
     Markdown,
     Json,
-}
-
-impl Default for OutputFormat {
-    fn default() -> Self {
-        Self::Html
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]

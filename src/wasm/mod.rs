@@ -309,12 +309,11 @@ impl WasmCompiler {
 
         for block in &function.body.blocks {
             for instr in &block.instructions {
-                match instr {
-                    crate::ir::IrInstruction::LoadConst { dest: _, value } => match value {
+                if let crate::ir::IrInstruction::LoadConst { dest: _, value } = instr {
+                    match value {
                         crate::ir::IrConst::U64(n) => body_instrs.push(WasmInstr::I64Const(*n as i64)),
                         _ => body_instrs.push(WasmInstr::I64Const(0)),
-                    },
-                    _ => {}
+                    }
                 }
             }
             if let crate::ir::IrTerminator::Return(value) = &block.terminator {

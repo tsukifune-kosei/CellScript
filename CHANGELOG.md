@@ -8,6 +8,9 @@
   ELF feature surface.
 - Reduced crates.io package contents by excluding GitHub workflow, wiki, and
   VS Code extension packaging files.
+- Cleaned remaining clippy mechanical warnings and documented the intentional
+  broad compiler-helper signature allowances so `cargo clippy --locked
+  --all-targets -- -D warnings` is a release gate.
 - Removed empty module doc comments and simplified duplicated verifier branches
   reported by clippy.
 - Clarified README CLI docs that `cellc test` is a compiler/policy harness, not

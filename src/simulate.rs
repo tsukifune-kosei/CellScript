@@ -163,7 +163,7 @@ impl SimulateInterpreter {
 
     pub fn simulate_action(&mut self, name: &str, args: &[SimValue]) -> Result<SimulateResult, SimulateError> {
         let key = format!("action::{}", name);
-        let (params, body) = self.functions.get(&key).cloned().ok_or_else(|| SimulateError::UndefinedFunction { name: key })?;
+        let (params, body) = self.functions.get(&key).cloned().ok_or(SimulateError::UndefinedFunction { name: key })?;
 
         for (param, arg) in params.iter().zip(args.iter()) {
             self.env.insert(param.name.clone(), arg.clone());

@@ -773,14 +773,14 @@ impl IrGenerator {
     }
 
     fn effect_covers(&self, declared: EffectClass, inferred: EffectClass) -> bool {
-        match (declared, inferred) {
-            (EffectClass::Pure, EffectClass::Pure) => true,
-            (EffectClass::ReadOnly, EffectClass::Pure | EffectClass::ReadOnly) => true,
-            (EffectClass::Creating, EffectClass::Pure | EffectClass::ReadOnly | EffectClass::Creating) => true,
-            (EffectClass::Destroying, EffectClass::Pure | EffectClass::ReadOnly | EffectClass::Destroying) => true,
-            (EffectClass::Mutating, _) => true,
-            _ => false,
-        }
+        matches!(
+            (declared, inferred),
+            (EffectClass::Pure, EffectClass::Pure)
+                | (EffectClass::ReadOnly, EffectClass::Pure | EffectClass::ReadOnly)
+                | (EffectClass::Creating, EffectClass::Pure | EffectClass::ReadOnly | EffectClass::Creating)
+                | (EffectClass::Destroying, EffectClass::Pure | EffectClass::ReadOnly | EffectClass::Destroying)
+                | (EffectClass::Mutating, _)
+        )
     }
 
     fn check_stmt_effects(&self, stmt: &Stmt, footprint: &mut EffectFootprint) {
@@ -1335,9 +1335,7 @@ impl IrGenerator {
                     return self.lower_if_stmt(if_stmt, current, blocks, vars, true);
                 }
             }
-            let Some(next) = self.lower_stmt(stmt, current, blocks, vars) else {
-                return None;
-            };
+            let next = self.lower_stmt(stmt, current, blocks, vars)?;
             current = next;
         }
 

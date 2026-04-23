@@ -13,6 +13,12 @@ pub struct Repl {
     show_asm: bool,
 }
 
+impl Default for Repl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Repl {
     pub fn new() -> Self {
         Self { history: Vec::new(), context: String::new(), show_ir: false, show_asm: false }

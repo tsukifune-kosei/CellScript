@@ -47,6 +47,12 @@ pub struct ImportItem {
     pub span: Span,
 }
 
+impl Default for ModuleResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ModuleResolver {
     pub fn new() -> Self {
         Self { modules: HashMap::new(), symbol_tables: HashMap::new(), imports: HashMap::new() }
@@ -298,7 +304,7 @@ impl ModuleResolver {
     }
 
     pub fn check_circular_deps(&self) -> Result<()> {
-        for (_module_name, imports) in &self.imports {
+        for imports in self.imports.values() {
             for import in imports {
                 let target_module = import.module_path.join("::");
                 if !self.modules.contains_key(&target_module) && !target_module.starts_with("spora::") {

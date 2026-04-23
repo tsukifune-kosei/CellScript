@@ -560,15 +560,9 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::LParen)?;
 
         let mut states = Vec::new();
-        loop {
-            match &self.current().kind {
-                TokenKind::Identifier(n) => {
-                    states.push(n.clone());
-                    self.advance();
-                }
-                _ => break,
-            }
-
+        while let TokenKind::Identifier(n) = &self.current().kind {
+            states.push(n.clone());
+            self.advance();
             if self.check(&TokenKind::Arrow) {
                 self.advance();
             } else {

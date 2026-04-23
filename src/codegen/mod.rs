@@ -606,11 +606,8 @@ impl CodeGenerator {
         }
 
         for item in &ir.items {
-            match item {
-                IrItem::Action(action) => {
-                    self.generate_action(action)?;
-                }
-                _ => {}
+            if let IrItem::Action(action) = item {
+                self.generate_action(action)?;
             }
         }
         for item in &ir.items {
@@ -1926,7 +1923,7 @@ impl CodeGenerator {
 
     /// Emit `addi rd, rs1, imm` handling immediates that don't fit in 12 bits.
     fn emit_large_addi(&mut self, rd: &str, rs1: &str, imm: i64) {
-        if imm >= -2048 && imm <= 2047 {
+        if (-2048..=2047).contains(&imm) {
             self.emit(format!("addi {}, {}, {}", rd, rs1, imm));
         } else {
             self.emit(format!("li t6, {}", imm));
@@ -2669,7 +2666,7 @@ impl CodeGenerator {
     }
 
     fn emit_pool_seed_token_pair_identity_check(&mut self, body: &IrBody) {
-        if !self.current_function.as_deref().is_some_and(|name| name == "seed_pool") {
+        if self.current_function.as_deref().is_none_or(|name| name != "seed_pool") {
             return;
         }
         if !body.create_set.iter().any(|pattern| pattern.operation == "create" && pattern.ty == "Pool") {
@@ -2820,7 +2817,7 @@ impl CodeGenerator {
         let mut ranges = Vec::new();
         for transition in &pattern.transitions {
             let layout = self.type_layouts.get(&pattern.ty).and_then(|fields| fields.get(&transition.field))?;
-            let width = layout_fixed_byte_width(&layout)?;
+            let width = layout_fixed_byte_width(layout)?;
             if layout.offset + width > RUNTIME_SCRATCH_BUFFER_SIZE {
                 return None;
             }
@@ -3446,9 +3443,7 @@ impl CodeGenerator {
                     return None;
                 }
                 // u128 transition: the operand must be a u64 value (delta always fits in 64 bits).
-                if self.prelude_u64_operand_source(&transition.operand).is_none() {
-                    return None;
-                }
+                self.prelude_u64_operand_source(&transition.operand)?;
                 Some((transition.clone(), layout))
             })
             .collect()
@@ -3473,9 +3468,7 @@ impl CodeGenerator {
                 if layout.offset + width > RUNTIME_SCRATCH_BUFFER_SIZE {
                     return None;
                 }
-                if self.prelude_u64_operand_source(&transition.operand).is_none() {
-                    return None;
-                }
+                self.prelude_u64_operand_source(&transition.operand)?;
                 Some((transition.clone(), layout, width))
             })
             .collect()
@@ -3872,7 +3865,7 @@ impl CodeGenerator {
         expected: &IrOperand,
         context: &str,
     ) {
-        let Some(width) = layout_fixed_scalar_width(&layout) else {
+        let Some(width) = layout_fixed_scalar_width(layout) else {
             return;
         };
         self.emit_loaded_schema_bounds_check(size_offset, layout.offset + width, context);
@@ -3983,11 +3976,11 @@ impl CodeGenerator {
         expected: &IrOperand,
         context: &str,
     ) -> bool {
-        if layout_fixed_scalar_width(&layout).is_some() {
+        if layout_fixed_scalar_width(layout).is_some() {
             self.emit_loaded_field_equals_expected(size_offset, buffer_offset, layout, expected, context);
             return true;
         }
-        let Some(width) = layout_fixed_byte_width(&layout) else {
+        let Some(width) = layout_fixed_byte_width(layout) else {
             return false;
         };
         let Some(source) = self.expected_fixed_byte_source(expected, width) else {
@@ -4257,11 +4250,9 @@ impl CodeGenerator {
                 {
                     return Some(ExpectedFixedByteSource::StackSlot { var_id: var.id, width: expected_width });
                 }
-                if self.param_vars.contains(&var.id) {
-                    if var_width == expected_width {
-                        if let Some(size_offset) = self.fixed_byte_param_size_offsets.get(&var.id).copied() {
-                            return Some(ExpectedFixedByteSource::ParamBytes { var_id: var.id, size_offset, width: expected_width });
-                        }
+                if self.param_vars.contains(&var.id) && var_width == expected_width {
+                    if let Some(size_offset) = self.fixed_byte_param_size_offsets.get(&var.id).copied() {
+                        return Some(ExpectedFixedByteSource::ParamBytes { var_id: var.id, size_offset, width: expected_width });
                     }
                 }
                 if let Some(size_offset) = self.cell_buffer_size_offsets.get(&var.id).copied() {
@@ -4392,7 +4383,7 @@ impl CodeGenerator {
                 }
             }
             _ => {
-                self.emit(format!("# cellscript abi: cannot store unknown const type to scratch"));
+                self.emit("# cellscript abi: cannot store unknown const type to scratch".to_string());
             }
         }
     }
@@ -4566,10 +4557,10 @@ impl CodeGenerator {
         }
         pattern.fields.iter().all(|(field, value)| {
             layouts.get(field).is_some_and(|layout| {
-                if let Some(width) = layout_fixed_byte_width(&layout) {
+                if let Some(width) = layout_fixed_byte_width(layout) {
                     self.is_prelude_available_fixed_value(value, width)
                 } else {
-                    self.can_verify_dynamic_create_output_field_value(value, &layout)
+                    self.can_verify_dynamic_create_output_field_value(value, layout)
                 }
             })
         })
@@ -8166,7 +8157,7 @@ fn parse_immediate(value: &str) -> Result<i64> {
     value.parse::<i64>().map_err(|_| CompileError::new(format!("invalid immediate '{}'", value), crate::error::Span::default()))
 }
 
-fn arg<'a>(args: &'a [String], index: usize) -> Result<&'a str> {
+fn arg(args: &[String], index: usize) -> Result<&str> {
     args.get(index)
         .map(|value| value.as_str())
         .ok_or_else(|| CompileError::new("malformed assembly instruction", crate::error::Span::default()))

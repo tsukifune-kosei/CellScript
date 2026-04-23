@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use camino::Utf8PathBuf;
 use cellscript::{
     codegen::{analyze_backend_shape, BackendShapeMetrics},

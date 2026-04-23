@@ -130,6 +130,12 @@ pub struct Hover {
     pub range: Option<Range>,
 }
 
+impl Default for LspServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LspServer {
     pub fn new() -> Self {
         Self { documents: HashMap::new(), ast_cache: HashMap::new(), diagnostics: HashMap::new() }
@@ -554,7 +560,6 @@ impl LspServer {
         self.format_document(uri)
     }
 
-    ///
     pub fn signature_help(&self, uri: &str, position: Position) -> Option<SignatureHelp> {
         let content = self.documents.get(uri)?;
         let offset = position_to_offset(content, position)?;
@@ -566,7 +571,6 @@ impl LspServer {
         Some(SignatureHelp { signatures: vec![signature_info], active_signature: Some(0), active_parameter: Some(active_param) })
     }
 
-    ///
     pub fn document_highlight(&self, uri: &str, position: Position) -> Vec<DocumentHighlight> {
         let Some(symbol) = self.symbol_at_position(uri, position) else {
             return Vec::new();
@@ -586,7 +590,6 @@ impl LspServer {
         highlights
     }
 
-    ///
     pub fn folding_range(&self, uri: &str) -> Vec<FoldingRange> {
         let Some(ast) = self.ast_cache.get(uri) else {
             return Vec::new();
@@ -646,7 +649,6 @@ impl LspServer {
         ranges
     }
 
-    ///
     pub fn selection_range(&self, uri: &str, position: Position) -> Option<SelectionRange> {
         let content = self.documents.get(uri)?;
         let ast = self.ast_cache.get(uri)?;
@@ -744,7 +746,7 @@ impl LspServer {
                             documentation: None,
                         })
                         .collect();
-                    let return_type = a.return_type.as_ref().map(|t| type_to_string(t)).unwrap_or_default();
+                    let return_type = a.return_type.as_ref().map(type_to_string).unwrap_or_default();
                     let label = format!(
                         "action {}({}) -> {}",
                         a.name,
@@ -769,7 +771,7 @@ impl LspServer {
                             documentation: None,
                         })
                         .collect();
-                    let return_type = f.return_type.as_ref().map(|t| type_to_string(t)).unwrap_or_default();
+                    let return_type = f.return_type.as_ref().map(type_to_string).unwrap_or_default();
                     let label = format!(
                         "fn {}({}) -> {}",
                         f.name,

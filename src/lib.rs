@@ -1,6 +1,8 @@
 //! CellScript - Domain-specific language compiler for Spora blockchain
 //! Currently the backend can output RISC-V assembly or ELF artifacts.
 
+#![allow(clippy::ptr_arg, clippy::too_many_arguments)]
+
 pub mod ast;
 pub mod cli;
 pub mod codegen;
@@ -30,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// Compile options
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CompileOptions {
     /// Optimization level (0-3)
     pub opt_level: u8,
@@ -42,12 +44,6 @@ pub struct CompileOptions {
     pub target: Option<String>,
     /// Target chain/profile. spora and ckb can produce artifacts; portable-cell is a source compatibility check profile.
     pub target_profile: Option<String>,
-}
-
-impl Default for CompileOptions {
-    fn default() -> Self {
-        Self { opt_level: 0, output: None, debug: false, target: None, target_profile: None }
-    }
 }
 
 fn validate_compile_options(options: &CompileOptions) -> Result<()> {
@@ -512,16 +508,14 @@ pub fn validate_compile_metadata(metadata: &CompileMetadata, artifact_format: Ar
         )));
     }
 
-    if metadata.runtime.standalone_runner_compatible {
-        if metadata.runtime.ckb_runtime_required {
-            return Err(CompileError::without_span(
-                "metadata marks artifact as standalone-compatible while CKB runtime features are required",
-            ));
-        }
-        // No operations are purely symbolic anymore; fail-closed features are
-        // acceptable for standalone compatibility (they halt with specific
-        // error codes rather than producing wrong results).
+    if metadata.runtime.standalone_runner_compatible && metadata.runtime.ckb_runtime_required {
+        return Err(CompileError::without_span(
+            "metadata marks artifact as standalone-compatible while CKB runtime features are required",
+        ));
     }
+    // No operations are purely symbolic anymore; fail-closed features are
+    // acceptable for standalone compatibility (they halt with specific
+    // error codes rather than producing wrong results).
 
     validate_type_identity_metadata(metadata)?;
     validate_ckb_type_id_output_metadata(metadata)?;
@@ -997,13 +991,13 @@ fn spora_limits_source() -> String {
 /// Extract the span from an AST statement, for debug info line table generation.
 fn stmt_span(stmt: &ast::Stmt) -> error::Span {
     match stmt {
-        ast::Stmt::Let(let_stmt) => let_stmt.span.clone(),
+        ast::Stmt::Let(let_stmt) => let_stmt.span,
         ast::Stmt::Expr(expr) => expr_span(expr),
         ast::Stmt::Return(Some(expr)) => expr_span(expr),
         ast::Stmt::Return(None) => error::Span::default(),
-        ast::Stmt::If(if_stmt) => if_stmt.span.clone(),
-        ast::Stmt::For(for_stmt) => for_stmt.span.clone(),
-        ast::Stmt::While(while_stmt) => while_stmt.span.clone(),
+        ast::Stmt::If(if_stmt) => if_stmt.span,
+        ast::Stmt::For(for_stmt) => for_stmt.span,
+        ast::Stmt::While(while_stmt) => while_stmt.span,
     }
 }
 
@@ -2263,7 +2257,7 @@ fn compile_ast_with_build(
     };
     let ir = scoped_ir.as_ref().unwrap_or(&ir);
 
-    let mut metadata = compile_metadata_from_ir(&ir, artifact_format, target_profile);
+    let mut metadata = compile_metadata_from_ir(ir, artifact_format, target_profile);
     let target_policy_violations = target_profile_artifact_policy_violations(&metadata, target_profile);
     if !target_policy_violations.is_empty() {
         return Err(CompileError::without_span(format!(
@@ -2275,7 +2269,7 @@ fn compile_ast_with_build(
 
     // 5. Code generation
     let codegen_options = codegen::CodegenOptions { opt_level: options.opt_level, debug: options.debug, target_profile };
-    let mut artifact_bytes = codegen::generate(&ir, &codegen_options, artifact_format)?;
+    let mut artifact_bytes = codegen::generate(ir, &codegen_options, artifact_format)?;
     if artifact_bytes.is_empty() {
         return Err(CompileError::new("backend produced an empty artifact", error::Span::default()));
     }
@@ -2306,7 +2300,7 @@ fn compile_ast_with_build(
     }
     let artifact_hash = *blake3::hash(&artifact_bytes).as_bytes();
     bind_artifact_metadata(&mut metadata, &artifact_bytes, &artifact_hash);
-    bind_constraints_metadata(&mut metadata, &artifact_bytes, artifact_format, target_profile, &ir, &codegen_options)?;
+    bind_constraints_metadata(&mut metadata, &artifact_bytes, artifact_format, target_profile, ir, &codegen_options)?;
 
     let result = CompileResult { artifact_bytes, artifact_format, artifact_hash, metadata, ast: ast.clone() };
     result.validate()?;
@@ -2883,7 +2877,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         params: param_metadata_for_body(&action.params, &action.body),
                         effect_class: scheduler_effect_class,
                         parallelizable: action.scheduler_hints.parallelizable,
-                        touches_shared: action.scheduler_hints.touches_shared.iter().map(|hash| hex_hash(hash)).collect(),
+                        touches_shared: action.scheduler_hints.touches_shared.iter().map(hex_hash).collect(),
                         estimated_cycles: action.scheduler_hints.estimated_cycles,
                         scheduler_witness_abi: SCHEDULER_WITNESS_ABI_MOLECULE.to_string(),
                         scheduler_witness_hex: scheduler_witness_molecule_hex.clone(),
@@ -4479,14 +4473,14 @@ fn resource_conservation_has_single_u64_amount_field(type_layouts: &MetadataType
     if layouts.len() != 1 {
         return false;
     }
-    layouts.get("amount").is_some_and(|layout| layout.ty == ir::IrType::U64 && metadata_layout_fixed_scalar_width(&layout) == Some(8))
+    layouts.get("amount").is_some_and(|layout| layout.ty == ir::IrType::U64 && metadata_layout_fixed_scalar_width(layout) == Some(8))
 }
 
 fn resource_conservation_has_u64_amount_field(type_layouts: &MetadataTypeLayouts, type_name: &str) -> bool {
     type_layouts
         .get(type_name)
         .and_then(|layouts| layouts.get("amount"))
-        .is_some_and(|layout| layout.ty == ir::IrType::U64 && metadata_layout_fixed_scalar_width(&layout) == Some(8))
+        .is_some_and(|layout| layout.ty == ir::IrType::U64 && metadata_layout_fixed_scalar_width(layout) == Some(8))
 }
 
 fn resource_conservation_created_identity_fields_are_checked(
@@ -4790,7 +4784,7 @@ fn claim_source_predicates_are_checked(name: &str, type_name: &str, body: &ir::I
     if checked_guards.is_empty() {
         return false;
     }
-    if uses_daa && !checked_guards.iter().any(|guard| *guard == "daa-cliff-reached") {
+    if uses_daa && !checked_guards.contains(&"daa-cliff-reached") {
         return false;
     }
     if source_invariant_count > checked_guards.len() {
@@ -4815,9 +4809,7 @@ fn receipt_claim_flow_checked_condition_guards(
         let mut guards = vec!["daa-cliff-reached"];
         // Additional source invariants beyond the DAA cliff check are
         // also checked-runtime when the codegen emits them as Branch conditions.
-        for _ in 1..source_invariant_count {
-            guards.push("source-invariant");
-        }
+        guards.extend(std::iter::repeat_n("source-invariant", source_invariant_count.saturating_sub(1)));
         return guards;
     }
     Vec::new()
@@ -5307,7 +5299,7 @@ fn obligation_detail_status<'a>(obligation: &'a VerifierObligationMetadata, labe
     let needle = format!("{}=", label);
     let start = obligation.detail.find(&needle)? + needle.len();
     let suffix = &obligation.detail[start..];
-    let end = suffix.find(|ch: char| ch == ';' || ch == ',' || ch == ')').unwrap_or(suffix.len());
+    let end = suffix.find([';', ',', ')']).unwrap_or(suffix.len());
     Some(suffix[..end].trim())
 }
 
@@ -5528,7 +5520,7 @@ fn transaction_condition_input_summary(
 }
 
 fn transaction_field_requirement_abi(layout: &MetadataFieldLayout) -> Option<(String, usize)> {
-    if let Some(width) = metadata_layout_fixed_scalar_width(&layout) {
+    if let Some(width) = metadata_layout_fixed_scalar_width(layout) {
         let scalar = match width {
             1 => "u8",
             2 => "u16",
@@ -5539,7 +5531,7 @@ fn transaction_field_requirement_abi(layout: &MetadataFieldLayout) -> Option<(St
         };
         return Some((format!("input-cell-field-{}", scalar), width));
     }
-    metadata_layout_fixed_byte_width(&layout).map(|width| (format!("input-cell-field-bytes-{}", width), width))
+    metadata_layout_fixed_byte_width(layout).map(|width| (format!("input-cell-field-bytes-{}", width), width))
 }
 
 fn transaction_output_obligation(
@@ -5631,7 +5623,7 @@ fn metadata_can_verify_settle_final_state(
     lifecycle_states.get(&pattern.ty).is_some_and(|states| states.len() >= 2)
         && type_layouts
             .get(&pattern.ty)
-            .is_some_and(|layouts| layouts.get("state").and_then(|layout| metadata_layout_fixed_scalar_width(&layout)).is_some())
+            .is_some_and(|layouts| layouts.get("state").and_then(metadata_layout_fixed_scalar_width).is_some())
         && metadata_can_verify_create_output_fields(pattern, type_layouts, availability)
 }
 
@@ -6726,8 +6718,7 @@ fn launch_distribution_sum_coupling_is_checked(
         return false;
     }
 
-    let mut required_left_sources =
-        (0..distribution_len).map(|index| launch_distribution_amount_source(index)).collect::<BTreeSet<_>>();
+    let mut required_left_sources = (0..distribution_len).map(launch_distribution_amount_source).collect::<BTreeSet<_>>();
     required_left_sources.insert(launch_param_source("pool_seed_amount"));
     let initial_mint_sources = BTreeSet::from([launch_param_source("initial_mint")]);
 
@@ -6799,11 +6790,9 @@ fn launch_distribution_sum_coupling_is_checked(
                         u64_sources.insert(dest.id, sources);
                     }
                 }
-                ir::IrInstruction::Move { dest, src } if dest.ty == ir::IrType::Bool => {
-                    if let ir::IrOperand::Var(src) = src {
-                        if checked_bool_vars.contains(&src.id) {
-                            checked_bool_vars.insert(dest.id);
-                        }
+                ir::IrInstruction::Move { dest, src: ir::IrOperand::Var(src) } if dest.ty == ir::IrType::Bool => {
+                    if checked_bool_vars.contains(&src.id) {
+                        checked_bool_vars.insert(dest.id);
                     }
                 }
                 _ => {}
@@ -6913,7 +6902,7 @@ fn type_field_has_fixed_width(type_layouts: &MetadataTypeLayouts, type_name: &st
     type_layouts
         .get(type_name)
         .and_then(|fields| fields.get(field))
-        .and_then(|layout| metadata_layout_fixed_byte_width(&layout))
+        .and_then(metadata_layout_fixed_byte_width)
         .is_some_and(|width| width == expected_width)
 }
 
@@ -8085,7 +8074,7 @@ fn metadata_can_verify_lifecycle_transition(
     let Some(state_layout) = layouts.get("state") else {
         return false;
     };
-    if metadata_layout_fixed_scalar_width(&state_layout).is_none() {
+    if metadata_layout_fixed_scalar_width(state_layout).is_none() {
         return false;
     }
     metadata_can_verify_create_output_fields(pattern, type_layouts, availability)
@@ -8718,7 +8707,7 @@ fn metadata_can_verify_create_output_fields(
     }
     pattern.fields.iter().all(|(field, value)| {
         layouts.get(field).is_some_and(|layout| {
-            if let Some(width) = metadata_layout_fixed_byte_width(&layout) {
+            if let Some(width) = metadata_layout_fixed_byte_width(layout) {
                 metadata_fixed_value_available_with_width(value, availability, width)
             } else {
                 metadata_dynamic_create_output_value_available(value, layout, availability, type_layouts)
@@ -9119,7 +9108,7 @@ fn is_executable_schema_field_access(
     let Some(layout) = type_layouts.get(type_name).and_then(|fields| fields.get(field)) else {
         return false;
     };
-    metadata_layout_fixed_byte_width(&layout).is_some()
+    metadata_layout_fixed_byte_width(layout).is_some()
         || metadata_molecule_vector_element_fixed_width(&layout.ty, type_layouts).is_some()
 }
 
@@ -9233,9 +9222,7 @@ fn cell_pattern_receipt_type_name<'a>(
     pattern: &ir::CellPattern,
     cell_type_kinds: &'a HashMap<String, ir::IrTypeKind>,
 ) -> Option<&'a str> {
-    let Some(type_hash) = pattern.type_hash else {
-        return None;
-    };
+    let type_hash = pattern.type_hash?;
     cell_type_kinds.iter().find_map(|(type_name, kind)| {
         (*kind == ir::IrTypeKind::Receipt && ir::type_hash_for_name(type_name) == type_hash).then_some(type_name.as_str())
     })
@@ -9245,7 +9232,7 @@ fn metadata_claim_signer_pubkey_hash_field<'a>(type_name: &str, type_layouts: &'
     let fields = type_layouts.get(type_name)?;
     CLAIM_SIGNER_PUBKEY_HASH_FIELDS.iter().find_map(|field| {
         let layout = fields.get(*field)?;
-        (metadata_layout_fixed_byte_width(&layout) == Some(20)).then_some(*field)
+        (metadata_layout_fixed_byte_width(layout) == Some(20)).then_some(*field)
     })
 }
 
@@ -9253,7 +9240,7 @@ fn metadata_claim_auth_lock_hash_field<'a>(type_name: &str, type_layouts: &'a Me
     let fields = type_layouts.get(type_name)?;
     CLAIM_AUTH_LOCK_HASH_FIELDS.iter().find_map(|field| {
         let layout = fields.get(*field)?;
-        (metadata_layout_fixed_byte_width(&layout) == Some(32)).then_some(*field)
+        (metadata_layout_fixed_byte_width(layout) == Some(32)).then_some(*field)
     })
 }
 
@@ -10319,7 +10306,7 @@ fn mutate_preserved_field_is_verifier_coverable(pattern: &ir::MutatePattern, fie
     if metadata_type_encoded_size_from_layouts(fields).is_none() {
         return true;
     }
-    let Some(width) = metadata_layout_fixed_byte_width(&layout) else {
+    let Some(width) = metadata_layout_fixed_byte_width(layout) else {
         return false;
     };
     layout.offset + width <= METADATA_MUTATE_CELL_BUFFER_SIZE
@@ -10339,9 +10326,9 @@ fn mutate_preserved_data_except_transition_is_verifier_coverable(
     pattern.transitions.iter().all(|transition| {
         fields.get(&transition.field).is_some_and(|layout| {
             if dynamic_table {
-                metadata_layout_fixed_byte_width(&layout).is_some()
+                metadata_layout_fixed_byte_width(layout).is_some()
             } else {
-                metadata_layout_fixed_byte_width(&layout)
+                metadata_layout_fixed_byte_width(layout)
                     .map(|width| layout.offset + width)
                     .is_some_and(|end| end <= METADATA_MUTATE_CELL_BUFFER_SIZE)
             }
@@ -10392,7 +10379,7 @@ fn mutate_transition_is_verifier_coverable(
         };
     }
     if transition.op == ir::MutateTransitionOp::Set {
-        let Some(width) = metadata_layout_fixed_byte_width(&layout) else {
+        let Some(width) = metadata_layout_fixed_byte_width(layout) else {
             return false;
         };
         if !dynamic_table && layout.offset + width > METADATA_MUTATE_CELL_BUFFER_SIZE {
@@ -10409,7 +10396,7 @@ fn mutate_transition_is_verifier_coverable(
     }
     // u128 fields are verifier-coverable via 128-bit add/sub with carry.
     if dynamic_table {
-        let Some(width) = metadata_layout_fixed_scalar_width(&layout) else {
+        let Some(width) = metadata_layout_fixed_scalar_width(layout) else {
             return false;
         };
         if width > 8 {
@@ -10434,7 +10421,7 @@ fn mutate_transition_is_verifier_coverable(
         };
     }
     // Standard path: fields that fit in a single 64-bit register (≤8 bytes).
-    let Some(width) = metadata_layout_fixed_scalar_width(&layout) else {
+    let Some(width) = metadata_layout_fixed_scalar_width(layout) else {
         return false;
     };
     if width > 8 {
@@ -18403,7 +18390,7 @@ source_roots = ["src", "shared"]
         assert!(witness.estimated_cycles > 0);
         let _parallelizable = witness.parallelizable;
         assert!(
-            witness.accesses.iter().all(|access| access.operation != 0 && matches!(access.source, 1 | 2 | 3)),
+            witness.accesses.iter().all(|access| access.operation != 0 && matches!(access.source, 1..=3)),
             "scheduler witness must contain only scheduler-visible cell-state accesses"
         );
         assert!(witness.accesses.iter().any(|access| access.operation == 4 && access.source == 1));
@@ -19783,7 +19770,7 @@ action ping() -> u64 {
         )
         .unwrap();
 
-        let expected = super::canonical_utf8_path(&root).unwrap().join("build").join("main.s");
+        let expected = super::canonical_utf8_path(root).unwrap().join("build").join("main.s");
         let resolved = resolve_input_path(root).unwrap();
         assert_eq!(default_output_path_for_input(root, &resolved, ArtifactFormat::RiscvAssembly).unwrap(), expected);
 
@@ -19822,7 +19809,7 @@ action ping() -> u64 {
         )
         .unwrap();
 
-        let expected = super::canonical_utf8_path(&root).unwrap().join("artifacts").join("main.s");
+        let expected = super::canonical_utf8_path(root).unwrap().join("artifacts").join("main.s");
         let resolved = resolve_input_path(root).unwrap();
         assert_eq!(default_output_path_for_input(root, &resolved, ArtifactFormat::RiscvAssembly).unwrap(), expected);
     }

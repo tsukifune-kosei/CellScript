@@ -213,7 +213,7 @@ impl DebugInfoGenerator {
         dwarf.debug_info.push(0x13); // DW_AT_language
         dwarf.debug_info.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // CellScript
 
-        for (_, ty) in &self.type_table.types {
+        for ty in self.type_table.types.values() {
             self.generate_type_die(dwarf, ty);
         }
 
@@ -333,7 +333,7 @@ impl DebugInfoGenerator {
             let addr_delta = (addr - prev_addr) as u8;
             let line_delta = (*line as i32) - (prev_line as i32);
 
-            if addr_delta < 64 && line_delta >= -8 && line_delta <= 7 {
+            if addr_delta < 64 && (-8..=7).contains(&line_delta) {
                 let opcode = ((line_delta + 8) as u8) + (addr_delta * 14) + 13;
                 dwarf.debug_line.push(opcode);
             } else {

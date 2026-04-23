@@ -39,6 +39,12 @@ pub enum LinearState {
     Destroyed,
 }
 
+impl Default for TypeEnv {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeEnv {
     pub fn new() -> Self {
         Self { vars: HashMap::new(), mutability: HashMap::new(), linear_states: HashMap::new(), parent: None }
@@ -327,6 +333,12 @@ fn register_type_id(seen: &mut HashMap<String, Span>, type_name: &str, type_id: 
         return Ok(());
     };
     register_type_id_value(seen, type_name, &type_id.value, type_id.span)
+}
+
+impl<'a> Default for TypeChecker<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<'a> TypeChecker<'a> {
@@ -2390,13 +2402,11 @@ impl<'a> TypeChecker<'a> {
                 Span::default(),
             ));
         }
-        if base_name == "Vec" && name.contains('<') {
-            if self.named_type_contains_reference(name) {
-                return Err(CompileError::new(
-                    format!("type '{}' cannot contain reference type; Vec<T> values must use owned non-reference items", name),
-                    Span::default(),
-                ));
-            }
+        if base_name == "Vec" && name.contains('<') && self.named_type_contains_reference(name) {
+            return Err(CompileError::new(
+                format!("type '{}' cannot contain reference type; Vec<T> values must use owned non-reference items", name),
+                Span::default(),
+            ));
         }
 
         match base_name {
