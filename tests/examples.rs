@@ -12,7 +12,7 @@ const BUNDLED_EXAMPLES: [&str; 7] =
 const BUNDLED_EXAMPLE_ELF_SIZE_BUDGETS: [(&str, usize); 7] = [
     ("amm_pool.cell", 56 * 1024),
     ("launch.cell", 48 * 1024),
-    ("multisig.cell", 64 * 1024),
+    ("multisig.cell", 80 * 1024),
     ("nft.cell", 64 * 1024),
     ("timelock.cell", 40 * 1024),
     ("token.cell", 24 * 1024),

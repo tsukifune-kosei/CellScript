@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -6924,12 +6924,10 @@ fn try_external_elf_toolchain(lines: &[String]) -> Result<Option<Vec<u8>>> {
                 .arg("-o")
                 .arg(&elf_path)
                 .arg(&asm_path),
-            &toolchain,
             "RISC-V compiler",
         ),
         ExternalToolchainMode::AssemblerLinker { assembler, linker } => run_external_command(
             Command::new(assembler).arg("-march=rv64imac").arg("-mabi=lp64").arg(&asm_path).arg("-o").arg(&obj_path),
-            &toolchain,
             "RISC-V assembler",
         )
         .and_then(|_| {
@@ -6945,7 +6943,6 @@ fn try_external_elf_toolchain(lines: &[String]) -> Result<Option<Vec<u8>>> {
                     .arg("-o")
                     .arg(&elf_path)
                     .arg(&obj_path),
-                &toolchain,
                 "RISC-V linker",
             )
         }),
@@ -6958,30 +6955,19 @@ fn try_external_elf_toolchain(lines: &[String]) -> Result<Option<Vec<u8>>> {
                 crate::error::Span::default(),
             )
         }),
-        Err(err) if toolchain.explicit => Err(err),
-        Err(_) => {
-            let _ = fs::remove_dir_all(&temp_dir);
-            return Ok(None);
-        }
+        Err(err) => Err(err),
     };
 
-    let elf = elf
-        .and_then(|bytes| {
-            if bytes.starts_with(b"\x7fELF") {
-                Ok(bytes)
-            } else {
-                Err(CompileError::new(
-                    format!("external toolchain output '{}' is not an ELF file", elf_path.display()),
-                    crate::error::Span::default(),
-                ))
-            }
-        })
-        .or_else(|err| if toolchain.explicit { Err(err) } else { Ok(Vec::new()) })?;
-
-    if elf.is_empty() && !toolchain.explicit {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return Ok(None);
-    }
+    let elf = elf.and_then(|bytes| {
+        if bytes.starts_with(b"\x7fELF") {
+            Ok(bytes)
+        } else {
+            Err(CompileError::new(
+                format!("external toolchain output '{}' is not an ELF file", elf_path.display()),
+                crate::error::Span::default(),
+            ))
+        }
+    })?;
 
     let _ = fs::remove_dir_all(&temp_dir);
     Ok(Some(elf))
@@ -7011,7 +6997,6 @@ fn entry_requires_explicit_parameter_abi(lines: &[String], entry_label: &str) ->
 #[derive(Debug, Clone)]
 struct ExternalToolchain {
     mode: ExternalToolchainMode,
-    explicit: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -7032,12 +7017,12 @@ fn discover_external_toolchain() -> Result<Option<ExternalToolchain>> {
                 crate::error::Span::default(),
             ));
         }
-        return Ok(Some(ExternalToolchain { mode: ExternalToolchainMode::Compiler(compiler), explicit: true }));
+        return Ok(Some(ExternalToolchain { mode: ExternalToolchainMode::Compiler(compiler) }));
     }
 
     match (explicit_assembler, explicit_linker) {
         (Some(assembler), Some(linker)) => {
-            return Ok(Some(ExternalToolchain { mode: ExternalToolchainMode::AssemblerLinker { assembler, linker }, explicit: true }))
+            return Ok(Some(ExternalToolchain { mode: ExternalToolchainMode::AssemblerLinker { assembler, linker } }))
         }
         (Some(_), None) | (None, Some(_)) => {
             return Err(CompileError::new(
@@ -7048,28 +7033,10 @@ fn discover_external_toolchain() -> Result<Option<ExternalToolchain>> {
         (None, None) => {}
     }
 
-    if let Some(compiler) = find_first_tool(&[
-        "riscv64-unknown-elf-gcc",
-        "riscv64-elf-gcc",
-        "riscv64-none-elf-gcc",
-        "riscv64-linux-gnu-gcc",
-        "riscv64-unknown-elf-clang",
-    ]) {
-        return Ok(Some(ExternalToolchain { mode: ExternalToolchainMode::Compiler(compiler), explicit: false }));
-    }
-
-    match (
-        find_first_tool(&["riscv64-unknown-elf-as", "riscv64-elf-as", "riscv64-none-elf-as", "riscv64-linux-gnu-as"]),
-        find_first_tool(&["riscv64-unknown-elf-ld", "riscv64-elf-ld", "riscv64-none-elf-ld", "riscv64-linux-gnu-ld"]),
-    ) {
-        (Some(assembler), Some(linker)) => {
-            Ok(Some(ExternalToolchain { mode: ExternalToolchainMode::AssemblerLinker { assembler, linker }, explicit: false }))
-        }
-        _ => Ok(None),
-    }
+    Ok(None)
 }
 
-fn run_external_command(command: &mut Command, toolchain: &ExternalToolchain, label: &str) -> Result<()> {
+fn run_external_command(command: &mut Command, label: &str) -> Result<()> {
     let rendered = render_command(command);
     let output = command.output().map_err(|err| {
         CompileError::new(format!("failed to launch {} ({}): {}", label, rendered, err), crate::error::Span::default())
@@ -7080,14 +7047,7 @@ fn run_external_command(command: &mut Command, toolchain: &ExternalToolchain, la
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let message = format!("{} failed ({}): {}", label, rendered, stderr.trim());
-    if toolchain.explicit {
-        return Err(CompileError::new(message, crate::error::Span::default()));
-    }
-
-    Err(CompileError::new(
-        format!("autodetected external toolchain failed, falling back to built-in ELF assembler: {}", message),
-        crate::error::Span::default(),
-    ))
+    Err(CompileError::new(message, crate::error::Span::default()))
 }
 
 fn render_command(command: &Command) -> String {
@@ -7110,26 +7070,6 @@ fn make_external_toolchain_temp_dir() -> Result<PathBuf> {
         )
     })?;
     Ok(dir)
-}
-
-fn find_first_tool(candidates: &[&str]) -> Option<PathBuf> {
-    candidates.iter().find_map(|candidate| find_in_path(candidate))
-}
-
-fn find_in_path(tool: &str) -> Option<PathBuf> {
-    let path = env::var_os("PATH")?;
-    env::split_paths(&path).map(|dir| dir.join(tool)).find(|candidate| candidate.is_file() && is_executable(candidate))
-}
-
-#[cfg(unix)]
-fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    fs::metadata(path).map(|meta| meta.permissions().mode() & 0o111 != 0).unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn is_executable(path: &Path) -> bool {
-    path.is_file()
 }
 
 #[derive(Debug, Default)]

@@ -20,6 +20,11 @@
   crates.io package contents.
 - Stripped externally-linked RISC-V ELF artifacts when an external toolchain is
   available, matching the internal production artifact surface more closely.
+- Made external RISC-V toolchains explicit opt-in via `CELLSCRIPT_RISCV_CC` or
+  `CELLSCRIPT_RISCV_AS`/`CELLSCRIPT_RISCV_LD`, so production ELF output and
+  backend shape budgets no longer depend on tools accidentally present in PATH.
+- Rebased the multisig bundled-example ELF budget on the deterministic internal
+  ELF artifact size while keeping the assembly text/CFG budgets unchanged.
 - Removed the executable Wasm pseudo-lowering path; the Wasm module now remains
   audit-only and rejects action/function modules instead of emitting approximate
   code.

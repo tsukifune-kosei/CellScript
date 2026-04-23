@@ -10689,7 +10689,6 @@ mod tests {
     };
     use crate::{ir, lexer, parser};
     use camino::{Utf8Path, Utf8PathBuf};
-    use std::{env, process::Command};
     use tempfile::tempdir;
 
     fn rebind_artifact_integrity_for_test(result: &mut crate::CompileResult) {
@@ -19426,20 +19425,13 @@ action main() -> u64 {
 
         let result =
             compile(program, CompileOptions { target: Some("riscv64-elf".to_string()), ..CompileOptions::default() }).unwrap();
-        let dir = tempdir().unwrap();
-        let output_path = Utf8Path::from_path(dir.path()).unwrap().join("main.elf");
-        result.write_to_path(&output_path).unwrap();
-
-        let Some(objdump) = find_riscv_objdump() else {
-            return;
-        };
-
-        let output = Command::new(objdump).arg("-d").arg(output_path.as_str()).output().unwrap();
-        assert!(output.status.success(), "objdump should disassemble generated ELF");
-
-        let disassembly = String::from_utf8(output.stdout).unwrap();
-        assert!(disassembly.contains("a7,93"), "expected exit syscall trampoline in disassembly:\n{}", disassembly);
-        assert!(disassembly.contains("a0,0"), "expected zero return value in disassembly:\n{}", disassembly);
+        let exit_syscall_addi_a7 = [0x93, 0x88, 0xd8, 0x05];
+        let ecall = [0x73, 0x00, 0x00, 0x00];
+        assert!(
+            result.artifact_bytes.windows(exit_syscall_addi_a7.len()).any(|window| window == exit_syscall_addi_a7),
+            "expected exit syscall load in ELF trampoline"
+        );
+        assert!(result.artifact_bytes.windows(ecall.len()).any(|window| window == ecall), "expected ecall in ELF trampoline");
     }
 
     #[test]
@@ -19590,23 +19582,6 @@ action bad(items: Vec<Address>) -> u64 {
 
         let err = action.entry_witness_args(&[EntryWitnessArg::Bytes(Vec::new())]).unwrap_err();
         assert!(err.message.contains("schema-backed parameters are omitted"), "unexpected error: {}", err.message);
-    }
-
-    fn find_riscv_objdump() -> Option<String> {
-        let path = env::var_os("PATH")?;
-        let candidates =
-            ["riscv64-elf-objdump", "riscv64-unknown-elf-objdump", "riscv64-none-elf-objdump", "riscv64-linux-gnu-objdump"];
-
-        for directory in env::split_paths(&path) {
-            for candidate in candidates {
-                let candidate_path = directory.join(candidate);
-                if candidate_path.is_file() {
-                    return Some(candidate_path.to_string_lossy().into_owned());
-                }
-            }
-        }
-
-        None
     }
 
     #[test]
