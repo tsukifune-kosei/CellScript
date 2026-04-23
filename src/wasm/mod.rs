@@ -159,193 +159,14 @@ impl WasmCompiler {
 
     pub fn compile(&mut self, ir: &IrModule) -> Result<WasmModule> {
         let report = audit_module(ir);
-
-        // Allow pure actions/fns with no CKB runtime requirements
-        let has_unsupported = report.blockers.iter().any(|b| {
-            !b.contains("has no wasm lowering") ||
-            // Keep rejecting stateful items
-            b.contains("ckb_runtime") || b.contains("fail_closed")
-        });
-
-        if report.status == WasmSupportStatus::UnsupportedProgram && has_unsupported {
+        if report.status == WasmSupportStatus::UnsupportedProgram {
             return Err(CompileError::without_span(format!("wasm target is not supported: {}", report.blockers.join("; "))));
         }
 
-        // Attempt to lower pure items to Wasm
-        self.lower_ir(ir)?;
-
-        // Update status section to reflect actual compilation
         self.module.customs.clear();
-        self.module.customs.push(WasmCustom {
-            name: "cellscript.wasm.status".to_string(),
-            data: if report.status == WasmSupportStatus::AuditOnly { b"audit-only".to_vec() } else { b"executable".to_vec() },
-        });
+        self.module.customs.push(WasmCustom { name: "cellscript.wasm.status".to_string(), data: b"audit-only".to_vec() });
 
         Ok(self.module.clone())
-    }
-
-    /// Lower IR items to Wasm instructions.
-    /// Currently supports pure actions/fns with simple arithmetic.
-    fn lower_ir(&mut self, ir: &IrModule) -> Result<()> {
-        let mut func_idx = 0u32;
-
-        for item in &ir.items {
-            match item {
-                IrItem::Action(action) => {
-                    // Only lower pure actions with no CKB runtime features
-                    if action.effect_class != crate::ir::EffectClass::Pure {
-                        continue;
-                    }
-                    if !action.body.consume_set.is_empty()
-                        || !action.body.create_set.is_empty()
-                        || !action.body.write_intents.is_empty()
-                        || !action.body.read_refs.is_empty()
-                    {
-                        continue;
-                    }
-
-                    // Add function type
-                    let param_types: Vec<WasmValType> = action.params.iter().map(|p| ir_type_to_wasm(&p.ty)).collect();
-                    let result_types: Vec<WasmValType> =
-                        action.return_type.as_ref().map(|ty| vec![ir_type_to_wasm(ty)]).unwrap_or_default();
-                    self.module.types.push(WasmFuncType { params: param_types.clone(), results: result_types.clone() });
-
-                    // Add function
-                    self.module.functions.push(WasmFunction { type_idx: func_idx, name: action.name.clone() });
-
-                    // Export
-                    self.module.exports.push(WasmExport { name: action.name.clone(), kind: WasmExportKind::Func, idx: func_idx });
-
-                    // Generate function body
-                    let body = self.lower_action_body(action, &param_types, &result_types);
-                    self.module.code.push(body);
-
-                    func_idx += 1;
-                }
-                IrItem::PureFn(function) => {
-                    let param_types: Vec<WasmValType> = function.params.iter().map(|p| ir_type_to_wasm(&p.ty)).collect();
-                    let result_types: Vec<WasmValType> =
-                        function.return_type.as_ref().map(|ty| vec![ir_type_to_wasm(ty)]).unwrap_or_default();
-                    self.module.types.push(WasmFuncType { params: param_types.clone(), results: result_types.clone() });
-
-                    self.module.functions.push(WasmFunction { type_idx: func_idx, name: function.name.clone() });
-
-                    self.module.exports.push(WasmExport { name: function.name.clone(), kind: WasmExportKind::Func, idx: func_idx });
-
-                    let body = self.lower_fn_body(function, &param_types, &result_types);
-                    self.module.code.push(body);
-
-                    func_idx += 1;
-                }
-                _ => {}
-            }
-        }
-
-        Ok(())
-    }
-
-    fn lower_action_body(&self, action: &crate::ir::IrAction, _param_types: &[WasmValType], result_types: &[WasmValType]) -> WasmCode {
-        let locals = Vec::new();
-        let mut body_instrs = Vec::new();
-
-        // Lower IR blocks
-        for block in &action.body.blocks {
-            for instr in &block.instructions {
-                match instr {
-                    crate::ir::IrInstruction::LoadConst { dest: _, value } => match value {
-                        crate::ir::IrConst::U64(n) => body_instrs.push(WasmInstr::I64Const(*n as i64)),
-                        crate::ir::IrConst::U32(n) => body_instrs.push(WasmInstr::I32Const(*n as i32)),
-                        crate::ir::IrConst::Bool(b) => body_instrs.push(WasmInstr::I32Const(if *b { 1 } else { 0 })),
-                        _ => body_instrs.push(WasmInstr::I64Const(0)),
-                    },
-                    crate::ir::IrInstruction::Binary { dest: _, op, left, right } => {
-                        // Push operands then op
-                        self.lower_operand(&mut body_instrs, left);
-                        self.lower_operand(&mut body_instrs, right);
-                        match op {
-                            crate::ast::BinaryOp::Add => body_instrs.push(WasmInstr::I64Add),
-                            crate::ast::BinaryOp::Sub => body_instrs.push(WasmInstr::I64Add), // Approximate
-                            crate::ast::BinaryOp::Mul => body_instrs.push(WasmInstr::I64Add), // Approximate
-                            crate::ast::BinaryOp::Div => body_instrs.push(WasmInstr::I64Add), // Approximate
-                            crate::ast::BinaryOp::Eq => body_instrs.push(WasmInstr::I64Eq),
-                            crate::ast::BinaryOp::Ne => body_instrs.push(WasmInstr::I64Eq), // Approximate
-                            _ => body_instrs.push(WasmInstr::Nop),
-                        }
-                    }
-                    _ => {
-                        // Unsupported instruction in Wasm: skip
-                    }
-                }
-            }
-            if let crate::ir::IrTerminator::Return(value) = &block.terminator {
-                if let Some(val) = value {
-                    self.lower_operand(&mut body_instrs, val);
-                }
-                body_instrs.push(WasmInstr::Return);
-            }
-        }
-
-        // If no explicit return, add one
-        if !body_instrs.iter().any(|i| matches!(i, WasmInstr::Return)) {
-            if result_types.is_empty() {
-                body_instrs.push(WasmInstr::Return);
-            } else {
-                // Return a zero value of the result type
-                match result_types[0] {
-                    WasmValType::I32 => body_instrs.push(WasmInstr::I32Const(0)),
-                    WasmValType::I64 => body_instrs.push(WasmInstr::I64Const(0)),
-                    _ => body_instrs.push(WasmInstr::I64Const(0)),
-                }
-                body_instrs.push(WasmInstr::Return);
-            }
-        }
-
-        WasmCode { locals, body: body_instrs }
-    }
-
-    fn lower_fn_body(&self, function: &crate::ir::IrPureFn, _param_types: &[WasmValType], result_types: &[WasmValType]) -> WasmCode {
-        let locals = Vec::new();
-        let mut body_instrs = Vec::new();
-
-        for block in &function.body.blocks {
-            for instr in &block.instructions {
-                if let crate::ir::IrInstruction::LoadConst { dest: _, value } = instr {
-                    match value {
-                        crate::ir::IrConst::U64(n) => body_instrs.push(WasmInstr::I64Const(*n as i64)),
-                        _ => body_instrs.push(WasmInstr::I64Const(0)),
-                    }
-                }
-            }
-            if let crate::ir::IrTerminator::Return(value) = &block.terminator {
-                if let Some(val) = value {
-                    self.lower_operand(&mut body_instrs, val);
-                }
-                body_instrs.push(WasmInstr::Return);
-            }
-        }
-
-        if !body_instrs.iter().any(|i| matches!(i, WasmInstr::Return)) {
-            if !result_types.is_empty() {
-                body_instrs.push(WasmInstr::I64Const(0));
-            }
-            body_instrs.push(WasmInstr::Return);
-        }
-
-        WasmCode { locals, body: body_instrs }
-    }
-
-    fn lower_operand(&self, instrs: &mut Vec<WasmInstr>, operand: &crate::ir::IrOperand) {
-        match operand {
-            crate::ir::IrOperand::Const(c) => match c {
-                crate::ir::IrConst::U64(n) => instrs.push(WasmInstr::I64Const(*n as i64)),
-                crate::ir::IrConst::U32(n) => instrs.push(WasmInstr::I32Const(*n as i32)),
-                crate::ir::IrConst::Bool(b) => instrs.push(WasmInstr::I32Const(if *b { 1 } else { 0 })),
-                _ => instrs.push(WasmInstr::I64Const(0)),
-            },
-            crate::ir::IrOperand::Var(v) => {
-                instrs.push(WasmInstr::LocalGet(v.id as u32));
-            }
-        }
     }
 
     pub fn encode(&self) -> Vec<u8> {
@@ -553,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn wasm_audit_reports_metadata_only_for_type_only_module() {
+    fn wasm_audit_reports_audit_only_for_type_only_module() {
         let ir = IrModule {
             name: "types_only".to_string(),
             items: Vec::new(),
@@ -567,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn wasm_compiler_lowers_pure_action_modules() {
+    fn wasm_compiler_rejects_pure_action_modules() {
         let ir = IrModule {
             name: "demo".to_string(),
             external_type_defs: Vec::new(),
@@ -584,10 +405,9 @@ mod tests {
         };
         let mut compiler = WasmCompiler::new();
         let result = compiler.compile(&ir);
-        assert!(result.is_ok(), "pure action should be Wasm-compilable: {:?}", result);
-        let module = result.unwrap();
-        assert!(module.functions.iter().any(|f| f.name == "main"));
-        assert!(module.exports.iter().any(|e| e.name == "main"));
+        let err = result.expect_err("executable Wasm backend must reject action modules");
+        assert!(err.message.contains("wasm target is not supported"), "unexpected error: {}", err.message);
+        assert!(err.message.contains("action 'main' has no wasm lowering"), "unexpected error: {}", err.message);
     }
 
     #[test]

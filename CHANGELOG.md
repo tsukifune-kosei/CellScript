@@ -20,6 +20,9 @@
   crates.io package contents.
 - Stripped externally-linked RISC-V ELF artifacts when an external toolchain is
   available, matching the internal production artifact surface more closely.
+- Removed the executable Wasm pseudo-lowering path; the Wasm module now remains
+  audit-only and rejects action/function modules instead of emitting approximate
+  code.
 - Removed empty module doc comments and simplified duplicated verifier branches
   reported by clippy.
 - Clarified README CLI docs that `cellc test` is a compiler/policy harness, not

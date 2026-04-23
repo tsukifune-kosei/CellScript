@@ -3441,11 +3441,8 @@ version = "0.1.0"
 #[test]
 fn cellc_run_subcommand_without_vm_runner_degrades_gracefully() {
     let output = Command::new(env!("CARGO_BIN_EXE_cellc")).arg("run").output().unwrap();
-    // Without a project directory, compile_path will fail
-    // The new behavior is to attempt simulation or provide guidance
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    // Should mention simulate or experimental or compile error
     assert!(
         stderr.contains("simulate") || stderr.contains("experimental") || stderr.contains("Cell.toml") || stderr.contains("compile")
     );

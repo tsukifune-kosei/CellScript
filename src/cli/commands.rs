@@ -1952,16 +1952,16 @@ fn common_portability_policy_violations(metadata: &crate::CompileMetadata) -> Ve
         ));
     }
 
-    let metadata_only_type_ids = metadata
+    let type_only_type_ids = metadata
         .types
         .iter()
         .filter(|ty| ty.type_id.is_some() && ty.ckb_type_id.is_none())
         .map(|ty| ty.name.clone())
         .collect::<Vec<_>>();
-    if !metadata_only_type_ids.is_empty() {
+    if !type_only_type_ids.is_empty() {
         violations.push(format!(
-            "metadata-only type_id declarations require profile-specific type-id lowering before they are portable: {}",
-            metadata_only_type_ids.join(", ")
+            "type-only type_id declarations require profile-specific type-id lowering before they are portable: {}",
+            type_only_type_ids.join(", ")
         ));
     }
 

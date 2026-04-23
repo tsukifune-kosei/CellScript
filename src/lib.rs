@@ -651,16 +651,16 @@ fn common_portability_policy_violations(metadata: &CompileMetadata) -> Vec<Strin
         ));
     }
 
-    let metadata_only_type_ids = metadata
+    let type_only_type_ids = metadata
         .types
         .iter()
         .filter(|ty| ty.type_id.is_some() && ty.ckb_type_id.is_none())
         .map(|ty| ty.name.clone())
         .collect::<Vec<_>>();
-    if !metadata_only_type_ids.is_empty() {
+    if !type_only_type_ids.is_empty() {
         violations.push(format!(
-            "metadata-only type_id declarations require profile-specific type-id lowering before they are portable: {}",
-            metadata_only_type_ids.join(", ")
+            "type-only type_id declarations require profile-specific type-id lowering before they are portable: {}",
+            type_only_type_ids.join(", ")
         ));
     }
 
@@ -19376,7 +19376,7 @@ action value() -> u64 {
 
         assert!(err.message.contains("target profile policy failed for 'ckb'"), "unexpected error: {}", err.message);
         assert!(
-            err.message.contains("metadata-only type_id declarations require profile-specific type-id lowering"),
+            err.message.contains("type-only type_id declarations require profile-specific type-id lowering"),
             "unexpected error: {}",
             err.message
         );
@@ -19415,7 +19415,7 @@ struct TokenSnapshot {
     }
 
     #[test]
-    fn compiled_riscv_elf_contains_start_trampoline() {
+    fn compiled_riscv_elf_contains_exit_trampoline() {
         let program = r#"
 module vm::minimal
 
@@ -19438,8 +19438,6 @@ action main() -> u64 {
         assert!(output.status.success(), "objdump should disassemble generated ELF");
 
         let disassembly = String::from_utf8(output.stdout).unwrap();
-        assert!(disassembly.contains("<_start>:"));
-        assert!(disassembly.contains("<main>:"));
         assert!(disassembly.contains("a7,93"), "expected exit syscall trampoline in disassembly:\n{}", disassembly);
         assert!(disassembly.contains("a0,0"), "expected zero return value in disassembly:\n{}", disassembly);
     }
