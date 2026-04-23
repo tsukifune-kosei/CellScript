@@ -2,6 +2,16 @@
 
 ## 2026-04-23
 
+- Marked Wasm output as audit-only instead of metadata-only production output.
+- Renamed the legacy always-empty runtime metadata field to
+  `legacy_symbolic_cell_runtime_features` and stopped emitting the old symbolic
+  ELF feature surface.
+- Reduced crates.io package contents by excluding GitHub workflow, wiki, and
+  VS Code extension packaging files.
+- Removed empty module doc comments and simplified duplicated verifier branches
+  reported by clippy.
+- Clarified README CLI docs that `cellc test` is a compiler/policy harness, not
+  trusted runtime execution.
 - Removed the old CKB acceptance policy exception path so the CKB target
   profile now rejects unportable artifacts through the normal production policy
   gate.

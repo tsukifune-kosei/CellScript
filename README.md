@@ -363,7 +363,7 @@ Still beta:
 | `cellc metadata` | Emit lowering, runtime, scheduler, source, and schema metadata. |
 | `cellc constraints` | Emit profile-aware ABI, artifact, CKB, and Spora production constraints. |
 | `cellc verify-artifact` | Verify an artifact against its metadata sidecar and optional source hashes. |
-| `cellc test` | Run compiler tests for `.cell` sources and directive-driven diagnostics. |
+| `cellc test` | Run compiler and policy tests for `.cell` sources and directive-driven diagnostics; it does not provide trusted runtime execution. |
 | `cellc doc` | Generate API and audit documentation. |
 | `cellc fmt` | Format `.cell` sources or check formatting. |
 | `cellc init` | Create a package skeleton. |

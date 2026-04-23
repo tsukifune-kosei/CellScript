@@ -1,5 +1,3 @@
-//!
-
 use crate::ast::*;
 use crate::error::{CompileError, Result, Span};
 use crate::lexer::token::{Token, TokenKind};

@@ -1,5 +1,3 @@
-//!
-
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::error::{CompileError, Result};
 use crate::ir::*;
@@ -4542,13 +4540,9 @@ impl CodeGenerator {
                 self.emit(format!("add {}, t4, t5", dest_reg));
             }
             true
-        } else if self.aggregate_pointer_sources.contains_key(&source.obj_var_id) {
-            self.emit(format!("ld {}, {}(sp)", dest_reg, source.obj_var_id * 8));
-            if source.layout.offset != 0 {
-                self.emit_large_addi(dest_reg, dest_reg, source.layout.offset as i64);
-            }
-            true
-        } else if self.type_fixed_sizes.contains_key(&source.type_name) {
+        } else if self.aggregate_pointer_sources.contains_key(&source.obj_var_id)
+            || self.type_fixed_sizes.contains_key(&source.type_name)
+        {
             self.emit(format!("ld {}, {}(sp)", dest_reg, source.obj_var_id * 8));
             if source.layout.offset != 0 {
                 self.emit_large_addi(dest_reg, dest_reg, source.layout.offset as i64);

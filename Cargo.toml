@@ -7,6 +7,11 @@ authors = ["CellScript Core Team"]
 description = "CellScript compiler for CKB and Spora blockchain"
 license = "MIT"
 repository = "https://github.com/tsukifune-kosei/CellScript"
+exclude = [
+    ".github/",
+    "docs/wiki/",
+    "editors/",
+]
 
 [[bin]]
 name = "cellc"

@@ -1,5 +1,3 @@
-//!
-
 use crate::ir::IrType;
 
 pub struct Collections;

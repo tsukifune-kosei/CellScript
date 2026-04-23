@@ -1,5 +1,4 @@
 //! Explicitly fail-closed WebAssembly target scaffolding.
-//!
 //! This module is intentionally compiled and tested even though Wasm is not a
 //! supported CellScript backend yet. Keeping the module in the build prevents a
 //! stale, hidden backend from drifting away from the current IR.
@@ -151,7 +150,7 @@ impl WasmCompiler {
                 memories: vec![WasmMemory { min: 1, max: Some(1) }],
                 customs: vec![WasmCustom {
                     name: "cellscript.wasm.status".to_string(),
-                    data: b"metadata-only; executable wasm backend is unsupported".to_vec(),
+                    data: b"audit-only; executable wasm backend is unsupported".to_vec(),
                 }],
                 ..Default::default()
             },

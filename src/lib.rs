@@ -1,5 +1,4 @@
 //! CellScript - Domain-specific language compiler for Spora blockchain
-//!
 //! Currently the backend can output RISC-V assembly or ELF artifacts.
 
 pub mod ast;
@@ -385,7 +384,8 @@ pub struct RuntimeMetadata {
     pub ckb_runtime_features: Vec<String>,
     pub standalone_runner_compatible: bool,
     pub symbolic_cell_runtime_required: bool,
-    pub unsupported_elf_features: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub legacy_symbolic_cell_runtime_features: Vec<String>,
     pub fail_closed_runtime_features: Vec<String>,
     pub ckb_runtime_accesses: Vec<CkbRuntimeAccessMetadata>,
     pub verifier_obligations: Vec<VerifierObligationMetadata>,
@@ -2736,11 +2736,11 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
     let lifecycle_states = metadata_lifecycle_states(ir);
     let cell_type_kinds = metadata_cell_type_kinds(ir);
     let pure_const_returns = metadata_pure_const_returns(ir);
-    // No operations are purely symbolic anymore — all have real RISC-V
-    // lowerings or fail-closed traps. The unsupported_elf_features list
-    // is kept for backward compatibility but will always be empty.
-    let _unsupported_elf_features = module_symbolic_runtime_features(ir, &type_layouts, &cell_type_kinds);
-    let unsupported_elf_features: Vec<String> = Vec::new();
+    // No operations are purely symbolic anymore: all have real RISC-V
+    // lowerings or fail-closed traps. This legacy list stays empty and is
+    // omitted from serialized metadata.
+    let _legacy_symbolic_cell_runtime_features = module_symbolic_runtime_features(ir, &type_layouts, &cell_type_kinds);
+    let legacy_symbolic_cell_runtime_features: Vec<String> = Vec::new();
     let fail_closed_runtime_features = module_fail_closed_runtime_features(ir, &type_layouts, &cell_type_kinds, &pure_const_returns);
     let ckb_runtime_features = module_ckb_runtime_features(ir, &cell_type_kinds, &type_layouts);
     let ckb_runtime_accesses = module_ckb_runtime_accesses(ir, &cell_type_kinds, &type_layouts);
@@ -2750,7 +2750,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
     let pool_primitives = module_pool_primitive_metadata(ir, &type_layouts, &cell_type_kinds, &pure_const_returns);
     let has_entry_params = module_has_entry_params(ir);
     let ckb_runtime_required = !ckb_runtime_features.is_empty();
-    let standalone_runner_compatible = unsupported_elf_features.is_empty() && !ckb_runtime_required && !has_entry_params;
+    let standalone_runner_compatible = legacy_symbolic_cell_runtime_features.is_empty() && !ckb_runtime_required && !has_entry_params;
     let embeds_vm_abi_trailer = target_profile.embeds_vm_abi_trailer(artifact_format);
     CompileMetadata {
         metadata_schema_version: METADATA_SCHEMA_VERSION,
@@ -2797,8 +2797,8 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
             ckb_runtime_required,
             ckb_runtime_features,
             standalone_runner_compatible,
-            symbolic_cell_runtime_required: !unsupported_elf_features.is_empty(),
-            unsupported_elf_features,
+            symbolic_cell_runtime_required: !legacy_symbolic_cell_runtime_features.is_empty(),
+            legacy_symbolic_cell_runtime_features,
             fail_closed_runtime_features,
             ckb_runtime_accesses,
             verifier_obligations,
@@ -5442,9 +5442,8 @@ fn claim_runtime_gap_detail(
             && pattern.binding == binding
             && (is_claim_witness_authorization_domain_check_target(name, pattern, cell_type_kinds, type_layouts)
                 || is_claim_input_lock_hash_binding_check_target(name, pattern, cell_type_kinds, type_layouts))
-    }) {
-        ""
-    } else if revoke_admin_authorization_is_checked(name, "VestingGrant", body, type_layouts) {
+    }) || revoke_admin_authorization_is_checked(name, "VestingGrant", body, type_layouts)
+    {
         ""
     } else {
         "; claim witness binding is not verifier-covered"
@@ -10299,9 +10298,9 @@ fn mutate_field_equality_status(pattern: &ir::MutatePattern, type_layouts: &Meta
         .iter()
         .filter(|field| mutate_preserved_field_is_verifier_coverable(pattern, field, type_layouts))
         .count();
-    if checked == pattern.preserved_fields.len() {
-        "checked-runtime"
-    } else if mutate_preserved_data_except_transition_is_verifier_coverable(pattern, type_layouts) {
+    if checked == pattern.preserved_fields.len()
+        || mutate_preserved_data_except_transition_is_verifier_coverable(pattern, type_layouts)
+    {
         "checked-runtime"
     } else if checked > 0 {
         "checked-partial"
@@ -16055,9 +16054,9 @@ action create_listing(nft: &NFT, price: u64) -> Listing {
             action.fail_closed_runtime_features
         );
         assert!(
-            result.metadata.runtime.unsupported_elf_features.is_empty(),
-            "unsupported_elf_features should be empty (all ops have lowerings): {:?}",
-            result.metadata.runtime.unsupported_elf_features
+            result.metadata.runtime.legacy_symbolic_cell_runtime_features.is_empty(),
+            "legacy_symbolic_cell_runtime_features should be empty (all ops have lowerings): {:?}",
+            result.metadata.runtime.legacy_symbolic_cell_runtime_features
         );
         assert!(
             result.metadata.runtime.fail_closed_runtime_features.contains(&"cell-backed-collection-push".to_string()),
@@ -16786,7 +16785,7 @@ action use_collection() -> u64 {
         assert_eq!(result.artifact_format, ArtifactFormat::RiscvElf);
         assert!(result.artifact_bytes.starts_with(b"\x7fELF"));
         assert!(!result.metadata.runtime.symbolic_cell_runtime_required);
-        assert!(result.metadata.runtime.unsupported_elf_features.is_empty());
+        assert!(result.metadata.runtime.legacy_symbolic_cell_runtime_features.is_empty());
     }
 
     #[test]
@@ -16800,7 +16799,7 @@ action use_collection() -> u64 {
         assert!(result.metadata.runtime.ckb_runtime_required);
         assert!(!result.metadata.runtime.standalone_runner_compatible);
         assert!(result.metadata.runtime.ckb_runtime_features.contains(&"read-cell-dep".to_string()));
-        assert!(result.metadata.runtime.unsupported_elf_features.is_empty());
+        assert!(result.metadata.runtime.legacy_symbolic_cell_runtime_features.is_empty());
         assert!(result.metadata.runtime.fail_closed_runtime_features.is_empty());
     }
 
@@ -18329,8 +18328,8 @@ source_roots = ["src", "shared"]
         );
         assert!(result.metadata.runtime.ckb_runtime_required);
         assert!(result.metadata.runtime.ckb_runtime_features.contains(&"read-cell-dep".to_string()));
-        assert!(!result.metadata.runtime.unsupported_elf_features.contains(&"read-ref-expression".to_string()));
-        assert!(!result.metadata.runtime.unsupported_elf_features.contains(&"schema-field-access".to_string()));
+        assert!(!result.metadata.runtime.legacy_symbolic_cell_runtime_features.contains(&"read-ref-expression".to_string()));
+        assert!(!result.metadata.runtime.legacy_symbolic_cell_runtime_features.contains(&"schema-field-access".to_string()));
         assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| access.source == "Input"));
         assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| access.source == "CellDep"));
         assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| access.source == "Output"));

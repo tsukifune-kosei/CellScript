@@ -1,5 +1,3 @@
-//!
-
 use crate::codegen::{self, CodegenOptions};
 use crate::ir::generate;
 use crate::lexer::lex;

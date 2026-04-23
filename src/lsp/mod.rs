@@ -1,5 +1,3 @@
-//!
-
 use crate::ast::*;
 use crate::error::{CompileError, Span};
 use crate::lexer::token::{keyword_or_identifier, TokenKind};

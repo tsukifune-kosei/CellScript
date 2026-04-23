@@ -349,7 +349,7 @@ fail-closed；registry protocol 仍属于 post-v1 工作。
 | `cellc metadata` | 输出 lowering、runtime、scheduler、source 和 schema metadata。 |
 | `cellc constraints` | 输出 profile-aware ABI、artifact、CKB 和 Spora production constraints。 |
 | `cellc verify-artifact` | 用 metadata sidecar 和可选 source hashes 校验 artifact。 |
-| `cellc test` | 运行 `.cell` 源码和注释驱动诊断的编译器测试。 |
+| `cellc test` | 运行 `.cell` 源码和注释驱动诊断的编译器 / policy 测试；它不是可信 runtime execution。 |
 | `cellc doc` | 生成 API 和 audit 文档。 |
 | `cellc fmt` | 格式化 `.cell` 源码或检查格式。 |
 | `cellc init` | 创建 package skeleton。 |

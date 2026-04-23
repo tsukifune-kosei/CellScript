@@ -1,5 +1,4 @@
 //! CellScript formatter.
-//!
 //! Release-grade code formatter with idempotency guarantees,
 //! configurable line width, comment preservation, and whitespace normalization.
 

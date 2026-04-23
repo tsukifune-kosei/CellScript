@@ -1,5 +1,3 @@
-//!
-
 pub mod token;
 
 use crate::error::{CompileError, Result, Span};

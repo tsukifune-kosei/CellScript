@@ -1,4 +1,3 @@
-//!
 
 use crate::ast::*;
 use crate::error::{CompileError, Result, Span};

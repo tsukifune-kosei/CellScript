@@ -1,5 +1,3 @@
-//!
-
 use crate::docgen::{DocGenerator, OutputFormat};
 use crate::error::Result;
 use crate::fmt::format_default;
@@ -1768,7 +1766,10 @@ fn validate_check_policy(metadata: &crate::CompileMetadata, args: &CheckArgs) ->
 
     if args.deny_symbolic_runtime {
         if metadata.runtime.symbolic_cell_runtime_required {
-            violations.push(format!("symbolic Cell/runtime features: {}", metadata.runtime.unsupported_elf_features.join(", ")));
+            violations.push(format!(
+                "symbolic Cell/runtime features: {}",
+                metadata.runtime.legacy_symbolic_cell_runtime_features.join(", ")
+            ));
         }
         let unsupported_obligations = metadata
             .runtime
@@ -1912,7 +1913,7 @@ fn common_portability_policy_violations(metadata: &crate::CompileMetadata) -> Ve
     if metadata.runtime.symbolic_cell_runtime_required {
         violations.push(format!(
             "symbolic Cell/runtime features are not portable: {}",
-            metadata.runtime.unsupported_elf_features.join(", ")
+            metadata.runtime.legacy_symbolic_cell_runtime_features.join(", ")
         ));
     }
     if !metadata.runtime.fail_closed_runtime_features.is_empty() {
@@ -2605,7 +2606,7 @@ fn validate_named_metadata_set(path: &Utf8Path, kind: &str, actual: &[&str], exp
 fn compile_test_runtime_summary(metadata: &crate::CompileMetadata) -> String {
     let mut values = Vec::new();
     values.extend(metadata.runtime.ckb_runtime_features.iter().cloned());
-    values.extend(metadata.runtime.unsupported_elf_features.iter().cloned());
+    values.extend(metadata.runtime.legacy_symbolic_cell_runtime_features.iter().cloned());
     values.extend(metadata.runtime.fail_closed_runtime_features.iter().cloned());
     for access in &metadata.runtime.ckb_runtime_accesses {
         values.push(format!("{}:{}:{}:{}:{}", access.operation, access.syscall, access.source, access.index, access.binding));

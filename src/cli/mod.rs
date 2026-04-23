@@ -1,5 +1,4 @@
 //! CLI module
-//!
 //! Command-line interface and subcommand implementation
 
 pub mod commands;

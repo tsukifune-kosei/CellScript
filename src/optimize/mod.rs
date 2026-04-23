@@ -1,5 +1,4 @@
 //! AST optimizer for CellScript.
-//!
 //! The optimizer is intentionally conservative: it only rewrites expressions
 //! whose value can be determined from syntax-local constants. Protocol and
 //! Cell-state operations are preserved so linear/resource semantics remain
