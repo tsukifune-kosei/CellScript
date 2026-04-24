@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.12.0
+
+- Replaced direct CLI diagnostics with a full LSP language server integration
+  (`cellc lsp --stdio`) using `vscode-languageclient`.
+- LSP-powered features: real-time diagnostics (open/edit/save with incremental
+  sync), context-aware completion, hover, go-to-definition, find-references,
+  rename, signature help, document highlight, folding ranges, selection ranges,
+  document symbols, code actions, and document formatting.
+- CLI-backed commands continue to work for compile, metadata, constraints,
+  production report, and target-profile selection.
+- Updated extension architecture: VS Code → LanguageClient → `cellc lsp --stdio`
+  → `CellScriptBackend` (tower-lsp) → in-process `LspServer`.
+- Removed stale validation-mode and validation-debounce settings (diagnostics
+  are now driven by the language server, not by CLI polling).
+- Updated README to reflect the new LSP architecture.
+
 ## 0.11.0
 
 - Promoted the extension from a thin syntax package to stable local editor

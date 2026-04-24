@@ -48,9 +48,19 @@ struct Cli {
 
     #[arg(long)]
     gen_stdlib: bool,
+
+    /// Start the language server (JSON-RPC over stdio).
+    #[arg(long)]
+    lsp: bool,
 }
 
 fn main() {
+    // Start the LSP server before any CLI parsing side effects.
+    if std::env::args().any(|arg| arg == "--lsp") {
+        cellscript::lsp::server::run_lsp_server_blocking();
+        return;
+    }
+
     if std::env::args()
         .nth(1)
         .map(|arg| {

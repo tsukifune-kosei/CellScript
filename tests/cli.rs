@@ -3348,7 +3348,7 @@ action main(amount: u64) -> u64 {
 }
 
 #[test]
-fn cellc_entry_witness_subcommand_omits_schema_backed_params() {
+fn cellc_entry_witness_subcommand_encodes_schema_backed_params() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
 
@@ -3384,6 +3384,8 @@ action main(snapshot: Snapshot, amount: u64) -> u64 {
         .arg("--action")
         .arg("main")
         .arg("--arg")
+        .arg("0500000000000000")
+        .arg("--arg")
         .arg("5")
         .arg("--json")
         .output()
@@ -3391,9 +3393,9 @@ action main(snapshot: Snapshot, amount: u64) -> u64 {
     assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["witness_hex"], "43534152477631000500000000000000");
-    assert_eq!(stdout["payload_params"][0], "amount");
-    assert_eq!(stdout["schema_backed_params_omitted"][0], "snapshot");
+    assert_eq!(stdout["witness_hex"], "43534152477631000800000005000000000000000500000000000000");
+    assert_eq!(stdout["payload_params"][0], "snapshot");
+    assert_eq!(stdout["payload_params"][1], "amount");
 }
 
 #[test]

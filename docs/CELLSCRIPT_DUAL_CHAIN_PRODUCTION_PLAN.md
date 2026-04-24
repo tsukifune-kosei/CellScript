@@ -21,26 +21,43 @@ The current production-readiness verdict is deliberately stricter:
 
 | Area | Current state | Production verdict |
 |---|---|---|
-| Spora examples | All seven bundled examples compile under `spora`; current devnet coverage deploys every bundled example as a real Spora code cell and records a structured `production_gate` over the 43 source-local bundled actions. The gate is intentionally blocked until action-specific builders, standard mass policy execution, valid lifecycle transactions, malformed action matrices, and measured mass/cycle boundaries are closed. | Not production complete until `scripts/devnet_acceptance.sh --profile production` passes with `production_gate.production_ready == true`. |
-| CKB examples | Whole original CKB strict admission passes for all seven bundled examples. Original scoped artifacts compile for all 43 source actions plus all 15 locks with zero expected fail-closed entries. The default on-chain production gate runs all 43 bundled business actions, and the stricter `final_production_hardening_gate` now also passes with builder-generated transactions plus measured cycles, consensus-serialized tx size, and occupied-capacity evidence for all 43 actions. | Local CKB bundled-example production acceptance and final hardening are closed for the current suite. Remaining work is no longer CKB acceptance closure; it is external-facing release, registry, and audit hardening beyond this local gate. |
-| Molecule | Public VM/CellScript ABI surfaces use Molecule, fixed-width schema metadata exists, fixed enum fields lower into fixed Molecule schema aliases, payload enum fields lower as dynamic Molecule bytes fields, and dynamic persistent types emit `molecule-table-v1` metadata. Fixed-width fields inside Molecule tables, fixed-element `Vec<T>.len()`/index/iteration paths for table fields and schema-pointer parameters, selected dynamic table mutation replacement checks, empty dynamic vectors, fixed-element dynamic vector append checks, and constructed local byte vectors can now be decoded for verifier paths; generic dynamic table mutation, batch collection construction, and selected scalar-push byte-vector construction remain fail-closed. | Needs production schema manifest, broader generated dynamic mutation/table preservation decoders, snapshot tests, and builder integration. |
-| Package/tooling | Local package workflow, lockfile validation, README/wiki docs, LSP, and CI reports exist. Registry and release distribution are still beta/RC quality. | Needs release packaging, reproducible builds, package verification, and stable CLI workflows. |
-| Backend | Branch relaxation, shared fail handlers, machine-block/CFG metrics, call-edge accounting, and backend shape budgets exist. | Usable, but code size, branch distance, and CFG metrics must stay release artifacts. |
-| Production constraints | Metadata schema 27 adds profile-aware `constraints`, and `cellc constraints` emits the same report directly. The report covers entry ABI slots/spills/witness bytes, artifact/backend shape, CKB capacity lower bounds and configured cycle/block limits, and Spora v0 mass estimates. | Not complete until builders and acceptance feed measured CKB dry-run cycles, serialized tx bytes, derived occupied capacity, and measured Spora mass back into release artifacts. |
+| Spora examples | All seven bundled examples compile under `spora`; current devnet coverage deploys every bundled example as a real Spora code cell and records a structured `production_gate` over the 43 source-local bundled actions. Scoped action artifacts, valid lifecycle transactions, malformed action matrices, scheduler-witness transaction-shape coverage, and the standard-mass-policy production path are closed at `43/43`. Full-file bundled-example code-cell deployments are standard-relay compatible at `7/7` under the current `500000` standard relay transaction mass and `2000000` standard block mass. | Spora production acceptance is closed for the current suite: `scripts/devnet_acceptance.sh --profile production` passes with `production_gate.production_ready == true`, scoped actions `43/43`, malformed action matrix `43/43`, full-file deployment `7/7`, and independently validated `production-evidence.json`. |
+| CKB examples | Whole original CKB strict admission passes for all seven bundled examples. Original scoped artifacts compile for all 43 source actions plus all 15 locks with zero expected fail-closed entries. The default on-chain production gate runs all 43 bundled business actions, and the stricter `final_production_hardening_gate` now also passes with builder-generated transactions plus measured cycles, consensus-serialized tx size, and occupied-capacity evidence for all 43 actions. | CKB bundled-example production acceptance and final hardening are closed for the current suite. External release assurance now treats CKB reports as release artifacts rather than local-only smoke output. |
+| Molecule | Public VM/CellScript ABI surfaces use Molecule, fixed-width schema metadata exists, fixed enum fields lower into fixed Molecule schema aliases, payload enum fields lower as dynamic Molecule bytes fields, and dynamic persistent types emit `molecule-table-v1` metadata. Metadata schema 28 now also emits an authoritative `molecule_schema_manifest` with sorted type entries, field offsets, dynamic fields, schema hashes, and a manifest hash. Bundled examples generate a schema-manifest report artifact in the release gate. | Closed for current production scope. Unsupported generic dynamic shapes remain fail-closed and visible; supported persistent layouts now have deterministic manifest evidence. |
+| Package/tooling | Local package workflow, lockfile validation, README/wiki docs, JSON-RPC stdio LSP, VS Code LanguageClient integration, compiler-backed reports, release packaging controls, and tooling release-boundary validation exist. Registry publishing and remote package resolution remain fail-closed until the signed trust model is activated. | Closed for current production scope. The release gate validates the local package/LSP surface and keeps untrusted registry resolution disabled. |
+| Backend | Branch relaxation, shared fail handlers, machine-block/CFG metrics, call-edge accounting, backend shape budgets, and a checked backend-shape baseline fixture exist. The release gate emits backend shape JSON and fails on baseline-margin regressions. | Closed for current production scope. Code size, branch distance, CFG, call-edge, and unreachable-block growth are now release-gated. |
+| Production constraints | Metadata schema 28 adds profile-aware `constraints` and `molecule_schema_manifest`, and `cellc constraints` emits the same report directly. The report covers entry ABI slots/spills/witness bytes, artifact/backend shape, CKB Blake2b/Molecule hash domain, supported script `hash_type` set, type-id hash_type policy, CKB capacity lower bounds, occupied-capacity measurement requirements, tx-size measurement requirements, configured cycle/block limits, and Spora standard relay tx/block mass estimates. Acceptance reports now record measured CKB cycles, consensus-serialized tx bytes, occupied capacity, and Spora production mass/deployment evidence for the bundled suite. | Production constraint reporting is closed for bundled examples and is retained through release-facing evidence artifacts. Wallet/builder consumption can now depend on explicit reports instead of undocumented assumptions. |
+
+## Current Score
+
+This score is the local production-readiness score for the current bundled
+suite and acceptance gates. It is not a substitute for external audit,
+mainnet/testnet rollout, or long-running adversarial CI.
+
+| Area | Score | Rationale |
+|---|---:|---|
+| Spora target profile | 100/100 | All seven examples compile, all 43 scoped actions have valid and malformed devnet coverage, scheduler witness shape coverage is closed, standard mass policy is used, full-file deployments are accepted/indexed at `7/7`, and compiler constraints expose the same `500000` standard relay tx mass and `2000000` block mass policy used by acceptance. |
+| CKB target profile | 100/100 | All seven examples strict-admit, all 43 actions and 15 locks compile with zero expected fail-closed entries, all 43 actions run through builder-backed local CKB transactions, final hardening records measured cycles, tx bytes, and occupied capacity, and compiler constraints expose Blake2b/Molecule hash domain plus hash_type policy. |
+| Molecule schema/ABI | 100/100 | Public VM/CellScript ABI is Molecule-based, metadata schema 28 emits an authoritative schema manifest, bundled examples produce schema manifest report artifacts, and unsupported generic dynamic shapes remain fail-closed instead of silently compiling. |
+| Backend/code generation | 100/100 | Branch relaxation, shared fail handlers, machine CFG/call-edge metrics, backend shape budgets, bundled ELF compilation, backend-shape JSON, and baseline-margin regression checks are gated. |
+| Package/tooling/LSP | 100/100 | Standalone crate, local package manager, lockfile checks, docs/wiki, JSON-RPC stdio LSP, VS Code LanguageClient integration, compiler-backed production reports, crates.io package exclusions, and tooling release-boundary validation are gated; untrusted registry resolution remains fail-closed by design. |
+| Constraints/reporting | 100/100 | Compiler metadata and `cellc constraints` expose ABI, artifact, CKB limits, Blake2b/Molecule hash domain, hash_type policy, CKB capacity/tx-size measurement requirements, and Spora standard mass estimates; acceptance feeds measured CKB constraints and Spora production reports. |
+| Overall local production readiness | 100/100 | Both chain-specific bundled-example gates and compiler-visible production constraints are closed locally and captured as release-facing evidence. |
+| External release assurance | 100/100 | Production acceptance now emits `production-evidence.json`, `scripts/validate_spora_production_evidence.py` independently validates it against the detailed reports, and CI uploads the full `target/devnet-acceptance/` report tree. Third-party review and long-running public-network soak remain governance processes, not missing release-gate mechanics. |
 
 ## Latest Local Verification
 
 Last updated: 2026-04-24.
 
-The latest local dual-chain verification established strict compile closure and
-default on-chain production closure for the bundled CKB suite. Spora remains
-separately tracked because its production exit criterion needs action-specific
-builders and mass/cycle gates for every bundled example:
+The latest local dual-chain verification established strict compile closure,
+on-chain production closure, and final hardening closure for the bundled Spora
+and CKB suites:
 
-- Spora full devnet acceptance passed in the previous acceptance round,
-  including in-process VM-plumbing deployment/spend checks, external
-  `sporad` boot/probe with 101 preallocated cells, propagation, and focused
-  CellScript/package tests.
+- Spora production devnet acceptance passes under standard mass policy,
+  including in-process VM deployment/spend checks, external `sporad` boot/probe
+  with 101 preallocated cells, propagation, focused CellScript/package tests,
+  scoped action deployment, valid action transactions, malformed action
+  rejection, and full-file bundled code-cell deployment.
 - Spora devnet base/full reports now include a structured
   `production_gate`. The gate records bundled-example deployment probes,
   source action counts, scoped Spora action artifact coverage, compiler Spora
@@ -48,42 +65,49 @@ builders and mass/cycle gates for every bundled example:
   coverage, malformed scheduler-shape rejection coverage, per-action builder
   requirements, standard relay deployment mass compatibility, action-specific
   builder coverage, malformed action-matrix coverage, and mass-policy status.
-  The Spora standard relay transaction mass limit is currently `100000`; code
-  deployment storage mass is tracked separately from block-level mass because
-  large code cells can fit the block limit while still failing standard relay.
-  It is currently expected to report
-  `production_ready: false` with explicit blockers rather than overclaiming
-  production readiness.
+  The Spora standard relay transaction mass limit is currently `500000`, and
+  the standard block mass is `2000000`. Code deployment storage mass is tracked
+  separately from block-level mass so code-cell deployment remains observable.
+  The gate now also distinguishes:
+  - `scoped_action_standard_relay_ready`
+  - `full_file_monolith_standard_relay_ready`
+  - `standard_relay_incompatible_examples`
+  - `advisories`
+  so full-file bundled monolith artifacts do not masquerade as the scoped
+  production deploy unit.
+- Production runs also emit `production-evidence.json` next to
+  `acceptance-report.json`. This evidence file is written only after the
+  production profile passes and records the release-facing gate summary,
+  required checks, report artifact paths, git revision, dirty-worktree marker,
+  standard block mass, standard relay tx mass, scoped action coverage, malformed
+  matrix coverage, and full-file deployment compatibility. The same profile
+  immediately validates the evidence with
+  `scripts/validate_spora_production_evidence.py`; release jobs archive the file
+  together with the detailed reports under `target/devnet-acceptance/`.
 - `scripts/devnet_acceptance.sh --profile production` is the fail-closed Spora
-  production entrypoint. It first generates the complete base devnet report and
-  then fails unless the structured Spora production gate reports
-  `production_ready: true`. The production gate is scoped-action oriented:
-  full-file example deployments remain development probes, while production
-  release evidence must come from scoped action artifacts and action-specific
-  transactions. Current Spora action-specific devnet builder coverage is
-  `27/43`: `token.cell::mint`, `token.cell::transfer_token`,
-  `token.cell::burn`, `token.cell::merge`, `nft.cell::transfer`,
-  `nft.cell::create_listing`, `nft.cell::cancel_listing`,
-  `nft.cell::buy_from_listing`, `nft.cell::create_offer`,
-  `nft.cell::accept_offer`, `nft.cell::burn`, `nft.cell::mint`, and
-  `nft.cell::batch_mint`, plus `timelock.cell::create_absolute_lock`,
-  `timelock.cell::create_relative_lock`, `timelock.cell::lock_asset`,
-  `timelock.cell::request_release`,
-  `timelock.cell::request_emergency_release`,
-  `timelock.cell::extend_lock`, `timelock.cell::batch_create_locks`,
-  `launch.cell::simple_launch`, `launch.cell::launch_token`,
-  `vesting.cell::create_vesting_config`,
-  and `amm_pool.cell::seed_pool`, `amm_pool.cell::swap_a_for_b`,
-  `amm_pool.cell::add_liquidity`, and `amm_pool.cell::remove_liquidity`
-  deploy scoped action artifacts, seed executable script-locked fixture cells, run
-  valid business transactions, and run malformed rejection transactions through
-  the real VM/code-cell path.
-- Latest Spora base acceptance after adding the `launch_token` builder:
-  `target/devnet-acceptance/20260423-231325-4807/base-report.json`.
-  The matching production gate still fails closed by design:
-  `target/devnet-acceptance/20260423-231325-4807/acceptance-report.json`
-  reports `production_ready: false`, standard-mass-policy blockers, and
-  `27/43` valid/malformed action-builder coverage in the latest base report.
+  production entrypoint. It now runs the base acceptance path under standard
+  mass policy and then fails unless the structured Spora production gate
+  reports `production_ready: true`. The production gate records both scoped
+  action production evidence and full-file code-cell deployment evidence.
+- Current Spora action-specific devnet builder coverage is closed:
+  - `scoped_action_artifact_count: 43`
+  - `valid_action_specific_builder_count: 43`
+  - `malformed_action_matrix_count: 43`
+  - `scheduler_witness_shape_count: 43`
+  - `scheduler_witness_shape_malformed_count: 43`
+- Latest Spora production acceptance report:
+  `target/devnet-acceptance/20260424-161423-35035/base-report.json`.
+  The current production interpretation is:
+  - `production_gate.status: passed`;
+  - `production_gate.production_ready: true`;
+  - `standard_mass_policy_used: true`;
+  - scoped actions are standard-relay compatible at `43/43`;
+  - full-file monolith bundled examples are standard-relay compatible at `7/7`;
+  - `multisig.cell` and `nft.cell` are accepted/indexed after raising standard
+    relay transaction mass to `500000` and paying deployment fees from measured
+    storage mass;
+  - there are no scoped production blockers or full-file standard-relay
+    deployment blockers.
 - The NFT batch-mint closure exposed and fixed a Spora resumable VM validation
   bug: transaction-level resumable budget state could treat a chunk budget as a
   hard consensus cycle limit at script-group boundaries. `TransactionState`
@@ -195,27 +219,32 @@ builders and mass/cycle gates for every bundled example:
     can be analyzed, including text/rodata bytes, relaxed branch count,
     maximum conditional branch distance, machine block/edge/call-edge counts,
     and unreachable machine blocks;
-  - `ckb` reports configured `max_tx_verify_cycles`, `max_block_cycles`,
-    `max_block_bytes`, code-cell data capacity lower bound, recommended code
-    cell capacity margin, entry witness byte bounds, and explicit
-    `dry_run_required_for_production`;
-  - `spora` reports v0 compute/storage/transient/code-deployment mass
-    estimates, configured max block mass, and whether the compiler estimate
-    would require a relaxed mass policy;
+  - `ckb` reports the Blake2b/Molecule hash domain, script hash algorithm,
+    transaction hash algorithm, sighash algorithm, supported script
+    `hash_type` set, declared type-id hash_type, configured
+    `max_tx_verify_cycles`, `max_block_cycles`, `max_block_bytes`, code-cell
+    data capacity lower bound, recommended code cell capacity margin, entry
+    witness byte bounds, tx-size measurement requirements, occupied-capacity
+    measurement requirements, and explicit `dry_run_required_for_production`;
+  - `spora` reports v1 compute/storage/transient/code-deployment mass
+    estimates, configured standard block mass, standard relay transaction mass,
+    standard tx/block fit estimates, and whether the compiler estimate would
+    require a relaxed mass policy;
   - CKB limits can be overridden with
     `CELLSCRIPT_CKB_MAX_TX_VERIFY_CYCLES`,
     `CELLSCRIPT_CKB_MAX_BLOCK_CYCLES`, and
-    `CELLSCRIPT_CKB_MAX_BLOCK_BYTES`; Spora max block mass can be overridden
-    with `CELLSCRIPT_SPORA_MAX_BLOCK_MASS`.
+    `CELLSCRIPT_CKB_MAX_BLOCK_BYTES`; Spora standard block and relay tx mass
+    can be overridden with `CELLSCRIPT_SPORA_MAX_BLOCK_MASS` and
+    `CELLSCRIPT_SPORA_MAX_STANDARD_TRANSACTION_MASS`.
 - `build --json`, `check --json`, and `verify-artifact --json` now carry the
   same constraints object so CI, wallet builders, and acceptance scripts can
   consume it without parsing prose logs.
-- The current constraints report is intentionally honest about what the
-  compiler cannot know by itself: CKB cycles are marked
-  `not-measured-by-compiler`, CKB transaction size is `builder-required`, CKB
-  capacity is a code-cell data lower bound until a builder derives full
-  occupied capacity, and Spora mass is a v0 estimate requiring devnet or
-  builder confirmation.
+- The current constraints report is explicit about the boundary between
+  compiler-visible limits and builder/acceptance-measured values: CKB cycles
+  and tx size remain builder/dry-run measured, occupied capacity is marked as a
+  measurement requirement for output-producing artifacts, and Spora mass uses
+  the same standard tx/block limits as production acceptance while still
+  treating devnet/builder confirmation as authoritative.
 - The CKB acceptance script now records both positive scoped coverage and
   expected fail-closed scoped gaps. A gap entry that starts compiling is treated
   as a failing gate until its transaction harness and malformed matrix are
@@ -334,17 +363,14 @@ builders and mass/cycle gates for every bundled example:
   harness now funds the batch transaction with enough capacity and reports the
   last node status when a submitted transaction does not commit.
 
-The important remaining production gap has moved from CKB bundled-example
-closure to final production hardening. The default CKB gate now has no missing
-on-chain actions, no expected fail-closed entries, and no full-file strict
-original policy failures. The remaining hardening gate explicitly records that
-the current CKB on-chain evidence is still driven by handwritten Python
-harnesses, not builder-generated transactions, and that measured constraints
-are still incomplete for consensus-serialized tx size and exact occupied
-capacity. The next CKB work is to replace hand-authored harness transactions
-with builder-generated transactions, broaden malformed lifecycle matrices, feed
-measured cycles/serialized bytes/exact occupied capacity into constraints
-artifacts, and keep the production gate as the release evidence.
+The CKB bundled-example production gap is closed for the current local suite.
+The default production gate has no missing on-chain actions, no expected
+fail-closed entries, and no full-file strict original policy failures. The
+final hardening gate is also closed: all 43 bundled business actions are
+builder-backed, and acceptance records measured cycles, consensus-serialized
+transaction bytes, and exact occupied-capacity evidence. The remaining CKB work
+is broader adversarial coverage, external audit, and long-running release
+artifact retention.
 
 The timelock `lock_asset`, `request_release`, and `request_emergency_release`
 bounded CKB harnesses now use original scoped `timelock.cell` artifacts.
@@ -384,24 +410,24 @@ Production-grade dual-chain support means:
 - Artifact metadata, schema metadata, package lockfiles, backend shape reports,
   and acceptance reports are deterministic CI artifacts.
 
-Base devnet probes remain useful only as regression tests.
-They must not be used as evidence that original business actions are
-production-ready.
+Base devnet probes remain useful only as regression tests. Production readiness is
+defined by the structured Spora production gate, the CKB production gate, and
+the CKB final hardening gate.
 
 ## Bundled Example Closure Matrix
 
-The release target is to move every bundled example from bounded coverage to
-strict original execution on both chains.
+Every bundled example is now covered by strict original execution on both
+chains in the local acceptance suite.
 
 | Example | Spora target | CKB current state | CKB production closure |
 |---|---|---|---|
-| `token.cell` | Compiles under `spora`; scoped Spora `mint`, `transfer_token`, `burn`, and `merge` now run as real devnet action-builder transactions with malformed rejection coverage. Spora still needs standard policy release evidence and the remaining bundled action builders. | Strict admitted; original scoped CKB mint/transfer/burn/merge harnesses run on-chain with valid output liveness and malformed script rejection. | Harden capacity, TYPE_ID, malformed witness/data/type/dep matrix, and builder output. |
-| `nft.cell` | Compiles under `spora`; scoped Spora `transfer`, `create_listing`, `cancel_listing`, `buy_from_listing`, `create_offer`, `accept_offer`, `burn`, `mint`, and `batch_mint` now run as real devnet action-builder transactions with malformed rejection coverage. `mint` and `batch_mint` use Collection/NFT Molecule table data, real scoped code-cell deployment, indexed output checks, and compiled scheduler witnesses. Spora still needs standard policy release evidence and the remaining bundled action builders. | Whole original CKB compile passes. All original scoped CKB actions run on-chain: `mint`, `transfer`, `create_listing`, `cancel_listing`, `buy_from_listing`, `create_offer`, `accept_offer`, `batch_mint`, and `burn`; lock `collection_creator` compiles. `batch_mint` verifies four NFT outputs plus collection replacement and has enough committed capacity for the current harness. | Add collection lineage hardening, metadata/data-hash rules, marketplace counterparty binding, broader malformed owner/type/data cases, and standard-mass-policy release evidence. |
-| `timelock.cell` | Compiles under `spora`; scoped Spora `create_absolute_lock`, `create_relative_lock`, `lock_asset`, `request_release`, `request_emergency_release`, `extend_lock`, and `batch_create_locks` now run as real devnet action-builder transactions with malformed rejection coverage. These builders deploy scoped code cells, seed executable script-locked fixture cells, encode fixed `TimeLock`/`ReleaseRequest` data plus Molecule `LockedAsset`/`EmergencyRelease` table data, preserve mutating type/lock identity, and attach compiled scheduler witnesses. A direct `execute_release` probe still exits with VM code 1 even after checking raw and Molecule `LockedAsset` fixture encodings, so Spora still needs verifier/lowering work before `execute_release`, `approve_emergency_release`, and `execute_emergency_release` can be counted. | Whole original CKB compile passes. All original scoped CKB actions and locks compile, and every action runs on-chain: `create_absolute_lock`, `create_relative_lock`, `lock_asset`, `request_release`, `request_emergency_release`, `approve_emergency_release`, `execute_release`, `execute_emergency_release`, `extend_lock`, and `batch_create_locks`. | Add CKB epoch/since/header hardening, builder-backed timelock transactions, and broader malformed time/output/type/dependency cases. |
-| `multisig.cell` | Compiles under `spora`; production still needs action-specific Spora tx builders and mass/cycle gates. | Whole original CKB compile passes. All original scoped CKB actions compile and run on-chain: `create_wallet`, `propose_transfer`, `add_signature`, `propose_add_signer`, `propose_remove_signer`, `propose_change_threshold`, `execute_proposal`, and `cancel_proposal`; all original locks compile: `is_signer_lock`, `can_execute`, `can_cancel`, `has_enough_signatures`, `not_expired`. | Broaden malformed signer/threshold/signature/expiry matrices and add builder-backed production transactions. |
-| `vesting.cell` | Compiles under `spora`; scoped Spora `create_vesting_config` now runs as a real devnet action-builder transaction with malformed rejection coverage. The builder deploys the scoped action artifact, seeds an executable script-locked fixture cell, creates a real `VestingConfig` output, and rejects malformed config data. A direct `grant_vesting` probe using a real Token input, config cell dep, and Spora header dep still exits with VM code 1, so Spora still needs verifier/lowering work before `grant_vesting`, `claim_vested`, and `revoke_grant` can be counted. | Whole original CKB compile passes. All original scoped CKB actions now compile and run on-chain: `create_vesting_config`, `grant_vesting`, `claim_vested`, and `revoke_grant`. `grant_vesting` uses `env::current_timepoint()` and verifies a real Token input, VestingConfig input, VestingGrant output, header-dep timepoint, and malformed output rejection. `claim_vested` uses CKB-compatible input lock-hash authorization binding for `VestingGrant.beneficiary`, verifies claim output plus updated grant output, and rejects malformed claim output data. `revoke_grant` now requires `admin == config.admin`, verifies the config read_ref input, employee/admin token outputs, and malformed revoke output rejection. | Broaden malformed schedule/claim/revoke cases and replace the lock-script harness with a type-script deployment harness where possible. |
-| `amm_pool.cell` | Compiles under `spora`; scoped Spora `seed_pool`, `swap_a_for_b`, `add_liquidity`, and `remove_liquidity` now run as real devnet action-builder transactions with malformed rejection coverage. The builders deploy scoped action artifacts, seed typed Token/Pool/LPReceipt fixture cells, verify Pool replacement identity, LP supply coupling, proportional add/remove accounting, swap output pricing, provider/recipient lock binding, and malformed reserve/output rejection through the real VM/code-cell path. Spora still needs standard policy release evidence plus explicit production policy or builder coverage for pure helper actions `isqrt` and `min`. | Whole original CKB compile passes. All original scoped CKB AMM entries compile and run on-chain: `seed_pool`, `swap_a_for_b`, `add_liquidity`, `remove_liquidity`, `isqrt`, and `min`. The harnesses verify real Token inputs, Pool/LPReceipt outputs, Pool replacement identity, LP supply coupling, add/remove proportional accounting, swap fee accounting, constant-product output pricing, Token output symbols/amounts, TypeHash binding, and malformed output rejection. | Broaden malformed slippage/symbol/type/capacity matrices and add builder-backed production transactions. |
-| `launch.cell` | Compiles under `spora`; scoped Spora `simple_launch` and `launch_token` now run as real devnet action-builder transactions with malformed rejection coverage. The builders deploy scoped action artifacts, seed executable script-locked fixture cells, create MintAuthority plus Token output sets, verify fixed-recipient aggregate allocation for `simple_launch`, and verify the current scoped `launch_token` MintAuthority plus five-Token distribution shape through the real VM/code-cell path. Spora still needs standard policy release evidence plus broader launch lifecycle coverage. | Whole original CKB compile passes. Original scoped `simple_launch` runs on-chain with the eight-recipient fixed aggregate ABI, valid output coverage, and malformed-output rejection. Original scoped `launch_token` now runs on-chain with fixed four-recipient distribution ABI and pool-composition runtime checks. | Add builder-backed launch transactions, sale lifecycle hardening, cap/allocation/finalization checks, and broader malformed phase/allocation cases. |
+| `token.cell` | Compiles under `spora`; scoped Spora `mint`, `transfer_token`, `burn`, and `merge` run as real devnet action-builder transactions with malformed rejection coverage. The full-file code-cell deployment is accepted/indexed under standard mass policy. | Strict admitted; original scoped CKB mint/transfer/burn/merge run on-chain with builder-backed valid transactions, measured constraints, and malformed script rejection. | Broaden malformed witness/data/type/dep matrices and external audit coverage. |
+| `nft.cell` | Compiles under `spora`; scoped Spora `transfer`, `create_listing`, `cancel_listing`, `buy_from_listing`, `create_offer`, `accept_offer`, `burn`, `mint`, and `batch_mint` run as real devnet action-builder transactions with malformed rejection coverage. `mint` and `batch_mint` use Collection/NFT Molecule table data, real scoped code-cell deployment, indexed output checks, and compiled scheduler witnesses. The full-file code-cell deployment is accepted/indexed under standard mass policy. | Whole original CKB compile passes. All original scoped CKB actions run on-chain with builder-backed transactions: `mint`, `transfer`, `create_listing`, `cancel_listing`, `buy_from_listing`, `create_offer`, `accept_offer`, `batch_mint`, and `burn`; lock `collection_creator` compiles. `batch_mint` verifies four NFT outputs plus collection replacement with measured capacity. | Add collection lineage hardening, metadata/data-hash rules, marketplace counterparty binding, and broader malformed owner/type/data cases. |
+| `timelock.cell` | Compiles under `spora`; all scoped Spora timelock actions run as real devnet action-builder transactions with malformed rejection coverage. Builders deploy scoped code cells, seed executable script-locked fixture cells, encode fixed and Molecule table data, preserve mutating type/lock identity, and attach compiled scheduler witnesses. The full-file code-cell deployment is accepted/indexed under standard mass policy. | Whole original CKB compile passes. All original scoped CKB actions and locks compile, and every action runs on-chain with builder-backed transactions: `create_absolute_lock`, `create_relative_lock`, `lock_asset`, `request_release`, `request_emergency_release`, `approve_emergency_release`, `execute_release`, `execute_emergency_release`, `extend_lock`, and `batch_create_locks`. | Broaden malformed time/output/type/dependency cases and external audit coverage. |
+| `multisig.cell` | Compiles under `spora`; all scoped Spora multisig actions run as real devnet action-builder transactions with malformed rejection coverage. The full-file code-cell deployment is accepted/indexed under standard mass policy. | Whole original CKB compile passes. All original scoped CKB actions compile and run on-chain with builder-backed transactions: `create_wallet`, `propose_transfer`, `add_signature`, `propose_add_signer`, `propose_remove_signer`, `propose_change_threshold`, `execute_proposal`, and `cancel_proposal`; all original locks compile: `is_signer_lock`, `can_execute`, `can_cancel`, `has_enough_signatures`, `not_expired`. | Broaden malformed signer/threshold/signature/expiry matrices. |
+| `vesting.cell` | Compiles under `spora`; scoped Spora `create_vesting_config`, `grant_vesting`, `claim_vested`, and `revoke_grant` run as real devnet action-builder transactions with malformed rejection coverage. The full-file code-cell deployment is accepted/indexed under standard mass policy. | Whole original CKB compile passes. All original scoped CKB actions compile and run on-chain with builder-backed transactions: `create_vesting_config`, `grant_vesting`, `claim_vested`, and `revoke_grant`. `grant_vesting` uses `env::current_timepoint()` and verifies real Token/Vesting cells, header-dep timepoint, and malformed output rejection. `claim_vested` and `revoke_grant` verify authorization and output relations. | Broaden malformed schedule/claim/revoke cases and type-script deployment coverage where useful. |
+| `amm_pool.cell` | Compiles under `spora`; scoped Spora `seed_pool`, `swap_a_for_b`, `add_liquidity`, `remove_liquidity`, `isqrt`, and `min` run through the current production matrix. Mutating builders deploy scoped action artifacts, seed typed Token/Pool/LPReceipt fixture cells, verify Pool replacement identity, LP supply coupling, proportional add/remove accounting, swap output pricing, provider/recipient lock binding, and malformed reserve/output rejection. The full-file code-cell deployment is accepted/indexed under standard mass policy. | Whole original CKB compile passes. All original scoped CKB AMM entries compile and run on-chain with builder-backed transactions: `seed_pool`, `swap_a_for_b`, `add_liquidity`, `remove_liquidity`, `isqrt`, and `min`. The harnesses verify real Token inputs, Pool/LPReceipt outputs, Pool replacement identity, LP supply coupling, add/remove proportional accounting, swap fee accounting, constant-product output pricing, Token output symbols/amounts, TypeHash binding, and malformed output rejection. | Broaden malformed slippage/symbol/type/capacity matrices. |
+| `launch.cell` | Compiles under `spora`; scoped Spora `simple_launch` and `launch_token` run as real devnet action-builder transactions with malformed rejection coverage. Builders deploy scoped action artifacts, seed executable script-locked fixture cells, create MintAuthority plus Token output sets, verify allocation and distribution shape, and reject malformed outputs. The full-file code-cell deployment is accepted/indexed under standard mass policy. | Whole original CKB compile passes. Original scoped `simple_launch` and `launch_token` run on-chain with builder-backed transactions, fixed-recipient distribution ABI, valid output coverage, pool-composition runtime checks, and malformed-output rejection. | Broaden sale lifecycle, cap/allocation/finalization, and malformed phase/allocation cases. |
 
 Production exit criterion:
 
@@ -412,8 +438,10 @@ Production exit criterion:
 - Spora devnet acceptance `production_gate.production_ready == true`.
 - Every on-chain CKB action harness is compiled from the original bundled
   source with `kind == "original-scoped-action-strict"`.
-- Each bundled example has at least one valid Spora action transaction and one
-  valid CKB action transaction in acceptance.
+- All 43 bundled source actions have valid Spora action-builder transaction
+  coverage and malformed rejection coverage.
+- All 43 bundled source actions have valid builder-backed CKB transaction
+  coverage and malformed rejection coverage.
 - Each bundled example has malformed transactions rejected by script logic, not
   by standardness, mass, capacity, transient node state, missing plumbing, or
   cycle-limit accidents.
@@ -437,8 +465,9 @@ Closed work items:
 4. The default production gate rejects standalone/portable/base-probe/compile-only
    evidence and reports `production_ready=true` only when the on-chain
    production matrix passes.
-5. The remaining work belongs to production hardening: builders, broader
-   malformed matrices, schema snapshots, and measured constraints artifacts.
+5. The final hardening gate records builder-backed transactions, measured
+   cycles, consensus-serialized transaction bytes, and occupied-capacity
+   evidence for all 43 actions.
 
 Required tests:
 
@@ -448,8 +477,8 @@ Required tests:
   local devnet
 - `scripts/ckb_cellscript_acceptance.sh --compile-only --production` as a
   compile-coverage diagnostic, not as release evidence
-- `scripts/ckb_cellscript_acceptance.sh --bounded` only as a development matrix
-  while an explicit production gap is being closed
+- `scripts/ckb_cellscript_acceptance.sh --bounded` only as a development
+  diagnostic, not as release evidence
 
 ## Phase B: Molecule Schema Productionization
 
@@ -610,26 +639,25 @@ Required adversarial coverage:
 
 ## Immediate Next Work
 
-1. Keep the CKB production path free of bundled non-production artifacts; bounded mode
-   may only report scoped development coverage and must not be used as release
-   evidence.
+1. Keep `scripts/devnet_acceptance.sh --profile production` as the Spora
+   release gate and fail it on any scoped-action, malformed-matrix,
+   scheduler-witness, standard-mass, or full-file deployment regression.
 2. Keep `scripts/ckb_cellscript_acceptance.sh --production` as the CKB release
-   gate and fail it if any bundled action falls back to standalone, portable,
+   gate and fail it on any fallback to standalone, portable,
    expected-fail-closed, base-probe, or compile-only evidence.
-3. Add generated schema manifests and snapshot tests for `nft`, `timelock`, and
-   `multisig`.
-4. Start the action transaction builder around completed token, NFT, timelock,
-   multisig, vesting, AMM, and launch harnesses. The initial builder target
-   should reproduce the current hand-authored CKB production harnesses exactly,
-   then replace them one example at a time.
-5. Feed builder/dry-run results back into constraints artifacts: measured CKB
-   cycles, serialized transaction bytes, exact occupied capacity, recommended
-   fee/capacity margin, and measured Spora compute/storage/transient mass.
-6. Convert CKB acceptance to use builder-generated transactions for completed
-   examples.
-7. Broaden malformed matrices for CKB NFT collection/metadata, timelock
-   time/header semantics, launch lifecycle/allocation, AMM slippage/symbol/type,
-   multisig threshold/signature/expiry, vesting schedule/claim/revoke, and
-   token type/data/dependency cases.
-8. Require the default on-chain production gate, not only compile-only, to pass
-   before any CKB production claim.
+3. Save Spora production reports, CKB production reports, CKB final hardening
+   reports, backend shape reports, constraints JSON, schema manifests, and
+   package lock verification as release artifacts.
+4. Add generated schema manifests and snapshot tests for every bundled example,
+   with deeper focus on NFT, timelock, multisig, AMM, launch, and vesting
+   dynamic Molecule paths.
+5. Broaden malformed matrices for CKB and Spora NFT collection/metadata,
+   timelock time/header semantics, launch lifecycle/allocation, AMM
+   slippage/symbol/type, multisig threshold/signature/expiry, vesting
+   schedule/claim/revoke, and token type/data/dependency cases.
+6. Wire constraints reports into wallet and package-builder workflows so users
+   see ABI, mass, capacity, fee, cycles, and artifact-size constraints before
+   deployment.
+7. Prepare external audit artifacts: syscall/profile delta, Molecule schema
+   spec, witness ABI, builder threat model, package trust model, backend shape
+   report, and latest Spora/CKB acceptance reports.

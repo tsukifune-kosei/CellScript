@@ -943,11 +943,16 @@ impl CommandExecutor {
             )));
         }
 
-        let payload_params =
-            selected.params.iter().filter(|param| !(param.schema_pointer_abi || param.schema_length_abi)).collect::<Vec<_>>();
+        let payload_params = selected
+            .params
+            .iter()
+            .filter(|param| {
+                !param.cell_bound_abi && !param.ty.starts_with('&') && !selected.runtime_bound_param_names.contains(&param.name)
+            })
+            .collect::<Vec<_>>();
         if args.args.len() != payload_params.len() {
             return Err(crate::error::CompileError::without_span(format!(
-                "{} '{}' expects {} witness payload arg(s), got {}; schema-backed parameters are omitted",
+                "{} '{}' expects {} witness payload arg(s), got {}",
                 selected.kind,
                 selected.name,
                 payload_params.len(),
@@ -960,8 +965,12 @@ impl CommandExecutor {
             .zip(args.args.iter())
             .map(|(param, value)| parse_entry_witness_arg(param, value))
             .collect::<Result<Vec<_>>>()?;
-        let witness = crate::encode_entry_witness_args_for_params(selected.params, &witness_args)
-            .map_err(|error| crate::error::CompileError::without_span(format!("failed to encode entry witness: {}", error)))?;
+        let witness = crate::encode_entry_witness_args_for_params_with_runtime_bound(
+            selected.params,
+            &witness_args,
+            &selected.runtime_bound_param_names,
+        )
+        .map_err(|error| crate::error::CompileError::without_span(format!("failed to encode entry witness: {}", error)))?;
         let witness_hex = crate::hex_encode(&witness);
 
         if let Some(output_path) = &args.output {
@@ -972,12 +981,6 @@ impl CommandExecutor {
         }
 
         if args.json {
-            let schema_backed_params = selected
-                .params
-                .iter()
-                .filter(|param| param.schema_pointer_abi || param.schema_length_abi)
-                .map(|param| param.name.as_str())
-                .collect::<Vec<_>>();
             let payload_param_names = payload_params.iter().map(|param| param.name.as_str()).collect::<Vec<_>>();
             let summary = serde_json::json!({
                 "status": "ok",
@@ -988,7 +991,6 @@ impl CommandExecutor {
                 "witness_size_bytes": witness.len(),
                 "payload_args": witness_args.len(),
                 "payload_params": payload_param_names,
-                "schema_backed_params_omitted": schema_backed_params,
                 "output": args.output.as_ref().map(|path| path.display().to_string()),
             });
             let json = serde_json::to_string_pretty(&summary).map_err(|error| {
@@ -2683,6 +2685,7 @@ struct SelectedEntryWitnessMetadata<'a> {
     kind: &'static str,
     name: &'a str,
     params: &'a [ParamMetadata],
+    runtime_bound_param_names: std::collections::BTreeSet<String>,
 }
 
 fn select_entry_witness_metadata<'a>(
@@ -2696,7 +2699,18 @@ fn select_entry_witness_metadata<'a>(
             .iter()
             .find(|candidate| candidate.name == name)
             .ok_or_else(|| crate::error::CompileError::without_span(format!("action '{}' was not found in metadata", name)))?;
-        return Ok(SelectedEntryWitnessMetadata { kind: "action", name: action.name.as_str(), params: &action.params });
+        return Ok(SelectedEntryWitnessMetadata {
+            kind: "action",
+            name: action.name.as_str(),
+            params: &action.params,
+            runtime_bound_param_names: action
+                .consume_set
+                .iter()
+                .map(|pattern| pattern.binding.clone())
+                .chain(action.read_refs.iter().map(|pattern| pattern.binding.clone()))
+                .chain(action.mutate_set.iter().map(|pattern| pattern.binding.clone()))
+                .collect(),
+        });
     }
     if let Some(name) = lock {
         let lock = metadata
@@ -2704,18 +2718,49 @@ fn select_entry_witness_metadata<'a>(
             .iter()
             .find(|candidate| candidate.name == name)
             .ok_or_else(|| crate::error::CompileError::without_span(format!("lock '{}' was not found in metadata", name)))?;
-        return Ok(SelectedEntryWitnessMetadata { kind: "lock", name: lock.name.as_str(), params: &lock.params });
+        return Ok(SelectedEntryWitnessMetadata {
+            kind: "lock",
+            name: lock.name.as_str(),
+            params: &lock.params,
+            runtime_bound_param_names: lock
+                .consume_set
+                .iter()
+                .map(|pattern| pattern.binding.clone())
+                .chain(lock.read_refs.iter().map(|pattern| pattern.binding.clone()))
+                .chain(lock.mutate_set.iter().map(|pattern| pattern.binding.clone()))
+                .collect(),
+        });
     }
 
     let mut entries = metadata
         .actions
         .iter()
         .filter(|action| !action.params.is_empty())
-        .map(|action| SelectedEntryWitnessMetadata { kind: "action", name: action.name.as_str(), params: action.params.as_slice() })
-        .chain(metadata.locks.iter().filter(|lock| !lock.params.is_empty()).map(|lock| SelectedEntryWitnessMetadata {
-            kind: "lock",
-            name: lock.name.as_str(),
-            params: lock.params.as_slice(),
+        .map(|action| SelectedEntryWitnessMetadata {
+            kind: "action",
+            name: action.name.as_str(),
+            params: action.params.as_slice(),
+            runtime_bound_param_names: action
+                .consume_set
+                .iter()
+                .map(|pattern| pattern.binding.clone())
+                .chain(action.read_refs.iter().map(|pattern| pattern.binding.clone()))
+                .chain(action.mutate_set.iter().map(|pattern| pattern.binding.clone()))
+                .collect(),
+        })
+        .chain(metadata.locks.iter().filter(|lock| !lock.params.is_empty()).map(|lock| {
+            SelectedEntryWitnessMetadata {
+                kind: "lock",
+                name: lock.name.as_str(),
+                params: lock.params.as_slice(),
+                runtime_bound_param_names: lock
+                    .consume_set
+                    .iter()
+                    .map(|pattern| pattern.binding.clone())
+                    .chain(lock.read_refs.iter().map(|pattern| pattern.binding.clone()))
+                    .chain(lock.mutate_set.iter().map(|pattern| pattern.binding.clone()))
+                    .collect(),
+            }
         }))
         .collect::<Vec<_>>();
 
@@ -2732,10 +2777,7 @@ fn select_entry_witness_metadata<'a>(
 
 fn parse_entry_witness_arg(param: &ParamMetadata, value: &str) -> Result<EntryWitnessArg> {
     if param.schema_pointer_abi || param.schema_length_abi {
-        return Err(crate::error::CompileError::without_span(format!(
-            "parameter '{}' is schema-backed and must be omitted from entry witness args",
-            param.name
-        )));
+        return decode_hex_arg(&param.name, value, None).map(EntryWitnessArg::Bytes);
     }
 
     if let Some(width) = param.fixed_byte_len {

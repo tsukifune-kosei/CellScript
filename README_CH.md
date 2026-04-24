@@ -14,47 +14,88 @@
 
 [English](README.md) | [中文](README_CH.md)
 
+**用你思考 Cell 合约的方式来写 Cell 合约——而不是按线格式的方式来写。**
+
 CellScript 是面向 Spora 和 CKB 的 Cell 模型智能合约 DSL。它把 `.cell`
 源码编译为 ckb-vm RISC-V assembly 或 ELF 产物，并同时输出可用于审计、
 策略检查、schema 绑定和调度感知执行的类型化 metadata。
 
-CellScript 是刻意收窄的语言。它不是新的 VM，也不是账户存储合约语言。
+CellScript 是刻意收窄的语言：它不是新的 VM，也不是账户存储合约语言。
 它为协议作者提供一种类型化方式来描述资产、共享 Cell 状态、receipt、
-生命周期转换、lock 和交易形状的效果，同时仍然直接映射到 Spora 和 CKB
+生命周期转换、lock 和交易形状的效果——同时仍然直接映射到 Spora 和 CKB
 使用的 Cell 模型。
+
+---
 
 ## 为什么需要 CellScript
 
 Spora 和 CKB 都暴露了强大的 Cell 执行模型，但手写脚本会迫使作者靠近线
 格式工作：
 
-- 手动解析 witness bytes；
-- 按 index 跟踪 inputs、CellDeps、outputs 和 output data；
-- 把类型化状态编码进原始 byte arrays；
-- 用 RISC-V C 或汇编直接调用 syscall 编号；
-- 依靠约定而不是编译器维护线性资产语义。
+- 手动解析 witness bytes
+- 按 index 跟踪 inputs、CellDeps、outputs 和 output data
+- 把类型化状态编码进原始 byte arrays
+- 用 RISC-V C 或汇编直接调用 syscall 编号
+- 依靠约定而不是编译器维护线性资产语义
 
 CellScript 把这些工作提升为显式语言构造：`resource`、`shared`、
 `receipt`、`action`、`lock`、`consume`、`create`、`read_ref`、
-`transfer`、`destroy`、`claim` 和 `settle`。这些构造不是隐喻；它们会
-lower 到目标链已经执行的 Cell 交易形状。
+`transfer`、`destroy`、`claim` 和 `settle`。这些构造不是隐喻——它们会
+直接 lower 到目标链已经执行的 Cell 交易形状。
+
+## 快速开始
+
+从仓库安装：
+
+```bash
+cd cellscript
+cargo install --path .
+```
+
+编译你的第一个合约：
+
+```bash
+# 仅做类型检查
+cellc examples/token.cell
+
+# 输出 Spora 的 RISC-V ELF
+cellc examples/token.cell --target riscv64-elf --target-profile spora
+
+# 输出 CKB 的 RISC-V ELF，指定入口 action
+cellc examples/nft.cell --target riscv64-elf --target-profile ckb --entry-action transfer
+```
+
+创建包：
+
+```bash
+cellc init token-package
+cd token-package
+cellc add shared-types --path ../shared-types
+cellc build --target riscv64-elf --target-profile spora
+```
+
+检查跨目标可移植性：
+
+```bash
+cellc check --target-profile portable-cell
+```
+
+> **下一步：** 阅读[语言模型](#核心模型)、[完整示例](#示例)，或深入了解[架构](#架构)。
+
+---
 
 ## Target Profiles
 
-CellScript 通过 `--target-profile` 支持多个 Cell 兼容目标。
+CellScript 通过 `--target-profile` 支持多个 Cell 兼容目标：
 
-| Profile | 适用场景 | 目标形状 |
+| Profile | 何时使用 | 你得到什么 |
 |---|---|---|
-| `spora` | Spora 原生产物 | Spora CellTx 约定、domain-separated BLAKE3 metadata、Spora DAG header ABI、Spora scheduler witness metadata，以及 ELF 产物中的 Spora ABI trailer。 |
-| `ckb` | 受支持纯净子集的 CKB 产物 | CKB mainnet syscall profile、CKB Molecule/BLAKE2b 约定、CKB header ABI、无 Spora ABI trailer、无 Spora scheduler witness ABI。 |
-| `portable-cell` | 源码可移植性检查 | 用于检查代码是否保持在 Spora/CKB 共享 Cell 子集内；生成产物时使用 `spora` 或 `ckb`。 |
+| `spora` | Spora 原生产物 | BLAKE3 metadata、Spora syscall ABI、scheduler witness、ABI trailer |
+| `ckb` | CKB mainnet 产物 | BLAKE2b/Molecule 约定、CKB syscall profile、无 Spora 扩展 |
+| `portable-cell` | 源码可移植性检查 | 验证代码在两个目标上都能工作——不生成产物 |
 
-v1 的 `ckb` profile 是有边界的 artifact profile。它只承诺通过 CKB
-portability gate 的源码可以按 CKB profile 生成产物；它不承诺任意
-stateful CellScript 程序或任意手写 CKB 合约可以完整互换。未覆盖的
-CKB/runtime/stateful 形状会被策略拒绝，或保留为 post-v1 工作。
-
-示例：
+> v1 的 `ckb` profile 是有边界的 artifact profile。它对受支持 Cell 子集提供有边界的 ckb-vm artifact profile，
+> 只覆盖通过 CKB portability gate 的源码；未支持的 runtime/stateful 形状会被策略拒绝，或保留为 post-v1 工作。
 
 ```bash
 cellc examples/token.cell --target riscv64-elf --target-profile spora
@@ -64,57 +105,55 @@ cellc check --target-profile portable-cell
 
 ## 核心模型
 
-CellScript 程序围绕 Cell 生命周期操作书写。
+CellScript 程序围绕 Cell 生命周期操作书写：
 
-| CellScript 概念 | Cell 交易映射 |
+| 概念 | 编译到什么 |
 |---|---|
-| `resource T { ... }` | 线性的 Cell-backed 资产，表示为 `CellOutput` 加 `outputs_data[i]`。 |
-| `shared T { ... }` | 共享状态 Cell；通过 `CellDep` 读取，或通过消费 input 并创建替代 output 来更新。 |
-| `receipt T { ... }` | 一次性证明 Cell，可表达 deposit、vesting grant、vote 或 liquidity position 等操作结果。 |
-| `consume value` | 花费一个 transaction input，线性值随后不可再用。 |
-| `create T { ... }` | 创建新的 output Cell 和类型化 output data。 |
-| `read_ref T` | 加载只读 CellDep-backed 值。 |
-| `action` | 编译为 RISC-V 的 type-script 风格状态转换逻辑。 |
-| `lock` | 编译为 RISC-V 的 lock-script 风格授权逻辑。 |
-| 本地 `let` 值 | 交易局部计算或 witness 派生值；它们自身不会成为持久存储。 |
+| `resource T { ... }` | 线性的 Cell-backed 资产（`CellOutput` + `outputs_data[i]`） |
+| `shared T { ... }` | 共享状态 Cell，通过 `CellDep` 读取，或通过 consume + create 更新 |
+| `receipt T { ... }` | 一次性证明 Cell（deposit、vesting、vote、liquidity） |
+| `consume value` | 花费一个 transaction input |
+| `create T { ... }` | 创建新的 output Cell 和类型化数据 |
+| `read_ref T` | 加载只读 CellDep-backed 值 |
+| `action` | Type-script 状态转换逻辑 → 编译为 RISC-V |
+| `lock` | Lock-script 授权逻辑 → 编译为 RISC-V |
+| 本地 `let` 值 | 交易局部计算；不会成为持久存储 |
 
-只有 `create` 会物化持久状态。普通本地值不会变成 Cell，除非它们被显式
-创建为 `resource`、`shared` 或 `receipt`。
+> **关键规则：** 只有 `create` 会物化持久状态。普通本地值不会变成 Cell，
+> 除非被显式创建为 `resource`、`shared` 或 `receipt`。
 
 ## 语言特性
 
-- **Cell 原生资源**：`resource` 值是线性的，不能复制、静默丢弃或藏进
+- **Cell 原生资源** — `resource` 值是线性的，不能复制、静默丢弃或藏进
   普通值。每个 resource 都必须被 consume、transfer、return、claim、
   settle 或 destroy。
-- **显式共享状态**：`shared` 标记池、注册表、配置 Cell 等争用敏感协议
-  状态。读写会保持对 metadata 和工具可见。
-- **Receipt 作为有状态证明**：`receipt` 表示一次性 Cell，证明某个操作已经
+- **显式共享状态** — `shared` 标记池、注册表、配置 Cell 等争用敏感协议
+  状态。读写保持对 metadata 和工具可见。
+- **Receipt 作为有状态证明** — `receipt` 是一次性 Cell，证明某个操作已经
   发生，并可在之后被 claim 或 settle。
-- **Capability 守门**：`has store, transfer, destroy` 这类声明让资产权限
-  显式化。
-- **生命周期规则**：`#[lifecycle(...)]` 让 Cell-backed 值描述状态机，例如
-  `Granted -> Claimable -> FullyClaimed`。
-- **Effect 推断**：`action` 会根据 Cell 操作被分类为 `Pure`、`ReadOnly`、
+- **Capability 守门** — `has store, transfer, destroy` 让资产权限显式化。
+- **生命周期规则** — `#[lifecycle(...)]` 让 Cell-backed 值描述状态机，
+  例如 `Granted -> Claimable -> FullyClaimed`。
+- **Effect 推断** — `action` 会根据 Cell 操作被分类为 `Pure`、`ReadOnly`、
   `Mutating`、`Creating` 或 `Destroying`。
-- **调度感知 metadata**：Spora target 可以暴露 access summary 和 shared
-  touch domain，让区块构建器和执行流水线判断哪些工作可以独立处理。
-- **类型化 schema metadata**：Cell data layout、type identity、output 字段
-  provenance、source hash、runtime access 和 verifier obligation 都会作为机
-  器可读 metadata 输出。
-- **RISC-V 输出**：可执行目标是 ckb-vm 兼容 RISC-V assembly 或 ELF。
+- **调度感知 metadata** — Spora target 可以暴露 access summary 和 shared
+  touch domain，让区块构建器判断哪些工作可以独立处理。
+- **类型化 schema metadata** — Cell data layout、type identity、source hash、
+  runtime access 和 verifier obligation 都会作为机器可读 metadata 输出。
+- **RISC-V 输出** — 可执行目标是 ckb-vm 兼容 RISC-V assembly 或 ELF。
   CellScript 不引入独立 VM。
-- **包感知编译**：支持 `Cell.toml`、本地模块、配置化 source roots 和本地
-  path dependencies。
-- **策略门禁**：build、check、metadata 和 artifact verification 命令可以按
+- **包感知编译** — 支持 `Cell.toml`、本地模块、source roots 和本地 path
+  dependencies。
+- **策略门禁** — build、check、metadata 和 artifact verification 命令可以按
   目标 profile 或部署策略拒绝不合规产物。
 
 ## 示例
 
-CellScript 语法刻意贴近 Cell 交易形状。一个 module 包含 schema 声明和可
-执行入口。持久值用 `resource`、`shared` 或 `receipt` 声明；可执行逻辑用
-`action` 或 `lock` 声明；交易效果用显式生命周期操作表达。
+一个 module 包含 schema 声明和可执行入口。持久值用 `resource`、`shared`
+或 `receipt` 声明；可执行逻辑用 `action` 或 `lock` 声明；效果用显式生命
+周期操作表达。
 
-常见声明形式：
+**声明：**
 
 ```cellscript
 module spora::example
@@ -144,7 +183,7 @@ lock owner_only(owner: Address, signature: Signature) {
 }
 ```
 
-常见语句和效果形式：
+**效果：**
 
 ```cellscript
 action move_token(token: Token, to: Address) -> Token {
@@ -160,11 +199,11 @@ action move_token(token: Token, to: Address) -> Token {
 ```
 
 编译器把 `consume`、`create`、`transfer`、`destroy`、`claim`、`settle` 和
-`read_ref` 当作 Cell effect，而不是普通函数调用。这些 effect 会反映到
+`read_ref` 当作 **Cell effect**，而不是普通函数调用。这些 effect 会反映到
 metadata 中，使 Spora 调度、CKB admission policy、schema decoding 和
 artifact verification 都能审计生成脚本。
 
-完整的 fungible-token 示例：
+**完整的 fungible-token 示例：**
 
 ```cellscript
 module spora::fungible_token
@@ -206,95 +245,202 @@ action burn(token: Token) {
 }
 ```
 
-仓库还包含以下 bundled protocol examples：
+**内置协议示例：**
 
-| Example | 展示内容 |
+| 示例 | 展示内容 |
 |---|---|
-| `examples/token.cell` | Mint、transfer、burn，以及带同 symbol guard 的 token merge。 |
-| `examples/timelock.cell` | 时间门控状态转换和延迟 claim 路径。 |
-| `examples/multisig.cell` | 授权阈值和签名导向的 lock 逻辑。 |
-| `examples/nft.cell` | 唯一资产、metadata 和所有权转移。 |
-| `examples/vesting.cell` | Receipt-style grants 和 claim lifecycle。 |
-| `examples/amm_pool.cell` | Shared pool state、swap 和 liquidity effects。 |
-| `examples/launch.cell` | Launch/pool composition patterns。 |
+| `examples/token.cell` | Mint、transfer、burn，带同 symbol guard 的 token merge |
+| `examples/timelock.cell` | 时间门控状态转换、延迟 claim 路径 |
+| `examples/multisig.cell` | 授权阈值、签名导向的 lock 逻辑 |
+| `examples/nft.cell` | 唯一资产、metadata、所有权转移 |
+| `examples/vesting.cell` | Receipt-style grants 和 claim lifecycle |
+| `examples/amm_pool.cell` | Shared pool state、swap/liquidity effects |
+| `examples/launch.cell` | Launch/pool composition patterns |
 
 ## 对比
 
-下面的对比总结了 CellScript 为什么围绕 typed Cells、线性资源、显式交易
-effect 和 ckb-vm artifact 设计，而不是围绕账户存储或单链专用 VM 设计。
+CellScript 为什么围绕 typed Cells、线性资源、显式交易 effect 和 ckb-vm
+artifact 设计——而不是围绕账户存储或单链专用 VM：
 
 | 维度 | CellScript | Solidity | Move | Sway |
 |---|---|---|---|---|
-| 执行目标 | ckb-vm 上的 RISC-V ELF 或 assembly | EVM bytecode | Move bytecode | FuelVM bytecode |
-| 状态模型 | 类型化 Cells，显式 inputs/deps/outputs | 账户存储槽 | 全局存储中的 resources | UTXO 加原生资产 |
-| 资产模型 | 原生 `resource`、生命周期、receipt 和 shared Cell 模式 | 手写 token contracts | 原生 resources | 原生资产，但 type-script 概念较少 |
-| 线性所有权 | 对 Cell-backed 值做编译器强制 | 无 | 通过 abilities 支持 | 无通用用户定义线性 resource |
-| 共享状态 | 显式 `shared` Cells | 隐式 contract storage | 部分 Move 链中的 shared objects | 无通用 shared Cell 对应物 |
-| 重入形态 | 没有账户存储 callback 风格重入 | 常见风险面 | 设计上较低 | predicate 风险较低 |
-| 调度 metadata | Spora target 原生支持 | 无 | 非 GhostDAG 导向 | predicate 级独立性 |
+| 执行目标 | ckb-vm 上 RISC-V ELF/asm | EVM bytecode | Move bytecode | FuelVM bytecode |
+| 状态模型 | 类型化 Cells，显式 inputs/deps/outputs | 账户存储槽 | 全局存储中的 resources | UTXO + 原生资产 |
+| 资产模型 | 原生 `resource`、生命周期、receipt、shared Cells | 手写 token contracts | 原生 resources | 原生资产 |
+| 线性所有权 | 编译器强制 | 无 | 通过 abilities | 无通用用户定义 |
+| 共享状态 | 显式 `shared` Cells | 隐式 contract storage | 部分 Move 链的 shared objects | 无 shared Cell 对应物 |
+| 重入 | 无 callback 风格重入 | 常见风险面 | 设计上较低 | predicate 风险较低 |
+| 调度 metadata | Spora 原生支持 | 无 | 非 GhostDAG 导向 | predicate 级 |
 | CKB 兼容性 | 对受支持 Cell 子集提供有边界的 ckb-vm artifact profile | 需要不同 VM | 需要不同 VM | 需要 FuelVM |
 
 与手写 CKB 或 Spora 脚本相比，CellScript 保留同一个 runtime substrate，
 但用类型化 Cell 操作、线性检查、schema metadata 和可被策略验证的产物取代
 原始 byte/syscall 编程。
 
-## 快速开始
+---
 
-从仓库安装：
+## 编辑器支持
 
-```bash
-cd cellscript
-cargo install --path .
+CellScript 包含生产级本地语言工具：
+
+- **In-process LSP** — 诊断、补全、hover、go-to-definition、引用、重命名、
+  格式化和 metadata-oriented code actions。编译器 crate 暴露 `LspServer`；
+  `cellc lsp --stdio` 提供完整的 `tower-lsp` JSON-RPC 传输。
+- **VS Code 扩展** — 语法高亮、snippets、on-save 诊断、compiler-backed
+  格式化、scratch compile、metadata/constraints/production report、
+  target-profile 选择和状态栏反馈。它调用 `cellc`（或 `cargo run` 回退），
+  所以编辑器行为和 CLI/CI 保持一致。
+
+- [`editors/vscode-cellscript`](editors/vscode-cellscript)
+- [双链生产计划](docs/CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md)
+- [双链包 registry 设计](docs/CELLSCRIPT_DUAL_CHAIN_PACKAGE_REGISTRY_DESIGN.md)
+
+---
+
+## 架构
+
+CellScript 是一个多遍编译器，把 `.cell` 源码通过五个定义明确的阶段 lower，
+然后输出 RISC-V 产物、类型化 metadata 和 profile 感知策略检查。下面列出的
+每个模块都位于单一 Rust crate（`cellscript`）中，在 `src/` 下有自己的
+`mod.rs` 入口。
+
+```mermaid
+graph LR
+    Source["Source (.cell)"] --> Lexer
+    Lexer --> Parser
+    Parser --> TypeCheck["Type Checker\n+ Lifecycle"]
+    TypeCheck --> IRLower["IR Lowering\n+ Optimize"]
+    IRLower --> Codegen["Codegen (RISC-V)"]
+    IRLower --> Metadata["Metadata (JSON)"]
+    Codegen --> Artifact[".s / .elf Artifact"]
 ```
 
-编译单文件：
+### 编译流水线
 
-```bash
-cellc examples/token.cell
-cellc examples/token.cell --target riscv64-elf
-cellc examples/token.cell --target riscv64-elf --target-profile ckb
-cellc examples/nft.cell --target riscv64-elf --target-profile ckb --entry-action transfer
-cellc examples/nft.cell --target riscv64-elf --target-profile ckb --entry-lock nft_ownership
+**1. 词法分析**（`lexer/`）
+扫描 `.cell` 源码生成类型化 token 流。处理 CellScript 关键字、运算符、
+字面量和字符串插值。每个 token 携带行/列 span 用于诊断。
+
+**2. 语法解析**（`parser/`）
+从 token 流构建 AST。AST 建模完整 CellScript 表面语法：`resource`、
+`shared`、`receipt`、`struct`、`enum`、`action`、`lock`、`function`、
+`use`、`const`、capability gates、lifecycle 注解，以及所有语句/表达式形式。
+
+**3. 语义分析**（`types/` + `lifecycle/`）
+- *类型检查* — 强制线性资源语义：每个 `resource`/`receipt` 值在 action
+  体退出前必须被 consume、transfer、destroy、claim 或 settle。同时验证
+  shared-state 可变性规则、capability gates、effect 分类（`Pure` /
+  `ReadOnly` / `Mutating` / `Creating` / `Destroying`）和调用签名。
+- *生命周期检查* — 验证 receipt 上的 `#[lifecycle(...)]` 状态机：合法
+  状态转换、整数 state-field 类型和静态 create-site 检查。
+
+**4. IR 降低**（`ir/` + `optimize/` + `resolve/`）
+- *`resolve/`* — 构建每模块符号表，解析跨包 `use` 导入。
+- *`ir/`* — 将类型化 AST 降低为扁平的、面向 RISC-V 的中间表示
+  （`IrAction`、`IrLock`、`IrPureFn`、`IrTypeDef`），带显式 Cell-effect
+  指令（`IrConsume`、`IrCreate`、`IrReadRef`、`IrTransfer`、`IrDestroy`、
+  `IrClaim`、`IrSettle`）、witness/layout 槽位分配和 verifier obligations。
+- *`optimize/`* — 在 `-O1+` 时做语法局部常量折叠和死分支裁剪。刻意保守
+  以保留资源语义。
+
+**5. 代码生成**（`codegen/`）
+输出 ckb-vm 兼容 RISC-V assembly（`.s`）或 ELF（`.elf`）：
+- Syscall wrapper：`ckb_load_cell_data`、`ckb_load_witness`、
+  `ckb_load_header_by_field`、`ckb_load_input_by_field`，以及 Spora 扩展
+  syscall（`secp256k1_verify`、`load_ecdsa_signature_hash`）。
+- Cell input/output/dep 索引映射、witness ABI 帧、运行时 scratch buffer
+  和每入口点 trampoline。
+- Profile 切换的 syscall ABI — Spora 和 CKB 使用不同的 syscall 编号表和
+  source-flag 约定。
+
+### Metadata 与策略
+
+编译器输出单个 JSON metadata sidecar（`.elf.meta.json` / `.s.meta.json`），
+涵盖链调度器、审计工具和策略门禁所需的一切——无需重新解析源码：
+
+| 内容 | 产生者 | 消费者 |
+|---|---|---|
+| Schema 布局、type ID、字段偏移 | `ir/` | Schema 解码器、索引器 |
+| Effect 分类、资源摘要 | `types/` | 调度器、审计工具 |
+| Scheduler witness ABI 与访问域 | `codegen/`（Spora） | Spora 区块构建器、并行调度器 |
+| 源码哈希、artifact BLAKE3 | `lib.rs` | `cellc verify-artifact`、CI |
+| Verifier obligations、pool invariants | `ir/` | 链上 verifier、策略检查器 |
+| Target-profile 策略违规 | `lib.rs` | `cellc check`、CI |
+
+`cellc constraints` 输出关注生产就绪性的可读子集：ABI slot 用量、寄存器/
+stack-spill 布局、witness byte bounds、CKB cycle/capacity 估算和 Spora v0
+mass 估算。
+
+### 运行时与标准库
+
+| 模块 | 作用 |
+|---|---|
+| **Stdlib**（`stdlib/`） | 降低到 ckb-vm syscall 的内置函数：`syscall_load_tx_hash`、`syscall_load_script_hash`、`syscall_load_cell`、`syscall_load_header`、hash 原语、签名验证 stub。模块注入，不单独链接。 |
+| **Collections**（`stdlib/collections.rs`） | 类 vector 操作（push、length、get），降低到 Cell output data 区域写入/读取并带边界检查。 |
+
+### 工具面
+
+| 工具 | 模块 | 工作方式 |
+|---|---|---|
+| **CLI** | `cli/` + `main.rs` | `cellc` 二进制，包含所有子命令 |
+| **LSP** | `lsp/` + `lsp/server.rs` | In-process `LspServer` + `tower-lsp` JSON-RPC over stdio（`cellc lsp --stdio`） |
+| **VS Code** | `editors/vscode-cellscript/` | 调用 `cellc` 实现高亮、诊断、报告 |
+| **Formatter** | `fmt/` | 幂等格式化器，服务于 `cellc fmt` 和 LSP |
+| **Doc 生成器** | `docgen/` | 从 AST + metadata 生成 HTML/Markdown/JSON 文档 |
+| **模拟器** | `simulate.rs` | 符号求值器——输出 `TraceEvent` 日志，无需 ckb-vm |
+| **REPL** | `repl.rs` | 交互式 read-eval-print loop |
+
+### 包与构建系统
+
+| 模块 | 作用 |
+|---|---|
+| **包管理器**（`package/`） | `Cell.toml` 解析、依赖解析（`--path`/`--git`）、`Cell.lock` 可复现性、`cellc init`/`add`/`remove`/`info`。Registry 命令已具形状但 fail-closed。 |
+| **增量编译器**（`incremental/`） | 依赖图感知构建缓存——输入未变时跳过重编译。 |
+| **构建集成**（`lib.rs`） | 解析 `Cell.toml` → `CellBuildConfig`，合并 CLI + manifest 选项，选择入口 scope，运行策略门禁，写入 artifact + metadata。 |
+
+### Target Profile 切换
+
+编译器从类型检查到代码生成都感知 profile：
+
+```mermaid
+graph TB
+    subgraph "Target Profile"
+        subgraph Spora
+            S1[BLAKE3]
+            S2[Molecule]
+            S3[Spora syscall ABI]
+            S4[Spora scheduler witness]
+            S5[Spora ABI trailer]
+        end
+        subgraph CKB
+            C1[BLAKE2b]
+            C2[Molecule]
+            C3[CKB syscall ABI]
+            C4["no Spora scheduler witness"]
+            C5["no ABI trailer"]
+        end
+    end
+    Policy["Policy gate 在 codegen 前拒绝不兼容 metadata"] --> Spora
+    Policy --> CKB
 ```
 
-编译或检查包：
+`portable-cell` 是仅检查 profile，验证源码在两个目标上的兼容性，不生成产物。
 
-```bash
-cellc build --target-profile spora
-cellc check --target-profile ckb
-cellc check --target-profile portable-cell
-```
+### Wasm 门禁
 
-初始化和维护包：
+`wasm/` 是一个 **fail-closed** 审计脚手架：它参与编译和测试，但显式拒绝
+可执行 CellScript 入口，因为 CellScript 没有生产级 Wasm 后端。仅类型的
+IR 模块输出审计报告；其他入口返回
+`WasmSupportStatus::UnsupportedProgram`。该模块的存在是为了防止隐藏的
+过时后端偏离当前 IR。
 
-```bash
-cellc init token-package
-cd token-package
-cellc add shared-types --path ../shared-types
-cellc info
-cellc build --target riscv64-elf --target-profile spora
-```
+---
 
-输出 metadata：
+## 参考
 
-```bash
-cellc metadata examples/token.cell --target riscv64-elf --target-profile spora
-cellc constraints examples/token.cell --target-profile ckb --entry-action mint
-cellc examples/token.cell --target riscv64-elf --target-profile spora
-cellc verify-artifact examples/token.elf --metadata examples/token.elf.meta.json
-```
+### Manifest
 
-`cellc constraints` 会输出 production constraints report；同一份内容也会写入
-compile metadata。它会按 target profile 报告 entry ABI slot usage、寄存器和
-stack-spill 布局、witness byte bounds、artifact/backend-shape metrics、CKB
-cycle/block limit 配置、CKB code-cell capacity lower bounds，以及 Spora v0
-mass estimates。CKB dry-run cycles、serialized transaction size、完整 occupied
-capacity 和实测 Spora mass 仍需要 builder 或 acceptance 层补齐；compiler 会在
-未本地实测的字段上明确标注。
-
-## Manifest
-
-`Cell.toml` 可以设置包入口、source roots、target profile 和 policy 默认值。
+`Cell.toml` 设置包入口、source roots、target profile 和策略默认值：
 
 ```toml
 [package]
@@ -317,87 +463,67 @@ deny_runtime_obligations = false
 
 命令行 flags 可以在构建或 CI 中进一步收紧策略检查。
 
-## 包管理器 Beta
+### 包管理器 Beta
 
 CellScript 在 `cellc` 中提供 beta 包管理器。当前设计刻意保持本地优先和
 fail-closed；registry protocol 仍属于 post-v1 工作。
 
-当前支持：
+**当前支持：**
 
-- `cellc init` 创建带 `Cell.toml` 的应用包或 library package。
-- `cellc build`、`cellc check`、`cellc metadata` 和 `cellc test` 可以接受包
-  目录或 manifest 作为输入。
-- `cellc add --path` 和 `cellc add --git` 会把依赖写入 `Cell.toml`。
-- 本地 path dependencies 会递归解析，并参与 module loading、source
-  hashing 和 metadata。
-- `Cell.lock` 记录解析后的依赖身份，用于可复现检查。
-- `cellc info --json` 为 CI 和工具输出 package metadata。
+- `cellc init` — 创建带 `Cell.toml` 的应用包或 library package
+- `cellc build` / `check` / `metadata` / `test` — 接受包目录或 manifest
+  作为输入
+- `cellc add --path` / `--git` — 把依赖写入 `Cell.toml`
+- 本地 path dependencies 递归解析，参与 module loading、source hashing
+  和 metadata
+- `Cell.lock` — 记录解析后的依赖身份，用于可复现检查
+- `cellc info --json` — 为 CI 和工具输出 package metadata
 
-仍处于 beta：
+**仍处于 beta：**
 
 - Registry `publish`、`install`、`update` 和 `login` 已有命令形状，但在
-  registry backend 和 trust model 定稿前会 fail closed。
-- Package name、lockfile 字段和 registry authentication 还不是稳定生产接口。
+  registry backend 和 trust model 定稿前会 fail closed
+- Package name、lockfile 字段和 registry authentication 还不是稳定生产接口
 
-## CLI Reference
+### CLI 命令
 
-| Command | 用途 |
+| 命令 | 用途 |
 |---|---|
-| `cellc <input>` | 编译 `.cell` 文件、包目录或 `Cell.toml`。 |
-| `cellc build` | 编译包并写入 artifact 和 metadata。 |
-| `cellc check` | 类型检查和 lowering，不写入 artifact。 |
-| `cellc metadata` | 输出 lowering、runtime、scheduler、source 和 schema metadata。 |
-| `cellc constraints` | 输出 profile-aware ABI、artifact、CKB 和 Spora production constraints。 |
-| `cellc verify-artifact` | 用 metadata sidecar 和可选 source hashes 校验 artifact。 |
-| `cellc test` | 运行 `.cell` 源码和注释驱动诊断的编译器 / policy 测试；它不是可信 runtime execution。 |
-| `cellc doc` | 生成 API 和 audit 文档。 |
-| `cellc fmt` | 格式化 `.cell` 源码或检查格式。 |
-| `cellc init` | 创建 package skeleton。 |
-| `cellc add` / `cellc remove` | 修改本地包依赖。 |
-| `cellc publish` / `cellc install` / `cellc update` / `cellc login` | Beta registry-shaped commands；registry-backed operation 仍会 fail closed。 |
-| `cellc info` | 输出 manifest 和 package 信息。 |
-| `cellc repl` | 启动交互式 REPL。 |
-| `cellc run` | 通过可选 VM runner 或 simulator 路径运行支持的 ELF entrypoints。 |
+| `cellc <input>` | 编译 `.cell` 文件、包目录或 `Cell.toml` |
+| `cellc build` | 编译包，写入 artifact + metadata |
+| `cellc check` | 类型检查和 lowering，不写入 artifact |
+| `cellc metadata` | 输出 lowering、runtime、scheduler、source 和 schema metadata |
+| `cellc constraints` | 输出 profile-aware 生产约束 |
+| `cellc verify-artifact` | 用 metadata sidecar 校验 artifact |
+| `cellc test` | 运行编译器/policy 测试（非可信 runtime 执行） |
+| `cellc doc` | 生成 API 和审计文档 |
+| `cellc fmt` | 格式化 `.cell` 源码或检查格式 |
+| `cellc init` | 创建 package skeleton |
+| `cellc add` / `remove` | 修改本地包依赖 |
+| `cellc info` | 输出 manifest 和 package 信息 |
+| `cellc repl` | 启动交互式 REPL |
+| `cellc run` | 通过 VM runner 或 simulator 运行 ELF 入口 |
+| `cellc publish` / `install` / `update` / `login` | Beta — registry 形状，fail-closed |
 
-常用选项：
+### CLI 选项
 
-| Option | 用途 |
+| 选项 | 用途 |
 |---|---|
-| `--target riscv64-asm` | 输出 RISC-V assembly。 |
-| `--target riscv64-elf` | 输出 RISC-V ELF artifact。 |
-| `--target-profile spora` | 使用 Spora profile。 |
-| `--target-profile ckb` | 使用 CKB profile。 |
-| `--target-profile portable-cell` | 检查 Cell profile 间的源码可移植性。 |
-| `--entry-action <ACTION>` | 将单个 action 编译为 artifact entrypoint。适合 CKB 下同一 module 仍有其它入口保持 fail-closed 的场景。 |
-| `--entry-lock <LOCK>` | 将单个 lock 编译为 artifact entrypoint。与 `--entry-action` 互斥。 |
-| `--json` | 在支持的命令中输出机器可读 summary。 |
-| `--production` | 启用 production-oriented metadata policy checks。 |
-| `--deny-fail-closed` | 拒绝 fail-closed runtime features 或 obligations。 |
-| `--deny-symbolic-runtime` | 拒绝 symbolic Cell/runtime requirements。 |
-| `--deny-ckb-runtime` | 拒绝 CKB transaction/syscall runtime requirements。 |
-| `--deny-runtime-obligations` | 拒绝 runtime-required verifier obligations。 |
+| `--target riscv64-asm` | 输出 RISC-V assembly |
+| `--target riscv64-elf` | 输出 RISC-V ELF artifact |
+| `--target-profile spora` | 使用 Spora profile |
+| `--target-profile ckb` | 使用 CKB profile |
+| `--target-profile portable-cell` | 检查 Cell profile 间的源码可移植性 |
+| `--entry-action <ACTION>` | 将单个 action 编译为 artifact entrypoint |
+| `--entry-lock <LOCK>` | 将单个 lock 编译为 artifact entrypoint |
+| `--json` | 在支持的命令中输出机器可读 summary |
+| `--production` | 启用 production-oriented metadata policy checks |
+| `--deny-fail-closed` | 拒绝 fail-closed runtime features 或 obligations |
+| `--deny-symbolic-runtime` | 拒绝 symbolic Cell/runtime requirements |
+| `--deny-ckb-runtime` | 拒绝 CKB transaction/syscall runtime requirements |
+| `--deny-runtime-obligations` | 拒绝 runtime-required verifier obligations |
 
-## 编辑器支持
-
-CellScript 包含生产级本地语言工具：
-
-- 编译器 crate 暴露 in-process LSP service，覆盖 diagnostics、completions、
-  hover、definition、references、rename、formatting 和 metadata-oriented code
-  actions。
-- 仓库包含一个 VS Code 扩展，支持 `.cell` 语法高亮、语言配置、snippets、
-  edit/open/save diagnostics、compiler-backed formatting、scratch compile、
-  metadata report、constraints report、production report、target-profile 选择和
-  状态栏反馈。
-- 这个扩展是稳定的本地工具层。它调用 `cellc`，或在源码 workspace 内
-  回退到 `cargo run -q -p cellscript --`，所以编辑器行为和 CLI/CI gates
-  保持一致。
-- 边界：当前 VS Code 扩展不是独立的 JSON-RPC/stdin language-server
-  transport。编译器 crate 已有 in-process LSP service；未来如果要做
-  `cellc lsp --stdio` 加 VS Code `LanguageClient`，那是单独的 transport 工程。
-
-- [`editors/vscode-cellscript`](editors/vscode-cellscript)
-- [双链生产计划](docs/CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md)
-- [双链包 registry 设计](docs/CELLSCRIPT_DUAL_CHAIN_PACKAGE_REGISTRY_DESIGN.md)
+---
 
 ## 项目结构
 

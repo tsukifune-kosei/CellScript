@@ -5,6 +5,9 @@ use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub mod convert;
+pub mod server;
+
 pub struct LspServer {
     documents: HashMap<String, String>,
     ast_cache: HashMap<String, Module>,
@@ -151,6 +154,31 @@ impl LspServer {
         self.parse_document(&uri, &content);
     }
 
+    /// Apply incremental text changes to a document and re-parse.
+    ///
+    /// If any change has `range == None`, the entire document is replaced with that change's text.
+    /// Otherwise, each change's text is spliced into the current document at the given range.
+    pub fn update_document_incremental(&mut self, uri: &str, changes: Vec<TextDocumentContentChangeEvent>) {
+        let Some(mut content) = self.documents.get(uri).cloned() else {
+            return;
+        };
+
+        for change in changes {
+            match change.range {
+                None => {
+                    // Full document replacement.
+                    content = change.text;
+                }
+                Some(range) => {
+                    content = apply_incremental_change(&content, range, &change.text);
+                }
+            }
+        }
+
+        self.documents.insert(uri.to_string(), content.clone());
+        self.parse_document(uri, &content);
+    }
+
     pub fn close_document(&mut self, uri: &str) {
         self.documents.remove(uri);
         self.ast_cache.remove(uri);
@@ -194,15 +222,253 @@ impl LspServer {
         self.diagnostics.get(uri).cloned().unwrap_or_default()
     }
 
-    pub fn completion(&self, uri: &str, _position: Position) -> Vec<CompletionItem> {
+    pub fn completion(&self, uri: &str, position: Position) -> Vec<CompletionItem> {
         let mut items = Vec::new();
 
-        items.extend(self.keyword_completions());
+        let ctx = self.completion_context(uri, position);
 
-        items.extend(self.type_completions());
+        match ctx {
+            CompletionContext::Type => {
+                items.extend(self.type_completions());
+                // Type-position also allows user-defined types.
+                if let Some(ast) = self.ast_cache.get(uri) {
+                    items.extend(self.type_symbol_completions(ast));
+                }
+            }
+            CompletionContext::Member { type_name } => {
+                items.extend(self.member_completions(uri, &type_name));
+            }
+            CompletionContext::Declaration => {
+                items.extend(self.declaration_keyword_completions());
+            }
+            CompletionContext::Expression => {
+                items.extend(self.keyword_completions());
+                items.extend(self.type_completions());
+                if let Some(ast) = self.ast_cache.get(uri) {
+                    items.extend(self.symbol_completions(ast));
+                    items.extend(self.local_completions(ast, position));
+                }
+            }
+        }
 
+        items
+    }
+
+    /// Determine the completion context at the given position.
+    fn completion_context(&self, uri: &str, position: Position) -> CompletionContext {
+        let Some(content) = self.documents.get(uri) else {
+            return CompletionContext::Expression;
+        };
+
+        let line_start = self.line_start_offset(content, position.line);
+        let offset = position_to_offset(content, position).unwrap_or(line_start);
+        let prefix = &content[line_start..offset];
+
+        // Check for member access: `expr.field`
+        if let Some(dot_pos) = prefix.rfind('.') {
+            // We want the identifier before the dot.
+            let before_dot = &prefix[..dot_pos];
+            let type_name = word_before_offset(before_dot, before_dot.len()).unwrap_or_default();
+            return CompletionContext::Member { type_name };
+        }
+
+        // Check for type context: after `:`, `->`, or `<`
+        let trimmed = prefix.trim_end();
+        if trimmed.ends_with(':') || trimmed.ends_with("->") || trimmed.ends_with('<') {
+            return CompletionContext::Type;
+        }
+
+        // Check for top-level / declaration context
+        let line_text = prefix.trim();
+        if line_text.is_empty() || line_text == "module" {
+            return CompletionContext::Declaration;
+        }
+
+        CompletionContext::Expression
+    }
+
+    /// Get the byte offset where a given line starts.
+    fn line_start_offset(&self, content: &str, line: u32) -> usize {
+        let mut current_line = 0u32;
+        for (idx, ch) in content.char_indices() {
+            if current_line == line {
+                return idx;
+            }
+            if ch == '\n' {
+                current_line += 1;
+            }
+        }
+        content.len()
+    }
+
+    /// Declaration-position keywords only.
+    fn declaration_keyword_completions(&self) -> Vec<CompletionItem> {
+        vec![
+            ("resource", "resource ${1:Name} {\n    $0\n}"),
+            ("shared", "shared ${1:Name} {\n    $0\n}"),
+            ("receipt", "receipt ${1:Name} {\n    $0\n}"),
+            ("struct", "struct ${1:Name} {\n    $0\n}"),
+            ("action", "action ${1:name}($2) {\n    $0\n}"),
+            ("lock", "lock ${1:name}($2) -> $3 {\n    $0\n}"),
+            ("const", "const ${1:NAME}: ${2:u64} = $0;"),
+            ("enum", "enum ${1:Name} {\n    $0\n}"),
+            ("use", "use ${1:path};"),
+        ]
+        .into_iter()
+        .map(|(label, insert)| CompletionItem {
+            label: label.to_string(),
+            kind: CompletionItemKind::Keyword,
+            detail: Some(format!("{} keyword", label)),
+            documentation: None,
+            insert_text: Some(insert.to_string()),
+        })
+        .collect()
+    }
+
+    /// Completions for user-defined types (at type positions).
+    fn type_symbol_completions(&self, module: &Module) -> Vec<CompletionItem> {
+        let mut items = Vec::new();
+        for item in &module.items {
+            let (name, kind_label) = match item {
+                Item::Resource(r) => (&r.name, "resource"),
+                Item::Shared(s) => (&s.name, "shared"),
+                Item::Receipt(r) => (&r.name, "receipt"),
+                Item::Struct(s) => (&s.name, "struct"),
+                Item::Enum(e) => (&e.name, "enum"),
+                _ => continue,
+            };
+            items.push(CompletionItem {
+                label: name.clone(),
+                kind: CompletionItemKind::Class,
+                detail: Some(format!("{} {}", kind_label, name)),
+                documentation: None,
+                insert_text: Some(name.clone()),
+            });
+        }
+        items
+    }
+
+    /// Member completions for a given type name (after `.`).
+    fn member_completions(&self, uri: &str, type_name: &str) -> Vec<CompletionItem> {
+        let mut items = Vec::new();
+
+        // Built-in namespace methods.
+        match type_name {
+            "Vec" => {
+                for (name, insert) in [("new", "Vec::new()"), ("push", "push($0)"), ("len", "len()"), ("get", "get($0)")] {
+                    items.push(CompletionItem {
+                        label: name.to_string(),
+                        kind: CompletionItemKind::Method,
+                        detail: Some(format!("Vec::{}", name)),
+                        documentation: None,
+                        insert_text: Some(insert.to_string()),
+                    });
+                }
+                return items;
+            }
+            "env" => {
+                for (name, insert) in [("caller", "env::caller()"), ("height", "env::height()"), ("hash", "env::hash()")] {
+                    items.push(CompletionItem {
+                        label: name.to_string(),
+                        kind: CompletionItemKind::Method,
+                        detail: Some(format!("env::{}", name)),
+                        documentation: None,
+                        insert_text: Some(insert.to_string()),
+                    });
+                }
+                return items;
+            }
+            "Address" | "Hash" => {
+                // Namespace-style methods.
+                return items;
+            }
+            _ => {}
+        }
+
+        // User-defined type fields.
+        let mut search_modules: Vec<&Module> = Vec::new();
         if let Some(ast) = self.ast_cache.get(uri) {
-            items.extend(self.symbol_completions(ast));
+            search_modules.push(ast);
+        }
+        for module in &search_modules {
+            for item in &module.items {
+                let fields: &[Field] = match item {
+                    Item::Resource(r) if r.name == type_name => &r.fields,
+                    Item::Shared(s) if s.name == type_name => &s.fields,
+                    Item::Receipt(r) if r.name == type_name => &r.fields,
+                    Item::Struct(s) if s.name == type_name => &s.fields,
+                    _ => continue,
+                };
+                for field in fields {
+                    items.push(CompletionItem {
+                        label: field.name.clone(),
+                        kind: CompletionItemKind::Field,
+                        detail: Some(format!("{}: {}", field.name, type_to_string(&field.ty))),
+                        documentation: None,
+                        insert_text: Some(field.name.clone()),
+                    });
+                }
+                break;
+            }
+        }
+
+        items
+    }
+
+    /// Completions for local variables visible at `position`.
+    fn local_completions(&self, module: &Module, position: Position) -> Vec<CompletionItem> {
+        let mut items = Vec::new();
+
+        for item in &module.items {
+            let (params, body) = match item {
+                Item::Action(a) => (&a.params, &a.body),
+                Item::Function(f) => (&f.params, &f.body),
+                Item::Lock(l) => (&l.params, &l.body),
+                _ => continue,
+            };
+
+            // Check if position is inside this function's span.
+            let func_range = span_to_range(item_span(item));
+            if !position_in_range(position, func_range) {
+                continue;
+            }
+
+            // Add parameters.
+            for param in params {
+                items.push(CompletionItem {
+                    label: param.name.clone(),
+                    kind: CompletionItemKind::Variable,
+                    detail: Some(format!("param: {}", type_to_string(&param.ty))),
+                    documentation: None,
+                    insert_text: Some(param.name.clone()),
+                });
+            }
+
+            // Add local `let` bindings that are in scope (before position).
+            for stmt in body {
+                let stmt_range = span_to_range(stmt_span(stmt));
+                if position_in_range(position, stmt_range) || position_le(stmt_range.start, position) {
+                    // We are past the position, stop.
+                    if position_le(position, stmt_range.start) && !position_in_range(position, stmt_range) {
+                        break;
+                    }
+                }
+                if let Stmt::Let(let_stmt) = stmt {
+                    if let BindingPattern::Name(name) = &let_stmt.pattern {
+                        items.push(CompletionItem {
+                            label: name.clone(),
+                            kind: CompletionItemKind::Variable,
+                            detail: Some(format!(
+                                "let{}: {}",
+                                if let_stmt.is_mut { " mut" } else { "" },
+                                let_stmt.ty.as_ref().map(type_to_string).unwrap_or_else(|| "_".to_string())
+                            )),
+                            documentation: None,
+                            insert_text: Some(name.clone()),
+                        });
+                    }
+                }
+            }
         }
 
         items
@@ -327,7 +593,107 @@ impl LspServer {
 
     pub fn goto_definition(&self, uri: &str, position: Position) -> Option<Location> {
         let symbol = self.symbol_at_position(uri, position)?;
-        self.find_top_level_symbol(uri, &symbol)
+
+        // 1. Try top-level symbol in the current file.
+        if let Some(loc) = self.find_top_level_symbol(uri, &symbol) {
+            return Some(loc);
+        }
+
+        // 2. Try field definition if inside a type reference (e.g. `token.amount`).
+        if let Some(loc) = self.find_field_definition(uri, position, &symbol) {
+            return Some(loc);
+        }
+
+        // 3. Try local variable / parameter definition.
+        if let Some(loc) = self.find_local_definition(uri, position, &symbol) {
+            return Some(loc);
+        }
+
+        // 4. Try workspace modules (cross-file).
+        for module in self.workspace_modules(uri) {
+            let module_uri = utf8_path_to_file_uri(&module.path);
+            if let Some(loc) = module.ast.items.iter().find_map(|item| {
+                let name = item_name(item)?;
+                if name == symbol {
+                    Some(Location { uri: module_uri.clone(), range: span_to_range(item_span(item)) })
+                } else {
+                    None
+                }
+            }) {
+                return Some(loc);
+            }
+        }
+
+        None
+    }
+
+    /// Find a field definition for `symbol` when accessed via `expr.field`.
+    fn find_field_definition(&self, uri: &str, position: Position, symbol: &str) -> Option<Location> {
+        let content = self.documents.get(uri)?;
+        let offset = position_to_offset(content, position)?;
+
+        // Look for a `.` before the symbol.
+        let line_start = self.line_start_offset(content, position.line);
+        let prefix = &content[line_start..offset];
+        let dot_pos = prefix.rfind('.')?;
+        let type_name = word_before_offset(prefix, dot_pos)?;
+
+        let ast = self.ast_cache.get(uri)?;
+        for item in &ast.items {
+            let (name, fields, span) = match item {
+                Item::Resource(r) if r.name == type_name => (&r.name, &r.fields, r.span),
+                Item::Shared(s) if s.name == type_name => (&s.name, &s.fields, s.span),
+                Item::Receipt(r) if r.name == type_name => (&r.name, &r.fields, r.span),
+                Item::Struct(s) if s.name == type_name => (&s.name, &s.fields, s.span),
+                _ => continue,
+            };
+            let _ = name; // used in pattern guard
+            for field in fields {
+                if field.name == symbol {
+                    return Some(Location { uri: uri.to_string(), range: span_to_range(field.span) });
+                }
+            }
+            let _ = span;
+        }
+        None
+    }
+
+    /// Find a local variable or parameter definition for `symbol`.
+    fn find_local_definition(&self, uri: &str, position: Position, symbol: &str) -> Option<Location> {
+        let ast = self.ast_cache.get(uri)?;
+
+        for item in &ast.items {
+            let (params, body, item_span_val) = match item {
+                Item::Action(a) => (&a.params, &a.body, a.span),
+                Item::Function(f) => (&f.params, &f.body, f.span),
+                Item::Lock(l) => (&l.params, &l.body, l.span),
+                _ => continue,
+            };
+
+            let func_range = span_to_range(item_span_val);
+            if !position_in_range(position, func_range) {
+                continue;
+            }
+
+            // Check parameters.
+            for param in params {
+                if param.name == symbol {
+                    return Some(Location { uri: uri.to_string(), range: span_to_range(param.span) });
+                }
+            }
+
+            // Check local let bindings.
+            for stmt in body {
+                if let Stmt::Let(let_stmt) = stmt {
+                    if let BindingPattern::Name(name) = &let_stmt.pattern {
+                        if name == symbol {
+                            return Some(Location { uri: uri.to_string(), range: span_to_range(let_stmt.span) });
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub fn find_references(&self, uri: &str, position: Position) -> Vec<Location> {
@@ -366,6 +732,8 @@ impl LspServer {
 
     pub fn hover(&self, uri: &str, position: Position) -> Option<Hover> {
         let symbol = self.symbol_at_position(uri, position)?;
+
+        // 1. Try top-level item hover (existing logic).
         if let Some(ast) = self.ast_cache.get(uri) {
             let metadata = self.documents.get(uri).and_then(|source| crate::compile_metadata(source, None).ok());
             if let Some(hover) = ast.items.iter().find_map(|item| {
@@ -379,6 +747,17 @@ impl LspServer {
             }
         }
 
+        // 2. Try field hover.
+        if let Some(hover) = self.field_hover(uri, position, &symbol) {
+            return Some(hover);
+        }
+
+        // 3. Try local variable / parameter hover.
+        if let Some(hover) = self.local_hover(uri, position, &symbol) {
+            return Some(hover);
+        }
+
+        // 4. Try workspace modules.
         for module in self.workspace_modules(uri) {
             let metadata = crate::compile_metadata(&module.source, None).ok();
             if let Some(hover) = module.ast.items.iter().find_map(|item| {
@@ -392,6 +771,91 @@ impl LspServer {
             }
         }
 
+        None
+    }
+
+    /// Hover information for a field access (e.g. `token.amount`).
+    fn field_hover(&self, uri: &str, position: Position, symbol: &str) -> Option<Hover> {
+        let content = self.documents.get(uri)?;
+        let offset = position_to_offset(content, position)?;
+        let line_start = self.line_start_offset(content, position.line);
+        let prefix = &content[line_start..offset];
+        let dot_pos = prefix.rfind('.')?;
+        let type_name = word_before_offset(prefix, dot_pos)?;
+
+        let ast = self.ast_cache.get(uri)?;
+        for item in &ast.items {
+            let fields: &[Field] = match item {
+                Item::Resource(r) if r.name == type_name => &r.fields,
+                Item::Shared(s) if s.name == type_name => &s.fields,
+                Item::Receipt(r) if r.name == type_name => &r.fields,
+                Item::Struct(s) if s.name == type_name => &s.fields,
+                _ => continue,
+            };
+            for field in fields {
+                if field.name == symbol {
+                    return Some(Hover {
+                        contents: format!(
+                            "```cellscript\n{}: {}\n```\n\nField of `{}`",
+                            field.name,
+                            type_to_string(&field.ty),
+                            type_name
+                        ),
+                        range: Some(span_to_range(field.span)),
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    /// Hover information for a local variable or parameter.
+    fn local_hover(&self, uri: &str, position: Position, symbol: &str) -> Option<Hover> {
+        let ast = self.ast_cache.get(uri)?;
+
+        for item in &ast.items {
+            let (params, body, item_span_val) = match item {
+                Item::Action(a) => (&a.params, &a.body, a.span),
+                Item::Function(f) => (&f.params, &f.body, f.span),
+                Item::Lock(l) => (&l.params, &l.body, l.span),
+                _ => continue,
+            };
+
+            let func_range = span_to_range(item_span_val);
+            if !position_in_range(position, func_range) {
+                continue;
+            }
+
+            // Check parameters.
+            for param in params {
+                if param.name == symbol {
+                    return Some(Hover {
+                        contents: format!("```cellscript\n{}: {}\n```\n\nParameter", param.name, type_to_string(&param.ty)),
+                        range: Some(span_to_range(param.span)),
+                    });
+                }
+            }
+
+            // Check local let bindings.
+            for stmt in body {
+                if let Stmt::Let(let_stmt) = stmt {
+                    if let BindingPattern::Name(name) = &let_stmt.pattern {
+                        if name == symbol {
+                            let ty_str = let_stmt.ty.as_ref().map(type_to_string).unwrap_or_else(|| "_".to_string());
+                            return Some(Hover {
+                                contents: format!(
+                                    "```cellscript\n{}{}: {}\n```\n\nLocal variable",
+                                    if let_stmt.is_mut { "mut " } else { "" },
+                                    name,
+                                    ty_str
+                                ),
+                                range: Some(span_to_range(let_stmt.span)),
+                            });
+                        }
+                    }
+                }
+            }
+        }
         None
     }
 
@@ -964,10 +1428,47 @@ pub enum FoldingRangeKind {
     Region,
 }
 
+/// Context for completion at a given position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CompletionContext {
+    /// At a type position (after `:`, `->`, `<`).
+    Type,
+    /// At a member access position (after `.`), with the type name before the dot.
+    Member { type_name: String },
+    /// At a top-level declaration position.
+    Declaration,
+    /// Inside an expression body.
+    Expression,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectionRange {
     pub range: Range,
     pub parent: Option<Box<SelectionRange>>,
+}
+
+/// Incremental text change event sent by the client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextDocumentContentChangeEvent {
+    /// The range of the document that changed. If `None`, the whole document changed.
+    pub range: Option<Range>,
+    /// An optional length of the range that got replaced.
+    pub range_length: Option<u32>,
+    /// The new text of the range/document.
+    pub text: String,
+}
+
+/// Apply a single incremental text change to a document string.
+///
+/// Replaces the text in `range` with `new_text`.
+fn apply_incremental_change(content: &str, range: Range, new_text: &str) -> String {
+    let start_offset = position_to_offset(content, range.start).unwrap_or(0);
+    let end_offset = position_to_offset(content, range.end).unwrap_or(content.len());
+    let mut result = String::with_capacity(content.len() + new_text.len());
+    result.push_str(&content[..start_offset]);
+    result.push_str(new_text);
+    result.push_str(&content[end_offset..]);
+    result
 }
 
 fn span_to_range(span: Span) -> Range {
@@ -1291,6 +1792,44 @@ fn word_at_offset(source: &str, offset: usize) -> Option<String> {
         end += ch.len_utf8();
     }
 
+    if start == end {
+        None
+    } else {
+        Some(source[start..end].to_string())
+    }
+}
+
+/// Get the word immediately before the given offset in `source`.
+/// Unlike `word_at_offset`, this scans backwards from `offset` and stops at
+/// the first non-identifier character, returning the identifier that ends
+/// just before `offset`.
+fn word_before_offset(source: &str, offset: usize) -> Option<String> {
+    if source.is_empty() || offset == 0 || offset > source.len() {
+        return None;
+    }
+    // Skip trailing whitespace.
+    let mut end = offset;
+    while end > 0 {
+        let prev_idx = source[..end].char_indices().last()?.0;
+        let ch = source[prev_idx..end].chars().next()?;
+        if !ch.is_whitespace() {
+            break;
+        }
+        end = prev_idx;
+    }
+    if end == 0 {
+        return None;
+    }
+    // Scan the identifier backwards.
+    let mut start = end;
+    while start > 0 {
+        let prev_idx = source[..start].char_indices().last()?.0;
+        let ch = source[prev_idx..start].chars().next()?;
+        if !is_ident_char(ch) {
+            break;
+        }
+        start = prev_idx;
+    }
     if start == end {
         None
     } else {

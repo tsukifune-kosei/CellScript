@@ -1,41 +1,64 @@
 # CellScript VS Code Extension
 
-Production-grade local VS Code tooling for `.cell` contracts.
+Production-grade VS Code tooling for `.cell` contracts, powered by a
+CellScript Language Server (`cellc lsp --stdio`).
 
-The extension is intentionally compiler-backed: it does not duplicate
-CellScript semantics in JavaScript. It uses a local `cellc` binary, or a
-workspace `cargo run -q -p cellscript --` fallback, for validation, formatting,
-metadata, and constraints reports.
+The extension connects to a `cellc` binary running as a JSON-RPC language
+server over stdio. This provides real-time diagnostics, completion, hover,
+go-to-definition, find-references, rename, signature help, document
+highlighting, folding, formatting, code actions, and document symbols —
+all backed by the CellScript compiler's parser, type-checker, and
+lowering pipeline.
+
+CLI-backed commands (compile, metadata, constraints, production report)
+continue to spawn `cellc` directly for one-shot operations that are
+outside the LSP scope.
 
 ## Features
+
+### LSP-powered (via `cellc lsp --stdio`)
+
+- real-time diagnostics on open / edit / save with incremental sync
+- context-aware completion (keywords, types, user symbols, fields, locals)
+- hover information (types, lowering metadata, lifecycle states)
+- go-to-definition (top-level symbols, fields, local variables, cross-module)
+- find-references (lexer-accurate, skips comments and strings)
+- rename (cross-module, respects identifier boundaries)
+- signature help (action, function, lock parameters)
+- document highlight
+- folding ranges
+- selection ranges
+- document symbols
+- code actions (lowering diagnostics quickfix)
+- document formatting
+
+### CLI-backed
+
+- compile to scratch RISC-V assembly
+- `cellc metadata` JSON report
+- `cellc constraints` JSON report
+- production report (version + metadata + constraints)
+- target-profile selection (`spora`, `ckb`, `portable-cell`)
+
+### Editor basics
 
 - `.cell` file association
 - TextMate syntax highlighting
 - comment, bracket, auto-close, and folding configuration
-- snippets for resources, shared state, receipts, actions, locks, effects, and
-  `create ... with_lock`
-- edit/open/save diagnostics through `cellc --parse`
-- optional wider compiler diagnostics through `cellc <file> --target riscv64-asm`
-- document formatting through `cellc fmt`
-- command palette entries for compile, metadata, constraints, validation, and
-  target-profile selection
-- production report output that combines `cellc --version`, `cellc metadata`,
-  and `cellc constraints` for release review
-- status bar state for compiler-backed editor commands
-- hardened command execution with timeout and output-size limits
+- snippets for resources, shared state, receipts, actions, locks, effects,
+  and `create ... with_lock`
+- status bar state indicator
 
-## Production Boundary
+## Architecture
 
-This extension is a mature local compiler-backed editor integration. It is not
-an independent JSON-RPC language-server transport, and it does not start a
-`cellc lsp --stdio` process. The compiler crate already exposes an in-process
-LSP service, but VS Code currently uses direct `cellc` CLI calls for local
-diagnostics, formatting, metadata, constraints, and production reports.
+```
+VS Code ──(LanguageClient)──> cellc lsp --stdio ──(JSON-RPC)──> CellScriptBackend
+```
 
-The next transport project, if needed, is a separate VS Code `LanguageClient`
-integration backed by a standalone `cellc lsp --stdio` binary. That transport
-would change process management and incremental document synchronization; it is
-not required for the current local compiler-backed workflow.
+The `CellScriptBackend` in `server.rs` wraps the in-process `LspServer` and
+implements the `tower_lsp::LanguageServer` trait. Document changes use
+incremental sync; diagnostics are pushed automatically after each
+open/change event.
 
 ## Requirements
 
@@ -55,24 +78,23 @@ Set `cellscript.useCargoRunFallback` to `false` to disable that fallback.
 
 | Command | Purpose |
 |---|---|
-| `CellScript: Validate Current File` | Run configured diagnostics for the active `.cell` file. |
 | `CellScript: Compile Current File` | Compile the active file to a scratch RISC-V assembly artifact and print compiler output. |
 | `CellScript: Show Metadata` | Run `cellc metadata` for the active file and show JSON in the CellScript output channel. |
 | `CellScript: Show Constraints` | Run `cellc constraints` for the active file and show JSON in the CellScript output channel. |
 | `CellScript: Show Production Report` | Show compiler version, artifact metadata, constraints, and release audit boundaries for the active file. |
-| `CellScript: Format Current File` | Format the active file through `cellc fmt`. |
 | `CellScript: Select Target Profile` | Store `spora`, `ckb`, or `portable-cell` in workspace settings. |
+
+Diagnostics, completion, hover, go-to-definition, references, rename,
+formatting, signature help, folding, and code actions are provided
+automatically by the language server — no explicit commands needed.
 
 ## Settings
 
 | Setting | Default | Description |
 |---|---:|---|
-| `cellscript.compilerPath` | `cellc` | Compiler binary used by editor commands. |
+| `cellscript.compilerPath` | `cellc` | Compiler binary used for the language server and CLI commands. |
 | `cellscript.useCargoRunFallback` | `true` | Use workspace `cargo run -q -p cellscript --` if `cellc` is unavailable. |
-| `cellscript.validationMode` | `parse` | `parse`, `compile-asm`, or `off`. |
-| `cellscript.validateOnChange` | `true` | Run diagnostics after edits with a debounce. |
-| `cellscript.validationDebounceMs` | `250` | Edit-time diagnostic debounce. |
-| `cellscript.commandTimeoutMs` | `15000` | Compiler command timeout. |
+| `cellscript.commandTimeoutMs` | `15000` | Timeout for compiler-backed CLI commands. |
 | `cellscript.maxOutputBytes` | `4194304` | Captured stdout/stderr limit. |
 | `cellscript.target` | `riscv64-asm` | Compiler target for compile/metadata/constraints commands. |
 | `cellscript.targetProfile` | `spora` | Target profile for compile/metadata/constraints commands. |

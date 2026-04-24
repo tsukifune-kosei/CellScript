@@ -8,6 +8,7 @@ use cellscript::{
 
 const BUNDLED_EXAMPLES: [&str; 7] =
     ["amm_pool.cell", "launch.cell", "multisig.cell", "nft.cell", "timelock.cell", "token.cell", "vesting.cell"];
+const BACKEND_SHAPE_BASELINE_JSON: &str = include_str!("backend_shape_baseline.json");
 
 const BUNDLED_EXAMPLE_ELF_SIZE_BUDGETS: [(&str, usize); 7] = [
     ("amm_pool.cell", 40 * 1024),
@@ -164,6 +165,16 @@ struct BackendShapeReportRow {
     metrics: BackendShapeMetrics,
 }
 
+#[derive(Debug, serde::Serialize)]
+struct MoleculeSchemaManifestReportRow {
+    example: &'static str,
+    type_count: usize,
+    fixed_type_count: usize,
+    dynamic_type_count: usize,
+    manifest_hash_blake3: String,
+    entries: Vec<String>,
+}
+
 fn example_path(name: &str) -> Utf8PathBuf {
     Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples").join(name)
 }
@@ -219,6 +230,42 @@ fn bundled_example_backend_shape_report_rows() -> Vec<BackendShapeReportRow> {
             }
         })
         .collect()
+}
+
+fn backend_shape_baseline_rows() -> Vec<serde_json::Value> {
+    serde_json::from_str(BACKEND_SHAPE_BASELINE_JSON).expect("backend shape baseline JSON should parse")
+}
+
+fn json_u64(row: &serde_json::Value, field: &str) -> u64 {
+    row.get(field)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_else(|| panic!("baseline row is missing integer field {field}: {row}"))
+}
+
+fn metric_u64(row: &BackendShapeReportRow, field: &str) -> u64 {
+    let value = serde_json::to_value(row).expect("backend row should serialize");
+    match field {
+        "line_count" => value[field].as_u64().unwrap(),
+        _ => value["metrics"][field].as_u64().unwrap_or_else(|| panic!("backend row is missing metric field {field}: {value}")),
+    }
+}
+
+fn assert_with_regression_margin(example: &str, field: &str, actual: u64, baseline: u64) {
+    let margin = match field {
+        "relaxed_branch_count" => 1,
+        "max_cond_branch_abs_distance" => 256,
+        "max_machine_block_size" => 128,
+        _ => (baseline / 20).max(16),
+    };
+    assert!(
+        actual <= baseline + margin,
+        "{} backend {} regressed past baseline margin: actual {} > baseline {} + margin {}",
+        example,
+        field,
+        actual,
+        baseline,
+        margin
+    );
 }
 
 #[allow(dead_code)]
@@ -633,6 +680,94 @@ fn bundled_examples_backend_shape_report_serializes() {
 
     if let Ok(path) = std::env::var("CELLSCRIPT_BACKEND_SHAPE_REPORT") {
         std::fs::write(&path, json).unwrap_or_else(|e| panic!("failed to write backend shape report to {}: {}", path, e));
+    }
+}
+
+#[test]
+fn bundled_examples_stay_near_backend_shape_release_baseline() {
+    let rows = bundled_example_backend_shape_report_rows();
+    let baseline = backend_shape_baseline_rows();
+    assert_eq!(baseline.len(), BUNDLED_EXAMPLES.len(), "backend shape baseline must cover every bundled example");
+
+    let fields = [
+        "line_count",
+        "text_size",
+        "relaxed_branch_count",
+        "max_cond_branch_abs_distance",
+        "machine_block_count",
+        "max_machine_block_size",
+        "machine_cfg_edge_count",
+        "machine_call_edge_count",
+        "unreachable_machine_block_count",
+    ];
+    for (row, baseline_row) in rows.iter().zip(baseline.iter()) {
+        assert_eq!(baseline_row["example"].as_str(), Some(row.example), "backend shape baseline order changed");
+        for field in fields {
+            assert_with_regression_margin(row.example, field, metric_u64(row, field), json_u64(baseline_row, field));
+        }
+    }
+}
+
+#[test]
+fn bundled_examples_emit_molecule_schema_manifest_report() {
+    let rows = BUNDLED_EXAMPLES
+        .into_iter()
+        .map(|example| {
+            let result = compile_file(example_path(example), CompileOptions::default())
+                .unwrap_or_else(|e| panic!("{} should compile for schema manifest reporting: {}", example, e.message));
+            let manifest = &result.metadata.molecule_schema_manifest;
+            let schema_type_count = result.metadata.types.iter().filter(|ty| ty.molecule_schema.is_some()).count();
+            assert_eq!(manifest.schema, "cellscript-molecule-schema-manifest-v1");
+            assert_eq!(manifest.abi, "molecule");
+            assert_eq!(manifest.target_profile, "spora");
+            assert_eq!(manifest.type_count, schema_type_count, "{} manifest type count should match metadata types", example);
+            assert_eq!(manifest.entries.len(), schema_type_count, "{} manifest entry count should match metadata types", example);
+            assert!(manifest.type_count > 0, "{} should expose at least one Molecule schema entry", example);
+            assert_eq!(manifest.fixed_type_count + manifest.dynamic_type_count, manifest.type_count);
+            assert_eq!(
+                manifest.entries.iter().map(|entry| entry.type_name.as_str()).collect::<Vec<_>>(),
+                {
+                    let mut names = manifest.entries.iter().map(|entry| entry.type_name.as_str()).collect::<Vec<_>>();
+                    names.sort_unstable();
+                    names
+                },
+                "{} schema manifest entries must be sorted for release diffs",
+                example
+            );
+            assert_eq!(manifest.manifest_hash_blake3.len(), 64, "{} manifest hash should be canonical blake3 hex", example);
+            for entry in &manifest.entries {
+                let ty = result
+                    .metadata
+                    .types
+                    .iter()
+                    .find(|ty| ty.name == entry.type_name)
+                    .unwrap_or_else(|| panic!("{} manifest entry {} should match a metadata type", example, entry.type_name));
+                let schema = ty.molecule_schema.as_ref().expect("manifest entries only point at schema-backed types");
+                assert_eq!(entry.schema_hash_blake3, schema.schema_hash_blake3);
+                assert_eq!(
+                    entry.field_offsets.len(),
+                    ty.fields.len(),
+                    "{} {} field manifest should cover every field",
+                    example,
+                    entry.type_name
+                );
+            }
+
+            MoleculeSchemaManifestReportRow {
+                example,
+                type_count: manifest.type_count,
+                fixed_type_count: manifest.fixed_type_count,
+                dynamic_type_count: manifest.dynamic_type_count,
+                manifest_hash_blake3: manifest.manifest_hash_blake3.clone(),
+                entries: manifest.entries.iter().map(|entry| entry.type_name.clone()).collect(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let json = serde_json::to_string_pretty(&rows).expect("Molecule schema manifest report should serialize to JSON");
+    assert!(json.contains("manifest_hash_blake3"));
+    if let Ok(path) = std::env::var("CELLSCRIPT_MOLECULE_SCHEMA_MANIFEST_REPORT") {
+        std::fs::write(&path, json).unwrap_or_else(|e| panic!("failed to write Molecule schema manifest report to {}: {}", path, e));
     }
 }
 

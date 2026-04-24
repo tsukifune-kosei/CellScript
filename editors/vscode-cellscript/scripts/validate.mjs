@@ -29,7 +29,7 @@ if (pkg.name !== "cellscript-vscode") {
   throw new Error(`unexpected package name: ${pkg.name}`);
 }
 
-if (pkg.version !== "0.11.0") {
+if (pkg.version !== "0.12.0") {
   throw new Error(`unexpected extension version: ${pkg.version}`);
 }
 
@@ -47,12 +47,10 @@ if (pkg.main !== "./extension.js") {
 
 const commands = new Set((pkg.contributes?.commands || []).map((command) => command.command));
 for (const command of [
-  "cellscript.validateCurrentFile",
   "cellscript.compileCurrentFile",
   "cellscript.showMetadata",
   "cellscript.showConstraints",
   "cellscript.showProductionReport",
-  "cellscript.formatCurrentFile",
   "cellscript.selectTargetProfile"
 ]) {
   if (!commands.has(command)) {
@@ -64,9 +62,6 @@ const properties = pkg.contributes?.configuration?.properties || {};
 for (const setting of [
   "cellscript.compilerPath",
   "cellscript.useCargoRunFallback",
-  "cellscript.validationMode",
-  "cellscript.validateOnChange",
-  "cellscript.validationDebounceMs",
   "cellscript.commandTimeoutMs",
   "cellscript.maxOutputBytes",
   "cellscript.target",
@@ -95,19 +90,16 @@ if (typeof snippets !== "object" || snippets === null || Object.keys(snippets).l
 
 const extensionSource = fs.readFileSync(path.join(root, "extension.js"), "utf8");
 for (const token of [
-  "cellscript.validateCurrentFile",
+  "LanguageClient",
+  "vscode-languageclient",
   "cellscript.compileCurrentFile",
   "cellscript.showMetadata",
   "cellscript.showConstraints",
   "cellscript.showProductionReport",
-  "cellscript.formatCurrentFile",
   "cellscript.selectTargetProfile",
-  "registerDocumentFormattingEditProvider",
-  "production report",
-  "cellc constraints",
-  "cellc metadata",
-  "validationDebounceMs",
-  "commandTimeoutMs"
+  "cellc",
+  "--lsp",
+  "TransportKind.stdio"
 ]) {
   if (!extensionSource.includes(token)) {
     throw new Error(`extension runtime is missing expected wiring: ${token}`);

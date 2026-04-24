@@ -55,7 +55,7 @@ fn validate_compile_options(options: &CompileOptions) -> Result<()> {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "spora";
-pub const METADATA_SCHEMA_VERSION: u32 = 27;
+pub const METADATA_SCHEMA_VERSION: u32 = 28;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
 const METADATA_MUTATE_CELL_BUFFER_SIZE: usize = 512;
@@ -259,6 +259,8 @@ pub struct CompileMetadata {
     pub runtime: RuntimeMetadata,
     #[serde(default)]
     pub constraints: ConstraintsMetadata,
+    #[serde(default)]
+    pub molecule_schema_manifest: MoleculeSchemaManifestMetadata,
     pub types: Vec<TypeMetadata>,
     pub actions: Vec<ActionMetadata>,
     pub functions: Vec<FunctionMetadata>,
@@ -266,6 +268,44 @@ pub struct CompileMetadata {
     /// Embedded DWARF debug section names (non-empty when debug mode is enabled for ELF artifacts)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub debug_info_sections: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MoleculeSchemaManifestMetadata {
+    pub schema: String,
+    pub version: u32,
+    pub abi: String,
+    pub target_profile: String,
+    pub type_count: usize,
+    pub fixed_type_count: usize,
+    pub dynamic_type_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entries: Vec<MoleculeSchemaManifestEntryMetadata>,
+    pub manifest_hash_blake3: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MoleculeSchemaManifestEntryMetadata {
+    pub type_name: String,
+    pub kind: String,
+    pub layout: String,
+    pub fixed_size: usize,
+    pub encoded_size: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dynamic_fields: Vec<String>,
+    pub schema_hash_blake3: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_offsets: Vec<MoleculeSchemaManifestFieldMetadata>,
+    pub target_profile_compatible: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MoleculeSchemaManifestFieldMetadata {
+    pub name: String,
+    pub ty: String,
+    pub offset: usize,
+    pub encoded_size: Option<usize>,
+    pub fixed_width: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -337,6 +377,20 @@ pub struct ArtifactConstraintsMetadata {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CkbConstraintsMetadata {
     pub limits_source: String,
+    #[serde(default)]
+    pub hash_domain: String,
+    #[serde(default)]
+    pub script_hash_algorithm: String,
+    #[serde(default)]
+    pub transaction_hash_algorithm: String,
+    #[serde(default)]
+    pub sighash_algorithm: String,
+    #[serde(default)]
+    pub supported_script_hash_types: Vec<String>,
+    #[serde(default)]
+    pub declared_type_id_hash_type: String,
+    #[serde(default)]
+    pub hash_type_policy_surface: String,
     pub max_tx_verify_cycles: u64,
     pub max_block_cycles: u64,
     pub max_block_bytes: u64,
@@ -349,8 +403,22 @@ pub struct CkbConstraintsMetadata {
     pub max_entry_witness_bytes: usize,
     pub dry_run_required_for_production: bool,
     pub tx_size_bytes: Option<usize>,
+    #[serde(default)]
+    pub tx_size_measurement_required: bool,
     pub tx_size_status: String,
+    #[serde(default)]
+    pub occupied_capacity_measurement_required: bool,
     pub capacity_status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ckb_runtime_features: Vec<String>,
+    pub uses_input_since: bool,
+    pub uses_header_epoch: bool,
+    pub transaction_runtime_input_requirement_count: usize,
+    pub timelock_policy_surface: String,
+    pub created_output_count: usize,
+    pub mutated_output_count: usize,
+    pub capacity_planning_required: bool,
+    pub capacity_policy_surface: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -361,8 +429,16 @@ pub struct SporaConstraintsMetadata {
     pub estimated_transient_mass: u64,
     pub estimated_code_deployment_mass: u64,
     pub max_block_mass: u64,
+    #[serde(default)]
+    pub max_standard_transaction_mass: u64,
+    #[serde(default)]
+    pub fits_standard_transaction_mass_estimate: bool,
+    #[serde(default)]
+    pub fits_standard_block_mass_estimate: bool,
     pub requires_relaxed_mass_policy: bool,
     pub mass_status: String,
+    #[serde(default)]
+    pub standard_relay_policy_surface: String,
     pub estimator: String,
 }
 
@@ -533,6 +609,7 @@ pub fn validate_compile_metadata(metadata: &CompileMetadata, artifact_format: Ar
     validate_type_identity_metadata(metadata)?;
     validate_ckb_type_id_output_metadata(metadata)?;
     validate_molecule_schema_metadata(metadata)?;
+    validate_molecule_schema_manifest_metadata(metadata)?;
     validate_source_metadata(metadata)?;
 
     Ok(())
@@ -742,7 +819,8 @@ const CKB_SHANNONS_PER_CKB: u64 = 100_000_000;
 const CKB_DEFAULT_MAX_TX_VERIFY_CYCLES: u64 = 70_000_000;
 const CKB_DEFAULT_MAX_BLOCK_CYCLES: u64 = 10_000_000_000;
 const CKB_DEFAULT_MAX_BLOCK_BYTES: u64 = 597_000;
-const SPORA_DEFAULT_MAX_BLOCK_MASS: u64 = 100_000_000;
+const SPORA_DEFAULT_MAX_BLOCK_MASS: u64 = 2_000_000;
+const SPORA_DEFAULT_MAX_STANDARD_TRANSACTION_MASS: u64 = 500_000;
 
 fn bind_constraints_metadata(
     metadata: &mut CompileMetadata,
@@ -816,7 +894,20 @@ fn constraints_metadata(
         warnings.push(
             "CKB cycles and transaction size are not measured by the compiler; require builder dry-run for production".to_string(),
         );
-        ckb_constraints(artifact_size_bytes, max_entry_witness_bytes, estimated_cycles)
+        let ckb = ckb_constraints(metadata, artifact_size_bytes, max_entry_witness_bytes, estimated_cycles);
+        if ckb.uses_input_since || ckb.uses_header_epoch {
+            warnings.push(format!(
+                "CKB timelock-related runtime features are in use (input_since={}, header_epoch={}); declarative DSL policy surface is not yet first-class",
+                ckb.uses_input_since, ckb.uses_header_epoch
+            ));
+        }
+        if ckb.capacity_planning_required {
+            warnings.push(format!(
+                "CKB output capacity planning is required for this artifact (create outputs={}, mutate outputs={}); full transaction-level capacity remains builder/runtime-managed",
+                ckb.created_output_count, ckb.mutated_output_count
+            ));
+        }
+        ckb
     });
     let spora = (target_profile == TargetProfile::Spora)
         .then(|| spora_constraints(artifact_size_bytes, max_entry_witness_bytes, estimated_cycles));
@@ -925,6 +1016,7 @@ fn entry_abi_constraints(entry_kind: &str, entry_name: &str, params: &[ParamMeta
 }
 
 fn ckb_constraints(
+    metadata: &CompileMetadata,
     artifact_size_bytes: usize,
     max_entry_witness_bytes: usize,
     estimated_cycles: Option<u64>,
@@ -934,8 +1026,32 @@ fn ckb_constraints(
     let max_block_bytes = env_u64("CELLSCRIPT_CKB_MAX_BLOCK_BYTES").unwrap_or(CKB_DEFAULT_MAX_BLOCK_BYTES);
     let min_code_cell_data_capacity_shannons = (artifact_size_bytes as u64 + 8) * CKB_SHANNONS_PER_CKB;
     let recommended_code_cell_capacity_shannons = (artifact_size_bytes as u64 + 1_000) * CKB_SHANNONS_PER_CKB;
+    let ckb_runtime_features = metadata.runtime.ckb_runtime_features.clone();
+    let uses_input_since = ckb_runtime_features.iter().any(|feature| feature == "ckb-input-since");
+    let uses_header_epoch = ckb_runtime_features.iter().any(|feature| feature.starts_with("ckb-header-epoch-"));
+    let created_output_count = metadata
+        .actions
+        .iter()
+        .map(|action| action.create_set.len())
+        .chain(metadata.locks.iter().map(|lock| lock.create_set.len()))
+        .sum();
+    let mutated_output_count = metadata
+        .actions
+        .iter()
+        .map(|action| action.mutate_set.len())
+        .chain(metadata.locks.iter().map(|lock| lock.mutate_set.len()))
+        .sum();
+    let capacity_planning_required = created_output_count > 0 || mutated_output_count > 0;
     CkbConstraintsMetadata {
         limits_source: ckb_limits_source(),
+        hash_domain: "ckb-packed-molecule-blake2b".to_string(),
+        script_hash_algorithm: "blake2b-256(personal=ckb-default-hash) over packed Script".to_string(),
+        transaction_hash_algorithm: "blake2b-256(personal=ckb-default-hash) over packed RawTransaction".to_string(),
+        sighash_algorithm: "ckb witness-sighash blake2b-256".to_string(),
+        supported_script_hash_types: vec!["data".to_string(), "type".to_string(), "data1".to_string(), "data2".to_string()],
+        declared_type_id_hash_type: CKB_TYPE_ID_HASH_TYPE.to_string(),
+        hash_type_policy_surface: "compiler-declared-type-id-hash-type; builder must preserve script hash_type in deployed cells"
+            .to_string(),
         max_tx_verify_cycles,
         max_block_cycles,
         max_block_bytes,
@@ -948,8 +1064,31 @@ fn ckb_constraints(
         max_entry_witness_bytes,
         dry_run_required_for_production: true,
         tx_size_bytes: None,
+        tx_size_measurement_required: true,
         tx_size_status: "builder-required".to_string(),
-        capacity_status: "code-cell-data-lower-bound".to_string(),
+        occupied_capacity_measurement_required: capacity_planning_required,
+        capacity_status: if capacity_planning_required {
+            "builder-occupied-capacity-measurement-required".to_string()
+        } else {
+            "code-cell-data-lower-bound".to_string()
+        },
+        ckb_runtime_features,
+        uses_input_since,
+        uses_header_epoch,
+        transaction_runtime_input_requirement_count: metadata.runtime.transaction_runtime_input_requirements.len(),
+        timelock_policy_surface: if uses_input_since || uses_header_epoch {
+            "runtime-metadata-visible; declarative-dsl-policy-not-yet-first-class".to_string()
+        } else {
+            "not-applicable".to_string()
+        },
+        created_output_count,
+        mutated_output_count,
+        capacity_planning_required,
+        capacity_policy_surface: if capacity_planning_required {
+            "builder/runtime-required; declarative-dsl-capacity-not-yet-first-class".to_string()
+        } else {
+            "not-applicable".to_string()
+        },
     }
 }
 
@@ -959,10 +1098,16 @@ fn spora_constraints(
     estimated_cycles: Option<u64>,
 ) -> SporaConstraintsMetadata {
     let max_block_mass = env_u64("CELLSCRIPT_SPORA_MAX_BLOCK_MASS").unwrap_or(SPORA_DEFAULT_MAX_BLOCK_MASS);
+    let max_standard_transaction_mass =
+        env_u64("CELLSCRIPT_SPORA_MAX_STANDARD_TRANSACTION_MASS").unwrap_or(SPORA_DEFAULT_MAX_STANDARD_TRANSACTION_MASS);
     let estimated_compute_mass = estimated_cycles.unwrap_or_default();
     let estimated_storage_mass = artifact_size_bytes as u64;
     let estimated_transient_mass = max_entry_witness_bytes as u64;
     let estimated_code_deployment_mass = estimated_storage_mass + estimated_transient_mass;
+    let total_estimated_mass = estimated_compute_mass + estimated_storage_mass + estimated_transient_mass;
+    let fits_standard_transaction_mass_estimate = estimated_code_deployment_mass <= max_standard_transaction_mass;
+    let fits_standard_block_mass_estimate = total_estimated_mass <= max_block_mass;
+    let requires_relaxed_mass_policy = !(fits_standard_transaction_mass_estimate && fits_standard_block_mass_estimate);
     SporaConstraintsMetadata {
         limits_source: spora_limits_source(),
         estimated_compute_mass,
@@ -970,9 +1115,20 @@ fn spora_constraints(
         estimated_transient_mass,
         estimated_code_deployment_mass,
         max_block_mass,
-        requires_relaxed_mass_policy: estimated_compute_mass + estimated_storage_mass + estimated_transient_mass > max_block_mass,
-        mass_status: "compiler-estimate-requires-devnet-or-builder-confirmation".to_string(),
-        estimator: "v0: estimated_cycles + artifact bytes + max entry witness bytes".to_string(),
+        max_standard_transaction_mass,
+        fits_standard_transaction_mass_estimate,
+        fits_standard_block_mass_estimate,
+        requires_relaxed_mass_policy,
+        mass_status: if requires_relaxed_mass_policy {
+            "compiler-estimate-exceeds-standard-policy-requires-scope-split-or-devnet-confirmation".to_string()
+        } else {
+            "compiler-estimate-within-standard-policy-requires-devnet-or-builder-confirmation".to_string()
+        },
+        standard_relay_policy_surface: "standard relay tx mass and block mass are compiler-visible; acceptance remains authoritative"
+            .to_string(),
+        estimator:
+            "v1: estimated cycles + artifact bytes + max entry witness bytes; deployment tx mass is verified by devnet acceptance"
+                .to_string(),
     }
 }
 
@@ -994,10 +1150,15 @@ fn ckb_limits_source() -> String {
 }
 
 fn spora_limits_source() -> String {
-    if std::env::var("CELLSCRIPT_SPORA_MAX_BLOCK_MASS").is_ok() {
-        "environment:CELLSCRIPT_SPORA_MAX_BLOCK_MASS".to_string()
+    let overridden = ["CELLSCRIPT_SPORA_MAX_BLOCK_MASS", "CELLSCRIPT_SPORA_MAX_STANDARD_TRANSACTION_MASS"]
+        .iter()
+        .filter(|name| std::env::var(name).is_ok())
+        .copied()
+        .collect::<Vec<_>>();
+    if overridden.is_empty() {
+        "builtin-spora-standard-policy".to_string()
     } else {
-        "builtin-spora-defaults".to_string()
+        format!("environment:{}", overridden.join(","))
     }
 }
 
@@ -1361,6 +1522,113 @@ fn validate_molecule_schema_metadata(metadata: &CompileMetadata) -> Result<()> {
     Ok(())
 }
 
+fn validate_molecule_schema_manifest_metadata(metadata: &CompileMetadata) -> Result<()> {
+    let manifest = &metadata.molecule_schema_manifest;
+    if manifest.schema != "cellscript-molecule-schema-manifest-v1" {
+        return Err(CompileError::without_span(format!(
+            "metadata molecule_schema_manifest.schema '{}' is unsupported",
+            manifest.schema
+        )));
+    }
+    if manifest.version != 1 {
+        return Err(CompileError::without_span(format!(
+            "metadata molecule_schema_manifest.version {} is unsupported",
+            manifest.version
+        )));
+    }
+    if manifest.abi != "molecule" {
+        return Err(CompileError::without_span(format!("metadata molecule_schema_manifest.abi '{}' is unsupported", manifest.abi)));
+    }
+    if manifest.target_profile != metadata.target_profile.name {
+        return Err(CompileError::without_span(format!(
+            "metadata molecule_schema_manifest.target_profile '{}' does not match target profile '{}'",
+            manifest.target_profile, metadata.target_profile.name
+        )));
+    }
+
+    let schema_types = metadata.types.iter().filter(|ty| ty.molecule_schema.is_some()).collect::<Vec<_>>();
+    if manifest.type_count != schema_types.len() || manifest.entries.len() != schema_types.len() {
+        return Err(CompileError::without_span(format!(
+            "metadata molecule_schema_manifest.type_count {} does not match schema type count {}",
+            manifest.type_count,
+            schema_types.len()
+        )));
+    }
+    if manifest.fixed_type_count + manifest.dynamic_type_count != manifest.type_count {
+        return Err(CompileError::without_span("metadata molecule_schema_manifest fixed/dynamic counts do not sum to type_count"));
+    }
+    if !is_canonical_blake3_hex(&manifest.manifest_hash_blake3) {
+        return Err(CompileError::without_span(format!(
+            "metadata molecule_schema_manifest.manifest_hash_blake3 '{}' is invalid",
+            manifest.manifest_hash_blake3
+        )));
+    }
+
+    let mut entries = manifest.entries.clone();
+    entries.sort_by(|left, right| left.type_name.cmp(&right.type_name));
+    if entries.iter().map(|entry| entry.type_name.as_str()).collect::<Vec<_>>()
+        != manifest.entries.iter().map(|entry| entry.type_name.as_str()).collect::<Vec<_>>()
+    {
+        return Err(CompileError::without_span("metadata molecule_schema_manifest.entries must be sorted by type_name"));
+    }
+
+    for entry in &manifest.entries {
+        let Some(ty) = metadata.types.iter().find(|ty| ty.name == entry.type_name) else {
+            return Err(CompileError::without_span(format!(
+                "metadata molecule_schema_manifest entry '{}' does not match a metadata type",
+                entry.type_name
+            )));
+        };
+        let Some(schema) = &ty.molecule_schema else {
+            return Err(CompileError::without_span(format!(
+                "metadata molecule_schema_manifest entry '{}' points at a type without molecule_schema",
+                entry.type_name
+            )));
+        };
+        if entry.kind != ty.kind
+            || entry.layout != schema.layout
+            || entry.fixed_size != schema.fixed_size
+            || entry.encoded_size != ty.encoded_size
+            || entry.dynamic_fields != schema.dynamic_fields
+            || entry.schema_hash_blake3 != schema.schema_hash_blake3
+        {
+            return Err(CompileError::without_span(format!(
+                "metadata molecule_schema_manifest entry '{}' does not match type molecule_schema metadata",
+                entry.type_name
+            )));
+        }
+        if entry.field_offsets.len() != ty.fields.len() {
+            return Err(CompileError::without_span(format!(
+                "metadata molecule_schema_manifest entry '{}' field count does not match type metadata",
+                entry.type_name
+            )));
+        }
+        for (manifest_field, ty_field) in entry.field_offsets.iter().zip(&ty.fields) {
+            if manifest_field.name != ty_field.name
+                || manifest_field.ty != ty_field.ty
+                || manifest_field.offset != ty_field.offset
+                || manifest_field.encoded_size != ty_field.encoded_size
+                || manifest_field.fixed_width != ty_field.fixed_width
+            {
+                return Err(CompileError::without_span(format!(
+                    "metadata molecule_schema_manifest entry '{}.{}' does not match type field metadata",
+                    entry.type_name, manifest_field.name
+                )));
+            }
+        }
+    }
+
+    let expected = molecule_schema_manifest_metadata(&metadata.types, TargetProfile::from_name(&metadata.target_profile.name)?);
+    if manifest.manifest_hash_blake3 != expected.manifest_hash_blake3 {
+        return Err(CompileError::without_span(format!(
+            "metadata molecule_schema_manifest.manifest_hash_blake3 '{}' does not match manifest entries",
+            manifest.manifest_hash_blake3
+        )));
+    }
+
+    Ok(())
+}
+
 pub fn validate_source_units_on_disk(metadata: &CompileMetadata) -> Result<()> {
     validate_source_metadata(metadata)?;
     if metadata.source_units.is_empty() {
@@ -1646,6 +1914,7 @@ pub struct ActionMetadata {
     pub estimated_cycles: u64,
     #[serde(default = "default_scheduler_witness_abi")]
     pub scheduler_witness_abi: String,
+    // scheduler_witness_borsh_hex is not public scheduler witness metadata.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub scheduler_witness_hex: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1708,11 +1977,15 @@ impl ActionMetadata {
 
     /// Encode positional entry witness bytes for the generated `_cellscript_entry` wrapper.
     ///
-    /// Schema-backed parameters are loaded from transaction cells by the wrapper and
-    /// are intentionally omitted from `args`; scalar and fixed-byte parameters are
-    /// encoded in source order after the `CSARGv1\0` header.
+    /// Cell-bound parameters are loaded from transaction cells by the wrapper and
+    /// are intentionally omitted from `args`; remaining scalar, fixed-byte, and
+    /// dynamic schema parameters are encoded in source order after the `CSARGv1\0` header.
     pub fn entry_witness_args(&self, args: &[EntryWitnessArg]) -> Result<Vec<u8>> {
-        encode_entry_witness_args_for_params(&self.params, args)
+        encode_entry_witness_args_for_params_with_runtime_bound(
+            &self.params,
+            args,
+            &runtime_bound_param_names(&self.consume_set, &self.read_refs, &self.mutate_set),
+        )
     }
 }
 
@@ -1731,7 +2004,11 @@ impl LockMetadata {
 
     /// Encode positional entry witness bytes for the generated `_cellscript_entry` wrapper.
     pub fn entry_witness_args(&self, args: &[EntryWitnessArg]) -> Result<Vec<u8>> {
-        encode_entry_witness_args_for_params(&self.params, args)
+        encode_entry_witness_args_for_params_with_runtime_bound(
+            &self.params,
+            args,
+            &runtime_bound_param_names(&self.consume_set, &self.read_refs, &self.mutate_set),
+        )
     }
 }
 
@@ -1774,17 +2051,32 @@ pub enum EntryWitnessArg {
 /// Encode positional witness bytes for CellScript's generated entry wrapper.
 ///
 /// The result is suitable for transaction witnesses consumed by `_cellscript_entry`.
-/// It mirrors the codegen wrapper ABI: named schema parameters are runtime-loaded
-/// from cells and consume no witness payload, fixed-byte parameters are appended
-/// verbatim, and scalar parameters are little-endian encoded.
+/// It mirrors the codegen wrapper ABI: named schema parameters are encoded as
+/// `<u32:len><bytes>`, fixed-byte parameters are appended verbatim, and scalar
+/// parameters are little-endian encoded.
 pub fn encode_entry_witness_args_for_params(params: &[ParamMetadata], args: &[EntryWitnessArg]) -> Result<Vec<u8>> {
-    let payload_len = entry_witness_metadata_payload_len(params)?;
+    encode_entry_witness_args_for_params_with_runtime_bound(params, args, &BTreeSet::new())
+}
+
+pub fn encode_entry_witness_args_for_params_with_runtime_bound(
+    params: &[ParamMetadata],
+    args: &[EntryWitnessArg],
+    runtime_bound_param_names: &BTreeSet<String>,
+) -> Result<Vec<u8>> {
+    let payload_len = entry_witness_metadata_payload_len_with_runtime_bound(params, runtime_bound_param_names)?;
     let mut witness = Vec::with_capacity(ENTRY_WITNESS_ABI_MAGIC.len() + payload_len);
     witness.extend_from_slice(ENTRY_WITNESS_ABI_MAGIC);
 
     let mut arg_index = 0usize;
     for param in params {
+        if !param_consumes_entry_witness_payload(param, runtime_bound_param_names) {
+            continue;
+        }
+
         if param.schema_pointer_abi || param.schema_length_abi {
+            let arg = args.get(arg_index).ok_or_else(|| entry_witness_missing_arg_error(param, arg_index))?;
+            entry_witness_append_schema_arg(&mut witness, param, arg)?;
+            arg_index += 1;
             continue;
         }
 
@@ -1814,7 +2106,7 @@ pub fn encode_entry_witness_args_for_params(params: &[ParamMetadata], args: &[En
 
     if arg_index != args.len() {
         return Err(CompileError::without_span(format!(
-            "entry witness received {} payload args but consumed {}; schema-backed parameters are omitted from {}",
+            "entry witness received {} payload args but consumed {} for {}",
             args.len(),
             arg_index,
             ENTRY_WITNESS_ABI
@@ -1824,10 +2116,15 @@ pub fn encode_entry_witness_args_for_params(params: &[ParamMetadata], args: &[En
     Ok(witness)
 }
 
-fn entry_witness_metadata_payload_len(params: &[ParamMetadata]) -> Result<usize> {
+fn entry_witness_metadata_payload_len_with_runtime_bound(
+    params: &[ParamMetadata],
+    runtime_bound_param_names: &BTreeSet<String>,
+) -> Result<usize> {
     params.iter().try_fold(0usize, |acc, param| {
-        if param.schema_pointer_abi || param.schema_length_abi {
+        if !param_consumes_entry_witness_payload(param, runtime_bound_param_names) {
             Ok(acc)
+        } else if param.schema_pointer_abi || param.schema_length_abi {
+            Ok(acc + 4)
         } else if let Some(width) = param.fixed_byte_len {
             Ok(acc + width)
         } else if let Some(width) = entry_witness_scalar_param_width(&param.ty) {
@@ -1836,6 +2133,27 @@ fn entry_witness_metadata_payload_len(params: &[ParamMetadata]) -> Result<usize>
             Err(CompileError::without_span(format!("entry witness parameter '{}' has unsupported type '{}'", param.name, param.ty)))
         }
     })
+}
+
+fn entry_witness_append_schema_arg(witness: &mut Vec<u8>, param: &ParamMetadata, arg: &EntryWitnessArg) -> Result<()> {
+    let bytes = match arg {
+        EntryWitnessArg::Bytes(bytes) => bytes,
+        _ => {
+            return Err(CompileError::without_span(format!(
+                "entry witness parameter '{}' expects schema bytes for type '{}'",
+                param.name, param.ty
+            )));
+        }
+    };
+    let len = u32::try_from(bytes.len()).map_err(|_| {
+        CompileError::without_span(format!(
+            "entry witness parameter '{}' exceeds the 4-byte schema payload limit for {}",
+            param.name, ENTRY_WITNESS_ABI
+        ))
+    })?;
+    witness.extend_from_slice(&len.to_le_bytes());
+    witness.extend_from_slice(bytes);
+    Ok(())
 }
 
 fn entry_witness_fixed_arg_bytes(param: &ParamMetadata, arg: &EntryWitnessArg, width: usize) -> Result<Vec<u8>> {
@@ -1879,6 +2197,28 @@ fn entry_witness_missing_arg_error(param: &ParamMetadata, index: usize) -> Compi
         "entry witness missing payload arg {} for parameter '{}' of type '{}'",
         index, param.name, param.ty
     ))
+}
+
+fn runtime_bound_param_names(
+    consume_set: &[CellPatternMetadata],
+    read_refs: &[CellPatternMetadata],
+    mutate_set: &[MutatePatternMetadata],
+) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for pattern in consume_set {
+        names.insert(pattern.binding.clone());
+    }
+    for pattern in read_refs {
+        names.insert(pattern.binding.clone());
+    }
+    for pattern in mutate_set {
+        names.insert(pattern.binding.clone());
+    }
+    names
+}
+
+fn param_consumes_entry_witness_payload(param: &ParamMetadata, runtime_bound_param_names: &BTreeSet<String>) -> bool {
+    !param.cell_bound_abi && !param.ty.starts_with('&') && !runtime_bound_param_names.contains(&param.name)
 }
 
 fn entry_witness_scalar_param_width(ty: &str) -> Option<usize> {
@@ -2011,6 +2351,8 @@ pub struct ParamMetadata {
     pub ty: String,
     pub is_mut: bool,
     pub is_ref: bool,
+    #[serde(default)]
+    pub cell_bound_abi: bool,
     pub schema_pointer_abi: bool,
     pub schema_length_abi: bool,
     pub fixed_byte_pointer_abi: bool,
@@ -2782,6 +3124,13 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
     let ckb_runtime_required = !ckb_runtime_features.is_empty();
     let standalone_runner_compatible = legacy_symbolic_cell_runtime_features.is_empty() && !ckb_runtime_required && !has_entry_params;
     let embeds_vm_abi_trailer = target_profile.embeds_vm_abi_trailer(artifact_format);
+    let mut types =
+        ir.external_type_defs.iter().map(|type_def| type_metadata(type_def, &type_defs, target_profile)).collect::<Vec<_>>();
+    types.extend(ir.items.iter().filter_map(|item| match item {
+        ir::IrItem::TypeDef(type_def) => Some(type_metadata(type_def, &type_defs, target_profile)),
+        _ => None,
+    }));
+    let molecule_schema_manifest = molecule_schema_manifest_metadata(&types, target_profile);
     CompileMetadata {
         metadata_schema_version: METADATA_SCHEMA_VERSION,
         compiler_version: VERSION.to_string(),
@@ -2836,15 +3185,8 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
             pool_primitives,
         },
         constraints: ConstraintsMetadata::default(),
-        types: {
-            let mut types =
-                ir.external_type_defs.iter().map(|type_def| type_metadata(type_def, &type_defs, target_profile)).collect::<Vec<_>>();
-            types.extend(ir.items.iter().filter_map(|item| match item {
-                ir::IrItem::TypeDef(type_def) => Some(type_metadata(type_def, &type_defs, target_profile)),
-                _ => None,
-            }));
-            types
-        },
+        molecule_schema_manifest,
+        types,
         actions: ir
             .items
             .iter()
@@ -2910,7 +3252,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                     let scheduler_witness_molecule_hex = hex_bytes(&scheduler_witness_molecule);
                     Some(ActionMetadata {
                         name: action.name.clone(),
-                        params: param_metadata_for_body(&action.params, &action.body),
+                        params: param_metadata_for_body(&action.params, &action.body, &cell_type_kinds),
                         effect_class: scheduler_effect_class,
                         parallelizable: action.scheduler_hints.parallelizable,
                         touches_shared: action.scheduler_hints.touches_shared.iter().map(hex_hash).collect(),
@@ -2997,7 +3339,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         transaction_runtime_input_requirements_from_obligations(&verifier_obligations);
                     Some(FunctionMetadata {
                         name: function.name.clone(),
-                        params: param_metadata_for_body(&function.params, &function.body),
+                        params: param_metadata_for_body(&function.params, &function.body, &cell_type_kinds),
                         return_type: function.return_type.as_ref().map(ir_type_to_string),
                         mutate_set: function.body.mutate_set.iter().map(|pattern| mutate_pattern_metadata(pattern, &type_layouts)).collect(),
                         pool_primitives,
@@ -3062,7 +3404,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         symbolic_runtime_features.is_empty() && ckb_runtime_features.is_empty() && lock.params.is_empty();
                     Some(LockMetadata {
                         name: lock.name.clone(),
-                        params: param_metadata_for_body(&lock.params, &lock.body),
+                        params: param_metadata_for_body(&lock.params, &lock.body, &cell_type_kinds),
                         consume_set: lock.body.consume_set.iter().map(cell_pattern_metadata).collect(),
                         read_refs: lock.body.read_refs.iter().map(cell_pattern_metadata).collect(),
                         create_set: lock
@@ -5436,13 +5778,21 @@ fn transaction_claim_condition_detail(
         if let Some(signer_field) = signer_field {
             return format!(
                 "Compiler-emitted runtime verifier checks '{}' claim witness format, authorization-domain separation, secp256k1 signature verification, and signer-key binding via '{}.{}'; {}; claimed output relation is tracked by claim-output obligations; runtime inputs: {}",
-                type_name, type_name, signer_field, checked_parts.join("; "), input_summary
+                type_name,
+                type_name,
+                signer_field,
+                checked_parts.join("; "),
+                input_summary
             );
         }
         if let Some(lock_hash_field) = lock_hash_field {
             return format!(
                 "Compiler-emitted runtime verifier checks '{}' claim authorization by binding Input lock_hash to '{}.{}'; {}; claimed output relation is tracked by claim-output obligations; runtime inputs: {}",
-                type_name, type_name, lock_hash_field, checked_parts.join("; "), input_summary
+                type_name,
+                type_name,
+                lock_hash_field,
+                checked_parts.join("; "),
+                input_summary
             );
         }
     }
@@ -9599,6 +9949,82 @@ fn type_molecule_schema_metadata(
     })
 }
 
+fn molecule_schema_manifest_metadata(types: &[TypeMetadata], target_profile: TargetProfile) -> MoleculeSchemaManifestMetadata {
+    let mut entries = types
+        .iter()
+        .filter_map(|ty| {
+            let schema = ty.molecule_schema.as_ref()?;
+            Some(MoleculeSchemaManifestEntryMetadata {
+                type_name: ty.name.clone(),
+                kind: ty.kind.clone(),
+                layout: schema.layout.clone(),
+                fixed_size: schema.fixed_size,
+                encoded_size: ty.encoded_size,
+                dynamic_fields: schema.dynamic_fields.clone(),
+                schema_hash_blake3: schema.schema_hash_blake3.clone(),
+                field_offsets: ty
+                    .fields
+                    .iter()
+                    .map(|field| MoleculeSchemaManifestFieldMetadata {
+                        name: field.name.clone(),
+                        ty: field.ty.clone(),
+                        offset: field.offset,
+                        encoded_size: field.encoded_size,
+                        fixed_width: field.fixed_width,
+                    })
+                    .collect(),
+                target_profile_compatible: true,
+            })
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.type_name.cmp(&right.type_name));
+
+    let fixed_type_count = entries.iter().filter(|entry| entry.layout == "fixed-struct-v1").count();
+    let dynamic_type_count = entries.iter().filter(|entry| entry.layout == "molecule-table-v1").count();
+    let mut canonical = String::new();
+    for entry in &entries {
+        canonical.push_str(&entry.type_name);
+        canonical.push('|');
+        canonical.push_str(&entry.kind);
+        canonical.push('|');
+        canonical.push_str(&entry.layout);
+        canonical.push('|');
+        canonical.push_str(&entry.fixed_size.to_string());
+        canonical.push('|');
+        canonical.push_str(&entry.encoded_size.map(|size| size.to_string()).unwrap_or_else(|| "dynamic".to_string()));
+        canonical.push('|');
+        canonical.push_str(&entry.dynamic_fields.join(","));
+        canonical.push('|');
+        canonical.push_str(&entry.schema_hash_blake3);
+        canonical.push('\n');
+        for field in &entry.field_offsets {
+            canonical.push_str("  ");
+            canonical.push_str(&field.name);
+            canonical.push('|');
+            canonical.push_str(&field.ty);
+            canonical.push('|');
+            canonical.push_str(&field.offset.to_string());
+            canonical.push('|');
+            canonical.push_str(&field.encoded_size.map(|size| size.to_string()).unwrap_or_else(|| "dynamic".to_string()));
+            canonical.push('|');
+            canonical.push_str(if field.fixed_width { "fixed" } else { "dynamic" });
+            canonical.push('\n');
+        }
+    }
+
+    MoleculeSchemaManifestMetadata {
+        schema: "cellscript-molecule-schema-manifest-v1".to_string(),
+        version: 1,
+        abi: "molecule".to_string(),
+        target_profile: target_profile.name().to_string(),
+        type_count: entries.len(),
+        fixed_type_count,
+        dynamic_type_count,
+        manifest_hash_blake3: hex_encode(blake3::hash(canonical.as_bytes()).as_bytes()),
+        entries,
+    }
+}
+
 fn molecule_dynamic_fields(type_def: &ir::IrTypeDef, type_defs: &BTreeMap<String, &ir::IrTypeDef>) -> Vec<String> {
     type_def
         .fields
@@ -10192,9 +10618,13 @@ fn type_static_length(ty: &ir::IrType) -> Option<usize> {
     }
 }
 
-fn param_metadata_for_body(params: &[ir::IrParam], body: &ir::IrBody) -> Vec<ParamMetadata> {
+fn param_metadata_for_body(
+    params: &[ir::IrParam],
+    body: &ir::IrBody,
+    cell_type_kinds: &HashMap<String, ir::IrTypeKind>,
+) -> Vec<ParamMetadata> {
     let type_hash_param_ids = param_type_hash_param_ids(body);
-    params.iter().map(|param| param_metadata(param, &type_hash_param_ids)).collect()
+    params.iter().map(|param| param_metadata(param, &type_hash_param_ids, cell_type_kinds)).collect()
 }
 
 fn param_type_hash_param_ids(body: &ir::IrBody) -> BTreeSet<usize> {
@@ -10211,17 +10641,27 @@ fn param_type_hash_param_ids(body: &ir::IrBody) -> BTreeSet<usize> {
     ids
 }
 
-fn param_metadata(param: &ir::IrParam, type_hash_param_ids: &BTreeSet<usize>) -> ParamMetadata {
+fn param_metadata(
+    param: &ir::IrParam,
+    type_hash_param_ids: &BTreeSet<usize>,
+    cell_type_kinds: &HashMap<String, ir::IrTypeKind>,
+) -> ParamMetadata {
     let schema_pointer_abi = named_type_name(&param.ty).is_some();
     let fixed_byte_len = metadata_fixed_byte_width(&param.ty, type_static_length(&param.ty))
         .filter(|width| *width > 8)
         .or_else(|| metadata_fixed_aggregate_pointer_size(&param.ty));
     let type_hash_abi = schema_pointer_abi && type_hash_param_ids.contains(&param.binding.id);
+    let cell_bound_abi = param.is_ref
+        || matches!(
+            named_type_name(&param.ty).and_then(|name| cell_type_kinds.get(name)),
+            Some(ir::IrTypeKind::Resource | ir::IrTypeKind::Shared | ir::IrTypeKind::Receipt)
+        );
     ParamMetadata {
         name: param.name.clone(),
         ty: ir_type_to_string(&param.ty),
         is_mut: param.is_mut,
         is_ref: param.is_ref,
+        cell_bound_abi,
         schema_pointer_abi,
         schema_length_abi: schema_pointer_abi,
         fixed_byte_pointer_abi: fixed_byte_len.is_some(),
@@ -15089,6 +15529,53 @@ action create_listing(nft: &NFT, price: u64) -> Listing {
     }
 
     #[test]
+    fn compile_binds_read_ref_entry_params_to_cell_deps() {
+        let program = r#"
+module test
+
+shared Config has store {
+    admin: Address,
+}
+
+resource Token has store {
+    amount: u64,
+}
+
+receipt Grant has store {
+    admin: Address,
+    amount: u64,
+}
+
+action grant(config: read_ref Config, token: Token) -> Grant {
+    consume token
+    create Grant {
+        admin: config.admin,
+        amount: token.amount,
+    } with_lock(config.admin)
+}
+"#;
+
+        let result = compile(program, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: bind read-only param config to CellDep#0 cell data"),
+            "read_ref entry parameter was not bound to a CellDep:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: LOAD_CELL_DATA reason=read_ref_param_dep source=CellDep index=0"),
+            "read_ref entry parameter did not use the CellDep LOAD_CELL ABI:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: bind read-only param config to Input#"),
+            "read_ref entry parameter regressed back to Input binding:\n{}",
+            asm
+        );
+    }
+
+    #[test]
     fn compile_binds_duplicate_read_refs_by_order_not_name() {
         let result = compile(DUPLICATE_READ_REF_PROGRAM, CompileOptions::default()).unwrap();
         let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
@@ -16413,6 +16900,28 @@ action now() -> u64 {
         assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-header-epoch-start-block-number".to_string()));
         assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-header-epoch-length".to_string()));
         assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-input-since".to_string()));
+        let ckb_constraints = result.metadata.constraints.ckb.as_ref().expect("ckb constraints metadata");
+        assert!(ckb_constraints.uses_input_since, "ckb constraints must surface input_since usage");
+        assert!(ckb_constraints.uses_header_epoch, "ckb constraints must surface epoch-header usage");
+        assert!(
+            ckb_constraints.ckb_runtime_features.iter().any(|feature| feature == "ckb-input-since"),
+            "ckb constraints must carry ckb runtime features"
+        );
+        assert_eq!(ckb_constraints.hash_domain, "ckb-packed-molecule-blake2b");
+        assert_eq!(ckb_constraints.declared_type_id_hash_type, crate::CKB_TYPE_ID_HASH_TYPE);
+        assert!(
+            ckb_constraints.supported_script_hash_types.iter().any(|hash_type| hash_type == "data2"),
+            "CKB constraints must expose supported script hash_type set"
+        );
+        assert!(ckb_constraints.tx_size_measurement_required, "CKB production constraints must require tx-size measurement");
+        assert_eq!(ckb_constraints.timelock_policy_surface, "runtime-metadata-visible; declarative-dsl-policy-not-yet-first-class");
+        assert!(
+            !ckb_constraints.capacity_planning_required,
+            "pure epoch/since reads must not claim output-capacity planning is required"
+        );
+        assert_eq!(ckb_constraints.created_output_count, 0, "pure epoch/since reads must not report created outputs");
+        assert_eq!(ckb_constraints.mutated_output_count, 0, "pure epoch/since reads must not report mutated outputs");
+        assert_eq!(ckb_constraints.capacity_policy_surface, "not-applicable");
         assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| {
             access.syscall == "LOAD_INPUT_BY_FIELD" && access.source == "GroupInput" && access.operation == "input-since"
         }));
@@ -16421,6 +16930,56 @@ action now() -> u64 {
         let err = compile(CKB_HEADER_EPOCH_PROGRAM, CompileOptions::default()).unwrap_err();
         assert!(err.message.contains("target profile policy failed for 'spora'"), "unexpected error: {}", err.message);
         assert!(err.message.contains("CKB chain APIs require the 'ckb' target profile"), "unexpected error: {}", err.message);
+    }
+
+    #[test]
+    fn ckb_constraints_surface_capacity_planning_for_created_outputs() {
+        let source = r#"
+module ckb_capacity_surface
+
+resource Receipt {
+    amount: u64,
+}
+
+action mint(amount: u64) -> Receipt {
+    let receipt = create Receipt {
+        amount: amount,
+    };
+    receipt
+}
+"#;
+        let result = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() }).unwrap();
+        let ckb_constraints = result.metadata.constraints.ckb.as_ref().expect("ckb constraints metadata");
+
+        assert_eq!(ckb_constraints.created_output_count, 1, "ckb constraints must count created outputs");
+        assert_eq!(ckb_constraints.mutated_output_count, 0, "create-only action must not report mutated outputs");
+        assert!(ckb_constraints.capacity_planning_required, "create outputs must mark capacity planning as required");
+        assert!(
+            ckb_constraints.occupied_capacity_measurement_required,
+            "create outputs must require builder occupied-capacity measurement"
+        );
+        assert_eq!(ckb_constraints.capacity_status, "builder-occupied-capacity-measurement-required");
+        assert_eq!(ckb_constraints.capacity_policy_surface, "builder/runtime-required; declarative-dsl-capacity-not-yet-first-class");
+    }
+
+    #[test]
+    fn spora_constraints_surface_standard_mass_policy() {
+        let source = r#"
+module spora_mass_surface
+
+action add(a: u64, b: u64) -> u64 {
+    a + b
+}
+"#;
+        let result = compile(source, CompileOptions::default()).unwrap();
+        let spora_constraints = result.metadata.constraints.spora.as_ref().expect("spora constraints metadata");
+
+        assert_eq!(spora_constraints.max_block_mass, 2_000_000);
+        assert_eq!(spora_constraints.max_standard_transaction_mass, 500_000);
+        assert!(spora_constraints.fits_standard_transaction_mass_estimate);
+        assert!(spora_constraints.fits_standard_block_mass_estimate);
+        assert!(!spora_constraints.requires_relaxed_mass_policy);
+        assert_eq!(spora_constraints.limits_source, "builtin-spora-standard-policy");
     }
 
     #[test]
@@ -19204,6 +19763,62 @@ action value() -> u64 {
     }
 
     #[test]
+    fn compile_metadata_exposes_authoritative_molecule_schema_manifest() {
+        let source = r#"
+module schema_manifest
+
+resource Profile {
+    owner: Address,
+    display_name: String,
+    score: u64,
+}
+
+receipt MintReceipt {
+    owner: Address,
+    amount: u64,
+}
+
+action mint(owner: Address, amount: u64) -> MintReceipt {
+    create MintReceipt { owner: owner, amount: amount }
+}
+"#;
+        let result = compile(source, CompileOptions::default()).unwrap();
+        let manifest = &result.metadata.molecule_schema_manifest;
+        assert_eq!(manifest.schema, "cellscript-molecule-schema-manifest-v1");
+        assert_eq!(manifest.version, 1);
+        assert_eq!(manifest.abi, "molecule");
+        assert_eq!(manifest.target_profile, "spora");
+        assert_eq!(manifest.type_count, 2);
+        assert_eq!(manifest.fixed_type_count, 1);
+        assert_eq!(manifest.dynamic_type_count, 1);
+        assert_eq!(manifest.entries.iter().map(|entry| entry.type_name.as_str()).collect::<Vec<_>>(), vec!["MintReceipt", "Profile"]);
+        assert!(crate::is_canonical_blake3_hex(&manifest.manifest_hash_blake3));
+
+        let profile = manifest.entries.iter().find(|entry| entry.type_name == "Profile").expect("Profile manifest entry");
+        assert_eq!(profile.layout, "molecule-table-v1");
+        assert_eq!(profile.dynamic_fields, vec!["display_name"]);
+        assert!(profile.field_offsets.iter().any(|field| field.name == "owner" && field.offset == 0 && field.fixed_width));
+        assert!(
+            profile
+                .field_offsets
+                .iter()
+                .any(|field| field.name == "display_name" && field.encoded_size.is_none() && !field.fixed_width),
+            "dynamic field layout should stay visible in the schema manifest: {:?}",
+            profile.field_offsets
+        );
+
+        let receipt = manifest.entries.iter().find(|entry| entry.type_name == "MintReceipt").expect("MintReceipt manifest entry");
+        assert_eq!(receipt.layout, "fixed-struct-v1");
+        assert_eq!(receipt.fixed_size, 40);
+        assert!(receipt
+            .field_offsets
+            .iter()
+            .any(|field| field.name == "amount" && field.offset == 32 && field.encoded_size == Some(8)));
+
+        crate::validate_compile_metadata(&result.metadata, result.artifact_format).unwrap();
+    }
+
+    #[test]
     fn compile_result_exposes_type_capability_metadata() {
         let result = compile(TRANSFER_CLAIM_SETTLE_PROGRAM, CompileOptions::default()).unwrap();
         let token = result.metadata.types.iter().find(|ty| ty.name == "Token").expect("Token type metadata");
@@ -19561,7 +20176,7 @@ action stack_arg(a: A, b: B, c: C, owner: Address, required: u64) -> u64 {
     }
 
     #[test]
-    fn entry_witness_encoder_omits_schema_backed_params() {
+    fn entry_witness_encoder_includes_schema_backed_params_as_length_prefixed_bytes() {
         let program = r#"
 module vm::entry_abi
 
@@ -19572,10 +20187,14 @@ action bad(items: Vec<Address>) -> u64 {
 
         let result = compile(program, CompileOptions::default()).unwrap();
         let action = result.metadata.actions.iter().find(|action| action.name == "bad").unwrap();
-        assert_eq!(action.entry_witness_args(&[]).unwrap(), ENTRY_WITNESS_ABI_MAGIC.to_vec());
+        let schema_bytes = vec![1u8, 2, 3, 4];
+        let mut expected = ENTRY_WITNESS_ABI_MAGIC.to_vec();
+        expected.extend_from_slice(&(schema_bytes.len() as u32).to_le_bytes());
+        expected.extend_from_slice(&schema_bytes);
+        assert_eq!(action.entry_witness_args(&[EntryWitnessArg::Bytes(schema_bytes.clone())]).unwrap(), expected);
 
-        let err = action.entry_witness_args(&[EntryWitnessArg::Bytes(Vec::new())]).unwrap_err();
-        assert!(err.message.contains("schema-backed parameters are omitted"), "unexpected error: {}", err.message);
+        let err = action.entry_witness_args(&[]).unwrap_err();
+        assert!(err.message.contains("missing payload arg"), "unexpected error: {}", err.message);
     }
 
     #[test]

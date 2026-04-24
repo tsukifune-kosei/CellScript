@@ -1,0 +1,86 @@
+[
+  {
+    "example": "amm_pool.cell",
+    "line_count": 8558,
+    "text_size": 33912,
+    "relaxed_branch_count": 0,
+    "max_cond_branch_abs_distance": 3220,
+    "machine_block_count": 1393,
+    "max_machine_block_size": 280,
+    "machine_cfg_edge_count": 2400,
+    "machine_call_edge_count": 326,
+    "unreachable_machine_block_count": 1180
+  },
+  {
+    "example": "launch.cell",
+    "line_count": 5659,
+    "text_size": 21320,
+    "relaxed_branch_count": 0,
+    "max_cond_branch_abs_distance": 2192,
+    "machine_block_count": 763,
+    "max_machine_block_size": 492,
+    "machine_cfg_edge_count": 1309,
+    "machine_call_edge_count": 216,
+    "unreachable_machine_block_count": 348
+  },
+  {
+    "example": "multisig.cell",
+    "line_count": 19454,
+    "text_size": 76048,
+    "relaxed_branch_count": 4,
+    "max_cond_branch_abs_distance": 6768,
+    "machine_block_count": 3414,
+    "max_machine_block_size": 356,
+    "machine_cfg_edge_count": 5421,
+    "machine_call_edge_count": 266,
+    "unreachable_machine_block_count": 3234
+  },
+  {
+    "example": "nft.cell",
+    "line_count": 12273,
+    "text_size": 47388,
+    "relaxed_branch_count": 1,
+    "max_cond_branch_abs_distance": 5640,
+    "machine_block_count": 2375,
+    "max_machine_block_size": 164,
+    "machine_cfg_edge_count": 3933,
+    "machine_call_edge_count": 305,
+    "unreachable_machine_block_count": 1956
+  },
+  {
+    "example": "timelock.cell",
+    "line_count": 9914,
+    "text_size": 38284,
+    "relaxed_branch_count": 0,
+    "max_cond_branch_abs_distance": 3388,
+    "machine_block_count": 1797,
+    "max_machine_block_size": 224,
+    "machine_cfg_edge_count": 2976,
+    "machine_call_edge_count": 243,
+    "unreachable_machine_block_count": 1741
+  },
+  {
+    "example": "token.cell",
+    "line_count": 2541,
+    "text_size": 9748,
+    "relaxed_branch_count": 0,
+    "max_cond_branch_abs_distance": 1316,
+    "machine_block_count": 478,
+    "max_machine_block_size": 240,
+    "machine_cfg_edge_count": 787,
+    "machine_call_edge_count": 85,
+    "unreachable_machine_block_count": 207
+  },
+  {
+    "example": "vesting.cell",
+    "line_count": 3828,
+    "text_size": 14372,
+    "relaxed_branch_count": 0,
+    "max_cond_branch_abs_distance": 2356,
+    "machine_block_count": 566,
+    "max_machine_block_size": 340,
+    "machine_cfg_edge_count": 989,
+    "machine_call_edge_count": 189,
+    "unreachable_machine_block_count": 499
+  }
+]

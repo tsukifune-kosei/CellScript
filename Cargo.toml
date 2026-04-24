@@ -21,6 +21,11 @@ name = "cellc"
 path = "src/main.rs"
 test = false
 
+[[bin]]
+name = "cellscript-ckb-tx-measure"
+path = "src/bin/ckb_tx_measure.rs"
+test = false
+
 [lib]
 name = "cellscript"
 path = "src/lib.rs"
@@ -48,6 +53,12 @@ colored = "2.1"
 
 camino = "1.1"
 ckb-vm = { version = "0.24", features = ["asm", "detect-asm"], optional = true }
+ckb-jsonrpc-types = { path = "../../ckb/util/jsonrpc-types" }
+ckb-types = { path = "../../ckb/util/types" }
+
+# LSP
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["full"] }
 
 [features]
 default = []

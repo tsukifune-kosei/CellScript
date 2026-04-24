@@ -453,35 +453,35 @@ mod tests {
 
     #[test]
     fn test_debug_info_generator() {
-        let gen = DebugInfoGenerator::new("test".to_string(), PathBuf::from("test.cell"));
+        let debug_info = DebugInfoGenerator::new("test".to_string(), PathBuf::from("test.cell"));
 
-        assert_eq!(gen.compilation_unit.name, "test");
-        assert_eq!(gen.compilation_unit.language, SourceLanguage::CellScript);
+        assert_eq!(debug_info.compilation_unit.name, "test");
+        assert_eq!(debug_info.compilation_unit.language, SourceLanguage::CellScript);
     }
 
     #[test]
     fn test_line_table() {
-        let mut gen = DebugInfoGenerator::new("test".to_string(), PathBuf::from("test.cell"));
+        let mut debug_info = DebugInfoGenerator::new("test".to_string(), PathBuf::from("test.cell"));
 
-        gen.add_line_info(0x1000, Span::default());
-        gen.add_line_info(0x1004, Span::default());
+        debug_info.add_line_info(0x1000, Span::default());
+        debug_info.add_line_info(0x1004, Span::default());
 
-        assert_eq!(gen.line_table.entries.len(), 2);
+        assert_eq!(debug_info.line_table.entries.len(), 2);
     }
 
     #[test]
     fn test_type_registration() {
-        let mut gen = DebugInfoGenerator::new("test".to_string(), PathBuf::from("test.cell"));
+        let mut debug_info = DebugInfoGenerator::new("test".to_string(), PathBuf::from("test.cell"));
 
-        let id = gen.register_type("u64", &Type::U64);
-        assert!(gen.type_table.types.contains_key(&id));
+        let id = debug_info.register_type("u64", &Type::U64);
+        assert!(debug_info.type_table.types.contains_key(&id));
     }
 
     #[test]
     fn test_dwarf_generation() {
-        let gen = DebugInfoGenerator::new("test".to_string(), PathBuf::from("test.cell"));
+        let debug_info = DebugInfoGenerator::new("test".to_string(), PathBuf::from("test.cell"));
 
-        let dwarf = gen.generate_dwarf();
+        let dwarf = debug_info.generate_dwarf();
 
         assert!(!dwarf.debug_info.is_empty());
         assert!(!dwarf.debug_abbrev.is_empty());
