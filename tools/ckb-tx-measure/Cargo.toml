@@ -12,7 +12,7 @@ name = "cellscript-ckb-tx-measure"
 path = "../../src/bin/ckb_tx_measure.rs"
 
 [dependencies]
-ckb-jsonrpc-types = { path = "../../../ckb/util/jsonrpc-types" }
-ckb-types = { path = "../../../ckb/util/types" }
+ckb-jsonrpc-types = { path = "../../../../ckb/util/jsonrpc-types" }
+ckb-types = { path = "../../../../ckb/util/types" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
