@@ -1,25 +1,31 @@
 {
   "name": "cellscript-vscode",
   "displayName": "CellScript",
-  "description": "Syntax highlighting and editor support for CellScript (.cell) files.",
-  "version": "0.1.0",
+  "description": "Production-grade local VS Code tooling for CellScript (.cell) contracts.",
+  "version": "0.11.0",
   "publisher": "spora-foundation",
   "license": "MIT OR Apache-2.0",
   "main": "./extension.js",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Spora-Foundation/Spora.git"
+    "url": "https://github.com/tsukifune-kosei/CellScript.git"
   },
-  "homepage": "https://github.com/Spora-Foundation/Spora/tree/spora/cellscript/editors/vscode-cellscript",
+  "homepage": "https://github.com/tsukifune-kosei/CellScript/tree/main/editors/vscode-cellscript",
   "bugs": {
-    "url": "https://github.com/Spora-Foundation/Spora/issues"
+    "url": "https://github.com/tsukifune-kosei/CellScript/issues"
   },
   "engines": {
     "vscode": "^1.85.0"
   },
   "activationEvents": [
     "onLanguage:cellscript",
-    "onCommand:cellscript.validateCurrentFile"
+    "onCommand:cellscript.validateCurrentFile",
+    "onCommand:cellscript.compileCurrentFile",
+    "onCommand:cellscript.showMetadata",
+    "onCommand:cellscript.showConstraints",
+    "onCommand:cellscript.showProductionReport",
+    "onCommand:cellscript.formatCurrentFile",
+    "onCommand:cellscript.selectTargetProfile"
   ],
   "scripts": {
     "validate": "node ./scripts/validate.mjs",
@@ -67,8 +73,102 @@
       {
         "command": "cellscript.validateCurrentFile",
         "title": "CellScript: Validate Current File"
+      },
+      {
+        "command": "cellscript.compileCurrentFile",
+        "title": "CellScript: Compile Current File"
+      },
+      {
+        "command": "cellscript.showMetadata",
+        "title": "CellScript: Show Metadata"
+      },
+      {
+        "command": "cellscript.showConstraints",
+        "title": "CellScript: Show Constraints"
+      },
+      {
+        "command": "cellscript.showProductionReport",
+        "title": "CellScript: Show Production Report"
+      },
+      {
+        "command": "cellscript.formatCurrentFile",
+        "title": "CellScript: Format Current File"
+      },
+      {
+        "command": "cellscript.selectTargetProfile",
+        "title": "CellScript: Select Target Profile"
       }
     ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "cellscript.validateCurrentFile",
+          "when": "resourceLangId == cellscript",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "cellscript.validateCurrentFile",
+          "when": "resourceLangId == cellscript",
+          "group": "cellscript@1"
+        },
+        {
+          "command": "cellscript.compileCurrentFile",
+          "when": "resourceLangId == cellscript",
+          "group": "cellscript@2"
+        },
+        {
+          "command": "cellscript.showMetadata",
+          "when": "resourceLangId == cellscript",
+          "group": "cellscript@3"
+        },
+        {
+          "command": "cellscript.showConstraints",
+          "when": "resourceLangId == cellscript",
+          "group": "cellscript@4"
+        },
+        {
+          "command": "cellscript.showProductionReport",
+          "when": "resourceLangId == cellscript",
+          "group": "cellscript@5"
+        },
+        {
+          "command": "cellscript.formatCurrentFile",
+          "when": "resourceLangId == cellscript",
+          "group": "cellscript@6"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "cellscript.validateCurrentFile",
+          "when": "editorLangId == cellscript"
+        },
+        {
+          "command": "cellscript.compileCurrentFile",
+          "when": "editorLangId == cellscript"
+        },
+        {
+          "command": "cellscript.showMetadata",
+          "when": "editorLangId == cellscript"
+        },
+        {
+          "command": "cellscript.showConstraints",
+          "when": "editorLangId == cellscript"
+        },
+        {
+          "command": "cellscript.showProductionReport",
+          "when": "editorLangId == cellscript"
+        },
+        {
+          "command": "cellscript.formatCurrentFile",
+          "when": "editorLangId == cellscript"
+        },
+        {
+          "command": "cellscript.selectTargetProfile"
+        }
+      ]
+    },
     "configuration": {
       "title": "CellScript",
       "properties": {
@@ -91,6 +191,48 @@
           ],
           "default": "parse",
           "description": "Validation mode for editor diagnostics. 'parse' is fast syntax validation, 'compile-asm' runs the wider compiler pipeline to an assembly scratch file, and 'off' disables diagnostics."
+        },
+        "cellscript.validateOnChange": {
+          "type": "boolean",
+          "default": true,
+          "description": "Validate .cell files after edits with a debounce."
+        },
+        "cellscript.validationDebounceMs": {
+          "type": "number",
+          "default": 250,
+          "minimum": 50,
+          "description": "Debounce delay for edit-time diagnostics."
+        },
+        "cellscript.commandTimeoutMs": {
+          "type": "number",
+          "default": 15000,
+          "minimum": 1000,
+          "description": "Timeout for compiler-backed editor commands."
+        },
+        "cellscript.maxOutputBytes": {
+          "type": "number",
+          "default": 4194304,
+          "minimum": 65536,
+          "description": "Maximum stdout/stderr bytes captured from compiler commands."
+        },
+        "cellscript.target": {
+          "type": "string",
+          "enum": [
+            "riscv64-asm",
+            "riscv64-elf"
+          ],
+          "default": "riscv64-asm",
+          "description": "Compiler target used by compile, metadata, and constraints commands."
+        },
+        "cellscript.targetProfile": {
+          "type": "string",
+          "enum": [
+            "spora",
+            "ckb",
+            "portable-cell"
+          ],
+          "default": "spora",
+          "description": "Target profile used by compile, metadata, and constraints commands."
         }
       }
     }

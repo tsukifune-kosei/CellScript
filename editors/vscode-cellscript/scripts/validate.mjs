@@ -6,6 +6,8 @@ const root = path.resolve(import.meta.dirname, "..");
 const requiredFiles = [
   "package.json",
   "extension.js",
+  "README.md",
+  "CHANGELOG.md",
   "language-configuration.json",
   "syntaxes/cellscript.tmLanguage.json",
   "snippets/cellscript.json"
@@ -27,12 +29,52 @@ if (pkg.name !== "cellscript-vscode") {
   throw new Error(`unexpected package name: ${pkg.name}`);
 }
 
+if (pkg.version !== "0.11.0") {
+  throw new Error(`unexpected extension version: ${pkg.version}`);
+}
+
+if (!pkg.repository?.url?.includes("tsukifune-kosei/CellScript")) {
+  throw new Error(`extension repository must point at standalone CellScript repo: ${pkg.repository?.url}`);
+}
+
 if (!Array.isArray(pkg.contributes?.languages) || pkg.contributes.languages.length === 0) {
   throw new Error("package.json must contribute at least one language");
 }
 
 if (pkg.main !== "./extension.js") {
   throw new Error(`unexpected extension entrypoint: ${pkg.main}`);
+}
+
+const commands = new Set((pkg.contributes?.commands || []).map((command) => command.command));
+for (const command of [
+  "cellscript.validateCurrentFile",
+  "cellscript.compileCurrentFile",
+  "cellscript.showMetadata",
+  "cellscript.showConstraints",
+  "cellscript.showProductionReport",
+  "cellscript.formatCurrentFile",
+  "cellscript.selectTargetProfile"
+]) {
+  if (!commands.has(command)) {
+    throw new Error(`missing command contribution: ${command}`);
+  }
+}
+
+const properties = pkg.contributes?.configuration?.properties || {};
+for (const setting of [
+  "cellscript.compilerPath",
+  "cellscript.useCargoRunFallback",
+  "cellscript.validationMode",
+  "cellscript.validateOnChange",
+  "cellscript.validationDebounceMs",
+  "cellscript.commandTimeoutMs",
+  "cellscript.maxOutputBytes",
+  "cellscript.target",
+  "cellscript.targetProfile"
+]) {
+  if (!properties[setting]) {
+    throw new Error(`missing configuration setting: ${setting}`);
+  }
 }
 
 if (!Array.isArray(grammar.patterns) || grammar.patterns.length === 0) {
@@ -52,8 +94,29 @@ if (typeof snippets !== "object" || snippets === null || Object.keys(snippets).l
 }
 
 const extensionSource = fs.readFileSync(path.join(root, "extension.js"), "utf8");
-if (!extensionSource.includes("cellscript.validateCurrentFile")) {
-  throw new Error("extension runtime must register the validateCurrentFile command");
+for (const token of [
+  "cellscript.validateCurrentFile",
+  "cellscript.compileCurrentFile",
+  "cellscript.showMetadata",
+  "cellscript.showConstraints",
+  "cellscript.showProductionReport",
+  "cellscript.formatCurrentFile",
+  "cellscript.selectTargetProfile",
+  "registerDocumentFormattingEditProvider",
+  "production report",
+  "cellc constraints",
+  "cellc metadata",
+  "validationDebounceMs",
+  "commandTimeoutMs"
+]) {
+  if (!extensionSource.includes(token)) {
+    throw new Error(`extension runtime is missing expected wiring: ${token}`);
+  }
+}
+
+const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
+if (/\bbeta\b|\bthin\b|placeholder|metadata-only/i.test(readme)) {
+  throw new Error("extension README must describe the production local tooling surface, not beta/thin placeholder scope");
 }
 
 console.log("CellScript VS Code extension manifest is valid.");

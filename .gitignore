@@ -12,3 +12,13 @@
 
 .cell/
 Cell.lock
+
+# Keep translated prose out of the CellScript repository by default.
+# README_CH.md is the one maintained Chinese document.
+*_CN.md
+*_ZH.md
+*_CH.md
+docs/**/*_CN.md
+docs/**/*_ZH.md
+docs/**/*_CH.md
+!README_CH.md
