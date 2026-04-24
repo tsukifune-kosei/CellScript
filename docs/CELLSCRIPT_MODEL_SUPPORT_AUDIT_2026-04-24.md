@@ -25,6 +25,30 @@
 
 ## 二、当前支持状态
 
+### 0. 代码审计现状快照
+
+> 口径说明：本节按 2026-04-25 本地代码状态审计 CellScript
+> 编译器、工具链和文档边界。它描述当前实现真相，不替代
+> `CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md`、release evidence 或外部安全审计。
+
+| 组件 | 当前代码状态 | 审计结论 |
+|---|---|---|
+| Lexer / Parser / AST | `lexer/`、`parser/`、`ast/` 已接主编译链；parser 支持受控 builtin `Vec<T>` 类型记法，同时拒绝用户自定义泛型资源声明。 | ✅ 当前语法子集稳定，不应再按“语法原型”描述。 |
+| Type / Linear checks | `types/` 覆盖类型、effect、能力、引用逃逸、线性移动、分支/循环/聚合场景。 | 🟡 主路径真实可用；不是完整形式化语义证明，cell-backed collection ownership 仍是显式缺口。 |
+| IR lowering | `ir/` 产出 consume/read/create/mutate/write-intent、scheduler touch 和 callable 元数据。 | 🟡 生产主路径可用；复杂协议不变量仍可能以 runtime-required obligation 暴露。 |
+| RISC-V backend | `codegen/` 支持 RISC-V assembly 和 ELF，带 branch relaxation、shared fail handlers、machine CFG/call-edge/backend shape gates。 | 🟡 当前 bundled production scope 闭合；不声明任意合约后端完全闭包。 |
+| CLI / package workflow | `build/check/fmt/init/metadata/constraints/abi/scheduler-plan/ckb-hash/opt-report/entry-witness/verify-artifact` 已接入口；local package、path dependency、lockfile 可用。 | 🟡 本地工作流和 production reports 可用；`cellc new`、`cellc explain`、registry trust/remote resolution 仍是后续工作或 fail-closed。 |
+| Scheduler metadata | public metadata 使用 `scheduler_witness_abi = "molecule"` 和 `scheduler_witness_hex`；新 metadata 不发布 `scheduler_witness_molecule_hex`，legacy alias 仅保留读取兼容。 | 🟡 当前 MPE/shared touch 消费路径可用；旧 Borsh/Molecule legacy 字段不应再作为新输出面描述。 |
+| Molecule / dynamic data | Metadata schema 29 暴露 `molecule_schema_manifest`、dynamic fields、schema hashes；`Vec<u8>`、`Vec<Address>`、`Vec<Hash>` 的 schema/ABI/Molecule dynamic field 路径已覆盖。 | ✅ 当前 supported dynamic vector 路径不能再被写成“collections 只支持 U64”。 |
+| Collections runtime helpers | `stdlib/collections.rs` 仍以 U64-oriented helper 为主；generic `HashMap<K,V>`、generic `HashSet<T>`、broader local `Vec<T>` runtime semantics 和 cell-backed collection ownership 未完整支持。 | 🟡/🔴 应拆分为“schema/ABI vectors 已支持”和“runtime generic helpers / ownership 未完成”。 |
+| Runtime error codes | `src/runtime_errors.rs` 提供稳定 registry，`docs/CELLSCRIPT_RUNTIME_ERROR_CODES.md` 文档化，metadata/constraints 暴露 code/name/hint，并有一致性测试。 | ✅ 不再是“魔法数字分散且无文档”；剩余是 CLI compiler-style `E0001` 诊断和 `cellc explain` UX。 |
+| CKB hash_type | manifest-level `deploy.ckb.hash_type`、constraints hash_type policy、type-id hash_type policy 已支持。 | 🟡 CKB profile/report 层可用；源码 DSL 级 `hash_type(...)` 尚未实现。 |
+| CKB Blake2b | `ckb_blake2b256` 和 `cellc ckb-hash` 已提供 builder/release helper，CKB profile 暴露 Blake2b/Molecule hash domain。 | ✅ 不是 v0.13 必做支持项；generic in-script dynamic Blake2b 仍可作为 P3/按需工作。 |
+| Wasm target | `wasm/` 是 audit-only/type-only scaffold；可执行 CellScript entry 明确 fail-closed。 | 🚧 不应称为可执行后端。 |
+| Incremental compilation | `incremental/` 有 cache metadata、change detector 和单元测试；主编译链记录 cache，但 cache hit 当前返回 `None`，未复用完整 `CompileResult`。 | 🚧 不是有效的增量编译闭环。 |
+| LSP / fmt / docgen / debug | LSP JSON-RPC stdio 和 VS Code path 可用；formatter/docgen/debug info 有可用子集和测试覆盖。 | 🟡 工具面真实存在，但除 LSP 主路径外仍应按可用子集/原型级描述。 |
+| Test status | `cargo test --locked -p cellscript -- --test-threads=1` 当前通过：362 个 library tests、71 个 CLI tests、15 个 bundled example tests。 | ✅ 旧的 “357 项” 数字已过期。 |
+
 ### 1. CKB Blake2b / Molecule 哈希域
 
 当前代码里已经有明确的 CKB profile 哈希域声明：
