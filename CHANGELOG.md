@@ -10,9 +10,13 @@
   production hardening track around action builders, malformed matrices, and
   measured mass/cycle constraints.
 - Preserve the production safety gates added in the 2026-04-23 development
-  log: no CKB smoke policy bypass, no unresolved-call ELF stubs, audit-only
+  log: no CKB policy bypass, no unresolved-call ELF stubs, audit-only
   Wasm, tightened backend shape reporting, narrowed crates.io packaging, and
   explicit profile-aware constraints metadata.
+- Promote the VS Code extension to production-grade local tooling with
+  compiler-backed validation, formatting, scratch compilation, metadata and
+  constraints reports, target-profile selection, status feedback, and stricter
+  extension validation.
 
 ## 2026-04-23
 

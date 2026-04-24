@@ -1,81 +1,121 @@
 # CellScript VS Code Extension
 
-Thin VS Code support for `CellScript` source files.
+Production-grade local VS Code tooling for `.cell` contracts.
 
-Current scope:
+The extension is intentionally compiler-backed: it does not duplicate
+CellScript semantics in JavaScript. It uses a local `cellc` binary, or a
+workspace `cargo run -q -p cellscript --` fallback, for validation, formatting,
+metadata, and constraints reports.
+
+## Features
 
 - `.cell` file association
-- syntax highlighting
-- comment / bracket / auto-close configuration
-- basic snippets
-- open/save-time parse diagnostics via local `cellc --parse` or `cargo run -p cellscript -- --parse`
-- beta compiler LSP support exists in the CellScript crate for diagnostics,
-  completions, hover, definition, references, rename, formatting, and code
-  actions
+- TextMate syntax highlighting
+- comment, bracket, auto-close, and folding configuration
+- snippets for resources, shared state, receipts, actions, locks, effects, and
+  `create ... with_lock`
+- edit/open/save diagnostics through `cellc --parse`
+- optional wider compiler diagnostics through `cellc <file> --target riscv64-asm`
+- document formatting through `cellc fmt`
+- command palette entries for compile, metadata, constraints, validation, and
+  target-profile selection
+- production report output that combines `cellc --version`, `cellc metadata`,
+  and `cellc constraints` for release review
+- status bar state for compiler-backed editor commands
+- hardened command execution with timeout and output-size limits
 
-Also included:
+## Production Boundary
 
-- package / publish manifest metadata
-- a local `npm run validate` check for the extension files
+This extension is a mature local compiler-backed editor integration. It is not
+an independent JSON-RPC language-server transport, and it does not start a
+`cellc lsp --stdio` process. The compiler crate already exposes an in-process
+LSP service, but VS Code currently uses direct `cellc` CLI calls for local
+diagnostics, formatting, metadata, constraints, and production reports.
 
-Not included:
+The next transport project, if needed, is a separate VS Code `LanguageClient`
+integration backed by a standalone `cellc lsp --stdio` binary. That transport
+would change process management and incremental document synchronization; it is
+not required for the current local compiler-backed workflow.
 
-- direct VS Code language-server transport
-- debugger integration
+## Requirements
 
-## Local install
+Install `cellc` and make it available on `PATH`, or set
+`cellscript.compilerPath` to the full compiler path.
 
-1. Open VS Code.
-2. Go to Extensions.
-3. Use `Install from VSIX...` if you package it, or open this folder directly in an extension development host.
-
-Extension folder:
-
-- [cellscript/editors/vscode-cellscript](/Users/arthur/RustroverProjects/Spora/cellscript/editors/vscode-cellscript)
-
-## Local validation
+When developing inside the CellScript or Spora Rust workspace, the extension can
+fall back to:
 
 ```bash
-cd /Users/arthur/RustroverProjects/Spora/cellscript/editors/vscode-cellscript
+cargo run -q -p cellscript --
+```
+
+Set `cellscript.useCargoRunFallback` to `false` to disable that fallback.
+
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `CellScript: Validate Current File` | Run configured diagnostics for the active `.cell` file. |
+| `CellScript: Compile Current File` | Compile the active file to a scratch RISC-V assembly artifact and print compiler output. |
+| `CellScript: Show Metadata` | Run `cellc metadata` for the active file and show JSON in the CellScript output channel. |
+| `CellScript: Show Constraints` | Run `cellc constraints` for the active file and show JSON in the CellScript output channel. |
+| `CellScript: Show Production Report` | Show compiler version, artifact metadata, constraints, and release audit boundaries for the active file. |
+| `CellScript: Format Current File` | Format the active file through `cellc fmt`. |
+| `CellScript: Select Target Profile` | Store `spora`, `ckb`, or `portable-cell` in workspace settings. |
+
+## Settings
+
+| Setting | Default | Description |
+|---|---:|---|
+| `cellscript.compilerPath` | `cellc` | Compiler binary used by editor commands. |
+| `cellscript.useCargoRunFallback` | `true` | Use workspace `cargo run -q -p cellscript --` if `cellc` is unavailable. |
+| `cellscript.validationMode` | `parse` | `parse`, `compile-asm`, or `off`. |
+| `cellscript.validateOnChange` | `true` | Run diagnostics after edits with a debounce. |
+| `cellscript.validationDebounceMs` | `250` | Edit-time diagnostic debounce. |
+| `cellscript.commandTimeoutMs` | `15000` | Compiler command timeout. |
+| `cellscript.maxOutputBytes` | `4194304` | Captured stdout/stderr limit. |
+| `cellscript.target` | `riscv64-asm` | Compiler target for compile/metadata/constraints commands. |
+| `cellscript.targetProfile` | `spora` | Target profile for compile/metadata/constraints commands. |
+
+## Local Validation
+
+```bash
+cd editors/vscode-cellscript
 npm run validate
 ```
 
-## Editor diagnostics
-
-The extension now provides a minimal runtime diagnostic layer:
-
-- validates `.cell` files on open and save
-- shells out to local `cellc --parse`
-- falls back to `cargo run -q -p cellscript -- --parse` when working inside the Spora workspace
-
-Settings:
-
-- `cellscript.compilerPath`
-- `cellscript.useCargoRunFallback`
-- `cellscript.validationMode`
-
-`cellscript.validationMode` values:
-
-- `parse`
-- `compile-asm`
-- `off`
-
-`compile-asm` is still intentionally thin: it only asks the compiler to produce an assembly scratch artifact so the editor can surface broader compile-time failures. It is not a language-server semantic model.
+The validation script checks the extension manifest, grammar, snippets,
+language configuration, commands, settings, and runtime wiring.
 
 ## Packaging
 
 ```bash
-cd /Users/arthur/RustroverProjects/Spora/cellscript/editors/vscode-cellscript
+cd editors/vscode-cellscript
 npm run package
 ```
 
-This extension intentionally stays a thin editor layer. The CellScript compiler
-crate includes a beta LSP service, but this packaged extension still shells out
-to `cellc` for validation until the language-server transport is wired into the
-VS Code client.
+Generated `.vsix` files are ignored by git and excluded from packaged source
+archives.
 
-## Extension development host
+## Release Review Checklist
 
-There is also a minimal VS Code launch config:
+For production release review, use `CellScript: Show Production Report` and
+check the JSON/prose output for:
 
-- [cellscript/editors/vscode-cellscript/.vscode/launch.json](/Users/arthur/RustroverProjects/Spora/cellscript/editors/vscode-cellscript/.vscode/launch.json)
+- compiler version pin;
+- artifact metadata and artifact hash;
+- schema hash and ABI/schema metadata;
+- constraints hash or constraints JSON saved by the build;
+- build provenance and source hash fields;
+- target profile and entry-action/entry-lock scope;
+- CKB capacity/cycle limits or Spora mass estimates;
+- external audit signatures attached by the release process.
+
+The extension displays compiler evidence. It does not create audit signatures,
+publish packages, deploy code cells, or replace Spora/CKB acceptance gates.
+
+## Scope
+
+The extension is a stable local editor integration. It is not a debugger, and
+it does not replace release gates such as `cargo test`, `cargo clippy`,
+`cellc check --production`, or chain acceptance scripts.

@@ -9,10 +9,10 @@
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
 [![Targets: Spora and CKB](https://img.shields.io/badge/targets-Spora%20%7C%20CKB-2f6f4e.svg)](#target-profiles)
 [![Package Manager: Beta](https://img.shields.io/badge/package%20manager-beta-f0ad4e.svg)](#包管理器-beta)
-[![LSP: Available](https://img.shields.io/badge/LSP-available-4c78a8.svg)](#编辑器支持)
+[![LSP: Production Tooling](https://img.shields.io/badge/LSP-production%20tooling-2f6f4e.svg)](#编辑器支持)
 [![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](docs/wiki/Home.md)
 
-[English](README.md) | [中文](README_CN.md)
+[English](README.md) | [中文](README_CH.md)
 
 CellScript 是面向 Spora 和 CKB 的 Cell 模型智能合约 DSL。它把 `.cell`
 源码编译为 ckb-vm RISC-V assembly 或 ELF 产物，并同时输出可用于审计、
@@ -379,17 +379,25 @@ fail-closed；registry protocol 仍属于 post-v1 工作。
 
 ## 编辑器支持
 
-CellScript 包含 beta 语言工具：
+CellScript 包含生产级本地语言工具：
 
 - 编译器 crate 暴露 in-process LSP service，覆盖 diagnostics、completions、
   hover、definition、references、rename、formatting 和 metadata-oriented code
   actions。
 - 仓库包含一个 VS Code 扩展，支持 `.cell` 语法高亮、语言配置、snippets、
-  open/save diagnostics，以及 compiler-backed formatting/validation hooks。
-- 编辑器集成仍处于 beta。它适合本地编写和获取编译器反馈，但
-  language-server transport 和 extension packaging 后续仍可能演进。
+  edit/open/save diagnostics、compiler-backed formatting、scratch compile、
+  metadata report、constraints report、production report、target-profile 选择和
+  状态栏反馈。
+- 这个扩展是稳定的本地工具层。它调用 `cellc`，或在源码 workspace 内
+  回退到 `cargo run -q -p cellscript --`，所以编辑器行为和 CLI/CI gates
+  保持一致。
+- 边界：当前 VS Code 扩展不是独立的 JSON-RPC/stdin language-server
+  transport。编译器 crate 已有 in-process LSP service；未来如果要做
+  `cellc lsp --stdio` 加 VS Code `LanguageClient`，那是单独的 transport 工程。
 
 - [`editors/vscode-cellscript`](editors/vscode-cellscript)
+- [双链生产计划](docs/CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md)
+- [双链包 registry 设计](docs/CELLSCRIPT_DUAL_CHAIN_PACKAGE_REGISTRY_DESIGN.md)
 
 ## 项目结构
 

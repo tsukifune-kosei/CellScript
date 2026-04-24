@@ -210,7 +210,7 @@ action burn(nft: NFT) {
 }
 
 #[effect(Creating)]
-#[scheduler_hint(sequential, estimated_cycles = 20000)]
+#[scheduler_hint(sequential, estimated_cycles = 30000)]
 action batch_mint(
     collection: &mut Collection,
     recipients: [Address; 4],

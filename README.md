@@ -9,10 +9,10 @@
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
 [![Targets: Spora and CKB](https://img.shields.io/badge/targets-Spora%20%7C%20CKB-2f6f4e.svg)](#target-profiles)
 [![Package Manager: Beta](https://img.shields.io/badge/package%20manager-beta-f0ad4e.svg)](#package-manager-beta)
-[![LSP: Available](https://img.shields.io/badge/LSP-available-4c78a8.svg)](#editor-support)
+[![LSP: Production Tooling](https://img.shields.io/badge/LSP-production%20tooling-2f6f4e.svg)](#editor-support)
 [![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](docs/wiki/Home.md)
 
-[English](README.md) | [中文](README_CN.md)
+[English](README.md) | [中文](README_CH.md)
 
 CellScript is a domain-specific language for Cell-based smart contracts on
 Spora and CKB. It compiles `.cell` source into ckb-vm RISC-V assembly or ELF
@@ -393,19 +393,27 @@ Common options:
 
 ## Editor Support
 
-CellScript includes beta language tooling:
+CellScript includes production-grade local language tooling:
 
 - The compiler crate exposes an in-process LSP service for diagnostics,
   completions, hover, definition, references, rename, formatting, and
   metadata-oriented code actions.
 - The repository includes a VS Code extension for `.cell` syntax highlighting,
-  language configuration, snippets, open/save diagnostics, and compiler-backed
-  formatting/validation hooks.
-- The editor integration is beta. It is suitable for local authoring and
-  compiler feedback, but the language-server transport and extension packaging
-  are still expected to evolve.
+  language configuration, snippets, edit/open/save diagnostics,
+  compiler-backed formatting, scratch compilation, metadata reports,
+  constraints reports, production reports, target-profile selection, and
+  status-bar feedback.
+- The extension is a stable local tooling surface. It shells out to `cellc` or
+  a workspace `cargo run -q -p cellscript --` fallback, so compiler behavior
+  stays identical to CLI and CI gates.
+- Boundary: the current VS Code extension is not a standalone JSON-RPC/stdin
+  language-server transport. The compiler crate has an in-process LSP service;
+  a future `cellc lsp --stdio` plus VS Code `LanguageClient` is a separate
+  transport project.
 
 - [`editors/vscode-cellscript`](editors/vscode-cellscript)
+- [Dual-chain production plan](docs/CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md)
+- [Dual-chain package registry design](docs/CELLSCRIPT_DUAL_CHAIN_PACKAGE_REGISTRY_DESIGN.md)
 
 ## Project Layout
 
