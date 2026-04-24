@@ -32,6 +32,10 @@ pub enum Command {
     Check(CheckArgs),
     Metadata(MetadataArgs),
     Constraints(ConstraintsArgs),
+    Abi(AbiArgs),
+    SchedulerPlan(SchedulerPlanArgs),
+    CkbHash(CkbHashArgs),
+    OptReport(OptReportArgs),
     /// Encode generated entry wrapper witness bytes
     EntryWitness(EntryWitnessArgs),
     VerifyArtifact(VerifyArtifactArgs),
@@ -158,6 +162,40 @@ pub struct ConstraintsArgs {
     pub entry_lock: Option<String>,
 }
 
+#[derive(Debug, Default)]
+pub struct AbiArgs {
+    pub input: Option<PathBuf>,
+    pub output: Option<PathBuf>,
+    pub target: Option<String>,
+    pub target_profile: Option<String>,
+    pub action: Option<String>,
+    pub lock: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct SchedulerPlanArgs {
+    pub input: Option<PathBuf>,
+    pub output: Option<PathBuf>,
+    pub target: Option<String>,
+    pub target_profile: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct CkbHashArgs {
+    pub input: Option<String>,
+    pub hex: Option<String>,
+    pub file: Option<PathBuf>,
+    pub json: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct OptReportArgs {
+    pub input: Option<PathBuf>,
+    pub output: Option<PathBuf>,
+    pub target: Option<String>,
+    pub target_profile: Option<String>,
+}
+
 /// Entry witness encoding arguments
 #[derive(Debug, Default)]
 pub struct EntryWitnessArgs {
@@ -235,6 +273,10 @@ impl CommandExecutor {
             Command::Check(args) => Self::check(args),
             Command::Metadata(args) => Self::metadata(args),
             Command::Constraints(args) => Self::constraints(args),
+            Command::Abi(args) => Self::abi(args),
+            Command::SchedulerPlan(args) => Self::scheduler_plan(args),
+            Command::CkbHash(args) => Self::ckb_hash(args),
+            Command::OptReport(args) => Self::opt_report(args),
             Command::EntryWitness(args) => Self::entry_witness(args),
             Command::VerifyArtifact(args) => Self::verify_artifact(args),
             Command::Run(args) => Self::run(args),
@@ -921,6 +963,281 @@ impl CommandExecutor {
         Ok(())
     }
 
+    fn abi(args: AbiArgs) -> Result<()> {
+        if args.action.is_some() && args.lock.is_some() {
+            return Err(crate::error::CompileError::without_span("abi accepts either --action or --lock, not both"));
+        }
+
+        let input_path = args.input.unwrap_or_else(|| PathBuf::from("."));
+        let input = Utf8Path::from_path(&input_path)
+            .ok_or_else(|| crate::error::CompileError::without_span(format!("path '{}' is not valid UTF-8", input_path.display())))?;
+        let result = compile_path(
+            input,
+            CompileOptions { opt_level: 0, output: None, debug: false, target: args.target, target_profile: args.target_profile },
+        )?;
+        let selected = select_entry_witness_metadata(&result.metadata, args.action.as_deref(), args.lock.as_deref())?;
+        let entry_constraints = result
+            .metadata
+            .constraints
+            .entry_abi
+            .iter()
+            .find(|entry| entry.entry_kind == selected.kind && entry.entry_name == selected.name)
+            .ok_or_else(|| {
+                crate::error::CompileError::without_span(format!(
+                    "entry ABI constraints for {} '{}' were not found in metadata",
+                    selected.kind, selected.name
+                ))
+            })?;
+
+        let params = selected
+            .params
+            .iter()
+            .map(|param| {
+                let runtime_bound = selected.runtime_bound_param_names.contains(&param.name);
+                let payload_bound = !param.cell_bound_abi && !param.ty.starts_with('&') && !runtime_bound;
+                let layout = entry_constraints.params.iter().find(|candidate| candidate.name == param.name);
+                serde_json::json!({
+                    "name": param.name,
+                    "type": param.ty,
+                    "payload_bound": payload_bound,
+                    "runtime_bound": runtime_bound,
+                    "cell_bound": param.cell_bound_abi,
+                    "schema_pointer_abi": param.schema_pointer_abi,
+                    "fixed_byte_len": param.fixed_byte_len,
+                    "abi_kind": layout.map(|layout| layout.abi_kind.as_str()),
+                    "abi_slots": layout.map(|layout| layout.abi_slots),
+                    "slot_start": layout.map(|layout| layout.slot_start),
+                    "slot_end": layout.map(|layout| layout.slot_end),
+                    "witness_bytes": layout.map(|layout| layout.witness_bytes),
+                    "stack_spill_bytes": layout.map(|layout| layout.stack_spill_bytes),
+                    "supported": layout.map(|layout| layout.supported).unwrap_or(false),
+                    "unsupported_reason": layout.and_then(|layout| layout.unsupported_reason.as_deref()),
+                })
+            })
+            .collect::<Vec<_>>();
+        let payload_params = selected
+            .params
+            .iter()
+            .filter(|param| {
+                !param.cell_bound_abi && !param.ty.starts_with('&') && !selected.runtime_bound_param_names.contains(&param.name)
+            })
+            .map(|param| param.name.as_str())
+            .collect::<Vec<_>>();
+        let runtime_bound_params = selected.runtime_bound_param_names.iter().map(|name| name.as_str()).collect::<Vec<_>>();
+        let summary = serde_json::json!({
+            "status": if entry_constraints.unsupported { "fail" } else { "ok" },
+            "abi": ENTRY_WITNESS_ABI,
+            "target_profile": result.metadata.target_profile.name,
+            "entry_kind": selected.kind,
+            "entry": selected.name,
+            "payload_params": payload_params,
+            "runtime_bound_params": runtime_bound_params,
+            "layout": entry_constraints,
+            "params": params,
+        });
+        let json = serde_json::to_string_pretty(&summary)
+            .map_err(|error| crate::error::CompileError::without_span(format!("failed to serialize ABI report: {}", error)))?;
+
+        if let Some(output_path) = args.output {
+            if let Some(parent) = output_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&output_path, json)?;
+            println!("{}", "ABI report generated".green());
+            println!("  Output: {}", output_path.display());
+        } else {
+            println!("{}", json);
+        }
+        Ok(())
+    }
+
+    fn scheduler_plan(args: SchedulerPlanArgs) -> Result<()> {
+        let input_path = args.input.unwrap_or_else(|| PathBuf::from("."));
+        let input = Utf8Path::from_path(&input_path)
+            .ok_or_else(|| crate::error::CompileError::without_span(format!("path '{}' is not valid UTF-8", input_path.display())))?;
+        let result = compile_path(
+            input,
+            CompileOptions { opt_level: 0, output: None, debug: false, target: args.target, target_profile: args.target_profile },
+        )?;
+
+        let actions = result
+            .metadata
+            .actions
+            .iter()
+            .map(|action| {
+                let mut reasons = Vec::new();
+                if !action.parallelizable {
+                    reasons.push("parallelizable=false".to_string());
+                }
+                if !action.touches_shared.is_empty() {
+                    reasons.push("touches-shared-state".to_string());
+                }
+                serde_json::json!({
+                    "action": action.name,
+                    "effect_class": action.effect_class,
+                    "parallelizable": action.parallelizable,
+                    "touches_shared": action.touches_shared,
+                    "estimated_cycles": action.estimated_cycles,
+                    "scheduler_witness_abi": action.scheduler_witness_abi,
+                    "admission": if action.parallelizable && action.touches_shared.is_empty() {
+                        "parallel-candidate"
+                    } else {
+                        "serial-required"
+                    },
+                    "reasons": reasons,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut conflicts = Vec::new();
+        for (left_index, left) in result.metadata.actions.iter().enumerate() {
+            for right in result.metadata.actions.iter().skip(left_index + 1) {
+                let shared =
+                    left.touches_shared.iter().filter(|touch| right.touches_shared.contains(*touch)).cloned().collect::<Vec<_>>();
+                if !shared.is_empty() {
+                    conflicts.push(serde_json::json!({
+                        "left": left.name,
+                        "right": right.name,
+                        "shared_touches": shared,
+                        "policy": "must-not-run-in-parallel",
+                    }));
+                }
+            }
+        }
+
+        let total_estimated_cycles = result.metadata.actions.iter().map(|action| action.estimated_cycles).sum::<u64>();
+        let max_estimated_cycles = result.metadata.actions.iter().map(|action| action.estimated_cycles).max().unwrap_or_default();
+        let serial_required_actions = result
+            .metadata
+            .actions
+            .iter()
+            .filter(|action| !action.parallelizable || !action.touches_shared.is_empty())
+            .map(|action| action.name.as_str())
+            .collect::<Vec<_>>();
+        let summary = serde_json::json!({
+            "status": "ok",
+            "target_profile": result.metadata.target_profile.name,
+            "policy": "cellscript-scheduler-hints-v1",
+            "action_count": result.metadata.actions.len(),
+            "serial_required_actions": serial_required_actions,
+            "conflict_count": conflicts.len(),
+            "conflicts": conflicts,
+            "estimated_cycles": {
+                "total": total_estimated_cycles,
+                "max_action": max_estimated_cycles,
+            },
+            "actions": actions,
+        });
+        let json = serde_json::to_string_pretty(&summary)
+            .map_err(|error| crate::error::CompileError::without_span(format!("failed to serialize scheduler plan: {}", error)))?;
+
+        if let Some(output_path) = args.output {
+            if let Some(parent) = output_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&output_path, json)?;
+            println!("{}", "Scheduler plan generated".green());
+            println!("  Output: {}", output_path.display());
+        } else {
+            println!("{}", json);
+        }
+        Ok(())
+    }
+
+    fn ckb_hash(args: CkbHashArgs) -> Result<()> {
+        let source_count = usize::from(args.input.is_some()) + usize::from(args.hex.is_some()) + usize::from(args.file.is_some());
+        if source_count > 1 {
+            return Err(crate::error::CompileError::without_span(
+                "ckb-hash accepts at most one input source: positional UTF-8 text, --hex, or --file",
+            ));
+        }
+        let bytes = if let Some(hex) = args.hex.as_deref() {
+            decode_hex_arg("ckb-hash", hex, None)?
+        } else if let Some(path) = args.file.as_ref() {
+            std::fs::read(path).map_err(|error| {
+                crate::error::CompileError::without_span(format!("failed to read CKB hash input '{}': {}", path.display(), error))
+            })?
+        } else {
+            args.input.unwrap_or_default().into_bytes()
+        };
+        let hash = crate::ckb_blake2b256(&bytes);
+        let hash_hex = crate::hex_encode(&hash);
+        if args.json {
+            let summary = serde_json::json!({
+                "status": "ok",
+                "algorithm": "blake2b-256",
+                "personalization": std::str::from_utf8(crate::CKB_DEFAULT_HASH_PERSONALIZATION).unwrap_or("ckb-default-hash"),
+                "input_bytes": bytes.len(),
+                "hash": hash_hex,
+            });
+            let json = serde_json::to_string_pretty(&summary)
+                .map_err(|error| crate::error::CompileError::without_span(format!("failed to serialize CKB hash: {}", error)))?;
+            println!("{}", json);
+        } else {
+            println!("{}", hash_hex);
+        }
+        Ok(())
+    }
+
+    fn opt_report(args: OptReportArgs) -> Result<()> {
+        let input_path = args.input.unwrap_or_else(|| PathBuf::from("."));
+        let input = Utf8Path::from_path(&input_path)
+            .ok_or_else(|| crate::error::CompileError::without_span(format!("path '{}' is not valid UTF-8", input_path.display())))?;
+        let mut rows = Vec::new();
+        for opt_level in 0..=3u8 {
+            let result = compile_path(
+                input,
+                CompileOptions {
+                    opt_level,
+                    output: None,
+                    debug: false,
+                    target: args.target.clone(),
+                    target_profile: args.target_profile.clone(),
+                },
+            )?;
+            rows.push(serde_json::json!({
+                "opt_level": opt_level,
+                "artifact_format": result.metadata.artifact_format,
+                "target_profile": result.metadata.target_profile.name,
+                "artifact_size_bytes": result.artifact_bytes.len(),
+                "constraints_status": result.metadata.constraints.status,
+                "constraints_warnings": result.metadata.constraints.warnings.len(),
+                "constraints_failures": result.metadata.constraints.failures.len(),
+                "source_content_hash_blake3": result.metadata.source_content_hash_blake3,
+            }));
+        }
+        let baseline_size = rows.first().and_then(|row| row["artifact_size_bytes"].as_u64()).unwrap_or_default();
+        let summary_rows = rows
+            .into_iter()
+            .map(|mut row| {
+                let size = row["artifact_size_bytes"].as_u64().unwrap_or_default();
+                row["artifact_size_delta_from_o0"] = serde_json::json!(size as i64 - baseline_size as i64);
+                row
+            })
+            .collect::<Vec<_>>();
+        let summary = serde_json::json!({
+            "status": "ok",
+            "policy": "cellscript-opt-report-v1",
+            "input": input_path.display().to_string(),
+            "baseline_opt_level": 0,
+            "rows": summary_rows,
+        });
+        let json = serde_json::to_string_pretty(&summary)
+            .map_err(|error| crate::error::CompileError::without_span(format!("failed to serialize opt report: {}", error)))?;
+
+        if let Some(output_path) = args.output {
+            if let Some(parent) = output_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&output_path, json)?;
+            println!("{}", "Optimization report generated".green());
+            println!("  Output: {}", output_path.display());
+        } else {
+            println!("{}", json);
+        }
+        Ok(())
+    }
+
     /// Encode witness bytes for the generated `_cellscript_entry` wrapper.
     fn entry_witness(args: EntryWitnessArgs) -> Result<()> {
         if args.action.is_some() && args.lock.is_some() {
@@ -1470,6 +1787,7 @@ impl CommandExecutor {
                 "dev_dependencies": manifest.dev_dependencies,
                 "build": manifest.build,
                 "policy": manifest.policy,
+                "deploy": manifest.deploy,
                 "metadata": manifest.metadata,
             });
             let json = serde_json::to_string_pretty(&summary).map_err(|error| {
@@ -1748,6 +2066,10 @@ fn validate_check_policy(metadata: &crate::CompileMetadata, args: &CheckArgs) ->
     let mut violations = Vec::new();
 
     if args.production || args.deny_fail_closed {
+        if !metadata.constraints.failures.is_empty() {
+            violations.push(format!("constraints failures: {}", metadata.constraints.failures.join(", ")));
+        }
+
         if !metadata.runtime.fail_closed_runtime_features.is_empty() {
             violations.push(format!("fail-closed runtime features: {}", metadata.runtime.fail_closed_runtime_features.join(", ")));
         }
@@ -3102,6 +3424,61 @@ impl CliParser {
                     .arg(Arg::new("entry-lock").long("entry-lock").value_name("LOCK").help("Report constraints for this lock entry")),
             )
             .subcommand(
+                ClapCommand::new("abi")
+                    .about("Explain the generated _cellscript_entry witness ABI for an action or lock")
+                    .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
+                    .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON ABI report to a file"))
+                    .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
+                    .arg(
+                        Arg::new("target-profile")
+                            .long("target-profile")
+                            .value_name("PROFILE")
+                            .help("Target profile: spora, ckb, or portable-cell"),
+                    )
+                    .arg(Arg::new("action").long("action").value_name("NAME").help("Explain ABI for this action"))
+                    .arg(Arg::new("lock").long("lock").value_name("NAME").help("Explain ABI for this lock")),
+            )
+            .subcommand(
+                ClapCommand::new("scheduler-plan")
+                    .about("Consume scheduler hints and emit a Spora admission/conflict policy report")
+                    .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
+                    .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON scheduler plan to a file"))
+                    .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
+                    .arg(
+                        Arg::new("target-profile")
+                            .long("target-profile")
+                            .value_name("PROFILE")
+                            .help("Target profile: spora, ckb, or portable-cell"),
+                    ),
+            )
+            .subcommand(
+                ClapCommand::new("ckb-hash")
+                    .about("Compute CKB default Blake2b-256 hashes for builders, manifests, and release evidence")
+                    .arg(Arg::new("input").value_name("TEXT").help("UTF-8 text to hash; omitted input hashes empty bytes"))
+                    .arg(Arg::new("hex").long("hex").value_name("HEX").help("Hex bytes to hash"))
+                    .arg(Arg::new("file").long("file").value_name("FILE").help("File bytes to hash"))
+                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON summary")),
+            )
+            .subcommand(
+                ClapCommand::new("opt-report")
+                    .about("Compile O0..O3 and emit artifact-size/constraints comparison evidence")
+                    .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
+                    .arg(
+                        Arg::new("output")
+                            .long("output")
+                            .short('o')
+                            .value_name("FILE")
+                            .help("Write JSON optimization report to a file"),
+                    )
+                    .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
+                    .arg(
+                        Arg::new("target-profile")
+                            .long("target-profile")
+                            .value_name("PROFILE")
+                            .help("Target profile: spora, ckb, or portable-cell"),
+                    ),
+            )
+            .subcommand(
                 ClapCommand::new("entry-witness")
                     .about("Encode witness bytes for the generated _cellscript_entry wrapper")
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
@@ -3329,6 +3706,32 @@ impl CliParser {
                 target_profile: m.get_one::<String>("target-profile").cloned(),
                 entry_action: m.get_one::<String>("entry-action").cloned(),
                 entry_lock: m.get_one::<String>("entry-lock").cloned(),
+            }),
+            Some(("abi", m)) => Command::Abi(AbiArgs {
+                input: m.get_one::<String>("input").map(PathBuf::from),
+                output: m.get_one::<String>("output").map(PathBuf::from),
+                target: m.get_one::<String>("target").cloned(),
+                target_profile: m.get_one::<String>("target-profile").cloned(),
+                action: m.get_one::<String>("action").cloned(),
+                lock: m.get_one::<String>("lock").cloned(),
+            }),
+            Some(("scheduler-plan", m)) => Command::SchedulerPlan(SchedulerPlanArgs {
+                input: m.get_one::<String>("input").map(PathBuf::from),
+                output: m.get_one::<String>("output").map(PathBuf::from),
+                target: m.get_one::<String>("target").cloned(),
+                target_profile: m.get_one::<String>("target-profile").cloned(),
+            }),
+            Some(("ckb-hash", m)) => Command::CkbHash(CkbHashArgs {
+                input: m.get_one::<String>("input").cloned(),
+                hex: m.get_one::<String>("hex").cloned(),
+                file: m.get_one::<String>("file").map(PathBuf::from),
+                json: m.get_flag("json"),
+            }),
+            Some(("opt-report", m)) => Command::OptReport(OptReportArgs {
+                input: m.get_one::<String>("input").map(PathBuf::from),
+                output: m.get_one::<String>("output").map(PathBuf::from),
+                target: m.get_one::<String>("target").cloned(),
+                target_profile: m.get_one::<String>("target-profile").cloned(),
             }),
             Some(("entry-witness", m)) => Command::EntryWitness(EntryWitnessArgs {
                 input: m.get_one::<String>("input").map(PathBuf::from),

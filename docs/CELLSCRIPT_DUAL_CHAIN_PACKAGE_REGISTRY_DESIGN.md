@@ -101,7 +101,14 @@ artifact_hash = "blake2b:..."
 data_hash = "0x..."
 out_point = "0x...:0"
 dep_type = "code"
+hash_type = "data1"
 type_id = "0x..."
+
+[[deploy.ckb.cell_deps]]
+name = "secp256k1"
+out_point = "0x...:0"
+dep_type = "dep_group"
+hash_type = "type"
 ```
 
 Target-specific deployment sections are optional for libraries and required for
@@ -141,7 +148,7 @@ deployment = "spora:..."
 [package.target.ckb]
 elf_blake2b = "0x..."
 data_hash = "0x..."
-cell_dep = { tx_hash = "0x...", index = 0, dep_type = "code" }
+cell_dep = { out_point = "0x...:0", dep_type = "code" }
 type_id = "0x..."
 min_code_cell_capacity = "..."
 ```

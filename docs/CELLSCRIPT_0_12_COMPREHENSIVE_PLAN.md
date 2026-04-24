@@ -65,7 +65,9 @@ The current CKB path is production-gate closed through metadata, constraints, bu
 
 Deliverables:
 
-- Add CKB Blake2b stdlib/helper support, such as `ckb::blake2b256(data: Vec<u8>) -> Hash`.
+- Add CKB Blake2b builder/release helper support with pinned `ckb-default-hash`
+  vectors. In-script dynamic Blake2b remains a separate follow-up unless a real
+  RISC-V implementation is linked into generated artifacts.
 - Add a source-level or manifest-level `hash_type` authoring surface.
 - Promote DepGroup support from generator-only configuration into package/deployment manifest support.
 - Convert `since` usage from a generic warning into structured timelock policy reporting.
@@ -104,7 +106,9 @@ Exit criteria:
 
 - `Vec<Address>` is documented as supported where it is actually supported.
 - `HashMap<Hash, Token>` and similar cell-backed generic collection cases are either implemented or rejected with a stable diagnostic.
-- Nested dynamic values such as `Vec<Vec<u8>>` are either covered or explicitly fail closed.
+- Nested dynamic values such as `Vec<Vec<u8>>` are covered only as opaque
+  schema-backed entry witness bytes; runtime helper use remains outside the
+  production guarantee.
 
 ### 2.4 Mutate Primitive Productization
 
@@ -191,22 +195,25 @@ Implement a single source of truth for CellScript runtime/codegen fail codes.
 
 Tasks:
 
-- Add the registry in the CellScript crate.
-- Replace direct numeric usage where practical.
-- Add a helper for symbolic lookup.
-- Add tests ensuring all emitted codes are known.
+- [x] Add the registry in the CellScript crate.
+- [x] Replace direct numeric usage where practical.
+- [x] Add a helper for symbolic lookup.
+- [x] Add tests ensuring all emitted codes are known.
 
 ### A2. CLI and Report Integration
 
 Tasks:
 
-- Add symbolic names in `cellc check`, `cellc constraints`, and relevant metadata/report views.
-- Add docs for common errors.
+- [x] Add symbolic names in `cellc constraints` and metadata/report views through `constraints.runtime_errors`.
+- [x] Add docs for common errors.
 - Where acceptance captures failure codes, include symbolic names.
 
 ### A3. Documentation
 
 Add `Runtime Error Codes` documentation under `cellscript/docs`.
+
+Status: added `CELLSCRIPT_RUNTIME_ERROR_CODES.md` with code, symbolic name,
+meaning, and debugging hint for every generated runtime verifier error.
 
 ---
 
@@ -214,19 +221,28 @@ Add `Runtime Error Codes` documentation under `cellscript/docs`.
 
 ### B1. CKB Blake2b Helper
 
-Add a profile-aware helper:
+Add a CKB Blake2b helper for builders, manifests, and release evidence:
 
-```cellscript
-ckb::blake2b256(data)
+```bash
+cellc ckb-hash --file build/contract
+cellc ckb-hash --hex 00
 ```
+
+The implementation must match CKB's Blake2b-256 with `ckb-default-hash`
+personalization.
 
 Potential follow-up:
 
-```cellscript
-ckb::blake160(data)
-```
+- in-script `ckb::blake2b256(data)` once a real RISC-V Blake2b implementation is linked
+- `ckb::blake160(data)` once the 160-bit convention has the same test/evidence surface
 
-The implementation must match CKB's Blake2b-256 with `ckb-default-hash` personalization.
+Status: added `ckb_blake2b256(data: &[u8]) -> [u8; 32]` in the CellScript
+crate and `cellc ckb-hash` for builder, manifest, and release-evidence
+workflows. The empty-input vector is pinned to
+`44f4c69744d5f8c55d642062949dcae49bc4e7ef43d388c5a12f42b5633d163e`.
+This closes the off-chain/helper surface. A general in-script dynamic
+`ckb::blake2b256(data)` lowering remains intentionally unclaimed until the
+compiler can link a real RISC-V Blake2b implementation into the artifact.
 
 ### B2. Hash Type Visibility
 
@@ -236,6 +252,10 @@ The implementation must match CKB's Blake2b-256 with `ckb-default-hash` personal
 - Attribute-level `#[ckb(hash_type = "type")]`.
 
 Do not force a full `script {}` DSL in 0.12 unless the design is already clear.
+
+Status: added manifest-level `deploy.ckb.hash_type` support. Valid values are
+`data`, `type`, `data1`, and `data2`; invalid values fail compilation. The
+selected value is emitted through `constraints.ckb.hash_type_policy`.
 
 ### B3. DepGroup Manifest Support
 
@@ -247,6 +267,20 @@ Add deployment/package manifest support for named CKB cell deps:
 - builder integration
 - metadata/report output
 
+Status: added `deploy.ckb` and `[[deploy.ckb.cell_deps]]` manifest parsing for
+`code` and `dep_group` cell deps. Invalid `dep_type` values fail compilation.
+Declared deps are emitted through `constraints.ckb.dep_group_manifest`.
+
+Status update: `[[deploy.ckb.cell_deps]]` now accepts the same atomic
+`out_point = "0x<32-byte-tx-hash>:<index>"` form as top-level
+`[deploy.ckb]`. The older split form, `tx_hash = "0x..."` plus `index = N`,
+remains accepted for compatibility, but it must provide both fields. A cell dep
+that specifies both `out_point` and `tx_hash`/`index`, or only one split
+location field, fails closed. `tx_hash` values are validated as 0x-prefixed
+32-byte hex strings. Library and CLI tests now cover manifest roundtrip,
+`cellc constraints --target-profile ckb` reporting, conflicting locations, and
+incomplete split locations.
+
 ### B4. Since Policy Reporting
 
 Keep `ckb::input_since()` as the runtime primitive, but add structured policy reporting:
@@ -255,6 +289,9 @@ Keep `ckb::input_since()` as the runtime primitive, but add structured policy re
 - action depends on header epoch
 - timelock policy is runtime/assert-based
 - declarative timelock syntax is not yet first-class
+
+Status: added `constraints.ckb.timelock_policy` with `uses_input_since`,
+`uses_header_epoch`, policy kind, runtime feature list, and builder status.
 
 ### B5. Capacity Contract
 
@@ -268,6 +305,29 @@ Required report fields:
 - tx-size measurement requirement
 - measured tx size
 
+Status: added `constraints.ckb.capacity_evidence_contract`, preserving the
+code-cell lower bound, recommended capacity margin, occupied-capacity
+measurement requirement, tx-size measurement requirement, and evidence status.
+The release helper at `tools/ckb-tx-measure` now derives occupied capacity using
+CKB's own packed `CellOutput::occupied_capacity(Capacity::bytes(data.len()))`
+path, reports actual output capacities, and flags under-capacity output indexes.
+The helper's checked-in manifest targets the standalone `ckb/` + `CellScript/`
+sibling layout; the Spora acceptance script uses the same source through a
+generated temporary manifest for nested checkouts.
+
+Status update: release-evidence docs now explicitly distinguish the standalone
+CellScript repository layout from the nested `Spora/cellscript` checkout. The
+published `cellscript` crate excludes `tools/` and `src/bin/`, while Spora
+acceptance still builds the shared `src/bin/ckb_tx_measure.rs` source through a
+generated manifest pointing at `CKB_REPO`.
+
+### B6. Spora Syscall Table Evidence
+
+The Spora stdlib hash helper must stay pinned to the VM syscall table. The
+`__hash_blake3` helper now emits `a7 = 3001`, matching the Spora VM
+`BLAKE3_HASH` syscall number, and stdlib tests reject the old `2100`/`TBD`
+encoding.
+
 ---
 
 ## Track C: Collections and Dynamic Data
@@ -278,10 +338,10 @@ Document support by layer:
 
 | Feature | Schema/ABI | IR construction | Runtime helper | 0.12 status |
 |---|---:|---:|---:|---|
-| `Vec<u8>` | Yes | Targeted | Partial | Must test |
-| `Vec<Address>` | Yes | Targeted | Partial | Must test |
-| `Vec<Hash>` | Yes | Targeted | Partial | Should test |
-| `Vec<Vec<u8>>` | Unclear | Unclear | No | Decide/test or fail closed |
+| `Vec<u8>` | Yes | Targeted | Partial | Covered by schema-backed entry witness tests and documented support matrix |
+| `Vec<Address>` | Yes | Targeted | Partial | Covered by schema-backed entry witness tests, bundled examples, and documented support matrix |
+| `Vec<Hash>` | Yes | Targeted | Partial | Covered by schema-backed entry witness tests and documented support matrix |
+| `Vec<Vec<u8>>` | Opaque bytes | Boundary | No | Covered as schema-backed entry witness bytes; runtime helper use remains outside the production guarantee |
 | `HashMap<u64, u64>` | Limited | Limited | U64-oriented | Document |
 | `HashMap<Hash, Token>` | No production guarantee | No | No | Fail closed |
 | cell-backed collection ownership | No executable ownership model | No | No | Stable blocker |
@@ -308,6 +368,9 @@ Unsupported generic collections must produce:
 
 Silent acceptance is not acceptable.
 
+Status: added `CELLSCRIPT_COLLECTIONS_SUPPORT_MATRIX.md` to make the schema/ABI,
+IR construction, runtime helper, and cell-backed ownership boundaries explicit.
+
 ---
 
 ## Track D: Mutate and Replacement Outputs
@@ -323,6 +386,10 @@ Add a guide explaining:
 - lock hash preservation
 - type hash preservation
 - fixed struct vs Molecule table verification paths
+
+Status: added `CELLSCRIPT_MUTATE_AND_REPLACEMENT_OUTPUTS.md` with the
+Input-to-Output replacement model, preservation checks, transition shapes, AMM
+example, and builder contract.
 
 ### D2. AMM Example
 
@@ -354,6 +421,10 @@ Document:
 - required consume/transfer/destroy for linear values
 - restrictions on storing references rooted in linear values
 
+Status: added `CELLSCRIPT_LINEAR_OWNERSHIP.md` with compile-time ownership
+rules, required terminal operations, runtime defense boundaries, and the
+cell-backed collection ownership gap.
+
 ### E2. Cell-Backed Collection Ownership
 
 0.12 should not try to solve the full model unless the design is ready. It must, however, keep the boundary explicit.
@@ -364,6 +435,9 @@ Future design candidates:
 - typed collection destructuring
 - verifier-backed collection membership proofs
 - schema-level ownership witnesses
+
+Status: unsupported cell-backed collection ownership remains an explicit
+documented boundary rather than a silent production claim.
 
 ---
 
@@ -382,6 +456,16 @@ Document:
 - runtime-bound parameters
 - schema manifest linkage
 
+Status: added `CELLSCRIPT_ENTRY_WITNESS_ABI.md` with the `CSARGv1\0` envelope,
+scalar/fixed-byte/schema-backed payload layout, register/stack placement, and
+constraints report contract.
+
+Status update: library and CLI tests now cover scalar payloads, fixed-byte
+`Address` payloads, schema-backed `Vec<Address>` payloads, schema-backed
+`Vec<Hash>` payloads, opaque nested `Vec<Vec<u8>>` payload bytes,
+schema-backed `Vec<u8>` payloads, missing payload errors, and wrong-width
+fixed-byte errors.
+
 ### F2. CLI Explain
 
 Add or improve:
@@ -398,6 +482,12 @@ Expected output should show:
 - witness byte layout
 - runtime-bound status
 - example payload shape
+
+Status: added `cellc abi` as a focused JSON explain command for action/lock
+entry witness layouts. It reports `cellscript-entry-witness-v1`, payload-bound
+parameters, runtime-bound parameters, ABI slot placement, stack spill bytes,
+schema/fixed/scalar classification, and the canonical `constraints.entry_abi`
+layout for the selected entry.
 
 ---
 
@@ -418,6 +508,12 @@ Minimum behavior:
 - `estimated_cycles` contributes to a budget summary.
 
 Consensus-level scheduler changes can wait for a later release.
+
+Status: added `CELLSCRIPT_SCHEDULER_HINTS.md` documenting the scheduler witness,
+shared touch-set, `parallelizable`, and estimated-cycle metadata contract. Added
+`cellc scheduler-plan` as a real scheduler-hint consumer: it reports
+serial-required actions, shared touch-set conflicts, and estimated cycle budgets
+for wallet, CI, and devnet admission tooling.
 
 ---
 
@@ -452,6 +548,11 @@ Exit criteria:
 - production gates do not regress
 - size/cycle impact is measured rather than guessed
 
+Status: added `cellc opt-report`, which compiles the selected input at O0..O3
+and emits artifact format, target profile, artifact size, delta from O0,
+constraints status, warning/failure counts, and source content hash. Existing
+backend shape baselines continue to guard bundled examples.
+
 ---
 
 ## Track I: Documentation and Examples
@@ -468,6 +569,12 @@ Add or update these docs under `cellscript/docs`:
 - `Capacity and Builder Contract`
 - `Scheduler Hints`
 - `0.12 Migration Notes`
+- `0.12 Release Evidence`
+
+Status: added all listed documentation files. CKB profile authoring, CKB
+deployment manifest, capacity, runtime error, entry ABI, collections, mutate,
+scheduler, linear ownership, migration notes, and release evidence are now
+covered by focused docs.
 
 ### I2. Example Set
 
@@ -481,12 +588,17 @@ Keep the current examples:
 - `amm_pool.cell`
 - `launch.cell`
 
-Add or strengthen:
+Add or strengthen authoring examples without changing the fixed seven bundled
+example contracts:
 
-- `ckb_hashing.cell`: CKB Blake2b helper
-- `mutate_append.cell`: append transition
-- `collections_matrix.cell`: supported and unsupported dynamic collection cases
-- deployment manifest example: `hash_type` and DepGroup
+- `docs/examples/ckb_hashing.md`: CKB Blake2b builder/release helper
+- `docs/examples/mutate_append.md`: append transition as replacement output
+- `docs/examples/collections_matrix.md`: supported and unsupported dynamic collection cases
+- `docs/examples/deployment_manifest.md`: `hash_type` and DepGroup manifest example
+
+Status: added the authoring examples under `docs/examples`. The production
+regression suite still treats the top-level bundled contract set as exactly the
+seven files listed above.
 
 ### I3. Documentation Accuracy Rules
 
@@ -546,7 +658,7 @@ Goal: expose critical CKB concepts to authors.
 
 Deliverables:
 
-- `ckb::blake2b256`
+- `ckb_blake2b256` crate helper and `cellc ckb-hash` builder/release command
 - `hash_type` manifest or attribute support
 - DepGroup manifest support
 - structured since policy report
@@ -620,14 +732,14 @@ Exit criteria:
 |---|---:|---|
 | Error registry and docs | P0 for 0.12 | Required for actionable fail-closed debugging |
 | Production baseline freeze | P0 for 0.12 | Prevents regressions during broad changes |
-| CKB Blake2b stdlib | P1 | Small, clear authoring capability gap |
+| CKB Blake2b helper surface | P1 | Required for builder/release evidence and CKB hash test vectors |
 | `hash_type` source/manifest surface | P1 | Critical CKB safety concept should not remain hidden |
 | Collections support matrix | P1 | Prevents documentation and implementation mismatch |
 | Mutate docs and examples | P1 | Existing strong feature needs product-quality docs |
 | Entry Witness ABI docs/explain | P1 | Dynamic params must be transparent |
 | Capacity builder contract hard gate | P1 | Keeps current production closure enforceable |
 | Since policy structured report | P1 | Turns warning-only surface into consumable policy |
-| DepGroup manifest support | P1/P2 | Builder exists; authoring surface is missing |
+| DepGroup manifest support | P1/P2 | Authoring surface exists; builder/release evidence must keep exercising it |
 | Linear collection ownership | P2 | Important but design-heavy; fail-closed first |
 | Scheduler policy consumer | P2 | First step beyond metadata serialization |
 | Optimizer extra passes | P2 | Must be measurement-driven |
@@ -655,7 +767,8 @@ These are candidates for 0.13 or later once the 0.12 foundations are stable.
 ### Code
 
 - error code registry
-- CKB Blake2b helper
+- CKB Blake2b crate helper and `cellc ckb-hash`
+- Spora stdlib BLAKE3 syscall table pinning
 - `hash_type` manifest or attribute support
 - DepGroup manifest/builder bridge
 - scheduler admission simulator or wallet policy consumer
@@ -665,10 +778,11 @@ These are candidates for 0.13 or later once the 0.12 foundations are stable.
 
 - registry consistency tests
 - CKB Blake2b vectors
+- Spora stdlib BLAKE3 syscall-number regression test
 - `hash_type` mismatch fail-closed case
 - DepGroup configured transaction path
-- `Vec<u8>` and `Vec<Address>` ABI tests
-- nested dynamic support or fail-closed tests
+- `Vec<u8>`, `Vec<Address>`, and `Vec<Hash>` ABI tests
+- opaque nested `Vec<Vec<u8>>` entry-witness payload tests
 - mutate append tests
 - linear collection diagnostics
 - production acceptance hard gates
@@ -683,6 +797,7 @@ These are candidates for 0.13 or later once the 0.12 foundations are stable.
 - capacity/builder contract
 - scheduler hint semantics
 - 0.12 migration notes
+- release evidence checklist
 
 ### Release Evidence
 
@@ -691,6 +806,26 @@ These are candidates for 0.13 or later once the 0.12 foundations are stable.
 - artifact size/cycle baseline and diff
 - occupied-capacity and tx-size evidence
 - docs/test coverage summary
+
+Current local evidence for the 0.12 work-in-progress:
+
+- `cargo fmt --check`
+- `cargo test --locked -- --test-threads=1`
+- `cargo clippy --locked --all-targets -- -D warnings`
+- `cargo package --locked --allow-dirty --offline`
+- `cargo package --list --locked --allow-dirty --offline`
+- `bash -n /Users/arthur/RustroverProjects/Spora/scripts/ckb_cellscript_acceptance.sh`
+- `python3 /Users/arthur/RustroverProjects/Spora/scripts/validate_ckb_cellscript_production_evidence.py <report>`
+  is now the required CKB release-evidence validator for archived production
+  reports. It validates production mode, strict original compile closure,
+  exact bundled action coverage, builder-backed transactions, passed valid
+  dry-runs and commits, malformed rejection semantics, positive measured
+  cycles, consensus-serialized tx size, exact occupied capacity, and per-output
+  capacity sufficiency.
+- `git diff --check`
+
+The package-list evidence confirms `.github/`, `docs/`, `editors/`, `tools/`,
+and unpublished helper binaries are excluded from the crates.io package.
 
 ---
 

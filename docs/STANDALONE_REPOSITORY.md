@@ -17,12 +17,16 @@ CellScript must continue to support both target profiles:
 
 - `spora`: Spora-native CellScript artifacts, Spora hashing, Spora scheduler
   witness metadata, and Spora `SPORABI` ELF trailer behavior.
-- `ckb`: CKB-profile artifacts for the admitted v1 subset, CKB syscall/source
-  constants, CKB Molecule/BLAKE2b conventions, and no Spora `SPORABI` trailer.
+- `ckb`: production-gated CKB-profile artifacts for the bundled CellScript
+  suite, CKB syscall/source constants, CKB Molecule/BLAKE2b conventions, and
+  no Spora `SPORABI` trailer.
 
-The CKB profile remains bounded by target-profile policy. Stateful examples that
-are not yet admitted to the CKB v1 subset must fail closed for policy reasons,
-while minimal pure baseline artifacts must still compile and verify.
+The CKB profile is no longer described as a smoke or partial harness. The
+current standalone compatibility contract is: all seven bundled examples remain
+strict-admitted under the CKB target profile, scoped action and lock artifacts
+continue to compile, unsupported shapes fail through normal policy, and CKB
+release evidence records builder-backed transaction, tx-size, cycle, and
+occupied-capacity measurements.
 
 ## Local Validation
 

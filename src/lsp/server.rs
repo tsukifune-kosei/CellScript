@@ -1,7 +1,7 @@
 //! Tower-LSP transport layer for the CellScript language server.
 //!
 //! This module wraps the in-process `LspServer` behind the `tower_lsp::LanguageServer`
-//! trait so that `cellc lsp --stdio` can act as a full JSON-RPC language server.
+//! trait so that `cellc --lsp` can act as a full JSON-RPC language server.
 
 use crate::lsp;
 use std::collections::HashMap;
@@ -409,7 +409,7 @@ fn convert_completion_item(item: lsp::CompletionItem) -> CompletionItem {
             lsp::CompletionItemKind::TypeParameter => CompletionItemKind::TYPE_PARAMETER,
         }),
         detail: item.detail,
-        documentation: item.documentation.map(|d| Documentation::String(d)),
+        documentation: item.documentation.map(Documentation::String),
         insert_text: item.insert_text,
         insert_text_format: Some(InsertTextFormat::SNIPPET),
         ..CompletionItem::default()
@@ -471,7 +471,7 @@ fn convert_signature_help(help: lsp::SignatureHelp) -> SignatureHelp {
             .into_iter()
             .map(|sig| SignatureInformation {
                 label: sig.label,
-                documentation: sig.documentation.map(|d| Documentation::String(d)),
+                documentation: sig.documentation.map(Documentation::String),
                 parameters: Some(
                     sig.parameters
                         .into_iter()
@@ -482,7 +482,7 @@ fn convert_signature_help(help: lsp::SignatureHelp) -> SignatureHelp {
                                     format!("{}:{}", left, right)
                                 }
                             }),
-                            documentation: p.documentation.map(|d| Documentation::String(d)),
+                            documentation: p.documentation.map(Documentation::String),
                         })
                         .collect(),
                 ),

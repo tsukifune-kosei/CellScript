@@ -20,6 +20,7 @@ pub mod package;
 pub mod parser;
 pub mod repl;
 pub mod resolve;
+pub mod runtime_errors;
 pub mod simulate;
 pub mod stdlib;
 pub mod types;
@@ -55,9 +56,14 @@ fn validate_compile_options(options: &CompileOptions) -> Result<()> {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "spora";
-pub const METADATA_SCHEMA_VERSION: u32 = 28;
+pub const METADATA_SCHEMA_VERSION: u32 = 29;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
+pub const CKB_DEFAULT_HASH_PERSONALIZATION: &[u8; 16] = b"ckb-default-hash";
+pub const CKB_BLANK_HASH: [u8; 32] = [
+    68, 244, 198, 151, 68, 213, 248, 197, 93, 100, 32, 98, 148, 157, 202, 228, 155, 196, 231, 239, 67, 211, 136, 197, 161, 47, 66,
+    181, 99, 61, 22, 62,
+];
 const METADATA_MUTATE_CELL_BUFFER_SIZE: usize = 512;
 const CLAIM_SIGNER_PUBKEY_HASH_FIELDS: [&str; 5] =
     ["signer_pubkey_hash", "claim_pubkey_hash", "owner_pubkey_hash", "beneficiary_pubkey_hash", "pubkey_hash"];
@@ -66,6 +72,7 @@ const CKB_TYPE_ID_CODE_HASH: [u8; 32] =
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b'T', b'Y', b'P', b'E', b'_', b'I', b'D'];
 const CKB_TYPE_ID_ABI: &str = "ckb-type-id-v1";
 const CKB_TYPE_ID_HASH_TYPE: &str = "type";
+const CKB_DEFAULT_SCRIPT_HASH_TYPE: &str = "data1";
 const CKB_TYPE_ID_ARGS_SOURCE: &str = "first-input-output-index";
 const CKB_TYPE_ID_GROUP_RULE: &str = "at-most-one-input-and-one-output";
 const CKB_TYPE_ID_BUILDER: &str = "ckb_apply_type_id_script_to_output_molecule";
@@ -314,6 +321,8 @@ pub struct ConstraintsMetadata {
     pub status: String,
     pub entry_abi: Vec<EntryAbiConstraintsMetadata>,
     pub artifact: ArtifactConstraintsMetadata,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_errors: Vec<RuntimeErrorConstraintsMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ckb: Option<CkbConstraintsMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -322,6 +331,14 @@ pub struct ConstraintsMetadata {
     pub warnings: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failures: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RuntimeErrorConstraintsMetadata {
+    pub code: u64,
+    pub name: String,
+    pub description: String,
+    pub hint: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -391,6 +408,10 @@ pub struct CkbConstraintsMetadata {
     pub declared_type_id_hash_type: String,
     #[serde(default)]
     pub hash_type_policy_surface: String,
+    #[serde(default)]
+    pub hash_type_policy: CkbHashTypePolicyMetadata,
+    #[serde(default)]
+    pub dep_group_manifest: CkbDepGroupManifestMetadata,
     pub max_tx_verify_cycles: u64,
     pub max_block_cycles: u64,
     pub max_block_bytes: u64,
@@ -415,10 +436,68 @@ pub struct CkbConstraintsMetadata {
     pub uses_header_epoch: bool,
     pub transaction_runtime_input_requirement_count: usize,
     pub timelock_policy_surface: String,
+    #[serde(default)]
+    pub timelock_policy: CkbTimelockPolicyMetadata,
     pub created_output_count: usize,
     pub mutated_output_count: usize,
     pub capacity_planning_required: bool,
     pub capacity_policy_surface: String,
+    #[serde(default)]
+    pub capacity_evidence_contract: CkbCapacityEvidenceContractMetadata,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CkbHashTypePolicyMetadata {
+    pub source: String,
+    pub default_script_hash_type: String,
+    pub declared_hash_type: Option<String>,
+    pub type_id_hash_type: String,
+    pub supported_hash_types: Vec<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CkbDepGroupManifestMetadata {
+    pub source: String,
+    pub dep_group_supported: bool,
+    pub production_manifest_required: bool,
+    pub declared_cell_deps: Vec<CkbCellDepMetadata>,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CkbCellDepMetadata {
+    pub name: String,
+    pub artifact_hash: Option<String>,
+    pub tx_hash: Option<String>,
+    pub index: Option<u32>,
+    pub dep_type: String,
+    pub data_hash: Option<String>,
+    pub hash_type: Option<String>,
+    pub type_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CkbTimelockPolicyMetadata {
+    pub uses_input_since: bool,
+    pub uses_header_epoch: bool,
+    pub policy_kind: String,
+    pub runtime_features: Vec<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CkbCapacityEvidenceContractMetadata {
+    pub required: bool,
+    pub code_cell_lower_bound_shannons: u64,
+    pub recommended_code_cell_capacity_shannons: u64,
+    pub occupied_capacity_measurement_required: bool,
+    pub tx_size_measurement_required: bool,
+    pub measured_occupied_capacity_shannons: Option<u64>,
+    pub measured_tx_size_bytes: Option<usize>,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -806,8 +885,26 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
+pub fn ckb_blake2b256(data: &[u8]) -> [u8; 32] {
+    let mut state = blake2b_simd::Params::new().hash_length(32).personal(CKB_DEFAULT_HASH_PERSONALIZATION).to_state();
+    state.update(data);
+    let digest = state.finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(digest.as_bytes());
+    out
+}
+
 fn is_canonical_blake3_hex(hash: &str) -> bool {
     hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[cfg(test)]
+mod ckb_hash_tests {
+    #[test]
+    fn ckb_blake2b256_matches_blank_hash_vector() {
+        assert_eq!(super::ckb_blake2b256(b""), super::CKB_BLANK_HASH);
+        assert_eq!(super::hex_encode(&super::ckb_blake2b256(b"")), "44f4c69744d5f8c55d642062949dcae49bc4e7ef43d388c5a12f42b5633d163e");
+    }
 }
 
 fn bind_artifact_metadata(metadata: &mut CompileMetadata, artifact_bytes: &[u8], artifact_hash: &[u8; 32]) {
@@ -887,6 +984,18 @@ fn constraints_metadata(
     if backend_shape.is_none() {
         warnings.push("backend shape metrics were not available for this artifact".to_string());
     }
+    let runtime_errors = runtime_errors::ALL_RUNTIME_ERRORS
+        .iter()
+        .map(|error| {
+            let info = runtime_errors::runtime_error_info(*error);
+            RuntimeErrorConstraintsMetadata {
+                code: info.code,
+                name: info.name.to_string(),
+                description: info.description.to_string(),
+                hint: info.hint.to_string(),
+            }
+        })
+        .collect();
 
     let max_entry_witness_bytes = entry_abi.iter().map(|entry| entry.min_witness_bytes).max().unwrap_or(0);
     let estimated_cycles = metadata.actions.iter().map(|action| action.estimated_cycles).chain(metadata.locks.iter().map(|_| 0)).max();
@@ -926,6 +1035,7 @@ fn constraints_metadata(
         status,
         entry_abi,
         artifact,
+        runtime_errors,
         ckb,
         spora,
         warnings,
@@ -954,6 +1064,7 @@ fn entry_abi_constraints(entry_kind: &str, entry_name: &str, params: &[ParamMeta
                 "schema-pointer".to_string()
             };
             abi_slots = 2 + usize::from(param.type_hash_pointer_abi || param.type_hash_length_abi) * 2;
+            witness_bytes = 4;
             pointer_length_pair = true;
         } else if param.fixed_byte_pointer_abi || param.fixed_byte_length_abi {
             abi_kind = "fixed-byte-pointer".to_string();
@@ -1052,6 +1163,22 @@ fn ckb_constraints(
         declared_type_id_hash_type: CKB_TYPE_ID_HASH_TYPE.to_string(),
         hash_type_policy_surface: "compiler-declared-type-id-hash-type; builder must preserve script hash_type in deployed cells"
             .to_string(),
+        hash_type_policy: CkbHashTypePolicyMetadata {
+            source: "compiler-default".to_string(),
+            default_script_hash_type: CKB_DEFAULT_SCRIPT_HASH_TYPE.to_string(),
+            declared_hash_type: None,
+            type_id_hash_type: CKB_TYPE_ID_HASH_TYPE.to_string(),
+            supported_hash_types: ckb_supported_hash_types(),
+            status: "builder-must-preserve-script-hash-type".to_string(),
+        },
+        dep_group_manifest: CkbDepGroupManifestMetadata {
+            source: "not-declared".to_string(),
+            dep_group_supported: true,
+            production_manifest_required: false,
+            declared_cell_deps: Vec::new(),
+            status: "no-cell-deps-declared".to_string(),
+            warnings: Vec::new(),
+        },
         max_tx_verify_cycles,
         max_block_cycles,
         max_block_bytes,
@@ -1072,7 +1199,7 @@ fn ckb_constraints(
         } else {
             "code-cell-data-lower-bound".to_string()
         },
-        ckb_runtime_features,
+        ckb_runtime_features: ckb_runtime_features.clone(),
         uses_input_since,
         uses_header_epoch,
         transaction_runtime_input_requirement_count: metadata.runtime.transaction_runtime_input_requirements.len(),
@@ -1080,6 +1207,25 @@ fn ckb_constraints(
             "runtime-metadata-visible; declarative-dsl-policy-not-yet-first-class".to_string()
         } else {
             "not-applicable".to_string()
+        },
+        timelock_policy: CkbTimelockPolicyMetadata {
+            uses_input_since,
+            uses_header_epoch,
+            policy_kind: if uses_input_since || uses_header_epoch {
+                "runtime-assertion-policy".to_string()
+            } else {
+                "not-applicable".to_string()
+            },
+            runtime_features: ckb_runtime_features
+                .iter()
+                .filter(|feature| feature.starts_with("ckb-header-epoch-") || feature.as_str() == "ckb-input-since")
+                .cloned()
+                .collect(),
+            status: if uses_input_since || uses_header_epoch {
+                "reported-runtime-policy-builder-must-preserve-since/header-context".to_string()
+            } else {
+                "not-applicable".to_string()
+            },
         },
         created_output_count,
         mutated_output_count,
@@ -1089,7 +1235,167 @@ fn ckb_constraints(
         } else {
             "not-applicable".to_string()
         },
+        capacity_evidence_contract: CkbCapacityEvidenceContractMetadata {
+            required: true,
+            code_cell_lower_bound_shannons: min_code_cell_data_capacity_shannons,
+            recommended_code_cell_capacity_shannons,
+            occupied_capacity_measurement_required: capacity_planning_required,
+            tx_size_measurement_required: true,
+            measured_occupied_capacity_shannons: None,
+            measured_tx_size_bytes: None,
+            status: if capacity_planning_required {
+                "builder-must-attach-occupied-capacity-and-tx-size-evidence".to_string()
+            } else {
+                "builder-must-attach-tx-size-evidence-code-cell-lower-bound-available".to_string()
+            },
+        },
     }
+}
+
+fn ckb_supported_hash_types() -> Vec<String> {
+    vec!["data".to_string(), "type".to_string(), "data1".to_string(), "data2".to_string()]
+}
+
+fn apply_manifest_deploy_metadata(metadata: &mut CompileMetadata, manifest: &CellManifest) -> Result<()> {
+    let Some(ckb_manifest) = manifest.deploy.ckb.as_ref() else {
+        return Ok(());
+    };
+    let Some(ckb_constraints) = metadata.constraints.ckb.as_mut() else {
+        return Ok(());
+    };
+
+    if let Some(hash_type) = ckb_manifest.hash_type.as_deref() {
+        validate_ckb_hash_type(hash_type)?;
+        ckb_constraints.hash_type_policy.source = "Cell.toml deploy.ckb.hash_type".to_string();
+        ckb_constraints.hash_type_policy.declared_hash_type = Some(hash_type.to_string());
+        ckb_constraints.hash_type_policy.status = "manifest-declared-builder-must-match".to_string();
+        ckb_constraints.hash_type_policy_surface =
+            "manifest-declared-script-hash-type; builder/deployment output must match".to_string();
+    }
+
+    let mut declared_cell_deps = Vec::new();
+    if ckb_manifest.out_point.is_some() || ckb_manifest.dep_type.is_some() || ckb_manifest.data_hash.is_some() {
+        let dep_type = ckb_manifest.dep_type.as_deref().unwrap_or("code");
+        validate_ckb_dep_type(dep_type)?;
+        let (tx_hash, index) = ckb_manifest
+            .out_point
+            .as_deref()
+            .map(parse_ckb_out_point)
+            .transpose()?
+            .map(|(tx_hash, index)| (Some(tx_hash), Some(index)))
+            .unwrap_or((None, None));
+        declared_cell_deps.push(CkbCellDepMetadata {
+            name: "primary".to_string(),
+            artifact_hash: ckb_manifest.artifact_hash.clone(),
+            tx_hash,
+            index,
+            dep_type: dep_type.to_string(),
+            data_hash: ckb_manifest.data_hash.clone(),
+            hash_type: ckb_manifest.hash_type.clone(),
+            type_id: ckb_manifest.type_id.clone(),
+        });
+    }
+    for (index, dep) in ckb_manifest.cell_deps.iter().enumerate() {
+        let dep_type = dep.dep_type.as_deref().unwrap_or("code");
+        validate_ckb_dep_type(dep_type)?;
+        if let Some(hash_type) = dep.hash_type.as_deref() {
+            validate_ckb_hash_type(hash_type)?;
+        }
+        let (tx_hash, dep_index) = parse_ckb_cell_dep_location(dep)?;
+        declared_cell_deps.push(CkbCellDepMetadata {
+            name: dep.name.clone().unwrap_or_else(|| format!("cell_dep_{}", index)),
+            artifact_hash: None,
+            tx_hash,
+            index: dep_index,
+            dep_type: dep_type.to_string(),
+            data_hash: dep.data_hash.clone(),
+            hash_type: dep.hash_type.clone(),
+            type_id: dep.type_id.clone(),
+        });
+    }
+
+    if !declared_cell_deps.is_empty() {
+        let has_dep_group = declared_cell_deps.iter().any(|dep| dep.dep_type == "dep_group");
+        ckb_constraints.dep_group_manifest.source = "Cell.toml deploy.ckb".to_string();
+        ckb_constraints.dep_group_manifest.production_manifest_required = true;
+        ckb_constraints.dep_group_manifest.declared_cell_deps = declared_cell_deps;
+        ckb_constraints.dep_group_manifest.status = if has_dep_group {
+            "manifest-declares-dep-group-builder-must-expand-or-reference".to_string()
+        } else {
+            "manifest-declares-code-cell-deps".to_string()
+        };
+    }
+
+    refresh_constraints_status(&mut metadata.constraints);
+    Ok(())
+}
+
+fn validate_ckb_hash_type(hash_type: &str) -> Result<()> {
+    if ckb_supported_hash_types().iter().any(|supported| supported == hash_type) {
+        Ok(())
+    } else {
+        Err(CompileError::without_span(format!("unsupported CKB hash_type '{}'; expected one of data, type, data1, data2", hash_type)))
+    }
+}
+
+fn validate_ckb_dep_type(dep_type: &str) -> Result<()> {
+    if matches!(dep_type, "code" | "dep_group") {
+        Ok(())
+    } else {
+        Err(CompileError::without_span(format!("unsupported CKB dep_type '{}'; expected 'code' or 'dep_group'", dep_type)))
+    }
+}
+
+fn parse_ckb_cell_dep_location(dep: &CellCkbCellDepConfig) -> Result<(Option<String>, Option<u32>)> {
+    if let Some(out_point) = dep.out_point.as_deref() {
+        if dep.tx_hash.is_some() || dep.index.is_some() {
+            return Err(CompileError::without_span("CKB cell_dep location must use either out_point or tx_hash/index, not both"));
+        }
+        let (tx_hash, index) = parse_ckb_out_point(out_point)?;
+        return Ok((Some(tx_hash), Some(index)));
+    }
+    if let Some(tx_hash) = dep.tx_hash.as_deref() {
+        validate_ckb_tx_hash(tx_hash)?;
+    }
+    if dep.tx_hash.is_some() != dep.index.is_some() {
+        return Err(CompileError::without_span("CKB cell_dep split location must provide both tx_hash and index, or neither"));
+    }
+    Ok((dep.tx_hash.clone(), dep.index))
+}
+
+fn parse_ckb_out_point(out_point: &str) -> Result<(String, u32)> {
+    let Some((tx_hash, index)) = out_point.rsplit_once(':') else {
+        return Err(CompileError::without_span(format!(
+            "invalid CKB out_point '{}'; expected 0x<32-byte-tx-hash>:<index>",
+            out_point
+        )));
+    };
+    validate_ckb_tx_hash(tx_hash)?;
+    let index = index.parse::<u32>().map_err(|_| {
+        CompileError::without_span(format!("invalid CKB out_point index '{}'; expected unsigned 32-bit integer", index))
+    })?;
+    Ok((tx_hash.to_string(), index))
+}
+
+fn validate_ckb_tx_hash(tx_hash: &str) -> Result<()> {
+    let hex = tx_hash
+        .strip_prefix("0x")
+        .ok_or_else(|| CompileError::without_span(format!("invalid CKB tx_hash '{}'; expected 0x-prefixed 32-byte hash", tx_hash)))?;
+    if hex.len() != 64 || !hex.as_bytes().iter().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(CompileError::without_span(format!("invalid CKB tx_hash '{}'; expected 0x-prefixed 32-byte hash", tx_hash)));
+    }
+    Ok(())
+}
+
+fn refresh_constraints_status(constraints: &mut ConstraintsMetadata) {
+    constraints.status = if !constraints.failures.is_empty() {
+        "fail"
+    } else if !constraints.warnings.is_empty() {
+        "warn"
+    } else {
+        "pass"
+    }
+    .to_string();
 }
 
 fn spora_constraints(
@@ -2756,6 +3062,9 @@ fn compile_file_with_entry_scope<P: AsRef<Utf8Path>>(
         entry_scope.as_ref(),
     )?;
     bind_source_metadata(&mut result.metadata, collect_source_units_for_compile_file(path)?);
+    if let Some(manifest) = manifest.as_ref() {
+        apply_manifest_deploy_metadata(&mut result.metadata, manifest)?;
+    }
     result.validate()?;
 
     // Incremental compilation: store successful compilation result in cache
@@ -2899,6 +3208,8 @@ struct CellManifest {
     dependencies: HashMap<String, CellDependency>,
     #[serde(default)]
     build: CellBuildConfig,
+    #[serde(default)]
+    deploy: CellDeployConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -2917,6 +3228,50 @@ struct CellBuildConfig {
     target_profile: Option<String>,
     #[serde(default)]
     out_dir: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct CellDeployConfig {
+    #[serde(default)]
+    ckb: Option<CellCkbDeployConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct CellCkbDeployConfig {
+    #[serde(default)]
+    artifact_hash: Option<String>,
+    #[serde(default)]
+    data_hash: Option<String>,
+    #[serde(default)]
+    out_point: Option<String>,
+    #[serde(default)]
+    dep_type: Option<String>,
+    #[serde(default)]
+    hash_type: Option<String>,
+    #[serde(default)]
+    type_id: Option<String>,
+    #[serde(default)]
+    cell_deps: Vec<CellCkbCellDepConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct CellCkbCellDepConfig {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    out_point: Option<String>,
+    #[serde(default)]
+    tx_hash: Option<String>,
+    #[serde(default)]
+    index: Option<u32>,
+    #[serde(default)]
+    dep_type: Option<String>,
+    #[serde(default)]
+    data_hash: Option<String>,
+    #[serde(default)]
+    hash_type: Option<String>,
+    #[serde(default)]
+    type_id: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -16915,6 +17270,10 @@ action now() -> u64 {
         );
         assert!(ckb_constraints.tx_size_measurement_required, "CKB production constraints must require tx-size measurement");
         assert_eq!(ckb_constraints.timelock_policy_surface, "runtime-metadata-visible; declarative-dsl-policy-not-yet-first-class");
+        assert_eq!(ckb_constraints.timelock_policy.policy_kind, "runtime-assertion-policy");
+        assert!(ckb_constraints.timelock_policy.uses_input_since);
+        assert!(ckb_constraints.timelock_policy.uses_header_epoch);
+        assert!(ckb_constraints.timelock_policy.runtime_features.iter().any(|feature| feature == "ckb-input-since"));
         assert!(
             !ckb_constraints.capacity_planning_required,
             "pure epoch/since reads must not claim output-capacity planning is required"
@@ -16960,6 +17319,238 @@ action mint(amount: u64) -> Receipt {
         );
         assert_eq!(ckb_constraints.capacity_status, "builder-occupied-capacity-measurement-required");
         assert_eq!(ckb_constraints.capacity_policy_surface, "builder/runtime-required; declarative-dsl-capacity-not-yet-first-class");
+        assert!(ckb_constraints.capacity_evidence_contract.required);
+        assert!(ckb_constraints.capacity_evidence_contract.occupied_capacity_measurement_required);
+        assert!(ckb_constraints.capacity_evidence_contract.tx_size_measurement_required);
+        assert!(ckb_constraints.capacity_evidence_contract.code_cell_lower_bound_shannons > 0);
+    }
+
+    #[test]
+    fn ckb_deploy_manifest_surfaces_hash_type_and_dep_group_policy() {
+        let dir = tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+name = "deploy_manifest"
+version = "0.1.0"
+entry = "src/main.cell"
+
+[build]
+target_profile = "ckb"
+
+[deploy.ckb]
+hash_type = "data1"
+out_point = "0x1111111111111111111111111111111111111111111111111111111111111111:0"
+dep_type = "code"
+data_hash = "0x2222222222222222222222222222222222222222222222222222222222222222"
+
+[[deploy.ckb.cell_deps]]
+name = "secp256k1"
+out_point = "0x3333333333333333333333333333333333333333333333333333333333333333:1"
+dep_type = "dep_group"
+hash_type = "type"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/main.cell"),
+            r#"
+module deploy_manifest
+
+action add(a: u64, b: u64) -> u64 {
+    a + b
+}
+"#,
+        )
+        .unwrap();
+
+        let result = compile_path(root, CompileOptions::default()).unwrap();
+        let ckb = result.metadata.constraints.ckb.as_ref().expect("ckb constraints");
+        assert_eq!(ckb.hash_type_policy.source, "Cell.toml deploy.ckb.hash_type");
+        assert_eq!(ckb.hash_type_policy.declared_hash_type.as_deref(), Some("data1"));
+        assert_eq!(ckb.hash_type_policy.status, "manifest-declared-builder-must-match");
+        assert_eq!(ckb.dep_group_manifest.source, "Cell.toml deploy.ckb");
+        assert!(ckb.dep_group_manifest.dep_group_supported);
+        assert_eq!(ckb.dep_group_manifest.declared_cell_deps.len(), 2);
+        assert!(ckb.dep_group_manifest.declared_cell_deps.iter().any(|dep| {
+            dep.name == "primary"
+                && dep.dep_type == "code"
+                && dep.tx_hash.as_deref() == Some("0x1111111111111111111111111111111111111111111111111111111111111111")
+                && dep.index == Some(0)
+        }));
+        assert!(ckb.dep_group_manifest.declared_cell_deps.iter().any(|dep| {
+            dep.name == "secp256k1"
+                && dep.dep_type == "dep_group"
+                && dep.tx_hash.as_deref() == Some("0x3333333333333333333333333333333333333333333333333333333333333333")
+                && dep.index == Some(1)
+                && dep.hash_type.as_deref() == Some("type")
+        }));
+        assert_eq!(ckb.dep_group_manifest.status, "manifest-declares-dep-group-builder-must-expand-or-reference");
+    }
+
+    #[test]
+    fn ckb_deploy_manifest_rejects_conflicting_cell_dep_locations() {
+        let dir = tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+name = "conflicting_cell_dep_location"
+version = "0.1.0"
+entry = "src/main.cell"
+
+[build]
+target_profile = "ckb"
+
+[[deploy.ckb.cell_deps]]
+name = "secp256k1"
+out_point = "0x3333333333333333333333333333333333333333333333333333333333333333:1"
+tx_hash = "0x4444444444444444444444444444444444444444444444444444444444444444"
+index = 2
+dep_type = "dep_group"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/main.cell"),
+            r#"
+module conflicting_cell_dep_location
+
+action add(a: u64, b: u64) -> u64 {
+    a + b
+}
+"#,
+        )
+        .unwrap();
+
+        let err = compile_path(root, CompileOptions::default()).expect_err("conflicting CKB cell_dep locations must fail closed");
+        assert!(
+            err.message.contains("CKB cell_dep location must use either out_point or tx_hash/index"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn ckb_deploy_manifest_rejects_incomplete_split_cell_dep_location() {
+        let dir = tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+name = "incomplete_cell_dep_location"
+version = "0.1.0"
+entry = "src/main.cell"
+
+[build]
+target_profile = "ckb"
+
+[[deploy.ckb.cell_deps]]
+name = "secp256k1"
+tx_hash = "0x4444444444444444444444444444444444444444444444444444444444444444"
+dep_type = "dep_group"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/main.cell"),
+            r#"
+module incomplete_cell_dep_location
+
+action add(a: u64, b: u64) -> u64 {
+    a + b
+}
+"#,
+        )
+        .unwrap();
+
+        let err = compile_path(root, CompileOptions::default()).expect_err("incomplete CKB cell_dep split location must fail closed");
+        assert!(
+            err.message.contains("CKB cell_dep split location must provide both tx_hash and index"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn ckb_deploy_manifest_rejects_invalid_dep_type() {
+        let dir = tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+name = "bad_deploy_manifest"
+version = "0.1.0"
+entry = "src/main.cell"
+
+[build]
+target_profile = "ckb"
+
+[deploy.ckb]
+dep_type = "unknown"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/main.cell"),
+            r#"
+module bad_deploy_manifest
+
+action add(a: u64, b: u64) -> u64 {
+    a + b
+}
+"#,
+        )
+        .unwrap();
+
+        let err = compile_path(root, CompileOptions::default()).unwrap_err();
+        assert!(err.message.contains("unsupported CKB dep_type 'unknown'"), "unexpected error: {}", err.message);
+    }
+
+    #[test]
+    fn ckb_deploy_manifest_rejects_invalid_hash_type() {
+        let dir = tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+name = "bad_hash_type_manifest"
+version = "0.1.0"
+entry = "src/main.cell"
+
+[build]
+target_profile = "ckb"
+
+[deploy.ckb]
+hash_type = "legacy"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/main.cell"),
+            r#"
+module bad_hash_type_manifest
+
+action add(a: u64, b: u64) -> u64 {
+    a + b
+}
+"#,
+        )
+        .unwrap();
+
+        let err = compile_path(root, CompileOptions::default()).unwrap_err();
+        assert!(err.message.contains("unsupported CKB hash_type 'legacy'"), "unexpected error: {}", err.message);
     }
 
     #[test]
@@ -20183,6 +20774,18 @@ module vm::entry_abi
 action bad(items: Vec<Address>) -> u64 {
     return 0
 }
+
+action hashes(items: Vec<Hash>) -> u64 {
+    return 0
+}
+
+action nested(items: Vec<Vec<u8>>) -> u64 {
+    return 0
+}
+
+action raw(data: Vec<u8>) -> u64 {
+    return 0
+}
 "#;
 
         let result = compile(program, CompileOptions::default()).unwrap();
@@ -20195,6 +20798,27 @@ action bad(items: Vec<Address>) -> u64 {
 
         let err = action.entry_witness_args(&[]).unwrap_err();
         assert!(err.message.contains("missing payload arg"), "unexpected error: {}", err.message);
+
+        let hashes = result.metadata.actions.iter().find(|action| action.name == "hashes").unwrap();
+        let hash_bytes = vec![0x11; 64];
+        let mut hash_expected = ENTRY_WITNESS_ABI_MAGIC.to_vec();
+        hash_expected.extend_from_slice(&(hash_bytes.len() as u32).to_le_bytes());
+        hash_expected.extend_from_slice(&hash_bytes);
+        assert_eq!(hashes.entry_witness_args(&[EntryWitnessArg::Bytes(hash_bytes)]).unwrap(), hash_expected);
+
+        let nested = result.metadata.actions.iter().find(|action| action.name == "nested").unwrap();
+        let nested_bytes = vec![0x03, 0x00, 0x00, 0x00, 0xaa, 0xbb, 0xcc];
+        let mut nested_expected = ENTRY_WITNESS_ABI_MAGIC.to_vec();
+        nested_expected.extend_from_slice(&(nested_bytes.len() as u32).to_le_bytes());
+        nested_expected.extend_from_slice(&nested_bytes);
+        assert_eq!(nested.entry_witness_args(&[EntryWitnessArg::Bytes(nested_bytes)]).unwrap(), nested_expected);
+
+        let raw = result.metadata.actions.iter().find(|action| action.name == "raw").unwrap();
+        let raw_bytes = vec![0xaa, 0xbb, 0xcc];
+        let mut raw_expected = ENTRY_WITNESS_ABI_MAGIC.to_vec();
+        raw_expected.extend_from_slice(&(raw_bytes.len() as u32).to_le_bytes());
+        raw_expected.extend_from_slice(&raw_bytes);
+        assert_eq!(raw.entry_witness_args(&[EntryWitnessArg::Bytes(raw_bytes)]).unwrap(), raw_expected);
     }
 
     #[test]

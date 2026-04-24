@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.12.0 - 2026-04-24
+
+- Add a stable CellScript runtime error registry and expose code/name/hint
+  entries through metadata and `cellc constraints`.
+- Add CKB Blake2b builder/release helpers with pinned `ckb-default-hash`
+  vectors through `cellc ckb-hash`.
+- Add manifest-level CKB `hash_type` and `cell_deps`/DepGroup reporting, plus
+  structured timelock and capacity evidence contracts.
+- Add the standalone `tools/ckb-tx-measure` helper for CKB packed transaction
+  size and occupied-capacity evidence, with Spora acceptance building the same
+  source through a generated manifest for nested checkouts.
+- Add `cellc abi`, `cellc scheduler-plan`, and `cellc opt-report` for entry
+  witness inspection, scheduler-hint consumption, and optimization measurement.
+- Pin the Spora stdlib BLAKE3 helper to the VM `BLAKE3_HASH` syscall number
+  `3001`.
+- Expand entry witness tests to cover scalar, fixed-byte, `Vec<Address>`,
+  `Vec<Hash>`, opaque nested `Vec<Vec<u8>>`, `Vec<u8>`, missing payload, and
+  wrong-width payload cases.
+- Add 0.12 production documentation for runtime errors, CKB authoring,
+  deployment manifests, capacity, entry witnesses, collections, mutate,
+  linear ownership, scheduler hints, migration, examples, and release evidence.
+- Keep crates.io package contents narrow by excluding workflow, docs, editor,
+  auxiliary tool directories, and unpublished helper binaries from the
+  published crate.
+
 ## 0.11.0 - 2026-04-23
 
 - Release CellScript 0.11.0 as the standalone dual-chain compiler package.

@@ -51,10 +51,10 @@ Grounded against the current codebase:
 - The protocol direction is already moving toward effect-style processing for virtual-state composition.
 
 Relevant code and docs:
-- [exec/src/celltx/types.rs](/Users/arthur/RustroverProjects/Spora/exec/src/celltx/types.rs)
-- [exec/src/scheduler/dag.rs](/Users/arthur/RustroverProjects/Spora/exec/src/scheduler/dag.rs)
-- [exec/src/scheduler/executor.rs](/Users/arthur/RustroverProjects/Spora/exec/src/scheduler/executor.rs)
-- [docs/MPE_VIRTUAL_PROCESSOR_PARALLELIZATION_DESIGN.md](/Users/arthur/RustroverProjects/Spora/docs/MPE_VIRTUAL_PROCESSOR_PARALLELIZATION_DESIGN.md)
+- [exec/src/celltx/types.rs](../../exec/src/celltx/types.rs)
+- [exec/src/scheduler/dag.rs](../../exec/src/scheduler/dag.rs)
+- [exec/src/scheduler/executor.rs](../../exec/src/scheduler/executor.rs)
+- [docs/MPE_VIRTUAL_PROCESSOR_PARALLELIZATION_DESIGN.md](../../docs/MPE_VIRTUAL_PROCESSOR_PARALLELIZATION_DESIGN.md)
 
 ### 2.2 Fit with Cell / State Ontology
 

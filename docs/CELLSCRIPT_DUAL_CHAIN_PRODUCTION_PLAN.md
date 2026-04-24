@@ -23,10 +23,10 @@ The current production-readiness verdict is deliberately stricter:
 |---|---|---|
 | Spora examples | All seven bundled examples compile under `spora`; current devnet coverage deploys every bundled example as a real Spora code cell and records a structured `production_gate` over the 43 source-local bundled actions. Scoped action artifacts, valid lifecycle transactions, malformed action matrices, scheduler-witness transaction-shape coverage, and the standard-mass-policy production path are closed at `43/43`. Full-file bundled-example code-cell deployments are standard-relay compatible at `7/7` under the current `500000` standard relay transaction mass and `2000000` standard block mass. | Spora production acceptance is closed for the current suite: `scripts/devnet_acceptance.sh --profile production` passes with `production_gate.production_ready == true`, scoped actions `43/43`, malformed action matrix `43/43`, full-file deployment `7/7`, and independently validated `production-evidence.json`. |
 | CKB examples | Whole original CKB strict admission passes for all seven bundled examples. Original scoped artifacts compile for all 43 source actions plus all 15 locks with zero expected fail-closed entries. The default on-chain production gate runs all 43 bundled business actions, and the stricter `final_production_hardening_gate` now also passes with builder-generated transactions plus measured cycles, consensus-serialized tx size, and occupied-capacity evidence for all 43 actions. | CKB bundled-example production acceptance and final hardening are closed for the current suite. External release assurance now treats CKB reports as release artifacts rather than local-only smoke output. |
-| Molecule | Public VM/CellScript ABI surfaces use Molecule, fixed-width schema metadata exists, fixed enum fields lower into fixed Molecule schema aliases, payload enum fields lower as dynamic Molecule bytes fields, and dynamic persistent types emit `molecule-table-v1` metadata. Metadata schema 28 now also emits an authoritative `molecule_schema_manifest` with sorted type entries, field offsets, dynamic fields, schema hashes, and a manifest hash. Bundled examples generate a schema-manifest report artifact in the release gate. | Closed for current production scope. Unsupported generic dynamic shapes remain fail-closed and visible; supported persistent layouts now have deterministic manifest evidence. |
+| Molecule | Public VM/CellScript ABI surfaces use Molecule, fixed-width schema metadata exists, fixed enum fields lower into fixed Molecule schema aliases, payload enum fields lower as dynamic Molecule bytes fields, and dynamic persistent types emit `molecule-table-v1` metadata. Metadata schema 29 now also emits an authoritative `molecule_schema_manifest` with sorted type entries, field offsets, dynamic fields, schema hashes, and a manifest hash. Bundled examples generate a schema-manifest report artifact in the release gate. | Closed for current production scope. Unsupported generic dynamic shapes remain fail-closed and visible; supported persistent layouts now have deterministic manifest evidence. |
 | Package/tooling | Local package workflow, lockfile validation, README/wiki docs, JSON-RPC stdio LSP, VS Code LanguageClient integration, compiler-backed reports, release packaging controls, and tooling release-boundary validation exist. Registry publishing and remote package resolution remain fail-closed until the signed trust model is activated. | Closed for current production scope. The release gate validates the local package/LSP surface and keeps untrusted registry resolution disabled. |
 | Backend | Branch relaxation, shared fail handlers, machine-block/CFG metrics, call-edge accounting, backend shape budgets, and a checked backend-shape baseline fixture exist. The release gate emits backend shape JSON and fails on baseline-margin regressions. | Closed for current production scope. Code size, branch distance, CFG, call-edge, and unreachable-block growth are now release-gated. |
-| Production constraints | Metadata schema 28 adds profile-aware `constraints` and `molecule_schema_manifest`, and `cellc constraints` emits the same report directly. The report covers entry ABI slots/spills/witness bytes, artifact/backend shape, CKB Blake2b/Molecule hash domain, supported script `hash_type` set, type-id hash_type policy, CKB capacity lower bounds, occupied-capacity measurement requirements, tx-size measurement requirements, configured cycle/block limits, and Spora standard relay tx/block mass estimates. Acceptance reports now record measured CKB cycles, consensus-serialized tx bytes, occupied capacity, and Spora production mass/deployment evidence for the bundled suite. | Production constraint reporting is closed for bundled examples and is retained through release-facing evidence artifacts. Wallet/builder consumption can now depend on explicit reports instead of undocumented assumptions. |
+| Production constraints | Metadata schema 29 adds profile-aware `constraints`, `constraints.runtime_errors`, structured CKB `hash_type_policy`, `dep_group_manifest`, `timelock_policy`, `capacity_evidence_contract`, and `molecule_schema_manifest`, and `cellc constraints` emits the same report directly. The report covers stable runtime error code/name/hint mappings, entry ABI slots/spills/witness bytes, artifact/backend shape, CKB Blake2b/Molecule hash domain, supported script `hash_type` set, type-id hash_type policy, CKB capacity lower bounds, occupied-capacity measurement requirements, tx-size measurement requirements, configured cycle/block limits, and Spora standard relay tx/block mass estimates. Acceptance reports now record measured CKB cycles, consensus-serialized tx bytes, occupied capacity, and Spora production mass/deployment evidence for the bundled suite. | Production constraint reporting is closed for bundled examples and is retained through release-facing evidence artifacts. Wallet/builder consumption can now depend on explicit reports instead of undocumented assumptions. |
 
 ## Current Score
 
@@ -38,10 +38,10 @@ mainnet/testnet rollout, or long-running adversarial CI.
 |---|---:|---|
 | Spora target profile | 100/100 | All seven examples compile, all 43 scoped actions have valid and malformed devnet coverage, scheduler witness shape coverage is closed, standard mass policy is used, full-file deployments are accepted/indexed at `7/7`, and compiler constraints expose the same `500000` standard relay tx mass and `2000000` block mass policy used by acceptance. |
 | CKB target profile | 100/100 | All seven examples strict-admit, all 43 actions and 15 locks compile with zero expected fail-closed entries, all 43 actions run through builder-backed local CKB transactions, final hardening records measured cycles, tx bytes, and occupied capacity, and compiler constraints expose Blake2b/Molecule hash domain plus hash_type policy. |
-| Molecule schema/ABI | 100/100 | Public VM/CellScript ABI is Molecule-based, metadata schema 28 emits an authoritative schema manifest, bundled examples produce schema manifest report artifacts, and unsupported generic dynamic shapes remain fail-closed instead of silently compiling. |
+| Molecule schema/ABI | 100/100 | Public VM/CellScript ABI is Molecule-based, metadata schema 29 emits an authoritative schema manifest, bundled examples produce schema manifest report artifacts, and unsupported generic dynamic shapes remain fail-closed instead of silently compiling. |
 | Backend/code generation | 100/100 | Branch relaxation, shared fail handlers, machine CFG/call-edge metrics, backend shape budgets, bundled ELF compilation, backend-shape JSON, and baseline-margin regression checks are gated. |
 | Package/tooling/LSP | 100/100 | Standalone crate, local package manager, lockfile checks, docs/wiki, JSON-RPC stdio LSP, VS Code LanguageClient integration, compiler-backed production reports, crates.io package exclusions, and tooling release-boundary validation are gated; untrusted registry resolution remains fail-closed by design. |
-| Constraints/reporting | 100/100 | Compiler metadata and `cellc constraints` expose ABI, artifact, CKB limits, Blake2b/Molecule hash domain, hash_type policy, CKB capacity/tx-size measurement requirements, and Spora standard mass estimates; acceptance feeds measured CKB constraints and Spora production reports. |
+| Constraints/reporting | 100/100 | Compiler metadata and `cellc constraints` expose runtime error registry entries, ABI, artifact, CKB limits, Blake2b/Molecule hash domain, manifest-driven hash_type policy, DepGroup declarations, structured timelock policy, CKB capacity/tx-size evidence contracts, and Spora standard mass estimates; acceptance feeds measured CKB constraints and Spora production reports. |
 | Overall local production readiness | 100/100 | Both chain-specific bundled-example gates and compiler-visible production constraints are closed locally and captured as release-facing evidence. |
 | External release assurance | 100/100 | Production acceptance now emits `production-evidence.json`, `scripts/validate_spora_production_evidence.py` independently validates it against the detailed reports, and CI uploads the full `target/devnet-acceptance/` report tree. Third-party review and long-running public-network soak remain governance processes, not missing release-gate mechanics. |
 
@@ -368,9 +368,9 @@ The default production gate has no missing on-chain actions, no expected
 fail-closed entries, and no full-file strict original policy failures. The
 final hardening gate is also closed: all 43 bundled business actions are
 builder-backed, and acceptance records measured cycles, consensus-serialized
-transaction bytes, and exact occupied-capacity evidence. The remaining CKB work
-is broader adversarial coverage, external audit, and long-running release
-artifact retention.
+transaction bytes, and exact occupied-capacity evidence. Broader adversarial
+coverage, external audit, and long-running release artifact retention are
+post-release assurance work, not blockers in the current local production gate.
 
 The timelock `lock_asset`, `request_release`, and `request_emergency_release`
 bounded CKB harnesses now use original scoped `timelock.cell` artifacts.
@@ -381,9 +381,8 @@ a dynamic reason field and an empty `Vec<Address>` approval set.
 `approve_emergency_release` now verifies dynamic `Vec<Address>` append
 semantics against the original artifact, both release execution paths now
 verify original `ReleaseRecord` outputs, and `batch_create_locks` now verifies
-four TimeLock outputs on-chain. The remaining timelock hardening work is
-concentrated in CKB time/header semantics and broader malformed lifecycle
-matrices.
+four TimeLock outputs on-chain. Additional CKB time/header cases and malformed
+lifecycle matrices are post-release expansion items.
 
 The CKB harness for `nft.cell::create_listing` exposed and then closed a real
 production gap: strict compilation admitted the action, but the entry wrapper
@@ -508,7 +507,7 @@ Exit criteria:
 Goal: users should not hand-write Spora or CKB transaction JSON to use a
 CellScript contract.
 
-CLI target:
+Proposed future CLI target:
 
 ```bash
 cellc action build examples/token.cell \

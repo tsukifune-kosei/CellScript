@@ -167,7 +167,7 @@ CellScript does **not** introduce a new VM. It compiles to standard RISC-V ELF b
 | `LOAD_CELL_DATA` | 2092 | Used by `cell.data()` |
 | `CURRENT_CYCLES` | 2042 | Used by `remaining_cycles()` |
 | `DEBUG_PRINT` | 2177 | Used by `debug!()` macro |
-| `BLAKE3` (Spora ext) | TBD | Used by `hash()` builtin |
+| `BLAKE3` (Spora ext) | 3001 | Used by `hash()` builtin |
 
 The compiler links a thin CellScript stdlib into each ELF binary. This stdlib provides:
 - Molecule/schema encoding and decoding for typed Cell data

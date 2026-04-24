@@ -1,6 +1,6 @@
 pub mod collections;
 
-use crate::{ir::IrType, TargetProfile};
+use crate::{ir::IrType, runtime_errors::CellScriptRuntimeError, TargetProfile};
 
 pub struct StdLib;
 
@@ -369,7 +369,7 @@ impl StdLib {
         asm.push_str("    sd ra, 8(sp)\n");
         asm.push_str("    # a0 = data pointer, a1 = data length\n");
         asm.push_str("    # result (32 bytes) returned in buffer pointed by a0\n");
-        asm.push_str("    li a7, 2100  # BLAKE3 syscall number (TBD)\n");
+        asm.push_str("    li a7, 3001  # Spora BLAKE3_HASH syscall\n");
         asm.push_str("    ecall\n");
         asm.push_str("    ld ra, 8(sp)\n");
         asm.push_str("    addi sp, sp, 16\n");
@@ -387,7 +387,12 @@ impl StdLib {
         asm.push_str("__env_current_daa_score:\n");
         if target_profile == TargetProfile::Ckb {
             asm.push_str("    # rejected by ckb target-profile policy\n");
-            asm.push_str("    li a0, 22\n");
+            asm.push_str(&format!(
+                "    # cellscript runtime error {} {}\n",
+                CellScriptRuntimeError::ConsumeInvalidOperand.code(),
+                CellScriptRuntimeError::ConsumeInvalidOperand.name()
+            ));
+            asm.push_str(&format!("    li a0, {}\n", CellScriptRuntimeError::ConsumeInvalidOperand.code()));
             asm.push_str("    ret\n\n");
         } else {
             asm.push_str("    addi sp, sp, -16\n");
@@ -470,7 +475,12 @@ impl StdLib {
         asm.push_str(&format!("{}:\n", symbol));
         if !enabled {
             asm.push_str("    # rejected outside ckb target-profile policy\n");
-            asm.push_str("    li a0, 22\n");
+            asm.push_str(&format!(
+                "    # cellscript runtime error {} {}\n",
+                CellScriptRuntimeError::ConsumeInvalidOperand.code(),
+                CellScriptRuntimeError::ConsumeInvalidOperand.name()
+            ));
+            asm.push_str(&format!("    li a0, {}\n", CellScriptRuntimeError::ConsumeInvalidOperand.code()));
             asm.push_str("    ret\n\n");
             return;
         }
@@ -499,7 +509,12 @@ impl StdLib {
         asm.push_str("__ckb_input_since:\n");
         if !enabled {
             asm.push_str("    # rejected outside ckb target-profile policy\n");
-            asm.push_str("    li a0, 22\n");
+            asm.push_str(&format!(
+                "    # cellscript runtime error {} {}\n",
+                CellScriptRuntimeError::ConsumeInvalidOperand.code(),
+                CellScriptRuntimeError::ConsumeInvalidOperand.name()
+            ));
+            asm.push_str(&format!("    li a0, {}\n", CellScriptRuntimeError::ConsumeInvalidOperand.code()));
             asm.push_str("    ret\n\n");
             return;
         }
@@ -694,6 +709,9 @@ mod tests {
         assert!(asm.contains("li a7, 2075"));
         assert!(asm.contains("li a7, 2081"));
         assert!(asm.contains("li a7, 2092"));
+        assert!(asm.contains("li a7, 3001  # Spora BLAKE3_HASH syscall"));
+        assert!(!asm.contains("BLAKE3 syscall number (TBD)"));
+        assert!(!asm.contains("li a7, 2100"));
         assert!(asm.contains("__math_isqrt"));
     }
 

@@ -5,7 +5,6 @@ use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub mod convert;
 pub mod server;
 
 pub struct LspServer {

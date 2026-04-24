@@ -1,6 +1,7 @@
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::error::{CompileError, Result};
 use crate::ir::*;
+use crate::runtime_errors::CellScriptRuntimeError;
 use crate::{ArtifactFormat, TargetProfile, ENTRY_WITNESS_ABI_MAGIC};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
@@ -516,7 +517,7 @@ pub struct CodeGenerator {
     /// Collection push value ids whose effect is covered by a mutate append verifier.
     verified_collection_push_values: BTreeSet<usize>,
     /// Function-local cold fail handlers keyed by returned verifier error code.
-    fail_handler_codes: BTreeSet<u64>,
+    fail_handler_codes: BTreeSet<CellScriptRuntimeError>,
     /// Unique label counter for runtime checks.
     next_runtime_label: usize,
 }
@@ -925,7 +926,8 @@ impl CodeGenerator {
         }
 
         self.emit_label(&fail_label);
-        self.emit("li a0, 25");
+        self.emit_runtime_error_comment(CellScriptRuntimeError::EntryWitnessAbiInvalid);
+        self.emit(format!("li a0, {}", CellScriptRuntimeError::EntryWitnessAbiInvalid.code()));
         self.emit_label(&done_label);
         self.emit_stack_ld("ra", ENTRY_WITNESS_RA_OFFSET);
         self.emit_large_addi("sp", "sp", ENTRY_WITNESS_FRAME_SIZE as i64);
@@ -1792,7 +1794,7 @@ impl CodeGenerator {
                 buffer_offset,
                 RUNTIME_CELL_BUFFER_SIZE,
             );
-            self.emit_return_on_syscall_error(1);
+            self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
             self.emit_sp_addi("t0", buffer_offset);
             self.emit(format!("sd t0, {}(sp)", var_id * 8));
         }
@@ -1821,7 +1823,7 @@ impl CodeGenerator {
                 buffer_offset,
                 RUNTIME_CELL_BUFFER_SIZE,
             );
-            self.emit_return_on_syscall_error(1);
+            self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
             self.emit_sp_addi("t0", buffer_offset);
             self.emit(format!("sd t0, {}(sp)", var_id * 8));
         }
@@ -1842,7 +1844,7 @@ impl CodeGenerator {
                     buffer_offset,
                     RUNTIME_CELL_BUFFER_SIZE,
                 );
-                self.emit_return_on_syscall_error(1);
+                self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
                 self.emit_sp_addi("t0", buffer_offset);
                 self.emit(format!("sd t0, {}(sp)", var_id * 8));
                 if self.should_emit_claim_witness_authorization_domain_check(pattern, var_id) {
@@ -1863,7 +1865,7 @@ impl CodeGenerator {
         }
 
         self.emit_load_cell_data_syscall(&pattern.operation, CKB_SOURCE_INPUT, index);
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         if pattern.operation == "claim" {
             self.emit_claim_witness_authorization_domain_check(index, &pattern.binding, None);
         }
@@ -1888,7 +1890,7 @@ impl CodeGenerator {
                     buffer_offset,
                     RUNTIME_CELL_BUFFER_SIZE,
                 );
-                self.emit_return_on_syscall_error(1);
+                self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
                 self.emit_sp_addi("t0", buffer_offset);
                 self.emit(format!("sd t0, {}(sp)", var_id * 8));
                 return Ok(());
@@ -1896,7 +1898,7 @@ impl CodeGenerator {
         }
 
         self.emit_load_cell_data_syscall("read_ref", CKB_SOURCE_CELL_DEP, index);
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         Ok(())
     }
 
@@ -1905,7 +1907,7 @@ impl CodeGenerator {
         // transaction output selected by the lowering metadata.
         self.emit(format!("# {} output {}", pattern.operation, pattern.ty));
         self.emit_load_cell_data_syscall(&pattern.operation, CKB_SOURCE_OUTPUT, index);
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
 
         if pattern.lock.is_some() {
             self.emit("# set lock script");
@@ -1916,7 +1918,7 @@ impl CodeGenerator {
         } else {
             self.emit("# cellscript abi: output field verification incomplete for this create pattern");
             self.emit("# cellscript abi: fail closed because the output state is not fully verified");
-            self.emit_fail(5);
+            self.emit_fail(CellScriptRuntimeError::AssertionFailed);
             return Ok(());
         }
 
@@ -1926,7 +1928,7 @@ impl CodeGenerator {
             }
             self.emit("# cellscript abi: output lock verification incomplete for this create pattern");
             self.emit("# cellscript abi: fail closed because the output lock is not fully verified");
-            self.emit_fail(10);
+            self.emit_fail(CellScriptRuntimeError::EntryWitnessMagicMismatch);
         }
 
         Ok(())
@@ -1939,10 +1941,20 @@ impl CodeGenerator {
         ));
         self.emit_mutate_parameter_binding(pattern);
         if pattern.preserve_type_hash {
-            self.emit_mutate_replacement_field_hash_check(pattern, CKB_CELL_FIELD_TYPE_HASH, "type_hash", 11);
+            self.emit_mutate_replacement_field_hash_check(
+                pattern,
+                CKB_CELL_FIELD_TYPE_HASH,
+                "type_hash",
+                CellScriptRuntimeError::TypeHashPreservationMismatch,
+            );
         }
         if pattern.preserve_lock_hash {
-            self.emit_mutate_replacement_field_hash_check(pattern, CKB_CELL_FIELD_LOCK_HASH, "lock_hash", 12);
+            self.emit_mutate_replacement_field_hash_check(
+                pattern,
+                CKB_CELL_FIELD_LOCK_HASH,
+                "lock_hash",
+                CellScriptRuntimeError::LockHashPreservationMismatch,
+            );
         }
         self.emit_mutate_replacement_preserved_field_checks(pattern);
         self.emit_mutate_replacement_transition_checks(pattern);
@@ -1970,7 +1982,7 @@ impl CodeGenerator {
             buffer_offset,
             RUNTIME_CELL_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit_sp_addi("t0", buffer_offset);
         self.emit(format!("sd t0, {}(sp)", var_id * 8));
     }
@@ -2129,13 +2141,14 @@ impl CodeGenerator {
         self.emit_epilogue_body();
     }
 
-    fn emit_fail(&mut self, code: u64) {
+    fn emit_fail(&mut self, error: CellScriptRuntimeError) {
         if let Some(function) = &self.current_function {
-            self.fail_handler_codes.insert(code);
-            self.emit(format!("j .L{}_fail_{}", function, code));
+            self.fail_handler_codes.insert(error);
+            self.emit(format!("j .L{}_fail_{}", function, error.code()));
             return;
         }
-        self.emit(format!("li a0, {}", code));
+        self.emit_runtime_error_comment(error);
+        self.emit(format!("li a0, {}", error.code()));
         self.emit_epilogue_body();
     }
 
@@ -2144,13 +2157,18 @@ impl CodeGenerator {
             return;
         };
         let fail_codes = self.fail_handler_codes.iter().copied().collect::<Vec<_>>();
-        for code in fail_codes {
-            self.emit_label(&format!(".L{}_fail_{}", function, code));
-            self.emit(format!("li a0, {}", code));
+        for error in fail_codes {
+            self.emit_label(&format!(".L{}_fail_{}", function, error.code()));
+            self.emit_runtime_error_comment(error);
+            self.emit(format!("li a0, {}", error.code()));
             self.emit(format!("j .L{}_epilogue", function));
         }
         self.emit_label(&format!(".L{}_epilogue", function));
         self.emit_epilogue_body();
+    }
+
+    fn emit_runtime_error_comment(&mut self, error: CellScriptRuntimeError) {
+        self.emit(format!("# cellscript runtime error {} {}", error.code(), error.name()));
     }
 
     fn emit_epilogue_body(&mut self) {
@@ -2559,10 +2577,10 @@ impl CodeGenerator {
         self.emit("# a0 = CKB syscall return code");
     }
 
-    fn emit_return_on_syscall_error(&mut self, code: u64) {
+    fn emit_return_on_syscall_error(&mut self, error: CellScriptRuntimeError) {
         let ok_label = self.fresh_label("ckb_syscall_ok");
         self.emit(format!("beqz a0, {}", ok_label));
-        self.emit_fail(code);
+        self.emit_fail(error);
         self.emit_label(&ok_label);
     }
 
@@ -2573,7 +2591,7 @@ impl CodeGenerator {
         self.emit(format!("li a1, {}", required_size));
         self.emit("call __cellscript_require_min_size");
         self.emit(format!("beqz a0, {}", ok_label));
-        self.emit_fail(2);
+        self.emit_fail(CellScriptRuntimeError::BoundsCheckFailed);
         self.emit_label(&ok_label);
     }
 
@@ -2584,7 +2602,7 @@ impl CodeGenerator {
         self.emit(format!("li a1, {}", expected_size));
         self.emit("call __cellscript_require_exact_size");
         self.emit(format!("beqz a0, {}", ok_label));
-        self.emit_fail(4);
+        self.emit_fail(CellScriptRuntimeError::ExactSizeMismatch);
         self.emit_label(&ok_label);
     }
 
@@ -2606,7 +2624,7 @@ impl CodeGenerator {
         self.emit_unaligned_scalar_load(base_reg, "t0", "t2", 0, 4);
         self.emit("sub t2, t0, a0");
         self.emit(format!("beqz t2, {}", total_ok));
-        self.emit_fail(2);
+        self.emit_fail(CellScriptRuntimeError::BoundsCheckFailed);
         self.emit_label(&total_ok);
 
         self.emit_unaligned_scalar_load(base_reg, "t5", "t2", 4 + 4 * field_index, 4);
@@ -2614,7 +2632,7 @@ impl CodeGenerator {
         self.emit("sltu t2, t5, t1");
         let start_ok = self.fresh_label("molecule_table_start_ok");
         self.emit(format!("beqz t2, {}", start_ok));
-        self.emit_fail(2);
+        self.emit_fail(CellScriptRuntimeError::BoundsCheckFailed);
         self.emit_label(&start_ok);
 
         if field_width > 0 {
@@ -2623,12 +2641,12 @@ impl CodeGenerator {
             self.emit("sltu t2, t3, t5");
             let overflow_ok = self.fresh_label("molecule_table_field_overflow_ok");
             self.emit(format!("beqz t2, {}", overflow_ok));
-            self.emit_fail(2);
+            self.emit_fail(CellScriptRuntimeError::BoundsCheckFailed);
             self.emit_label(&overflow_ok);
             self.emit("sltu t2, a0, t3");
             let end_ok = self.fresh_label("molecule_table_end_ok");
             self.emit(format!("beqz t2, {}", end_ok));
-            self.emit_fail(2);
+            self.emit_fail(CellScriptRuntimeError::BoundsCheckFailed);
             self.emit_label(&end_ok);
         }
     }
@@ -2653,7 +2671,7 @@ impl CodeGenerator {
         self.emit_unaligned_scalar_load(base_reg, "t0", "t2", 0, 4);
         self.emit("sub t2, t0, a0");
         self.emit(format!("beqz t2, {}", total_ok));
-        self.emit_fail(2);
+        self.emit_fail(CellScriptRuntimeError::BoundsCheckFailed);
         self.emit_label(&total_ok);
 
         self.emit_unaligned_scalar_load(base_reg, "t5", "t2", 4 + 4 * field_index, 4);
@@ -2667,19 +2685,19 @@ impl CodeGenerator {
         self.emit("sltu t2, t5, t1");
         let start_ok = self.fresh_label("molecule_table_start_ok");
         self.emit(format!("beqz t2, {}", start_ok));
-        self.emit_fail(2);
+        self.emit_fail(CellScriptRuntimeError::BoundsCheckFailed);
         self.emit_label(&start_ok);
 
         self.emit("sltu t2, t6, t5");
         let order_ok = self.fresh_label("molecule_table_order_ok");
         self.emit(format!("beqz t2, {}", order_ok));
-        self.emit_fail(2);
+        self.emit_fail(CellScriptRuntimeError::BoundsCheckFailed);
         self.emit_label(&order_ok);
 
         self.emit("sltu t2, a0, t6");
         let end_ok = self.fresh_label("molecule_table_end_ok");
         self.emit(format!("beqz t2, {}", end_ok));
-        self.emit_fail(2);
+        self.emit_fail(CellScriptRuntimeError::BoundsCheckFailed);
         self.emit_label(&end_ok);
     }
 
@@ -2688,7 +2706,7 @@ impl CodeGenerator {
         pattern: &MutatePattern,
         cell_field: u64,
         field_name: &str,
-        error_code: u64,
+        error: CellScriptRuntimeError,
     ) {
         let input_size_offset = self.runtime_scratch_size_offset();
         let input_buffer_offset = self.runtime_scratch_buffer_offset();
@@ -2704,7 +2722,7 @@ impl CodeGenerator {
             input_buffer_offset,
             32,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit_load_cell_by_field_syscall_to_offsets(
             &format!("mutate_output_{}", field_name),
             CKB_SOURCE_OUTPUT,
@@ -2714,7 +2732,7 @@ impl CodeGenerator {
             output_buffer_offset,
             32,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit_loaded_schema_exact_size_check(input_size_offset, 32, &format!("mutate input {}", field_name));
         self.emit_loaded_schema_exact_size_check(output_size_offset, 32, &format!("mutate output {}", field_name));
         self.emit(format!(
@@ -2729,7 +2747,8 @@ impl CodeGenerator {
             self.emit("sub t2, t0, t1");
             let ok_label = self.fresh_label("mutate_identity_byte_ok");
             self.emit(format!("beqz t2, {}", ok_label));
-            self.emit(format!("li a0, {}", error_code));
+            self.emit_runtime_error_comment(error);
+            self.emit(format!("li a0, {}", error.code()));
             self.emit_epilogue();
             self.emit_label(&ok_label);
         }
@@ -2798,7 +2817,7 @@ impl CodeGenerator {
             buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit_loaded_schema_exact_size_check(size_offset, 32, "claim input lock hash");
         self.emit("# cellscript abi: verify claim input lock hash offset=0 size=32");
         if self.emit_schema_field_source_pointer_to("a1", source, 32) {
@@ -2807,10 +2826,10 @@ impl CodeGenerator {
             self.emit("call __cellscript_memcmp_fixed");
             let ok_label = self.fresh_label("claim_input_lock_hash_ok");
             self.emit(format!("beqz a0, {}", ok_label));
-            self.emit_fail(20);
+            self.emit_fail(CellScriptRuntimeError::NumericOrDiscriminantInvalid);
             self.emit_label(&ok_label);
         } else {
-            self.emit_fail(20);
+            self.emit_fail(CellScriptRuntimeError::NumericOrDiscriminantInvalid);
         }
     }
 
@@ -2837,7 +2856,7 @@ impl CodeGenerator {
             witness_buffer_offset,
             66,
         );
-        self.emit_return_on_syscall_error(17);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::TypeHashMismatch);
         self.emit_claim_witness_signature_size_check(witness_size_offset, witness_buffer_offset);
         self.emit_load_ecdsa_signature_hash_syscall_to_offsets(
             "claim_authorization_domain",
@@ -2848,7 +2867,7 @@ impl CodeGenerator {
             sighash_buffer_offset,
             32,
         );
-        self.emit_return_on_syscall_error(18);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::FixedByteComparisonUnresolved);
         self.emit_loaded_schema_exact_size_check(sighash_size_offset, 32, "claim ECDSA signature hash");
         if let Some(source) = signer_source {
             self.emit_claim_witness_signature_verification(group_input_index, witness_buffer_offset, sighash_buffer_offset, source);
@@ -2867,7 +2886,7 @@ impl CodeGenerator {
         self.emit(format!("li t1, {}", 66));
         self.emit("sub t2, t0, t1");
         self.emit(format!("beqz t2, {}", hash_type_from_witness_label));
-        self.emit_fail(17);
+        self.emit_fail(CellScriptRuntimeError::TypeHashMismatch);
         self.emit_label(&hash_type_from_witness_label);
         self.emit_sp_addi("t4", buffer_offset);
         self.emit("lbu t3, 65(t4)");
@@ -2907,7 +2926,7 @@ impl CodeGenerator {
         self.emit("ecall");
         let ok_label = self.fresh_label("claim_signature_ok");
         self.emit(format!("beqz a0, {}", ok_label));
-        self.emit_fail(19);
+        self.emit_fail(CellScriptRuntimeError::ClaimSignatureFailed);
         self.emit_label(&ok_label);
     }
 
@@ -2946,7 +2965,7 @@ impl CodeGenerator {
             left_buffer_offset,
             32,
         );
-        self.emit_return_on_syscall_error(22);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::ConsumeInvalidOperand);
         self.emit_load_cell_by_field_syscall_to_offsets(
             "pool_token_pair_right_type_hash",
             CKB_SOURCE_INPUT,
@@ -2956,7 +2975,7 @@ impl CodeGenerator {
             right_buffer_offset,
             32,
         );
-        self.emit_return_on_syscall_error(22);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::ConsumeInvalidOperand);
         self.emit_loaded_schema_exact_size_check(left_size_offset, 32, "pool token_a input type hash");
         self.emit_loaded_schema_exact_size_check(right_size_offset, 32, "pool token_b input type hash");
         self.emit("# cellscript abi: reject seed_pool when token_a and token_b Input TypeHash values are equal");
@@ -2969,7 +2988,7 @@ impl CodeGenerator {
             self.emit("sub t2, t0, t1");
             self.emit(format!("bnez t2, {}", distinct_label));
         }
-        self.emit_fail(22);
+        self.emit_fail(CellScriptRuntimeError::ConsumeInvalidOperand);
         self.emit_label(&distinct_label);
     }
 
@@ -2993,7 +3012,7 @@ impl CodeGenerator {
             input_buffer_offset,
             32,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit_loaded_schema_exact_size_check(input_size_offset, 32, "destroy input type hash");
         self.emit("li t6, 0");
         self.emit_label(&loop_label);
@@ -3013,7 +3032,7 @@ impl CodeGenerator {
         self.emit(format!("li t0, {}", CKB_ITEM_MISSING));
         self.emit("sub t1, a0, t0");
         self.emit(format!("beqz t1, {}", next_label));
-        self.emit_fail(16);
+        self.emit_fail(CellScriptRuntimeError::DynamicFieldBoundsInvalid);
 
         self.emit_label(&type_hash_label);
         self.emit_loaded_schema_exact_size_check(output_size_offset, 32, "destroy output type hash");
@@ -3029,7 +3048,7 @@ impl CodeGenerator {
             self.emit("sub t2, t0, t1");
             self.emit(format!("bnez t2, {}", next_label));
         }
-        self.emit_fail(16);
+        self.emit_fail(CellScriptRuntimeError::DynamicFieldBoundsInvalid);
 
         self.emit_label(&next_label);
         self.emit("addi t6, t6, 1");
@@ -3111,7 +3130,7 @@ impl CodeGenerator {
             input_buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit_load_cell_data_syscall_to_offsets(
             "mutate_output_data",
             CKB_SOURCE_OUTPUT,
@@ -3120,7 +3139,7 @@ impl CodeGenerator {
             output_buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         if let Some(expected_size) = self.type_fixed_sizes.get(&pattern.ty).copied() {
             self.emit_loaded_schema_exact_size_check(input_size_offset, expected_size, &format!("{} mutate input", pattern.ty));
             self.emit_loaded_schema_exact_size_check(output_size_offset, expected_size, &format!("{} mutate output", pattern.ty));
@@ -3149,7 +3168,7 @@ impl CodeGenerator {
                 self.emit("sub t2, t0, t1");
                 self.emit(format!("bnez t2, {}", mismatch_label));
             }
-            self.emit_fixed_byte_mismatch_fail(&mismatch_label, 13);
+            self.emit_fixed_byte_mismatch_fail(&mismatch_label, CellScriptRuntimeError::FieldPreservationMismatch);
         }
     }
 
@@ -3177,7 +3196,7 @@ impl CodeGenerator {
             input_buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit_load_cell_data_syscall_to_offsets(
             "mutate_output_table_preserved",
             CKB_SOURCE_OUTPUT,
@@ -3186,7 +3205,7 @@ impl CodeGenerator {
             output_buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit(format!(
             "# cellscript abi: verify mutate preserved Molecule table fields {} Input#{} == Output#{}",
             pattern.ty, pattern.input_index, pattern.output_index
@@ -3204,7 +3223,7 @@ impl CodeGenerator {
                 input_buffer_offset,
                 output_size_offset,
                 output_buffer_offset,
-                13,
+                CellScriptRuntimeError::FieldPreservationMismatch,
             );
         }
         true
@@ -3221,7 +3240,7 @@ impl CodeGenerator {
         input_buffer_offset: usize,
         output_size_offset: usize,
         output_buffer_offset: usize,
-        fail_code: u64,
+        fail_code: CellScriptRuntimeError,
     ) {
         let start_offset = self.runtime_expr_temp_offset(0).expect("runtime temp slot 0");
         let len_offset = self.runtime_expr_temp_offset(1).expect("runtime temp slot 1");
@@ -3359,7 +3378,7 @@ impl CodeGenerator {
             input_buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit_load_cell_data_syscall_to_offsets(
             "mutate_output_table_append",
             CKB_SOURCE_OUTPUT,
@@ -3368,7 +3387,7 @@ impl CodeGenerator {
             output_buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit(format!(
             "# cellscript abi: verify mutate Molecule table append fields {} Input#{} -> Output#{}",
             pattern.ty, pattern.input_index, pattern.output_index
@@ -3483,7 +3502,7 @@ impl CodeGenerator {
         self.emit("sub t2, t1, t3");
         let input_size_ok = self.fresh_label("molecule_append_input_size_ok");
         self.emit(format!("beqz t2, {}", input_size_ok));
-        self.emit_fail(14);
+        self.emit_fail(CellScriptRuntimeError::MutateTransitionMismatch);
         self.emit_label(&input_size_ok);
 
         self.emit_stack_ld("t4", output_start_offset);
@@ -3492,7 +3511,7 @@ impl CodeGenerator {
         self.emit("sub t2, t1, t0");
         let count_ok = self.fresh_label("molecule_append_count_ok");
         self.emit(format!("beqz t2, {}", count_ok));
-        self.emit_fail(14);
+        self.emit_fail(CellScriptRuntimeError::MutateTransitionMismatch);
         self.emit_label(&count_ok);
 
         self.emit_stack_ld("t0", input_len_offset);
@@ -3502,7 +3521,7 @@ impl CodeGenerator {
         self.emit("sub t2, t1, t0");
         let len_ok = self.fresh_label("molecule_append_len_ok");
         self.emit(format!("beqz t2, {}", len_ok));
-        self.emit_fail(14);
+        self.emit_fail(CellScriptRuntimeError::MutateTransitionMismatch);
         self.emit_label(&len_ok);
 
         let prefix_ok = self.fresh_label("molecule_append_prefix_ok");
@@ -3514,7 +3533,7 @@ impl CodeGenerator {
         self.emit("addi a2, a2, -4");
         self.emit("call __cellscript_memcmp_fixed");
         self.emit(format!("beqz a0, {}", prefix_ok));
-        self.emit_fail(14);
+        self.emit_fail(CellScriptRuntimeError::MutateTransitionMismatch);
         self.emit_label(&prefix_ok);
 
         self.emit_stack_ld("t0", output_start_offset);
@@ -3523,11 +3542,17 @@ impl CodeGenerator {
         self.emit_stack_sd("t0", output_start_offset);
         for (operand, field_layout, width) in fields {
             let Some(source) = self.expected_fixed_byte_source(operand, *width) else {
-                self.emit_fail(14);
+                self.emit_fail(CellScriptRuntimeError::MutateTransitionMismatch);
                 continue;
             };
             self.emit_prepare_fixed_byte_source(&source, *width, &format!("append {}.{}", type_name, field));
-            self.emit_pointer_fixed_bytes_against_source(output_start_offset, field_layout.offset, &source, *width, 14);
+            self.emit_pointer_fixed_bytes_against_source(
+                output_start_offset,
+                field_layout.offset,
+                &source,
+                *width,
+                CellScriptRuntimeError::MutateTransitionMismatch,
+            );
         }
     }
 
@@ -3537,7 +3562,7 @@ impl CodeGenerator {
         output_field_offset: usize,
         source: &ExpectedFixedByteSource,
         width: usize,
-        fail_code: u64,
+        fail_code: CellScriptRuntimeError,
     ) {
         let mismatch_label = self.fresh_label("fixed_byte_mismatch");
         match source {
@@ -3560,7 +3585,7 @@ impl CodeGenerator {
                     self.emit("call __cellscript_memcmp_fixed");
                     self.emit(format!("bnez a0, {}", mismatch_label));
                 } else {
-                    self.emit_fail(16);
+                    self.emit_fail(CellScriptRuntimeError::DynamicFieldBoundsInvalid);
                 }
             }
             ExpectedFixedByteSource::StackSlot { var_id, .. } => {
@@ -3608,7 +3633,7 @@ impl CodeGenerator {
             input_buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit_load_cell_data_syscall_to_offsets(
             "mutate_output_preserved_data",
             CKB_SOURCE_OUTPUT,
@@ -3617,13 +3642,13 @@ impl CodeGenerator {
             output_buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         let size_ok_label = self.fresh_label("mutate_preserved_data_size_ok");
         self.emit_stack_ld("t0", input_size_offset);
         self.emit_stack_ld("t1", output_size_offset);
         self.emit("sub t2, t0, t1");
         self.emit(format!("beqz t2, {}", size_ok_label));
-        self.emit_fail(13);
+        self.emit_fail(CellScriptRuntimeError::FieldPreservationMismatch);
         self.emit_label(&size_ok_label);
 
         self.emit(format!(
@@ -3663,7 +3688,7 @@ impl CodeGenerator {
         self.emit("addi t6, t6, 1");
         self.emit(format!("j {}", loop_label));
         self.emit_label(&mismatch_label);
-        self.emit_fail(13);
+        self.emit_fail(CellScriptRuntimeError::FieldPreservationMismatch);
         self.emit_label(&done_label);
         true
     }
@@ -3774,7 +3799,7 @@ impl CodeGenerator {
             input_buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit_load_cell_data_syscall_to_offsets(
             "mutate_output_transition",
             CKB_SOURCE_OUTPUT,
@@ -3783,7 +3808,7 @@ impl CodeGenerator {
             output_buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         if let Some(expected_size) = self.type_fixed_sizes.get(&pattern.ty).copied() {
             self.emit_loaded_schema_exact_size_check(
                 input_size_offset,
@@ -3844,7 +3869,7 @@ impl CodeGenerator {
             self.emit("sub t2, t0, t1");
             let ok_label = self.fresh_label("mutate_transition_ok");
             self.emit(format!("beqz t2, {}", ok_label));
-            self.emit_fail(14);
+            self.emit_fail(CellScriptRuntimeError::MutateTransitionMismatch);
             self.emit_label(&ok_label);
         }
     }
@@ -3883,7 +3908,7 @@ impl CodeGenerator {
             input_buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit_load_cell_data_syscall_to_offsets(
             "mutate_output_table_transition",
             CKB_SOURCE_OUTPUT,
@@ -3892,7 +3917,7 @@ impl CodeGenerator {
             output_buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit(format!(
             "# cellscript abi: verify mutate Molecule table transition fields {} Input#{} -> Output#{}",
             pattern.ty, pattern.input_index, pattern.output_index
@@ -3939,7 +3964,7 @@ impl CodeGenerator {
             self.emit("sub t2, t0, t1");
             let ok_label = self.fresh_label("mutate_table_transition_ok");
             self.emit(format!("beqz t2, {}", ok_label));
-            self.emit_fail(14);
+            self.emit_fail(CellScriptRuntimeError::MutateTransitionMismatch);
             self.emit_label(&ok_label);
         }
         let _ = field_count;
@@ -3961,7 +3986,7 @@ impl CodeGenerator {
             output_buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         if let Some(expected_size) = self.type_fixed_sizes.get(&pattern.ty).copied() {
             self.emit_loaded_schema_exact_size_check(
                 output_size_offset,
@@ -3982,7 +4007,7 @@ impl CodeGenerator {
                 &transition.operand,
                 &format!("{} set.{}", pattern.ty, transition.field),
             ) {
-                self.emit_fail(14);
+                self.emit_fail(CellScriptRuntimeError::MutateTransitionMismatch);
             }
         }
     }
@@ -4013,7 +4038,7 @@ impl CodeGenerator {
             input_buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit_load_cell_data_syscall_to_offsets(
             "mutate_output_u128_transition",
             CKB_SOURCE_OUTPUT,
@@ -4022,7 +4047,7 @@ impl CodeGenerator {
             output_buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         if let Some(expected_size) = self.type_fixed_sizes.get(&pattern.ty).copied() {
             self.emit_loaded_schema_exact_size_check(
                 input_size_offset,
@@ -4100,7 +4125,7 @@ impl CodeGenerator {
             self.emit("sub t1, t3, t6"); // diff_hi = actual_hi - expected_hi
             self.emit("or t2, t2, t1"); // combined diff = diff_lo | diff_hi
             self.emit(format!("beqz t2, {}", ok_label));
-            self.emit_fail(14);
+            self.emit_fail(CellScriptRuntimeError::MutateTransitionMismatch);
             self.emit_label(&ok_label);
         }
     }
@@ -4128,7 +4153,7 @@ impl CodeGenerator {
         self.emit("sub t2, t0, t1");
         let ok_label = self.fresh_label("output_field_ok");
         self.emit(format!("beqz t2, {}", ok_label));
-        self.emit_fail(3);
+        self.emit_fail(CellScriptRuntimeError::CellLoadFailed);
         self.emit_label(&ok_label);
     }
 
@@ -4138,7 +4163,7 @@ impl CodeGenerator {
         output_field_offset: usize,
         source: &ExpectedFixedByteSource,
         width: usize,
-        fail_code: u64,
+        fail_code: CellScriptRuntimeError,
     ) {
         let mismatch_label = self.fresh_label("fixed_byte_mismatch");
         self.emit_sp_addi("t4", output_buffer_offset);
@@ -4151,7 +4176,7 @@ impl CodeGenerator {
                     self.emit(format!("bnez a0, {}", mismatch_label));
                 } else {
                     self.emit("# cellscript abi: fail closed because schema field byte source is not addressable");
-                    self.emit_fail(16);
+                    self.emit_fail(CellScriptRuntimeError::DynamicFieldBoundsInvalid);
                 }
             }
             ExpectedFixedByteSource::Const(bytes) => {
@@ -4259,7 +4284,7 @@ impl CodeGenerator {
                     layout.offset,
                     &ExpectedFixedByteSource::SchemaField(source),
                     width,
-                    3,
+                    CellScriptRuntimeError::CellLoadFailed,
                 );
             }
             ExpectedFixedByteSource::Const(bytes) => {
@@ -4272,7 +4297,7 @@ impl CodeGenerator {
                     layout.offset,
                     &ExpectedFixedByteSource::Const(bytes),
                     width,
-                    3,
+                    CellScriptRuntimeError::CellLoadFailed,
                 );
             }
             ExpectedFixedByteSource::StackSlot { var_id, width } => {
@@ -4285,7 +4310,7 @@ impl CodeGenerator {
                     layout.offset,
                     &ExpectedFixedByteSource::StackSlot { var_id, width },
                     width,
-                    3,
+                    CellScriptRuntimeError::CellLoadFailed,
                 );
             }
             ExpectedFixedByteSource::PointerBytes { var_id, width } => {
@@ -4298,7 +4323,7 @@ impl CodeGenerator {
                     layout.offset,
                     &ExpectedFixedByteSource::PointerBytes { var_id, width },
                     width,
-                    3,
+                    CellScriptRuntimeError::CellLoadFailed,
                 );
             }
             ExpectedFixedByteSource::ParamBytes { var_id, size_offset, width } => {
@@ -4312,7 +4337,7 @@ impl CodeGenerator {
                     layout.offset,
                     &ExpectedFixedByteSource::ParamBytes { var_id, size_offset, width },
                     width,
-                    3,
+                    CellScriptRuntimeError::CellLoadFailed,
                 );
             }
             ExpectedFixedByteSource::LoadedBytes { var_id, size_offset, width } => {
@@ -4326,7 +4351,7 @@ impl CodeGenerator {
                     layout.offset,
                     &ExpectedFixedByteSource::LoadedBytes { var_id, size_offset, width },
                     width,
-                    3,
+                    CellScriptRuntimeError::CellLoadFailed,
                 );
             }
         }
@@ -4357,7 +4382,7 @@ impl CodeGenerator {
                     self.emit(format!("lbu {}, {}({})", dest_reg, byte_index, base_reg));
                 } else {
                     self.emit("# cellscript abi: fail closed because schema field byte source is not addressable");
-                    self.emit_fail(16);
+                    self.emit_fail(CellScriptRuntimeError::DynamicFieldBoundsInvalid);
                 }
             }
             ExpectedFixedByteSource::Const(bytes) => {
@@ -4398,7 +4423,7 @@ impl CodeGenerator {
         }
     }
 
-    fn emit_fixed_byte_mismatch_fail(&mut self, mismatch_label: &str, fail_code: u64) {
+    fn emit_fixed_byte_mismatch_fail(&mut self, mismatch_label: &str, fail_code: CellScriptRuntimeError) {
         let done_label = self.fresh_label("fixed_byte_verify_done");
         self.emit(format!("j {}", done_label));
         self.emit_label(mismatch_label);
@@ -4698,7 +4723,7 @@ impl CodeGenerator {
                 self.emit(format!("# cellscript abi: expected expression u64 {:?}", op));
                 let Some(temp_offset) = self.runtime_expr_temp_offset(_depth) else {
                     self.emit("# cellscript abi: fail closed because expression verifier temp stack is exhausted");
-                    self.emit_fail(15);
+                    self.emit_fail(CellScriptRuntimeError::DataPreservationMismatch);
                     return;
                 };
                 self.emit_prelude_u64_value_source_to_t1_at_depth(left, _depth + 1);
@@ -4717,7 +4742,7 @@ impl CodeGenerator {
                 self.emit("# cellscript abi: expected expression u64 min");
                 let Some(temp_offset) = self.runtime_expr_temp_offset(_depth) else {
                     self.emit("# cellscript abi: fail closed because expression verifier temp stack is exhausted");
-                    self.emit_fail(15);
+                    self.emit_fail(CellScriptRuntimeError::DataPreservationMismatch);
                     return;
                 };
                 self.emit_prelude_u64_value_source_to_t1_at_depth(left, _depth + 1);
@@ -4877,7 +4902,7 @@ impl CodeGenerator {
                     );
                 } else {
                     let Some(field_count) = self.type_layouts.get(&pattern.ty).map(|fields| fields.len()) else {
-                        self.emit_fail(5);
+                        self.emit_fail(CellScriptRuntimeError::AssertionFailed);
                         continue;
                     };
                     if !self.emit_dynamic_create_output_fixed_field_equals_expected(
@@ -4889,12 +4914,12 @@ impl CodeGenerator {
                         field_count,
                         value,
                     ) {
-                        self.emit_fail(5);
+                        self.emit_fail(CellScriptRuntimeError::AssertionFailed);
                     }
                 }
             } else {
                 let Some(field_count) = self.type_layouts.get(&pattern.ty).map(|fields| fields.len()) else {
-                    self.emit_fail(5);
+                    self.emit_fail(CellScriptRuntimeError::AssertionFailed);
                     continue;
                 };
                 if !self.emit_dynamic_create_output_field_equals_expected(
@@ -4906,7 +4931,7 @@ impl CodeGenerator {
                     field_count,
                     value,
                 ) {
-                    self.emit_fail(5);
+                    self.emit_fail(CellScriptRuntimeError::AssertionFailed);
                 }
             }
         }
@@ -4946,7 +4971,7 @@ impl CodeGenerator {
         self.emit("sub t2, t0, t1");
         let len_ok = self.fresh_label("create_fixed_table_field_len_ok");
         self.emit(format!("beqz t2, {}", len_ok));
-        self.emit_fail(3);
+        self.emit_fail(CellScriptRuntimeError::CellLoadFailed);
         self.emit_label(&len_ok);
 
         if layout_fixed_scalar_width(layout).is_some() {
@@ -4964,7 +4989,7 @@ impl CodeGenerator {
             self.emit("sub t2, t0, t1");
             let ok_label = self.fresh_label("output_table_field_ok");
             self.emit(format!("beqz t2, {}", ok_label));
-            self.emit_fail(3);
+            self.emit_fail(CellScriptRuntimeError::CellLoadFailed);
             self.emit_label(&ok_label);
             return true;
         }
@@ -4977,7 +5002,13 @@ impl CodeGenerator {
             type_name, field, layout.index, width
         ));
         self.emit_prepare_fixed_byte_source(&source, width, &format!("{}.{}", type_name, field));
-        self.emit_pointer_fixed_bytes_against_source(output_start_offset, 0, &source, width, 32);
+        self.emit_pointer_fixed_bytes_against_source(
+            output_start_offset,
+            0,
+            &source,
+            width,
+            CellScriptRuntimeError::DynamicFieldValueMismatch,
+        );
         true
     }
 
@@ -5028,7 +5059,7 @@ impl CodeGenerator {
         self.emit("sub t2, t0, t1");
         let len_ok = self.fresh_label("create_dynamic_field_len_ok");
         self.emit(format!("beqz t2, {}", len_ok));
-        self.emit_fail(3);
+        self.emit_fail(CellScriptRuntimeError::CellLoadFailed);
         self.emit_label(&len_ok);
 
         self.emit(format!("# cellscript abi: verify output dynamic field {}.{} as Molecule bytes", type_name, field));
@@ -5038,7 +5069,7 @@ impl CodeGenerator {
         self.emit_stack_ld("a2", output_len_offset);
         self.emit("call __cellscript_memcmp_fixed");
         self.emit(format!("bnez a0, {}", mismatch_label));
-        self.emit_fixed_byte_mismatch_fail(&mismatch_label, 3);
+        self.emit_fixed_byte_mismatch_fail(&mismatch_label, CellScriptRuntimeError::CellLoadFailed);
         true
     }
 
@@ -5055,14 +5086,14 @@ impl CodeGenerator {
         self.emit("sub t2, t0, t1");
         let len_ok = self.fresh_label("create_empty_vector_len_ok");
         self.emit(format!("beqz t2, {}", len_ok));
-        self.emit_fail(3);
+        self.emit_fail(CellScriptRuntimeError::CellLoadFailed);
         self.emit_label(&len_ok);
         self.emit_stack_ld("t0", output_start_offset);
         for offset in 0..4 {
             self.emit(format!("lbu t1, {}(t0)", offset));
             let byte_ok = self.fresh_label("create_empty_vector_byte_ok");
             self.emit(format!("beqz t1, {}", byte_ok));
-            self.emit_fail(3);
+            self.emit_fail(CellScriptRuntimeError::CellLoadFailed);
             self.emit_label(&byte_ok);
         }
     }
@@ -5078,7 +5109,7 @@ impl CodeGenerator {
         let Some(expected_count) =
             parts.iter().try_fold(0usize, |acc, part| constructed_byte_vector_part_width(part).map(|width| acc + width))
         else {
-            self.emit_fail(3);
+            self.emit_fail(CellScriptRuntimeError::CellLoadFailed);
             return;
         };
         let expected_len = 4 + expected_count;
@@ -5091,7 +5122,7 @@ impl CodeGenerator {
         self.emit("sub t2, t0, t1");
         let len_ok = self.fresh_label("create_constructed_vector_len_ok");
         self.emit(format!("beqz t2, {}", len_ok));
-        self.emit_fail(3);
+        self.emit_fail(CellScriptRuntimeError::CellLoadFailed);
         self.emit_label(&len_ok);
 
         self.emit_stack_ld("t4", output_start_offset);
@@ -5101,22 +5132,28 @@ impl CodeGenerator {
             self.emit("sub t2, t0, t1");
             let byte_ok = self.fresh_label("create_constructed_vector_count_ok");
             self.emit(format!("beqz t2, {}", byte_ok));
-            self.emit_fail(3);
+            self.emit_fail(CellScriptRuntimeError::CellLoadFailed);
             self.emit_label(&byte_ok);
         }
 
         let mut cursor = 4usize;
         for part in parts {
             let Some(width) = constructed_byte_vector_part_width(part) else {
-                self.emit_fail(3);
+                self.emit_fail(CellScriptRuntimeError::CellLoadFailed);
                 continue;
             };
             let Some(source) = self.expected_fixed_byte_source(part, width) else {
-                self.emit_fail(3);
+                self.emit_fail(CellScriptRuntimeError::CellLoadFailed);
                 continue;
             };
             self.emit_prepare_fixed_byte_source(&source, width, &format!("constructed {}.{}", type_name, field));
-            self.emit_pointer_fixed_bytes_against_source(output_start_offset, cursor, &source, width, 3);
+            self.emit_pointer_fixed_bytes_against_source(
+                output_start_offset,
+                cursor,
+                &source,
+                width,
+                CellScriptRuntimeError::CellLoadFailed,
+            );
             cursor += width;
         }
     }
@@ -5136,7 +5173,7 @@ impl CodeGenerator {
             buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit_loaded_schema_exact_size_check(size_offset, 32, "output lock hash");
         self.emit("# cellscript abi: verify output lock hash offset=0 size=32");
         let layout = SchemaFieldLayout { index: 0, offset: 0, ty: IrType::Hash, fixed_size: Some(32), fixed_enum_size: None };
@@ -5177,7 +5214,7 @@ impl CodeGenerator {
         self.emit(format!("li t3, {}", state_count));
         self.emit("sltu t2, t0, t3");
         self.emit(format!("bnez t2, {}", old_range_ok_label));
-        self.emit_fail(9);
+        self.emit_fail(CellScriptRuntimeError::LifecycleOldStateInvalid);
         self.emit_label(&old_range_ok_label);
 
         self.emit_sp_addi("t4", output_buffer_offset);
@@ -5186,14 +5223,14 @@ impl CodeGenerator {
         self.emit("sub t2, t1, t0");
         let ok_label = self.fresh_label("lifecycle_transition_ok");
         self.emit(format!("beqz t2, {}", ok_label));
-        self.emit_fail(7);
+        self.emit_fail(CellScriptRuntimeError::LifecycleTransitionMismatch);
         self.emit_label(&ok_label);
 
         let range_ok_label = self.fresh_label("lifecycle_state_range_ok");
         self.emit(format!("li t3, {}", state_count));
         self.emit("sltu t2, t1, t3");
         self.emit(format!("bnez t2, {}", range_ok_label));
-        self.emit_fail(8);
+        self.emit_fail(CellScriptRuntimeError::LifecycleNewStateInvalid);
         self.emit_label(&range_ok_label);
     }
 
@@ -5240,7 +5277,7 @@ impl CodeGenerator {
         self.emit("sub t2, t0, t3");
         let input_ok_label = self.fresh_label("settle_input_final_state_ok");
         self.emit(format!("beqz t2, {}", input_ok_label));
-        self.emit_fail(20);
+        self.emit_fail(CellScriptRuntimeError::NumericOrDiscriminantInvalid);
         self.emit_label(&input_ok_label);
 
         self.emit_sp_addi("t4", output_buffer_offset);
@@ -5248,7 +5285,7 @@ impl CodeGenerator {
         self.emit("sub t2, t1, t3");
         let output_ok_label = self.fresh_label("settle_output_final_state_ok");
         self.emit(format!("beqz t2, {}", output_ok_label));
-        self.emit_fail(21);
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
         self.emit_label(&output_ok_label);
     }
 
@@ -5499,7 +5536,7 @@ impl CodeGenerator {
             // Final fallback: emit a fail-closed trap with specific error code
             self.emit(format!("# binary {:?} over fixed-byte operands (unresolved)", op));
             self.emit("# cellscript abi: fail closed because fixed-byte operand sources are not available");
-            self.emit_fail(18);
+            self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
             return Ok(());
         }
 
@@ -5580,7 +5617,7 @@ impl CodeGenerator {
 
         self.emit(format!("# field access .{} (unresolved)", field));
         self.emit("# cellscript abi: fail closed because field offset is not computable from available type layout");
-        self.emit_fail(16);
+        self.emit_fail(CellScriptRuntimeError::DynamicFieldBoundsInvalid);
         Ok(())
     }
 
@@ -5780,7 +5817,7 @@ impl CodeGenerator {
 
         self.emit("# index access (unresolved)");
         self.emit("# cellscript abi: fail closed because element layout is not statically computable");
-        self.emit_fail(17);
+        self.emit_fail(CellScriptRuntimeError::TypeHashMismatch);
         Ok(())
     }
 
@@ -5853,7 +5890,7 @@ impl CodeGenerator {
         self.emit("sub t2, t3, t5");
         let size_ok = self.fresh_label("molecule_vector_index_size_ok");
         self.emit(format!("beqz t2, {}", size_ok));
-        self.emit_fail(2);
+        self.emit_fail(CellScriptRuntimeError::BoundsCheckFailed);
         self.emit_label(&size_ok);
 
         match idx {
@@ -5868,7 +5905,7 @@ impl CodeGenerator {
         let bounds_ok = self.fresh_label("molecule_vector_index_bounds_ok");
         self.emit("sltu t2, t1, t0");
         self.emit(format!("bnez t2, {}", bounds_ok));
-        self.emit_fail(2);
+        self.emit_fail(CellScriptRuntimeError::BoundsCheckFailed);
         self.emit_label(&bounds_ok);
 
         self.emit(format!("li t2, {}", element_width));
@@ -5927,7 +5964,7 @@ impl CodeGenerator {
         self.emit(format!("li t2, {}", len));
         self.emit("slt t3, t1, t2");
         self.emit(format!("bnez t3, {}", bounds_ok));
-        self.emit_fail(2);
+        self.emit_fail(CellScriptRuntimeError::BoundsCheckFailed);
         self.emit_label(&bounds_ok);
 
         // Compute offset = index * element_width
@@ -5958,7 +5995,7 @@ impl CodeGenerator {
             self.emit_stack_ld("t0", size_offset);
         } else {
             self.emit("# cellscript abi: fail closed because dynamic length is not available");
-            self.emit_fail(19);
+            self.emit_fail(CellScriptRuntimeError::ClaimSignatureFailed);
             return Ok(());
         }
         self.emit(format!("sd t0, {}(sp)", dest.id * 8));
@@ -5993,7 +6030,7 @@ impl CodeGenerator {
         self.emit("sub t2, t1, t3");
         let size_ok = self.fresh_label("molecule_vector_size_ok");
         self.emit(format!("beqz t2, {}", size_ok));
-        self.emit_fail(2);
+        self.emit_fail(CellScriptRuntimeError::BoundsCheckFailed);
         self.emit_label(&size_ok);
         true
     }
@@ -6037,7 +6074,7 @@ impl CodeGenerator {
                 buffer_offset,
                 32,
             );
-            self.emit_return_on_syscall_error(1);
+            self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
             self.emit_loaded_schema_exact_size_check(size_offset, 32, "output type hash");
             self.emit_sp_addi("t0", buffer_offset);
             self.emit(format!("sd t0, {}(sp)", dest.id * 8));
@@ -6063,7 +6100,7 @@ impl CodeGenerator {
 
         self.emit("# type_hash (unresolved)");
         self.emit("# cellscript abi: fail closed because type_hash source cell cannot be determined");
-        self.emit_fail(20);
+        self.emit_fail(CellScriptRuntimeError::NumericOrDiscriminantInvalid);
         Ok(())
     }
 
@@ -6099,7 +6136,7 @@ impl CodeGenerator {
             buffer_offset,
             32,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit_loaded_schema_exact_size_check(size_offset, 32, "runtime type hash");
         self.emit_sp_addi("t0", buffer_offset);
         self.emit(format!("sd t0, {}(sp)", dest.id * 8));
@@ -6150,7 +6187,7 @@ impl CodeGenerator {
         // needed in the verifier path – the prelude already verified the output.
         self.emit("# cellscript abi: collection push is not needed for verifier execution");
         self.emit("# cellscript abi: if this path is reached, the source program uses dynamic collections");
-        self.emit_fail(21);
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
         Ok(())
     }
 
@@ -6164,7 +6201,7 @@ impl CodeGenerator {
         }
         self.emit("# cellscript abi: collection extend is not needed for verifier execution");
         self.emit("# cellscript abi: if this path is reached, the source program uses dynamic collections");
-        self.emit_fail(21);
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
         Ok(())
     }
 
@@ -6406,7 +6443,7 @@ impl CodeGenerator {
             "# cellscript abi: call {} param {} requires ABI arg{} beyond register call lowering",
             func, label, abi_index
         ));
-        self.emit_fail(25);
+        self.emit_fail(CellScriptRuntimeError::EntryWitnessAbiInvalid);
         None
     }
 
@@ -6432,7 +6469,7 @@ impl CodeGenerator {
             buffer_offset,
             RUNTIME_SCRATCH_BUFFER_SIZE,
         );
-        self.emit_return_on_syscall_error(1);
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
         self.emit_sp_addi("t0", buffer_offset);
         self.emit(format!("sd t0, {}(sp)", dest.id * 8));
 
@@ -6489,7 +6526,7 @@ impl CodeGenerator {
         // Non-Var consume: this should not happen in valid IR, but fail with
         // a specific error code instead of blocking ELF emission.
         self.emit("# cellscript abi: fail closed because consume operand is not a variable");
-        self.emit_fail(22);
+        self.emit_fail(CellScriptRuntimeError::ConsumeInvalidOperand);
         Ok(())
     }
 
@@ -6532,7 +6569,7 @@ impl CodeGenerator {
             return Ok(());
         }
         self.emit("# cellscript abi: fail closed because transfer output relation is unknown");
-        self.emit_fail(23);
+        self.emit_fail(CellScriptRuntimeError::DestroyInvalidOperand);
         Ok(())
     }
 
@@ -6547,7 +6584,7 @@ impl CodeGenerator {
         }
         // Non-Var destroy: this should not happen in valid IR, fail with specific error.
         self.emit("# cellscript abi: fail closed because destroy operand is not a variable");
-        self.emit_fail(22);
+        self.emit_fail(CellScriptRuntimeError::ConsumeInvalidOperand);
         Ok(())
     }
 
@@ -6596,7 +6633,7 @@ impl CodeGenerator {
             return Ok(());
         }
         self.emit("# cellscript abi: fail closed because claim output relation is unknown");
-        self.emit_fail(23);
+        self.emit_fail(CellScriptRuntimeError::DestroyInvalidOperand);
         Ok(())
     }
 
@@ -6616,7 +6653,7 @@ impl CodeGenerator {
             return Ok(());
         }
         self.emit("# cellscript abi: fail closed because settle output relation is unknown");
-        self.emit_fail(23);
+        self.emit_fail(CellScriptRuntimeError::DestroyInvalidOperand);
         Ok(())
     }
 
@@ -6752,7 +6789,8 @@ impl CodeGenerator {
         self.emit_label(symbol);
         if !enabled {
             self.emit(format!("# cellscript abi: {}", disabled_reason));
-            self.emit("li a0, 22");
+            self.emit_runtime_error_comment(CellScriptRuntimeError::ConsumeInvalidOperand);
+            self.emit(format!("li a0, {}", CellScriptRuntimeError::ConsumeInvalidOperand.code()));
             self.emit("ret");
             return;
         }
@@ -6782,7 +6820,8 @@ impl CodeGenerator {
         self.emit_label(symbol);
         if !enabled {
             self.emit(format!("# cellscript abi: {}", disabled_reason));
-            self.emit("li a0, 22");
+            self.emit_runtime_error_comment(CellScriptRuntimeError::ConsumeInvalidOperand);
+            self.emit(format!("li a0, {}", CellScriptRuntimeError::ConsumeInvalidOperand.code()));
             self.emit("ret");
             return;
         }
@@ -7265,7 +7304,9 @@ fn render_external_assembly(lines: &[String], entry_label: &str) -> String {
         vec![".section .text".to_string(), ".global _start".to_string(), ".type _start, @function".to_string(), "_start:".to_string()];
     rendered.push(format!("    li sp, {}", CKB_SCRIPT_STACK_TOP));
     if entry_requires_explicit_parameter_abi(lines, entry_label) {
-        rendered.push("    li a0, 25".to_string());
+        let error = CellScriptRuntimeError::EntryWitnessAbiInvalid;
+        rendered.push(format!("    # cellscript runtime error {} {}", error.code(), error.name()));
+        rendered.push(format!("    li a0, {}", error.code()));
     } else {
         rendered.push(format!("    call {}", entry_label));
     }

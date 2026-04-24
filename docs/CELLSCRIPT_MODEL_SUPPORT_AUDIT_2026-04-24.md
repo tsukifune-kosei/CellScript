@@ -43,7 +43,9 @@ README 也明确把 `ckb` profile 定义为：
 
 - CKB profile 在 target metadata / ABI / hash-domain 层选择 Blake2b/Molecule 语义；
 - CKB action acceptance 已在真实本地 CKB devnet 路径运行；
-- 通用 DSL 级 Blake2b helper surface 仍可继续增强，但这不是 CKB profile 的生产阻断项。
+- 通用 DSL 级 Blake2b helper surface 仍可继续增强；当前 0.12 已提供
+  `cellc ckb-hash` 与 crate-level `ckb_blake2b256` builder/release helper，
+  因此这不是 CKB profile 的生产阻断项。
 
 ### 2. Capacity / occupied-capacity
 
@@ -98,7 +100,7 @@ README 也明确把 `ckb` profile 定义为：
 
 ## 三、按维度重新评级
 
-### 3.1 核心 Cell 模型映射 — **A-**
+### 3.1 核心 Cell 模型映射 — **A**
 
 | 维度 | 当前状态 | 结论 |
 |---|---|---|
@@ -159,7 +161,7 @@ Spora 特性支持目前已经进入本地 production gate 闭合状态。
 
 > **Spora 线在当前 acceptance 体系下已完成本地 production closure；剩余边界主要是外部发布、长期 CI、fuzz/property/adversarial matrix 与审计证据。**
 
-### 3.4 CKB 兼容 profile — **A-**
+### 3.4 CKB 兼容 profile — **A**
 
 当前 CKB 路线状态：
 
@@ -175,7 +177,7 @@ Spora 特性支持目前已经进入本地 production gate 闭合状态。
 
 > **CKB 线在当前 acceptance 体系下已达到本地 production + final hardening 闭合；剩余边界主要是 DSL 明确性和外部主网长期运维层，而不是 core compile/runtime support 缺失。**
 
-### 3.5 序列化与 ABI — **A-**
+### 3.5 序列化与 ABI — **A**
 
 当前 Molecule / ABI 现状：
 
@@ -183,7 +185,9 @@ Spora 特性支持目前已经进入本地 production gate 闭合状态。
 - entry witness ABI 已稳定
 - schema-backed params、cell-bound ABI、fixed byte params 都已有明确 lowering
 - 动态结构在真实 examples 与 acceptance 里已经大量使用
-- metadata schema 28 已输出 `molecule_schema_manifest`
+- metadata schema 29 已输出 `molecule_schema_manifest`
+- metadata schema 29 已输出 `constraints.runtime_errors`，runtime fail code 现在有稳定 code/name/hint registry
+- metadata schema 29 已输出结构化 CKB `hash_type_policy`、`dep_group_manifest`、`timelock_policy` 和 `capacity_evidence_contract`
 - bundled examples 已进入 schema-manifest release report gate
 
 泛化动态结构的边界现在按生产规则处理：支持的布局进入 manifest

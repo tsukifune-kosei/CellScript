@@ -10,7 +10,7 @@
 [![Targets: Spora and CKB](https://img.shields.io/badge/targets-Spora%20%7C%20CKB-2f6f4e.svg)](#target-profiles)
 [![Package Manager: Beta](https://img.shields.io/badge/package%20manager-beta-f0ad4e.svg)](#package-manager-beta)
 [![LSP: Production Tooling](https://img.shields.io/badge/LSP-production%20tooling-2f6f4e.svg)](#editor-support)
-[![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](docs/wiki/Home.md)
+[![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](https://github.com/tsukifune-kosei/CellScript/wiki)
 
 [English](README.md) | [中文](README_CH.md)
 
@@ -99,10 +99,10 @@ CellScript supports multiple Cell-compatible target profiles through
 | `ckb` | CKB mainnet artifacts | BLAKE2b/Molecule conventions, CKB syscall profile, no Spora extensions |
 | `portable-cell` | Source portability checks | Validates your code works on both targets — no artifacts produced |
 
-> The `ckb` profile is intentionally bounded in v1. It provides a
-> Bounded ckb-vm artifact profile for the admitted Cell subset that passes the
-> CKB portability gate; unsupported runtime/stateful shapes are rejected by
-> policy or kept as post-v1 work.
+> The `ckb` profile is production-gated for the bundled CellScript suite. It
+> emits raw CKB ckb-vm artifacts without Spora ABI trailers, uses CKB syscall
+> and Molecule/BLAKE2b conventions, and rejects unsupported shapes through
+> normal target-profile policy instead of portability shortcuts.
 
 ```bash
 cellc examples/token.cell --target riscv64-elf --target-profile spora
@@ -283,7 +283,7 @@ chain-specific VM:
 | Shared state | Explicit `shared` Cells | Implicit contract storage | Shared objects (some chains) | No shared Cell analogue |
 | Reentrancy | No callback-style reentrancy | Common risk surface | Lower by design | Lower predicate risk |
 | Scheduler metadata | Native for Spora | None | Not GhostDAG-oriented | Predicate-level |
-| CKB compatibility | Bounded ckb-vm artifact profile for the admitted Cell subset | Requires different VM | Requires different VM | Requires FuelVM |
+| CKB compatibility | Production-gated CKB ckb-vm artifact profile for the bundled Cell suite | Requires different VM | Requires different VM | Requires FuelVM |
 
 Compared with hand-written CKB or Spora scripts, CellScript keeps the same
 runtime substrate but replaces raw byte and syscall programming with typed Cell
@@ -297,17 +297,28 @@ CellScript includes production-grade local language tooling:
 
 - **In-process LSP** — diagnostics, completions, hover, go-to-definition,
   references, rename, formatting, and metadata-oriented code actions. The
-  compiler crate exposes an `LspServer`; `cellc lsp --stdio` provides a full
-  `tower-lsp` JSON-RPC transport.
+  compiler crate exposes an `LspServer`; `cellc --lsp` provides a full
+  `tower-lsp` JSON-RPC transport over stdio.
 - **VS Code extension** — syntax highlighting, snippets, on-save diagnostics,
   compiler-backed formatting, scratch compilation, metadata/constraints/production
   reports, target-profile selection, and status-bar feedback. It shells out to
   `cellc` (or a `cargo run` fallback), so behavior stays identical to CLI and
   CI gates.
 
-- [`editors/vscode-cellscript`](editors/vscode-cellscript)
-- [Dual-chain production plan](docs/CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md)
-- [Dual-chain package registry design](docs/CELLSCRIPT_DUAL_CHAIN_PACKAGE_REGISTRY_DESIGN.md)
+- [VS Code extension](https://github.com/tsukifune-kosei/CellScript/tree/main/editors/vscode-cellscript)
+- [Dual-chain production plan](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md)
+- [Dual-chain package registry design](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_DUAL_CHAIN_PACKAGE_REGISTRY_DESIGN.md)
+- [Runtime error codes](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_RUNTIME_ERROR_CODES.md)
+- [Entry witness ABI](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_ENTRY_WITNESS_ABI.md)
+- [Collections support matrix](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_COLLECTIONS_SUPPORT_MATRIX.md)
+- [Mutate and replacement outputs](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_MUTATE_AND_REPLACEMENT_OUTPUTS.md)
+- [CKB profile authoring](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_CKB_PROFILE_AUTHORING.md)
+- [CKB deployment manifest](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_CKB_DEPLOYMENT_MANIFEST.md)
+- [Capacity and builder contract](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_CAPACITY_AND_BUILDER_CONTRACT.md)
+- [Linear ownership](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_LINEAR_OWNERSHIP.md)
+- [Scheduler hints](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_SCHEDULER_HINTS.md)
+- [0.12 migration notes](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_12_MIGRATION_NOTES.md)
+- [0.12 release evidence](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_12_RELEASE_EVIDENCE.md)
 
 ---
 
@@ -404,7 +415,7 @@ CKB cycle/capacity estimates, and Spora v0 mass estimates.
 | Tool | Module | How it works |
 |---|---|---|
 | **CLI** | `cli/` + `main.rs` | `cellc` binary with all subcommands |
-| **LSP** | `lsp/` + `lsp/server.rs` | In-process `LspServer` + `tower-lsp` JSON-RPC over stdio (`cellc lsp --stdio`) |
+| **LSP** | `lsp/` + `lsp/server.rs` | In-process `LspServer` + `tower-lsp` JSON-RPC over stdio (`cellc --lsp`) |
 | **VS Code** | `editors/vscode-cellscript/` | Shells out to `cellc` for highlighting, diagnostics, reports |
 | **Formatter** | `fmt/` | Idempotent formatter for `cellc fmt` and LSP |
 | **Doc generator** | `docgen/` | HTML/Markdown/JSON docs from AST + metadata |
@@ -468,7 +479,7 @@ policy defaults:
 ```toml
 [package]
 name = "token"
-version = "0.11.0"
+version = "0.12.0"
 entry = "src/main.cell"
 source_roots = ["src"]
 
@@ -489,7 +500,7 @@ Command-line flags can tighten policy checks for a build or CI job.
 ### Package Manager Beta
 
 CellScript ships a beta package manager in `cellc`. It is intentionally local
-and fail-closed while the registry protocol is still post-v1 work.
+and fail-closed while remote registry resolution remains future protocol work.
 
 **Supported today:**
 
@@ -518,6 +529,11 @@ and fail-closed while the registry protocol is still post-v1 work.
 | `cellc check` | Type-check and lower without writing artifacts |
 | `cellc metadata` | Emit lowering, runtime, scheduler, source, and schema metadata |
 | `cellc constraints` | Emit profile-aware production constraints |
+| `cellc abi` | Explain `_cellscript_entry` witness ABI layout for an action or lock |
+| `cellc entry-witness` | Encode `_cellscript_entry` witness bytes |
+| `cellc scheduler-plan` | Consume Spora scheduler hints and report serial/conflict policy |
+| `cellc ckb-hash` | Compute CKB default Blake2b-256 hashes for builders and release evidence |
+| `cellc opt-report` | Compare O0..O3 artifact size and constraints status |
 | `cellc verify-artifact` | Verify an artifact against its metadata sidecar |
 | `cellc test` | Run compiler and policy tests (no trusted runtime execution) |
 | `cellc doc` | Generate API and audit documentation |

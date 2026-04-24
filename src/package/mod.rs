@@ -15,6 +15,8 @@ pub struct PackageManifest {
     #[serde(default)]
     pub policy: PolicyConfig,
     #[serde(default)]
+    pub deploy: DeployConfig,
+    #[serde(default)]
     pub metadata: HashMap<String, toml::Value>,
 }
 
@@ -111,6 +113,64 @@ pub struct PolicyConfig {
     pub deny_runtime_obligations: bool,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DeployConfig {
+    #[serde(default)]
+    pub spora: Option<SporaDeployConfig>,
+    #[serde(default)]
+    pub ckb: Option<CkbDeployConfig>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SporaDeployConfig {
+    #[serde(default)]
+    pub artifact_hash: Option<String>,
+    #[serde(default)]
+    pub schema_hash: Option<String>,
+    #[serde(default)]
+    pub abi_hash: Option<String>,
+    #[serde(default)]
+    pub code_cell: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CkbDeployConfig {
+    #[serde(default)]
+    pub artifact_hash: Option<String>,
+    #[serde(default)]
+    pub data_hash: Option<String>,
+    #[serde(default)]
+    pub out_point: Option<String>,
+    #[serde(default)]
+    pub dep_type: Option<String>,
+    #[serde(default)]
+    pub hash_type: Option<String>,
+    #[serde(default)]
+    pub type_id: Option<String>,
+    #[serde(default)]
+    pub cell_deps: Vec<CkbCellDepConfig>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CkbCellDepConfig {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub out_point: Option<String>,
+    #[serde(default)]
+    pub tx_hash: Option<String>,
+    #[serde(default)]
+    pub index: Option<u32>,
+    #[serde(default)]
+    pub dep_type: Option<String>,
+    #[serde(default)]
+    pub data_hash: Option<String>,
+    #[serde(default)]
+    pub hash_type: Option<String>,
+    #[serde(default)]
+    pub type_id: Option<String>,
+}
+
 pub struct PackageManager {
     root: PathBuf,
     resolved: HashMap<String, ResolvedPackage>,
@@ -193,6 +253,7 @@ impl PackageManager {
             dev_dependencies: HashMap::new(),
             build: BuildConfig::default(),
             policy: PolicyConfig::default(),
+            deploy: DeployConfig::default(),
             metadata: HashMap::new(),
         };
 
@@ -783,6 +844,7 @@ mod tests {
             dev_dependencies: HashMap::new(),
             build: BuildConfig::default(),
             policy: PolicyConfig::default(),
+            deploy: DeployConfig::default(),
             metadata: HashMap::new(),
         };
 

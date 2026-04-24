@@ -41,6 +41,7 @@ action add(x: u64, y: u64) -> u64 {
     assert!(metadata.contains("\"constraints\""));
     assert!(metadata.contains("\"entry_abi\""));
     assert!(metadata.contains("\"artifact\""));
+    assert!(metadata.contains("\"runtime_errors\""));
 }
 
 #[test]
@@ -76,8 +77,74 @@ action add(x: u64, y: u64) -> u64 {
     assert_eq!(constraints["entry_abi"][0]["entry_name"], "add");
     assert_eq!(constraints["entry_abi"][0]["register_slots_used"], 2);
     assert!(constraints["artifact"]["artifact_size_bytes"].as_u64().unwrap() > 0);
+    let runtime_errors = constraints["runtime_errors"].as_array().expect("runtime error registry should be emitted");
+    assert!(
+        runtime_errors.iter().any(|error| error["code"] == 14 && error["name"] == "mutate-transition-mismatch"),
+        "constraints output should expose stable runtime error names: {runtime_errors:?}"
+    );
     assert!(constraints["spora"]["estimated_storage_mass"].as_u64().unwrap() > 0);
     assert!(constraints["ckb"].is_null());
+}
+
+#[test]
+fn cellc_constraints_subcommand_surfaces_ckb_deployment_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+name = "demo"
+version = "0.1.0"
+
+[deploy.ckb]
+hash_type = "data2"
+
+[[deploy.ckb.cell_deps]]
+name = "secp256k1"
+out_point = "0x1111111111111111111111111111111111111111111111111111111111111111:0"
+dep_type = "dep_group"
+hash_type = "type"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src").join("main.cell"),
+        r#"
+module demo::main
+
+action main(value: u64) -> u64 {
+    return value
+}
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("constraints")
+        .arg("--target-profile")
+        .arg("ckb")
+        .arg("--entry-action")
+        .arg("main")
+        .output()
+        .unwrap();
+
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let constraints: serde_json::Value = serde_json::from_slice(&run.stdout).unwrap();
+    let ckb = &constraints["ckb"];
+    assert_eq!(constraints["target_profile"], "ckb");
+    assert_eq!(ckb["hash_type_policy"]["declared_hash_type"], "data2");
+    assert_eq!(ckb["hash_type_policy"]["status"], "manifest-declared-builder-must-match");
+    assert_eq!(ckb["dep_group_manifest"]["status"], "manifest-declares-dep-group-builder-must-expand-or-reference");
+    let dep = &ckb["dep_group_manifest"]["declared_cell_deps"][0];
+    assert_eq!(dep["name"], "secp256k1");
+    assert_eq!(dep["dep_type"], "dep_group");
+    assert_eq!(dep["tx_hash"], "0x1111111111111111111111111111111111111111111111111111111111111111");
+    assert_eq!(dep["index"], 0);
+    assert_eq!(dep["hash_type"], "type");
+    assert_eq!(ckb["capacity_evidence_contract"]["tx_size_measurement_required"], true);
 }
 
 #[test]
@@ -3348,6 +3415,176 @@ action main(amount: u64) -> u64 {
 }
 
 #[test]
+fn cellc_abi_subcommand_explains_entry_witness_layout() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+name = "demo"
+version = "0.1.0"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src").join("main.cell"),
+        r#"
+module demo::main
+
+struct Snapshot {
+    amount: u64,
+}
+
+action main(snapshot: Snapshot, amount: u64) -> u64 {
+    return amount
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("abi").arg("--action").arg("main").output().unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["status"], "ok");
+    assert_eq!(stdout["abi"], "cellscript-entry-witness-v1");
+    assert_eq!(stdout["entry_kind"], "action");
+    assert_eq!(stdout["entry"], "main");
+    assert_eq!(stdout["payload_params"][0], "snapshot");
+    assert_eq!(stdout["payload_params"][1], "amount");
+    assert_eq!(stdout["layout"]["abi_slots_used"], 3);
+    assert_eq!(stdout["layout"]["min_witness_bytes"], 20);
+    assert_eq!(stdout["params"][0]["name"], "snapshot");
+    assert_eq!(stdout["params"][0]["abi_kind"], "schema-pointer");
+    assert_eq!(stdout["params"][0]["witness_bytes"], 4);
+    assert_eq!(stdout["params"][0]["slot_start"], 0);
+    assert_eq!(stdout["params"][0]["slot_end"], 1);
+    assert_eq!(stdout["params"][1]["name"], "amount");
+    assert_eq!(stdout["params"][1]["abi_kind"], "scalar");
+    assert_eq!(stdout["params"][1]["witness_bytes"], 8);
+}
+
+#[test]
+fn cellc_scheduler_plan_consumes_shared_touch_hints() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+name = "demo"
+version = "0.1.0"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src").join("main.cell"),
+        r#"
+module demo::main
+
+shared Ledger has store {
+    balance: u64,
+}
+
+action credit(ledger: &mut Ledger, delta: u64) {
+    ledger.balance = ledger.balance + delta
+}
+
+action debit(ledger: &mut Ledger, delta: u64) {
+    ledger.balance = ledger.balance - delta
+}
+
+action read_only(value: u64) -> u64 {
+    return value
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("scheduler-plan")
+        .arg("--target-profile")
+        .arg("spora")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["status"], "ok");
+    assert_eq!(stdout["policy"], "cellscript-scheduler-hints-v1");
+    assert_eq!(stdout["action_count"], 3);
+    assert_eq!(stdout["conflict_count"], 1);
+    assert_eq!(stdout["conflicts"][0]["left"], "credit");
+    assert_eq!(stdout["conflicts"][0]["right"], "debit");
+    assert_eq!(stdout["conflicts"][0]["policy"], "must-not-run-in-parallel");
+    assert_eq!(stdout["serial_required_actions"][0], "credit");
+    assert_eq!(stdout["serial_required_actions"][1], "debit");
+    assert!(stdout["estimated_cycles"]["total"].as_u64().unwrap() > 0);
+    let read_only = stdout["actions"].as_array().unwrap().iter().find(|action| action["action"] == "read_only").unwrap();
+    assert_eq!(read_only["admission"], "parallel-candidate");
+}
+
+#[test]
+fn cellc_ckb_hash_emits_default_blake2b_vector() {
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc")).arg("ckb-hash").arg("--json").output().unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["status"], "ok");
+    assert_eq!(stdout["algorithm"], "blake2b-256");
+    assert_eq!(stdout["personalization"], "ckb-default-hash");
+    assert_eq!(stdout["input_bytes"], 0);
+    assert_eq!(stdout["hash"], "44f4c69744d5f8c55d642062949dcae49bc4e7ef43d388c5a12f42b5633d163e");
+
+    let text = Command::new(env!("CARGO_BIN_EXE_cellc")).arg("ckb-hash").arg("--hex").arg("00").output().unwrap();
+    assert!(text.status.success(), "stderr: {}", String::from_utf8_lossy(&text.stderr));
+    assert_eq!(String::from_utf8_lossy(&text.stdout).trim().len(), 64);
+}
+
+#[test]
+fn cellc_opt_report_compares_all_optimization_levels() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let source = root.join("main.cell");
+    std::fs::write(
+        &source,
+        r#"
+module demo::main
+
+action main(value: u64) -> u64 {
+    let doubled = value + value
+    return doubled
+}
+"#,
+    )
+    .unwrap();
+
+    let output =
+        Command::new(env!("CARGO_BIN_EXE_cellc")).arg("opt-report").arg(&source).arg("--target").arg("riscv64-asm").output().unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["status"], "ok");
+    assert_eq!(stdout["policy"], "cellscript-opt-report-v1");
+    assert_eq!(stdout["baseline_opt_level"], 0);
+    let rows = stdout["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 4);
+    for (index, row) in rows.iter().enumerate() {
+        assert_eq!(row["opt_level"], index as u64);
+        assert_eq!(row["artifact_format"], "RISC-V assembly");
+        assert_eq!(row["constraints_status"], "pass");
+        assert!(row["artifact_size_bytes"].as_u64().unwrap() > 0);
+        assert!(row["artifact_size_delta_from_o0"].is_i64());
+    }
+}
+
+#[test]
 fn cellc_entry_witness_subcommand_encodes_schema_backed_params() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
@@ -3396,6 +3633,48 @@ action main(snapshot: Snapshot, amount: u64) -> u64 {
     assert_eq!(stdout["witness_hex"], "43534152477631000800000005000000000000000500000000000000");
     assert_eq!(stdout["payload_params"][0], "snapshot");
     assert_eq!(stdout["payload_params"][1], "amount");
+}
+
+#[test]
+fn cellc_entry_witness_subcommand_rejects_wrong_width_fixed_bytes() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+name = "demo"
+version = "0.1.0"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src").join("main.cell"),
+        r#"
+module demo::main
+
+action owned(owner: Address) -> u64 {
+    return 0
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("entry-witness")
+        .arg("--action")
+        .arg("owned")
+        .arg("--arg")
+        .arg("0x010203")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "stdout: {}", String::from_utf8_lossy(&output.stdout));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("parameter 'owner' expects 32 byte(s), got 3"), "unexpected stderr: {}", stderr);
 }
 
 #[test]

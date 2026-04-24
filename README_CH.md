@@ -10,7 +10,7 @@
 [![Targets: Spora and CKB](https://img.shields.io/badge/targets-Spora%20%7C%20CKB-2f6f4e.svg)](#target-profiles)
 [![Package Manager: Beta](https://img.shields.io/badge/package%20manager-beta-f0ad4e.svg)](#包管理器-beta)
 [![LSP: Production Tooling](https://img.shields.io/badge/LSP-production%20tooling-2f6f4e.svg)](#编辑器支持)
-[![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](docs/wiki/Home.md)
+[![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](https://github.com/tsukifune-kosei/CellScript/wiki)
 
 [English](README.md) | [中文](README_CH.md)
 
@@ -94,8 +94,10 @@ CellScript 通过 `--target-profile` 支持多个 Cell 兼容目标：
 | `ckb` | CKB mainnet 产物 | BLAKE2b/Molecule 约定、CKB syscall profile、无 Spora 扩展 |
 | `portable-cell` | 源码可移植性检查 | 验证代码在两个目标上都能工作——不生成产物 |
 
-> v1 的 `ckb` profile 是有边界的 artifact profile。它对受支持 Cell 子集提供有边界的 ckb-vm artifact profile，
-> 只覆盖通过 CKB portability gate 的源码；未支持的 runtime/stateful 形状会被策略拒绝，或保留为 post-v1 工作。
+> `ckb` profile 已按 bundled CellScript suite 进入 production-gated 状态。
+> 它输出不带 Spora ABI trailer 的原生 CKB ckb-vm artifact，使用 CKB syscall
+> 与 Molecule/BLAKE2b 约定，并通过正常 target-profile policy 拒绝未支持形状，
+> 不依赖 portability shortcut。
 
 ```bash
 cellc examples/token.cell --target riscv64-elf --target-profile spora
@@ -271,7 +273,7 @@ artifact 设计——而不是围绕账户存储或单链专用 VM：
 | 共享状态 | 显式 `shared` Cells | 隐式 contract storage | 部分 Move 链的 shared objects | 无 shared Cell 对应物 |
 | 重入 | 无 callback 风格重入 | 常见风险面 | 设计上较低 | predicate 风险较低 |
 | 调度 metadata | Spora 原生支持 | 无 | 非 GhostDAG 导向 | predicate 级 |
-| CKB 兼容性 | 对受支持 Cell 子集提供有边界的 ckb-vm artifact profile | 需要不同 VM | 需要不同 VM | 需要 FuelVM |
+| CKB 兼容性 | 面向 bundled Cell suite 的 production-gated CKB ckb-vm artifact profile | 需要不同 VM | 需要不同 VM | 需要 FuelVM |
 
 与手写 CKB 或 Spora 脚本相比，CellScript 保留同一个 runtime substrate，
 但用类型化 Cell 操作、线性检查、schema metadata 和可被策略验证的产物取代
@@ -285,15 +287,26 @@ CellScript 包含生产级本地语言工具：
 
 - **In-process LSP** — 诊断、补全、hover、go-to-definition、引用、重命名、
   格式化和 metadata-oriented code actions。编译器 crate 暴露 `LspServer`；
-  `cellc lsp --stdio` 提供完整的 `tower-lsp` JSON-RPC 传输。
+  `cellc --lsp` 提供完整的 `tower-lsp` JSON-RPC stdio 传输。
 - **VS Code 扩展** — 语法高亮、snippets、on-save 诊断、compiler-backed
   格式化、scratch compile、metadata/constraints/production report、
   target-profile 选择和状态栏反馈。它调用 `cellc`（或 `cargo run` 回退），
   所以编辑器行为和 CLI/CI 保持一致。
 
-- [`editors/vscode-cellscript`](editors/vscode-cellscript)
-- [双链生产计划](docs/CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md)
-- [双链包 registry 设计](docs/CELLSCRIPT_DUAL_CHAIN_PACKAGE_REGISTRY_DESIGN.md)
+- [VS Code 扩展](https://github.com/tsukifune-kosei/CellScript/tree/main/editors/vscode-cellscript)
+- [双链生产计划](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md)
+- [双链包 registry 设计](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_DUAL_CHAIN_PACKAGE_REGISTRY_DESIGN.md)
+- [运行时错误码](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_RUNTIME_ERROR_CODES.md)
+- [Entry witness ABI](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_ENTRY_WITNESS_ABI.md)
+- [Collections 支持矩阵](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_COLLECTIONS_SUPPORT_MATRIX.md)
+- [Mutate 与 replacement output](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_MUTATE_AND_REPLACEMENT_OUTPUTS.md)
+- [CKB profile authoring](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_CKB_PROFILE_AUTHORING.md)
+- [CKB deployment manifest](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_CKB_DEPLOYMENT_MANIFEST.md)
+- [Capacity 与 builder contract](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_CAPACITY_AND_BUILDER_CONTRACT.md)
+- [线性所有权](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_LINEAR_OWNERSHIP.md)
+- [Scheduler hints](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_SCHEDULER_HINTS.md)
+- [0.12 migration notes](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_12_MIGRATION_NOTES.md)
+- [0.12 release evidence](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_12_RELEASE_EVIDENCE.md)
 
 ---
 
@@ -383,7 +396,7 @@ mass 估算。
 | 工具 | 模块 | 工作方式 |
 |---|---|---|
 | **CLI** | `cli/` + `main.rs` | `cellc` 二进制，包含所有子命令 |
-| **LSP** | `lsp/` + `lsp/server.rs` | In-process `LspServer` + `tower-lsp` JSON-RPC over stdio（`cellc lsp --stdio`） |
+| **LSP** | `lsp/` + `lsp/server.rs` | In-process `LspServer` + `tower-lsp` JSON-RPC over stdio（`cellc --lsp`） |
 | **VS Code** | `editors/vscode-cellscript/` | 调用 `cellc` 实现高亮、诊断、报告 |
 | **Formatter** | `fmt/` | 幂等格式化器，服务于 `cellc fmt` 和 LSP |
 | **Doc 生成器** | `docgen/` | 从 AST + metadata 生成 HTML/Markdown/JSON 文档 |
@@ -445,7 +458,7 @@ IR 模块输出审计报告；其他入口返回
 ```toml
 [package]
 name = "token"
-version = "0.11.0"
+version = "0.12.0"
 entry = "src/main.cell"
 source_roots = ["src"]
 
@@ -466,7 +479,7 @@ deny_runtime_obligations = false
 ### 包管理器 Beta
 
 CellScript 在 `cellc` 中提供 beta 包管理器。当前设计刻意保持本地优先和
-fail-closed；registry protocol 仍属于 post-v1 工作。
+fail-closed；远端 registry resolution 仍属于后续协议工作。
 
 **当前支持：**
 
@@ -494,6 +507,11 @@ fail-closed；registry protocol 仍属于 post-v1 工作。
 | `cellc check` | 类型检查和 lowering，不写入 artifact |
 | `cellc metadata` | 输出 lowering、runtime、scheduler、source 和 schema metadata |
 | `cellc constraints` | 输出 profile-aware 生产约束 |
+| `cellc abi` | 说明 action 或 lock 的 `_cellscript_entry` witness ABI 布局 |
+| `cellc entry-witness` | 编码 `_cellscript_entry` witness 字节 |
+| `cellc scheduler-plan` | 消费 Spora scheduler hints，输出串行/冲突策略报告 |
+| `cellc ckb-hash` | 为 builder 和 release evidence 计算 CKB 默认 Blake2b-256 hash |
+| `cellc opt-report` | 对比 O0..O3 的 artifact size 和 constraints status |
 | `cellc verify-artifact` | 用 metadata sidecar 校验 artifact |
 | `cellc test` | 运行编译器/policy 测试（非可信 runtime 执行） |
 | `cellc doc` | 生成 API 和审计文档 |
