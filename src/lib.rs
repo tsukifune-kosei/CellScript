@@ -8901,10 +8901,17 @@ fn body_fail_closed_runtime_features(
                 {
                     features.insert("fixed-byte-comparison".to_string());
                 }
-                ir::IrInstruction::Index { dest, .. }
+                ir::IrInstruction::Index { dest, arr, idx }
                     if !prelude_availability.aggregate_pointer_vars.contains_key(&dest.id)
                         && !prelude_availability.fixed_value_vars.contains(&dest.id)
-                        && !prelude_availability.scalar_vars.contains(&dest.id) =>
+                        && !prelude_availability.scalar_vars.contains(&dest.id)
+                        && !metadata_stack_collection_index_is_runtime_supported(
+                            dest,
+                            arr,
+                            idx,
+                            &prelude_availability,
+                            type_layouts,
+                        ) =>
                 {
                     features.insert("index-access".to_string());
                 }
@@ -8920,13 +8927,22 @@ fn body_fail_closed_runtime_features(
                     }
                 }
                 ir::IrInstruction::CollectionNew { dest, .. } => {
-                    if !metadata_collection_new_is_verified_create_value(dest.id, body, type_layouts, &prelude_availability) {
+                    if !prelude_availability.stack_collection_vars.contains(&dest.id)
+                        && !metadata_collection_new_is_verified_create_value(dest.id, body, type_layouts, &prelude_availability)
+                    {
                         features.insert("collection-new".to_string());
                     }
                 }
                 ir::IrInstruction::CollectionPush { collection, value } => {
                     if !metadata_collection_push_is_verified_append(collection, value, body, type_layouts)
-                        && !metadata_collection_mutation_is_verified_create_vector(collection, value, &prelude_availability)
+                        && !metadata_collection_mutation_is_verified_create_vector(
+                            collection,
+                            value,
+                            body,
+                            type_layouts,
+                            &prelude_availability,
+                        )
+                        && !metadata_stack_collection_push_is_runtime_supported(collection, value, &prelude_availability)
                     {
                         features.insert("collection-push".to_string());
                     }
@@ -8935,7 +8951,13 @@ fn body_fail_closed_runtime_features(
                     }
                 }
                 ir::IrInstruction::CollectionExtend { collection, slice } => {
-                    if !metadata_collection_mutation_is_verified_create_vector(collection, slice, &prelude_availability) {
+                    if !metadata_collection_mutation_is_verified_create_vector(
+                        collection,
+                        slice,
+                        body,
+                        type_layouts,
+                        &prelude_availability,
+                    ) {
                         features.insert("collection-extend".to_string());
                     }
                     if ir_operand_is_cell_backed_collection(slice, cell_type_kinds) {
@@ -9029,6 +9051,7 @@ struct MetadataPreludeAvailability {
     fixed_value_vars: HashSet<usize>,
     schema_pointer_vars: HashSet<usize>,
     empty_molecule_vector_vars: HashSet<usize>,
+    stack_collection_vars: HashSet<usize>,
     constructed_byte_vector_vars: HashMap<usize, usize>,
     constructed_byte_vector_roots: HashMap<usize, usize>,
     u64_value_vars: HashSet<usize>,
@@ -9107,6 +9130,7 @@ fn metadata_prelude_availability(
     }
 
     let mut named_constructed_vectors = HashMap::<String, usize>::new();
+    let mut named_stack_collections = HashMap::<String, usize>::new();
     let mut loaded_constructed_vector_names = HashMap::<usize, String>::new();
     let mut named_fixed_vars = params
         .iter()
@@ -9122,6 +9146,9 @@ fn metadata_prelude_availability(
         for instruction in &block.instructions {
             match instruction {
                 ir::IrInstruction::StoreVar { name, src: ir::IrOperand::Var(src) } => {
+                    if availability.stack_collection_vars.contains(&src.id) {
+                        named_stack_collections.insert(name.clone(), src.id);
+                    }
                     if availability.constructed_byte_vector_vars.contains_key(&src.id) {
                         named_constructed_vectors.insert(name.clone(), src.id);
                     }
@@ -9133,6 +9160,17 @@ fn metadata_prelude_availability(
                     }
                 }
                 ir::IrInstruction::LoadVar { dest, name } => {
+                    if let Some(source_id) = named_stack_collections.get(name).copied() {
+                        availability.stack_collection_vars.insert(dest.id);
+                        named_stack_collections.insert(name.clone(), dest.id);
+                        if let Some(byte_count) = availability.constructed_byte_vector_vars.get(&source_id).copied() {
+                            availability.constructed_byte_vector_vars.insert(dest.id, byte_count);
+                            if let Some(root_id) = availability.constructed_byte_vector_roots.get(&source_id).copied() {
+                                availability.constructed_byte_vector_roots.insert(dest.id, root_id);
+                            }
+                            loaded_constructed_vector_names.insert(dest.id, name.clone());
+                        }
+                    }
                     if let Some(source_id) = named_constructed_vectors.get(name).copied() {
                         if let Some(byte_count) = availability.constructed_byte_vector_vars.get(&source_id).copied() {
                             availability.constructed_byte_vector_vars.insert(dest.id, byte_count);
@@ -9176,6 +9214,7 @@ fn metadata_prelude_availability(
                     availability.created_output_vars.insert(dest.id, output_index);
                 }
                 ir::IrInstruction::CollectionNew { dest, .. } => {
+                    availability.stack_collection_vars.insert(dest.id);
                     availability.empty_molecule_vector_vars.insert(dest.id);
                     availability.constructed_byte_vector_vars.insert(dest.id, 0);
                     availability.constructed_byte_vector_roots.insert(dest.id, dest.id);
@@ -9286,6 +9325,19 @@ fn metadata_prelude_availability(
                                         .insert(dest.id, MetadataAggregatePointerSource { ty: element_ty.clone() });
                                 }
                             }
+                        } else if availability.stack_collection_vars.contains(&arr.id)
+                            && metadata_molecule_vector_element_fixed_width(&arr.ty, type_layouts).is_some()
+                            && (const_usize_operand(idx).is_some() || metadata_u64_operand_available(idx, &availability))
+                        {
+                            let fixed_size = metadata_ir_type_fixed_width(&dest.ty, type_layouts);
+                            if metadata_fixed_scalar_width(&dest.ty, fixed_size).is_some() {
+                                availability.scalar_vars.insert(dest.id);
+                                availability.fixed_value_vars.insert(dest.id);
+                                if dest.ty == ir::IrType::U64 {
+                                    availability.u64_value_vars.insert(dest.id);
+                                    availability.u64_operand_vars.insert(dest.id);
+                                }
+                            }
                         }
                     }
                 }
@@ -9339,6 +9391,9 @@ fn metadata_prelude_availability(
                         if availability.dynamic_collection_vars.contains(&src_var.id) && dest.ty == src_var.ty {
                             availability.dynamic_collection_vars.insert(dest.id);
                         }
+                        if availability.stack_collection_vars.contains(&src_var.id) && dest.ty == src_var.ty {
+                            availability.stack_collection_vars.insert(dest.id);
+                        }
                         if availability.empty_molecule_vector_vars.contains(&src_var.id) && dest.ty == src_var.ty {
                             availability.empty_molecule_vector_vars.insert(dest.id);
                         }
@@ -9360,6 +9415,9 @@ fn metadata_prelude_availability(
                     }
                     if availability.dynamic_collection_vars.contains(&src_var.id) && dest.ty == src_var.ty {
                         availability.dynamic_collection_vars.insert(dest.id);
+                    }
+                    if availability.stack_collection_vars.contains(&src_var.id) && dest.ty == src_var.ty {
+                        availability.stack_collection_vars.insert(dest.id);
                     }
                     if availability.empty_molecule_vector_vars.contains(&src_var.id) && dest.ty == src_var.ty {
                         availability.empty_molecule_vector_vars.insert(dest.id);
@@ -9513,12 +9571,18 @@ fn metadata_collection_new_is_verified_create_value(
 fn metadata_collection_mutation_is_verified_create_vector(
     collection: &ir::IrOperand,
     value: &ir::IrOperand,
+    body: &ir::IrBody,
+    type_layouts: &MetadataTypeLayouts,
     availability: &MetadataPreludeAvailability,
 ) -> bool {
     let ir::IrOperand::Var(collection) = collection else {
         return false;
     };
     if !availability.constructed_byte_vector_vars.contains_key(&collection.id) {
+        return false;
+    }
+    let root_id = availability.constructed_byte_vector_roots.get(&collection.id).copied().unwrap_or(collection.id);
+    if !metadata_collection_new_is_verified_create_value(root_id, body, type_layouts, availability) {
         return false;
     }
     match value {
@@ -9628,8 +9692,48 @@ fn metadata_u64_operand_available(operand: &ir::IrOperand, availability: &Metada
 
 fn metadata_dynamic_length_available(operand: &ir::IrOperand, availability: &MetadataPreludeAvailability) -> bool {
     match operand {
-        ir::IrOperand::Var(var) => availability.dynamic_collection_vars.contains(&var.id),
+        ir::IrOperand::Var(var) => {
+            availability.dynamic_collection_vars.contains(&var.id) || availability.stack_collection_vars.contains(&var.id)
+        }
         _ => false,
+    }
+}
+
+fn metadata_stack_collection_push_is_runtime_supported(
+    collection: &ir::IrOperand,
+    value: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+) -> bool {
+    let ir::IrOperand::Var(collection) = collection else {
+        return false;
+    };
+    availability.stack_collection_vars.contains(&collection.id) && metadata_runtime_collection_scalar_width(value).is_some()
+}
+
+fn metadata_stack_collection_index_is_runtime_supported(
+    dest: &ir::IrVar,
+    arr: &ir::IrOperand,
+    idx: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
+    let ir::IrOperand::Var(arr) = arr else {
+        return false;
+    };
+    availability.stack_collection_vars.contains(&arr.id)
+        && metadata_molecule_vector_element_fixed_width(&arr.ty, type_layouts)
+            .is_some_and(|width| metadata_fixed_scalar_width(&dest.ty, Some(width)).is_some())
+        && (const_usize_operand(idx).is_some() || metadata_u64_operand_available(idx, availability))
+}
+
+fn metadata_runtime_collection_scalar_width(operand: &ir::IrOperand) -> Option<usize> {
+    match operand {
+        ir::IrOperand::Var(var) => metadata_fixed_scalar_width(&var.ty, type_static_length(&var.ty)),
+        ir::IrOperand::Const(ir::IrConst::Bool(_) | ir::IrConst::U8(_)) => Some(1),
+        ir::IrOperand::Const(ir::IrConst::U16(_)) => Some(2),
+        ir::IrOperand::Const(ir::IrConst::U32(_)) => Some(4),
+        ir::IrOperand::Const(ir::IrConst::U64(_)) => Some(8),
+        _ => None,
     }
 }
 
@@ -14419,6 +14523,17 @@ action create_group(owner: Address, seed: Hash) -> Group {
 }
 "#;
 
+    const STACK_VEC_RUNTIME_PROGRAM: &str = r#"
+module test
+
+action stack_vec_sum() -> u64 {
+    let mut values = Vec::new()
+    values.push(7)
+    values.push(9)
+    return values.len() + values[1]
+}
+"#;
+
     const CELL_BACKED_VEC_PROGRAM: &str = r#"
 module test
 
@@ -16916,6 +17031,45 @@ action grant(config: read_ref Config, token: Token) -> Grant {
         assert!(!asm.contains("# call push"), "push() leaked through generic call path:\n{}", asm);
         assert!(!asm.contains("# call extend_from_slice"), "extend_from_slice() leaked through generic call path:\n{}", asm);
         assert!(!asm.contains("# call len"), "len() leaked through generic call path:\n{}", asm);
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_scalar_runtime_push_len_index() {
+        let result = compile(STACK_VEC_RUNTIME_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection push element_size=8"),
+            "scalar Vec<u64> push should execute against the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection length"),
+            "scalar Vec<u64> len should read the stack collection length word:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection index element_size=8"),
+            "scalar Vec<u64> index should read from the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection push is not needed for verifier execution")
+                && !asm.contains("# cellscript abi: fail closed because dynamic length is not available")
+                && !asm.contains("# cellscript abi: fail closed because element layout is not statically computable"),
+            "stack-backed scalar Vec runtime should not hit the old fail-closed collection paths:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_sum").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
+            "stack-backed scalar Vec runtime should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
     }
 
     #[test]

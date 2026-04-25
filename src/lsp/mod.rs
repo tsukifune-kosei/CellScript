@@ -2111,16 +2111,23 @@ action update(amount: u64) -> u64 {
         let source = r#"
 module metadata_action
 
-action use_collection() -> u64 {
-    let items = Vec::new()
-    items.push(1)
-    return items[0]
+resource NFT {
+    token_id: u64,
+}
+
+action use_collection() -> Vec<NFT> {
+    let mut items = Vec::new()
+    let nft = create NFT {
+        token_id: 1,
+    }
+    items.push(nft)
+    return items
 }
 "#;
         server.open_document(uri.clone(), source.to_string());
 
         let actions =
-            server.code_action(&uri, Range { start: Position { line: 3, character: 0 }, end: Position { line: 3, character: 30 } });
+            server.code_action(&uri, Range { start: Position { line: 0, character: 0 }, end: Position { line: 20, character: 0 } });
         assert!(actions.iter().any(|action| action.title.contains("cellc metadata")));
         assert!(actions.iter().any(|action| action.title.contains("riscv64-asm")));
         assert!(actions.iter().all(|action| action.edit.is_none()));

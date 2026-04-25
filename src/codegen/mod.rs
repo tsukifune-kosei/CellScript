@@ -249,6 +249,17 @@ fn constructed_byte_vector_part_width(operand: &IrOperand) -> Option<usize> {
     })
 }
 
+fn runtime_collection_scalar_width(operand: &IrOperand) -> Option<usize> {
+    match operand {
+        IrOperand::Var(var) => fixed_scalar_width(&var.ty, type_static_length(&var.ty)),
+        IrOperand::Const(IrConst::Bool(_)) | IrOperand::Const(IrConst::U8(_)) => Some(1),
+        IrOperand::Const(IrConst::U16(_)) => Some(2),
+        IrOperand::Const(IrConst::U32(_)) => Some(4),
+        IrOperand::Const(IrConst::U64(_)) => Some(8),
+        _ => None,
+    }
+}
+
 fn collect_pure_const_returns(ir: &IrModule) -> HashMap<String, IrConst> {
     ir.items
         .iter()
@@ -478,6 +489,8 @@ pub struct CodeGenerator {
     dynamic_value_size_offsets: HashMap<usize, usize>,
     /// Empty collection temporaries that can be verified as empty Molecule vectors.
     empty_molecule_vector_vars: BTreeSet<usize>,
+    /// Stack-backed local collection variables whose length word and buffer are emitted in this frame.
+    stack_collection_vars: BTreeSet<usize>,
     /// Locally constructed `Vec<u8>` bytes keyed by collection variable id.
     constructed_byte_vectors: HashMap<usize, Vec<IrOperand>>,
     /// Collection mutation value ids that are covered by create-output vector verification.
@@ -560,6 +573,7 @@ impl CodeGenerator {
             cell_buffer_size_offsets: HashMap::new(),
             dynamic_value_size_offsets: HashMap::new(),
             empty_molecule_vector_vars: BTreeSet::new(),
+            stack_collection_vars: BTreeSet::new(),
             constructed_byte_vectors: HashMap::new(),
             verified_collection_construction_values: BTreeSet::new(),
             output_type_hash_sources: HashMap::new(),
@@ -1178,6 +1192,7 @@ impl CodeGenerator {
         self.operation_output_indices.clear();
         self.verified_operation_outputs.clear();
         self.verified_collection_push_values.clear();
+        self.stack_collection_vars.clear();
         self.constructed_byte_vectors.clear();
         self.verified_collection_construction_values.clear();
         self.param_vars.clear();
@@ -1226,6 +1241,7 @@ impl CodeGenerator {
         self.operation_output_indices.clear();
         self.verified_operation_outputs.clear();
         self.verified_collection_push_values.clear();
+        self.stack_collection_vars.clear();
         self.constructed_byte_vectors.clear();
         self.verified_collection_construction_values.clear();
         self.param_vars.clear();
@@ -1279,6 +1295,7 @@ impl CodeGenerator {
         self.operation_output_indices.clear();
         self.verified_operation_outputs.clear();
         self.verified_collection_push_values.clear();
+        self.stack_collection_vars.clear();
         self.constructed_byte_vectors.clear();
         self.verified_collection_construction_values.clear();
         self.param_vars.clear();
@@ -1597,19 +1614,33 @@ impl CodeGenerator {
     }
 
     fn set_constructed_byte_vectors(&mut self, body: &IrBody) {
+        self.stack_collection_vars.clear();
         self.constructed_byte_vectors.clear();
         self.verified_collection_construction_values.clear();
         let mut named_vectors = HashMap::<String, usize>::new();
+        let mut named_stack_collections = HashMap::<String, usize>::new();
         let mut loaded_vector_names = HashMap::<usize, String>::new();
         for block in &body.blocks {
             for instruction in &block.instructions {
                 match instruction {
                     IrInstruction::StoreVar { name, src: IrOperand::Var(src) } => {
+                        if self.stack_collection_vars.contains(&src.id) {
+                            named_stack_collections.insert(name.clone(), src.id);
+                        }
                         if self.constructed_byte_vectors.contains_key(&src.id) {
                             named_vectors.insert(name.clone(), src.id);
                         }
                     }
                     IrInstruction::LoadVar { dest, name } => {
+                        if let Some(source_id) = named_stack_collections.get(name).copied() {
+                            self.stack_collection_vars.insert(dest.id);
+                            named_stack_collections.insert(name.clone(), dest.id);
+                            if let Some(bytes) = self.constructed_byte_vectors.get(&source_id).cloned() {
+                                self.constructed_byte_vectors.insert(dest.id, bytes);
+                                loaded_vector_names.insert(dest.id, name.clone());
+                            }
+                            continue;
+                        }
                         if let Some(source_id) = named_vectors.get(name).copied() {
                             if let Some(bytes) = self.constructed_byte_vectors.get(&source_id).cloned() {
                                 self.constructed_byte_vectors.insert(dest.id, bytes);
@@ -1618,6 +1649,7 @@ impl CodeGenerator {
                         }
                     }
                     IrInstruction::CollectionNew { dest, .. } => {
+                        self.stack_collection_vars.insert(dest.id);
                         self.constructed_byte_vectors.insert(dest.id, Vec::new());
                     }
                     IrInstruction::CollectionPush { collection: IrOperand::Var(collection), value } => {
@@ -1659,6 +1691,9 @@ impl CodeGenerator {
                     }
                     IrInstruction::Move { dest, src: IrOperand::Var(src) }
                     | IrInstruction::Unary { dest, op: UnaryOp::Ref | UnaryOp::Deref, operand: IrOperand::Var(src) } => {
+                        if self.stack_collection_vars.contains(&src.id) {
+                            self.stack_collection_vars.insert(dest.id);
+                        }
                         if let Some(bytes) = self.constructed_byte_vectors.get(&src.id).cloned() {
                             self.constructed_byte_vectors.insert(dest.id, bytes);
                         }
@@ -5837,6 +5872,9 @@ impl CodeGenerator {
         if self.emit_dynamic_molecule_vector_index(dest, arr, idx) {
             return Ok(());
         }
+        if self.emit_stack_collection_index(dest, arr, idx) {
+            return Ok(());
+        }
         if self.emit_dynamic_index_access(dest, arr, idx) {
             return Ok(());
         }
@@ -5947,6 +5985,41 @@ impl CodeGenerator {
         true
     }
 
+    fn emit_stack_collection_index(&mut self, dest: &IrVar, arr: &IrOperand, idx: &IrOperand) -> bool {
+        let IrOperand::Var(arr_var) = arr else {
+            return false;
+        };
+        if !self.stack_collection_vars.contains(&arr_var.id) {
+            return false;
+        }
+        let Some(element_width) = molecule_vector_element_fixed_width(&arr_var.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
+        else {
+            return false;
+        };
+        if fixed_scalar_width(&dest.ty, Some(element_width)).is_none() {
+            return false;
+        }
+
+        self.emit("# index access");
+        self.emit(format!("# cellscript abi: stack collection index element_size={}", element_width));
+        self.emit(format!("ld t4, {}(sp)", arr_var.id * 8));
+        self.emit("ld t0, -8(t4)");
+        self.emit_operand_to_register("t1", idx);
+
+        let bounds_ok = self.fresh_label("stack_collection_index_bounds_ok");
+        self.emit("sltu t2, t1, t0");
+        self.emit(format!("bnez t2, {}", bounds_ok));
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        self.emit_label(&bounds_ok);
+
+        self.emit(format!("li t2, {}", element_width));
+        self.emit("mul t1, t1, t2");
+        self.emit("add t4, t4, t1");
+        self.emit_unaligned_scalar_load("t4", "t0", "t2", 0, element_width);
+        self.emit(format!("sd t0, {}(sp)", dest.id * 8));
+        true
+    }
+
     /// Dynamic index access: compute element offset from array type layout.
     /// Handles cases where the index is not a constant or the array is not in
     /// aggregate_pointer_sources, but the element size is still statically known.
@@ -6013,7 +6086,7 @@ impl CodeGenerator {
         self.emit("# length");
         if let Some(static_len) = self.static_length(operand) {
             self.emit(format!("li t0, {}", static_len));
-        } else if self.emit_dynamic_molecule_vector_length(operand) {
+        } else if self.emit_stack_collection_length(operand) || self.emit_dynamic_molecule_vector_length(operand) {
         } else if let Some(size_offset) = self.dynamic_length_from_size_offset(operand) {
             // For schema-backed or fixed-byte params, the actual size word is already
             // stored at the size offset; load it directly.
@@ -6026,6 +6099,19 @@ impl CodeGenerator {
         }
         self.emit(format!("sd t0, {}(sp)", dest.id * 8));
         Ok(())
+    }
+
+    fn emit_stack_collection_length(&mut self, operand: &IrOperand) -> bool {
+        let IrOperand::Var(var) = operand else {
+            return false;
+        };
+        if !self.stack_collection_vars.contains(&var.id) {
+            return false;
+        }
+        self.emit("# cellscript abi: stack collection length");
+        self.emit(format!("ld t4, {}(sp)", var.id * 8));
+        self.emit("ld t0, -8(t4)");
+        true
     }
 
     fn emit_dynamic_molecule_vector_length(&mut self, operand: &IrOperand) -> bool {
@@ -6189,6 +6275,7 @@ impl CodeGenerator {
         self.emit_sp_addi("t0", buffer_offset);
         self.emit(format!("sd t0, {}(sp)", dest.id * 8));
         self.empty_molecule_vector_vars.insert(dest.id);
+        self.stack_collection_vars.insert(dest.id);
         self.next_collection_slot += 1;
         Ok(())
     }
@@ -6205,6 +6292,9 @@ impl CodeGenerator {
             self.emit("# cellscript abi: collection push is covered by create-output vector verifier");
             return Ok(());
         }
+        if self.emit_stack_collection_push(collection, value) {
+            return Ok(());
+        }
         // In the verifier context, collection push is used for building output data.
         // The verifier doesn't need to actually build the data; it needs to verify
         // that the output cell data matches expectations. The collection operations
@@ -6215,6 +6305,44 @@ impl CodeGenerator {
         self.emit("# cellscript abi: if this path is reached, the source program uses dynamic collections");
         self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
         Ok(())
+    }
+
+    fn emit_stack_collection_push(&mut self, collection: &IrOperand, value: &IrOperand) -> bool {
+        let IrOperand::Var(collection) = collection else {
+            return false;
+        };
+        if !self.stack_collection_vars.contains(&collection.id) {
+            return false;
+        }
+        let Some(width) = runtime_collection_scalar_width(value) else {
+            return false;
+        };
+
+        self.emit(format!("# cellscript abi: stack collection push element_size={}", width));
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("ld t0, -8(t4)");
+        self.emit(format!("li t1, {}", width));
+        self.emit("mul t2, t0, t1");
+        self.emit(format!("li t3, {}", RUNTIME_COLLECTION_BUFFER_SIZE));
+        self.emit("sub t5, t3, t2");
+        self.emit("sltu t5, t5, t1");
+        let capacity_ok = self.fresh_label("stack_collection_push_capacity_ok");
+        self.emit(format!("beqz t5, {}", capacity_ok));
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        self.emit_label(&capacity_ok);
+
+        self.emit("add t5, t4, t2");
+        self.emit_operand_to_register("t1", value);
+        match width {
+            1 => self.emit("sb t1, 0(t5)"),
+            2 => self.emit("sh t1, 0(t5)"),
+            4 => self.emit("sw t1, 0(t5)"),
+            8 => self.emit("sd t1, 0(t5)"),
+            _ => return false,
+        }
+        self.emit("addi t0, t0, 1");
+        self.emit("sd t0, -8(t4)");
+        true
     }
 
     fn emit_collection_extend(&mut self, collection: &IrOperand, slice: &IrOperand) -> Result<()> {
