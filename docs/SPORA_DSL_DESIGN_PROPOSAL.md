@@ -8,45 +8,28 @@
 
 ---
 
-## 实现状态
+## Implementation Status
 
-> ⚠️ **重要提示**: 本文档是设计提案，描述的是**设计意图**而非**实现真相**。
->
-> 若需要了解当前代码的实际生产状态和下一步推进，请优先查看
-> **[CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md](CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md)**。
->
-> 以下表格按 2026-04-25 的本地代码状态收紧；它是代码审计快照，不替代
-> release evidence、生产验收报告或外部安全审计。
+> This document is a design proposal. It describes design intent, not the
+> authoritative implementation record. For the current production boundary,
+> release evidence, and hardening status, prefer
+> **[CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md](CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md)**
+> and the release evidence documents.
 
-| 组件 | 状态 | 路径 |
+| Component | Status | Path |
 |---|---|---|
-| 词法分析器 (Lexer) | ✅ 已实现并有单元测试覆盖 | `cellscript/src/lexer/` |
-| 解析器 (Parser) | ✅ 当前语法子集稳定；受控 builtin `Vec<T>` 记法可用，用户自定义泛型声明仍拒绝 | `cellscript/src/parser/` |
-| AST 定义 | ✅ 已实现 | `cellscript/src/ast/` |
-| 类型检查器 | 🟡 主编译链可用，覆盖类型、effect、能力、ABI 边界；不是完整形式化语义证明 | `cellscript/src/types/` |
-| 线性检查器 | 🟡 编译期线性检查已接主路径，覆盖分支/循环/聚合移动；cell-backed collection ownership 仍是显式缺口 | `cellscript/src/types/` |
-| Spora IR | 🟡 lowering 主路径真实可用，并产出 consume/read/create/mutate/write-intent 元数据；复杂协议不变量仍可能以 runtime-required obligation 暴露 | `cellscript/src/ir/` |
-| RISC-V 代码生成 | 🟡 `asm` 与 `ELF` 路径可用于当前生产门禁范围，带 backend shape/CFG/call-edge gate；不声明任意合约完全闭包 | `cellscript/src/codegen/` |
-| CLI 编译器 | 🟡 standalone 与 package 主流程可用；`build/check/fmt/init/metadata/constraints/abi/scheduler-plan/ckb-hash/opt-report/entry-witness/verify-artifact` 已接入口，`new/explain` 仍是后续 UX 工作 | `cellscript/src/main.rs`, `cellscript/src/cli/` |
-| 标准库 | 🟡 基础运行时、scheduler metadata、Spora BLAKE3 syscall、CKB helper 表面已接通；不是完整标准库 | `cellscript/src/stdlib/` |
-| REPL 交互式解释器 | 🟡 基础可用，不是生产验收主路径 | `cellscript/src/repl.rs` |
-| 调度器元数据生成 | 🟡 public metadata 使用 `scheduler_witness_abi = "molecule"` 与 `scheduler_witness_hex`；新 metadata 不发布 `scheduler_witness_molecule_hex`，legacy alias 仅保留解码兼容；MPE/shared touch 消费路径已覆盖当前门禁范围 | `cellscript/src/stdlib/mod.rs`, `cellscript/src/lib.rs` |
-| 模块系统/名称解析 | 🟡 本地包、模块解析、path 依赖和跨模块 callable 元数据可用；registry/remote 信任流程仍 fail-closed | `cellscript/src/resolve/`, `cellscript/src/package/` |
-| 生命周期验证 | 🟡 已集成到主编译路径、LSP 和 metadata，部分 finalization/transition 检查有 runtime evidence；不声明任意生命周期协议完整证明 | `cellscript/src/lifecycle/` |
-| 优化器 | 🟡 保守 AST 优化已接入 `opt_level > 0`；大规模 DCE/inlining/constant propagation 仍是后续优化轨道 | `cellscript/src/optimize/` |
-| 文档生成器 | 🟡 API 文档、lowering audit、obligation 输出可用子集 | `cellscript/src/docgen/` |
-| 代码格式化器 | 🟡 部分可用并有 CLI 覆盖；不是完整 rustfmt 级格式化器 | `cellscript/src/fmt/` |
-| LSP 服务器 | 🟡 JSON-RPC stdio、VS Code LanguageClient、metadata-aware hover/诊断/code action/rename 等核心路径可用 | `cellscript/src/lsp/`, `cellscript/editors/vscode-cellscript/` |
-| 包管理器 | 🟡 本地包、path 依赖、lockfile 和 install/remove 本地路径流程可用；registry dependency resolution 保持 fail-closed | `cellscript/src/package/`, `cellscript/src/cli/` |
-| 测试框架 | 🟡 compile-test 发现、期望失败诊断、metadata/policy directive 可用；不是运行时属性测试或 fuzz 框架 | `cellscript/src/test/`, `cellscript/tests/` |
-| Wasm 目标 | 🚧 audit-only / type-only metadata scaffold；可执行 CellScript entry 明确 fail-closed | `cellscript/src/wasm/` |
-| 增量编译 | 🚧 cache 元数据、change detector 和单元测试存在；主编译链会记录 cache，但当前 cache hit 仍返回 `None`，未复用完整 `CompileResult` | `cellscript/src/incremental/`, `cellscript/src/lib.rs` |
-| CLI 子命令 | 🟡 本地工作流已接主入口；registry/runtime runner 类命令仍受 fail-closed 或环境能力限制 | `cellscript/src/cli/` |
-| 集合类型 | 🟡 `Vec<u8>`/`Vec<Address>`/`Vec<Hash>` 的 schema/ABI/Molecule dynamic field 路径已支持；`stdlib/collections.rs` runtime helper 仍以 U64-oriented 形态为主，generic `HashMap<K,V>`、generic `HashSet<T>` 和 cell-backed collection ownership 未完整支持 | `cellscript/src/stdlib/collections.rs`, `cellscript/docs/CELLSCRIPT_COLLECTIONS_SUPPORT_MATRIX.md` |
-| 调试信息 | 🚧 DWARF/debug info 生成器有原型和测试覆盖；不是 release-facing 调试体验闭包 | `cellscript/src/debug/` |
-| 测试套件 | ✅ `cargo test --locked -p cellscript -- --test-threads=1` 当前通过：362 个 library tests、71 个 CLI tests、15 个 bundled example tests | `cellscript/src/`, `cellscript/tests/` |
-| 错误码体系 | ✅ 稳定 runtime error registry 已实现并文档化，metadata/constraints 暴露 code/name/hint；CLI compiler-style `E0001` 诊断和 `cellc explain` 仍是后续 UX 工作 | `cellscript/src/runtime_errors.rs`, `cellscript/docs/CELLSCRIPT_RUNTIME_ERROR_CODES.md` |
-| Hash Type 支持 | 🟡 CKB manifest-level `deploy.ckb.hash_type`、metadata constraints 和 type-id hash_type policy 已支持；源码 DSL 级 `hash_type(...)` 尚未实现 | `cellscript/src/lib.rs`, `cellscript/docs/CELLSCRIPT_CKB_DEPLOYMENT_MANIFEST.md` |
+| Lexer / Parser / AST | Implemented and covered by the main compiler path. The parser accepts the controlled builtin `Vec<T>` notation and rejects user-defined generic resource declarations. | `cellscript/src/lexer/`, `cellscript/src/parser/`, `cellscript/src/ast/` |
+| Type and linear checks | Available on the main compile path for types, effects, capabilities, ABI boundaries, reference escape checks, and resource movement. This is not a formal semantic proof. | `cellscript/src/types/` |
+| IR lowering | Produces consume/read/create/mutate/write-intent metadata and callable summaries for the current production scope. | `cellscript/src/ir/` |
+| RISC-V backend | Assembly and ELF paths are used by the current release gates, including backend shape, CFG, and call-edge checks. | `cellscript/src/codegen/` |
+| CLI | Package and standalone workflows are wired for build, check, format, metadata, constraints, ABI, scheduler-plan, CKB hash, opt-report, entry-witness, and artifact verification. | `cellscript/src/main.rs`, `cellscript/src/cli/` |
+| Stdlib | Core runtime helpers, scheduler metadata, Spora BLAKE3 surface, and CKB helper surface are available. This is not a complete standard library. | `cellscript/src/stdlib/` |
+| LSP and VS Code | JSON-RPC stdio transport, VS Code LanguageClient integration, diagnostics, hover, code actions, rename, and metadata-aware tooling are available. | `cellscript/src/lsp/`, `cellscript/editors/vscode-cellscript/` |
+| Package workflow | Local packages, path dependencies, lockfiles, and local install/remove/update flows are available. Registry dependency resolution remains fail-closed. | `cellscript/src/package/`, `cellscript/src/cli/` |
+| Collections | Schema/ABI paths cover `Vec<u8>`, `Vec<Address>`, and `Vec<Hash>`. Generic runtime helpers and cell-backed collection ownership remain intentionally narrower. | `cellscript/src/stdlib/collections.rs`, `cellscript/docs/CELLSCRIPT_COLLECTIONS_SUPPORT_MATRIX.md` |
+| Runtime errors | Stable runtime error registry and documentation are present; compiler-style explain diagnostics remain follow-up UX work. | `cellscript/src/runtime_errors.rs`, `cellscript/docs/CELLSCRIPT_RUNTIME_ERROR_CODES.md` |
+| Wasm | Audit-only/type-only scaffold. Executable CellScript entries fail closed. | `cellscript/src/wasm/` |
+| Incremental compilation | Cache metadata and change detection exist, but full `CompileResult` reuse is not a production-closed feature. | `cellscript/src/incremental/`, `cellscript/src/lib.rs` |
 
 ---
 

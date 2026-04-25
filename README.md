@@ -12,7 +12,7 @@
 [![LSP: Production Tooling](https://img.shields.io/badge/LSP-production%20tooling-2f6f4e.svg)](#editor-support)
 [![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](https://github.com/tsukifune-kosei/CellScript/wiki)
 
-[English](README.md) | [中文](README_CH.md)
+[English](README.md) | [Chinese](README_CH.md)
 
 **Write Cell contracts the way you think about them — not the way the wire format does.**
 
