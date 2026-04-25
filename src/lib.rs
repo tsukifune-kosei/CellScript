@@ -9388,10 +9388,14 @@ fn metadata_prelude_availability(
                 }
                 ir::IrInstruction::CollectionPush { collection: ir::IrOperand::Var(collection), value } => {
                     if let Some(byte_count) = availability.constructed_byte_vector_vars.get(&collection.id).copied() {
-                        if metadata_fixed_value_available_with_width(value, &availability, 1) {
-                            availability.constructed_byte_vector_vars.insert(collection.id, byte_count + 1);
-                            if let Some(name) = loaded_constructed_vector_names.get(&collection.id).cloned() {
-                                named_constructed_vectors.insert(name, collection.id);
+                        if let Some(width) = metadata_constructed_vector_part_width(value, type_layouts) {
+                            if metadata_fixed_value_available_with_width(value, &availability, width) {
+                                availability.constructed_byte_vector_vars.insert(collection.id, byte_count + width);
+                                if let Some(name) = loaded_constructed_vector_names.get(&collection.id).cloned() {
+                                    named_constructed_vectors.insert(name, collection.id);
+                                }
+                            } else {
+                                availability.constructed_byte_vector_vars.remove(&collection.id);
                             }
                         } else {
                             availability.constructed_byte_vector_vars.remove(&collection.id);
@@ -9400,7 +9404,7 @@ fn metadata_prelude_availability(
                 }
                 ir::IrInstruction::CollectionExtend { collection: ir::IrOperand::Var(collection), slice } => {
                     if let Some(byte_count) = availability.constructed_byte_vector_vars.get(&collection.id).copied() {
-                        if let Some(width) = operand_fixed_byte_width(slice) {
+                        if let Some(width) = metadata_constructed_vector_part_width(slice, type_layouts) {
                             if metadata_fixed_value_available_with_width(slice, &availability, width) {
                                 availability.constructed_byte_vector_vars.insert(collection.id, byte_count + width);
                                 if let Some(name) = loaded_constructed_vector_names.get(&collection.id).cloned() {
@@ -9420,6 +9424,15 @@ fn metadata_prelude_availability(
     }
 
     availability
+}
+
+fn metadata_constructed_vector_part_width(operand: &ir::IrOperand, type_layouts: &MetadataTypeLayouts) -> Option<usize> {
+    match operand {
+        ir::IrOperand::Var(var) => {
+            metadata_ir_type_fixed_width(&var.ty, type_layouts).or_else(|| metadata_operand_fixed_value_width(operand))
+        }
+        ir::IrOperand::Const(_) => metadata_operand_fixed_value_width(operand),
+    }
 }
 
 fn metadata_can_verify_create_output_fields(
@@ -14386,6 +14399,26 @@ action pack(bytes: [u8; 3]) -> u64 {
 }
 "#;
 
+    const FIXED_WIDTH_VEC_CREATE_PROGRAM: &str = r#"
+module test
+
+resource Group {
+    members: Vec<Address>,
+    anchors: Vec<Hash>,
+}
+
+action create_group(owner: Address, seed: Hash) -> Group {
+    let mut members = Vec::new()
+    members.push(owner)
+    let mut anchors = Vec::new()
+    anchors.push(seed)
+    return create Group {
+        members: members,
+        anchors: anchors,
+    }
+}
+"#;
+
     const CELL_BACKED_VEC_PROGRAM: &str = r#"
 module test
 
@@ -16883,6 +16916,41 @@ action grant(config: read_ref Config, token: Token) -> Grant {
         assert!(!asm.contains("# call push"), "push() leaked through generic call path:\n{}", asm);
         assert!(!asm.contains("# call extend_from_slice"), "extend_from_slice() leaked through generic call path:\n{}", asm);
         assert!(!asm.contains("# call len"), "len() leaked through generic call path:\n{}", asm);
+    }
+
+    #[test]
+    fn compile_verifies_constructed_fixed_width_vec_output() {
+        let result = compile(FIXED_WIDTH_VEC_CREATE_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains(
+                "# cellscript abi: verify output dynamic field Group.members as constructed Molecule vector elements=1 bytes=32 element_size=32"
+            ),
+            "Group.members Vec<Address> should be verifier-checked as a fixed-width Molecule vector:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains(
+                "# cellscript abi: verify output dynamic field Group.anchors as constructed Molecule vector elements=1 bytes=32 element_size=32"
+            ),
+            "Group.anchors Vec<Hash> should be verifier-checked as a fixed-width Molecule vector:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: collection push is covered by create-output vector verifier"),
+            "fixed-width Vec pushes used for create-output fields should not execute the fail-closed collection path:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "create_group").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"output-verification-incomplete".to_string()),
+            "fixed-width Vec create-output verifier should leave no collection fail-closed debt: {:?}",
+            action.fail_closed_runtime_features
+        );
     }
 
     #[test]

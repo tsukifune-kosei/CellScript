@@ -1622,7 +1622,7 @@ impl CodeGenerator {
                     }
                     IrInstruction::CollectionPush { collection: IrOperand::Var(collection), value } => {
                         let width = constructed_byte_vector_part_width(value);
-                        let source_available = width == Some(1) && self.expected_fixed_byte_source(value, 1).is_some();
+                        let source_available = width.is_some_and(|width| self.expected_fixed_byte_source(value, width).is_some());
                         if let Some(bytes) = self.constructed_byte_vectors.get_mut(&collection.id) {
                             if source_available {
                                 bytes.push(value.clone());
@@ -5037,8 +5037,21 @@ impl CodeGenerator {
             output_len_offset,
         );
         if let Some(parts) = self.constructed_byte_vectors.get(&var.id).cloned() {
-            if molecule_vector_element_fixed_width(&layout.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes) == Some(1) {
-                self.emit_constructed_byte_vector_field_check(type_name, field, output_start_offset, output_len_offset, &parts);
+            if let Some(element_width) =
+                molecule_vector_element_fixed_width(&layout.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
+            {
+                if parts.is_empty() && element_width != 1 {
+                    self.emit_empty_molecule_vector_field_check(type_name, field, output_start_offset, output_len_offset);
+                    return true;
+                }
+                self.emit_constructed_molecule_vector_field_check(
+                    type_name,
+                    field,
+                    output_start_offset,
+                    output_len_offset,
+                    &parts,
+                    element_width,
+                );
                 return true;
             }
         }
@@ -5098,25 +5111,38 @@ impl CodeGenerator {
         }
     }
 
-    fn emit_constructed_byte_vector_field_check(
+    fn emit_constructed_molecule_vector_field_check(
         &mut self,
         type_name: &str,
         field: &str,
         output_start_offset: usize,
         output_len_offset: usize,
         parts: &[IrOperand],
+        element_width: usize,
     ) {
-        let Some(expected_count) =
+        let Some(expected_bytes) =
             parts.iter().try_fold(0usize, |acc, part| constructed_byte_vector_part_width(part).map(|width| acc + width))
         else {
             self.emit_fail(CellScriptRuntimeError::CellLoadFailed);
             return;
         };
-        let expected_len = 4 + expected_count;
-        self.emit(format!(
-            "# cellscript abi: verify output dynamic field {}.{} as constructed Molecule byte vector len={}",
-            type_name, field, expected_count
-        ));
+        if element_width == 0 || expected_bytes % element_width != 0 {
+            self.emit_fail(CellScriptRuntimeError::CellLoadFailed);
+            return;
+        }
+        let expected_elements = expected_bytes / element_width;
+        let expected_len = 4 + expected_bytes;
+        if element_width == 1 {
+            self.emit(format!(
+                "# cellscript abi: verify output dynamic field {}.{} as constructed Molecule byte vector len={}",
+                type_name, field, expected_bytes
+            ));
+        } else {
+            self.emit(format!(
+                "# cellscript abi: verify output dynamic field {}.{} as constructed Molecule vector elements={} bytes={} element_size={}",
+                type_name, field, expected_elements, expected_bytes, element_width
+            ));
+        }
         self.emit_stack_ld("t0", output_len_offset);
         self.emit(format!("li t1, {}", expected_len));
         self.emit("sub t2, t0, t1");
@@ -5126,7 +5152,7 @@ impl CodeGenerator {
         self.emit_label(&len_ok);
 
         self.emit_stack_ld("t4", output_start_offset);
-        for (offset, byte) in (expected_count as u32).to_le_bytes().iter().enumerate() {
+        for (offset, byte) in (expected_elements as u32).to_le_bytes().iter().enumerate() {
             self.emit(format!("lbu t0, {}(t4)", offset));
             self.emit(format!("li t1, {}", byte));
             self.emit("sub t2, t0, t1");
