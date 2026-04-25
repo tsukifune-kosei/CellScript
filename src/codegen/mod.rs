@@ -6857,9 +6857,21 @@ impl CodeGenerator {
         else {
             return false;
         };
-        if element_width != value_width || fixed_scalar_operand_width(value).is_none() {
+        if element_width != value_width {
             return false;
         }
+        let value_scalar = element_width <= 8 && fixed_scalar_operand_width(value).is_some();
+        let fixed_byte_source = if value_scalar {
+            None
+        } else {
+            if element_width > (RUNTIME_EXPR_TEMP_SLOTS - 2) * 8 {
+                return false;
+            }
+            let Some(source) = self.expected_fixed_byte_source(value, element_width) else {
+                return false;
+            };
+            Some(source)
+        };
 
         self.emit(format!("# cellscript abi: stack collection insert element_size={}", element_width));
         self.emit(format!("ld t4, {}(sp)", collection.id * 8));
@@ -6886,6 +6898,16 @@ impl CodeGenerator {
         let current_offset = self.runtime_expr_temp_offset(1).expect("runtime temp slot 1");
         self.emit_stack_sd("t1", index_offset);
         self.emit_stack_sd("t0", current_offset);
+        if let Some(source) = fixed_byte_source.as_ref() {
+            self.emit_prepare_fixed_byte_source(source, element_width, "stack collection insert");
+            let value_offset = self.runtime_expr_temp_offset(2).expect("runtime temp slot 2");
+            self.emit(format!("# cellscript abi: stack collection insert snapshot fixed bytes size={}", element_width));
+            for byte_index in 0..element_width {
+                self.emit_fixed_byte_source_byte_to("t1", "t6", source, byte_index);
+                self.emit_sp_addi("t6", value_offset + byte_index);
+                self.emit("sb t1, 0(t6)");
+            }
+        }
         let shift_loop = self.fresh_label("stack_collection_insert_shift_loop");
         let shift_done = self.fresh_label("stack_collection_insert_shift_done");
         self.emit(format!("# cellscript abi: stack collection insert shift element_size={}", element_width));
@@ -6900,13 +6922,27 @@ impl CodeGenerator {
         self.emit("add t5, t4, t5");
         self.emit("mul t6, t2, t3");
         self.emit("add t6, t4, t6");
-        self.emit_unaligned_scalar_load("t6", "t0", "t2", 0, element_width);
-        match element_width {
-            1 => self.emit("sb t0, 0(t5)"),
-            2 => self.emit("sh t0, 0(t5)"),
-            4 => self.emit("sw t0, 0(t5)"),
-            8 => self.emit("sd t0, 0(t5)"),
-            _ => return false,
+        if element_width <= 8 {
+            self.emit_unaligned_scalar_load("t6", "t0", "t2", 0, element_width);
+            match element_width {
+                1 => self.emit("sb t0, 0(t5)"),
+                2 => self.emit("sh t0, 0(t5)"),
+                4 => self.emit("sw t0, 0(t5)"),
+                8 => self.emit("sd t0, 0(t5)"),
+                _ => return false,
+            }
+        } else {
+            for byte_index in 0..element_width {
+                if byte_index <= 2047 {
+                    self.emit(format!("lbu t0, {}(t6)", byte_index));
+                    self.emit(format!("sb t0, {}(t5)", byte_index));
+                } else {
+                    self.emit_large_addi("t0", "t6", byte_index as i64);
+                    self.emit("lbu t0, 0(t0)");
+                    self.emit_large_addi("t2", "t5", byte_index as i64);
+                    self.emit("sb t0, 0(t2)");
+                }
+            }
         }
         self.emit_stack_ld("t0", current_offset);
         self.emit("addi t0, t0, -1");
@@ -6919,13 +6955,28 @@ impl CodeGenerator {
         self.emit(format!("li t2, {}", element_width));
         self.emit("mul t3, t0, t2");
         self.emit("add t5, t4, t3");
-        self.emit_operand_to_register("t1", value);
-        match element_width {
-            1 => self.emit("sb t1, 0(t5)"),
-            2 => self.emit("sh t1, 0(t5)"),
-            4 => self.emit("sw t1, 0(t5)"),
-            8 => self.emit("sd t1, 0(t5)"),
-            _ => return false,
+        if value_scalar {
+            self.emit_operand_to_register("t1", value);
+            match element_width {
+                1 => self.emit("sb t1, 0(t5)"),
+                2 => self.emit("sh t1, 0(t5)"),
+                4 => self.emit("sw t1, 0(t5)"),
+                8 => self.emit("sd t1, 0(t5)"),
+                _ => return false,
+            }
+        } else {
+            let value_offset = self.runtime_expr_temp_offset(2).expect("runtime temp slot 2");
+            self.emit(format!("# cellscript abi: stack collection insert copy fixed bytes size={}", element_width));
+            for byte_index in 0..element_width {
+                self.emit_sp_addi("t6", value_offset + byte_index);
+                self.emit("lbu t1, 0(t6)");
+                if byte_index <= 2047 {
+                    self.emit(format!("sb t1, {}(t5)", byte_index));
+                } else {
+                    self.emit_large_addi("t0", "t5", byte_index as i64);
+                    self.emit("sb t1, 0(t0)");
+                }
+            }
         }
         self.emit(format!("ld t4, {}(sp)", collection.id * 8));
         self.emit("ld t0, -8(t4)");

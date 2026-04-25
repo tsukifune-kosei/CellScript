@@ -9949,7 +9949,6 @@ fn metadata_stack_collection_insert_is_runtime_supported(
     };
     element_width != 0
         && element_width == value_width
-        && value_width <= 8
         && metadata_fixed_value_available_with_width(value, availability, value_width)
         && (const_usize_operand(index).is_some() || metadata_u64_operand_available(index, availability))
 }
@@ -14842,6 +14841,20 @@ action stack_vec_insert_middle() -> u64 {
 }
 "#;
 
+    const FIXED_BYTE_STACK_VEC_INSERT_PROGRAM: &str = r#"
+module test
+
+action stack_vec_address_insert(owner: Address, candidate: Address) -> bool {
+    let mut owners = Vec::new()
+    owners.push(owner)
+    owners.insert(0, candidate)
+    if owners[0] == candidate {
+        return owners[1] == owner
+    }
+    return false
+}
+"#;
+
     const FIXED_BYTE_STACK_VEC_RUNTIME_PROGRAM: &str = r#"
 module test
 
@@ -17588,6 +17601,40 @@ action grant(config: read_ref Config, token: Token) -> Grant {
                 && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
                 && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
             "stack-backed Vec<u64>.insert should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_fixed_byte_insert() {
+        let result = compile(FIXED_BYTE_STACK_VEC_INSERT_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection insert element_size=32"),
+            "Vec<Address>.insert should insert into the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection insert snapshot fixed bytes size=32")
+                && asm.contains("# cellscript abi: stack collection insert copy fixed bytes size=32"),
+            "Vec<Address>.insert should snapshot and copy fixed-byte values:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection insert is not available for this collection"),
+            "stack-backed Vec<Address>.insert should not hit fail-closed collection path:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_address_insert").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-insert".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string())
+                && !action.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
+            "stack-backed Vec<Address>.insert should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
     }
