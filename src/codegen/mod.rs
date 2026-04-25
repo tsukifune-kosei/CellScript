@@ -1736,6 +1736,9 @@ impl CodeGenerator {
                     IrInstruction::CollectionTruncate { collection: IrOperand::Var(collection), .. } => {
                         self.constructed_byte_vectors.remove(&collection.id);
                     }
+                    IrInstruction::CollectionSwap { collection: IrOperand::Var(collection), .. } => {
+                        self.constructed_byte_vectors.remove(&collection.id);
+                    }
                     IrInstruction::CollectionInsert { collection: IrOperand::Var(collection), .. } => {
                         self.constructed_byte_vectors.remove(&collection.id);
                     }
@@ -2161,6 +2164,9 @@ impl CodeGenerator {
             }
             IrInstruction::CollectionTruncate { collection, len } => {
                 self.emit_collection_truncate(collection, len)?;
+            }
+            IrInstruction::CollectionSwap { collection, left, right } => {
+                self.emit_collection_swap(collection, left, right)?;
             }
             IrInstruction::CollectionContains { dest, collection, value } => {
                 self.emit_collection_contains(dest, collection, value)?;
@@ -5637,6 +5643,11 @@ impl CodeGenerator {
                 self.record_operand(collection, max_var_id);
                 self.record_operand(len, max_var_id);
             }
+            IrInstruction::CollectionSwap { collection, left, right } => {
+                self.record_operand(collection, max_var_id);
+                self.record_operand(left, max_var_id);
+                self.record_operand(right, max_var_id);
+            }
             IrInstruction::CollectionContains { dest, collection, value } => {
                 self.record_var(dest, max_var_id);
                 self.record_operand(collection, max_var_id);
@@ -6737,6 +6748,76 @@ impl CodeGenerator {
         self.emit(format!("bnez t2, {}", done_label));
         self.emit("sd t1, -8(t4)");
         self.emit_label(&done_label);
+        true
+    }
+
+    fn emit_collection_swap(&mut self, collection: &IrOperand, left: &IrOperand, right: &IrOperand) -> Result<()> {
+        self.emit("# collection swap");
+        self.emit_symbolic_operand_comment("collection", collection);
+        self.emit_symbolic_operand_comment("left", left);
+        self.emit_symbolic_operand_comment("right", right);
+        if self.emit_stack_collection_swap(collection, left, right) {
+            return Ok(());
+        }
+        self.emit("# cellscript abi: collection swap is not available for this collection");
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        Ok(())
+    }
+
+    fn emit_stack_collection_swap(&mut self, collection: &IrOperand, left: &IrOperand, right: &IrOperand) -> bool {
+        let IrOperand::Var(collection) = collection else {
+            return false;
+        };
+        if !self.stack_collection_vars.contains(&collection.id) {
+            return false;
+        }
+        let Some(element_width) = molecule_vector_element_fixed_width(&collection.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
+        else {
+            return false;
+        };
+        if element_width == 0 || element_width > RUNTIME_COLLECTION_BUFFER_SIZE {
+            return false;
+        }
+
+        self.emit(format!("# cellscript abi: stack collection swap element_size={}", element_width));
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("ld t0, -8(t4)");
+        self.emit_operand_to_register("t1", left);
+        self.emit_operand_to_register("t2", right);
+
+        let left_ok = self.fresh_label("stack_collection_swap_left_ok");
+        self.emit("sltu t3, t1, t0");
+        self.emit(format!("bnez t3, {}", left_ok));
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        self.emit_label(&left_ok);
+
+        let right_ok = self.fresh_label("stack_collection_swap_right_ok");
+        self.emit("sltu t3, t2, t0");
+        self.emit(format!("bnez t3, {}", right_ok));
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        self.emit_label(&right_ok);
+
+        self.emit(format!("li t3, {}", element_width));
+        self.emit("mul t5, t1, t3");
+        self.emit("add t5, t4, t5");
+        self.emit("mul t6, t2, t3");
+        self.emit("add t6, t4, t6");
+        self.emit(format!("# cellscript abi: stack collection swap bytes element_size={}", element_width));
+        for byte_index in 0..element_width {
+            if byte_index <= 2047 {
+                self.emit(format!("lbu t0, {}(t5)", byte_index));
+                self.emit(format!("lbu t1, {}(t6)", byte_index));
+                self.emit(format!("sb t1, {}(t5)", byte_index));
+                self.emit(format!("sb t0, {}(t6)", byte_index));
+            } else {
+                self.emit_large_addi("t2", "t5", byte_index as i64);
+                self.emit_large_addi("t3", "t6", byte_index as i64);
+                self.emit("lbu t0, 0(t2)");
+                self.emit("lbu t1, 0(t3)");
+                self.emit("sb t1, 0(t2)");
+                self.emit("sb t0, 0(t3)");
+            }
+        }
         true
     }
 

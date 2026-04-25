@@ -4028,6 +4028,11 @@ fn collect_instruction_scope(instruction: &ir::IrInstruction, used_types: &mut B
             collect_operand_named_types(collection, used_types);
             collect_operand_named_types(len, used_types);
         }
+        ir::IrInstruction::CollectionSwap { collection, left, right } => {
+            collect_operand_named_types(collection, used_types);
+            collect_operand_named_types(left, used_types);
+            collect_operand_named_types(right, used_types);
+        }
         ir::IrInstruction::CollectionContains { dest, collection, value } => {
             collect_ir_type_named_types(&dest.ty, used_types);
             collect_operand_named_types(collection, used_types);
@@ -9030,6 +9035,20 @@ fn body_fail_closed_runtime_features(
                         features.insert("cell-backed-collection-truncate".to_string());
                     }
                 }
+                ir::IrInstruction::CollectionSwap { collection, left, right } => {
+                    if !metadata_stack_collection_swap_is_runtime_supported(
+                        collection,
+                        left,
+                        right,
+                        &prelude_availability,
+                        type_layouts,
+                    ) {
+                        features.insert("collection-swap".to_string());
+                    }
+                    if ir_operand_is_cell_backed_collection(collection, cell_type_kinds) {
+                        features.insert("cell-backed-collection-swap".to_string());
+                    }
+                }
                 ir::IrInstruction::CollectionContains { collection, value, .. } => {
                     if !metadata_stack_collection_contains_is_runtime_supported(collection, value, &prelude_availability, type_layouts)
                     {
@@ -9643,6 +9662,10 @@ fn metadata_prelude_availability(
                     availability.constructed_byte_vector_vars.remove(&collection.id);
                     availability.empty_molecule_vector_vars.remove(&collection.id);
                 }
+                ir::IrInstruction::CollectionSwap { collection: ir::IrOperand::Var(collection), .. } => {
+                    availability.constructed_byte_vector_vars.remove(&collection.id);
+                    availability.empty_molecule_vector_vars.remove(&collection.id);
+                }
                 ir::IrInstruction::CollectionInsert { collection: ir::IrOperand::Var(collection), .. } => {
                     availability.constructed_byte_vector_vars.remove(&collection.id);
                     availability.empty_molecule_vector_vars.remove(&collection.id);
@@ -9930,6 +9953,22 @@ fn metadata_stack_collection_truncate_is_runtime_supported(
     };
     availability.stack_collection_vars.contains(&collection.id)
         && (const_usize_operand(len).is_some() || metadata_u64_operand_available(len, availability))
+}
+
+fn metadata_stack_collection_swap_is_runtime_supported(
+    collection: &ir::IrOperand,
+    left: &ir::IrOperand,
+    right: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
+    let ir::IrOperand::Var(collection) = collection else {
+        return false;
+    };
+    availability.stack_collection_vars.contains(&collection.id)
+        && metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts).is_some_and(|width| width != 0)
+        && (const_usize_operand(left).is_some() || metadata_u64_operand_available(left, availability))
+        && (const_usize_operand(right).is_some() || metadata_u64_operand_available(right, availability))
 }
 
 fn metadata_stack_collection_contains_is_runtime_supported(
@@ -14938,6 +14977,34 @@ action stack_vec_address_reverse(first: Address, second: Address) -> bool {
 }
 "#;
 
+    const STACK_VEC_SWAP_RUNTIME_PROGRAM: &str = r#"
+module test
+
+action stack_vec_swap_sum() -> u64 {
+    let mut values = Vec::new()
+    values.push(7)
+    values.push(9)
+    values.push(11)
+    values.swap(0, 2)
+    return values[0] + values[2]
+}
+"#;
+
+    const FIXED_BYTE_STACK_VEC_SWAP_PROGRAM: &str = r#"
+module test
+
+action stack_vec_address_swap(first: Address, second: Address) -> bool {
+    let mut owners = Vec::new()
+    owners.push(first)
+    owners.push(second)
+    owners.swap(0, 1)
+    if owners[0] == second {
+        return owners[1] == first
+    }
+    return false
+}
+"#;
+
     const STACK_VEC_TRUNCATE_RUNTIME_PROGRAM: &str = r#"
 module test
 
@@ -17811,6 +17878,71 @@ action grant(config: read_ref Config, token: Token) -> Grant {
                 && !action.fail_closed_runtime_features.contains(&"index-access".to_string())
                 && !action.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
             "stack-backed Vec<Address>.reverse should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_scalar_swap() {
+        let result = compile(STACK_VEC_SWAP_RUNTIME_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection swap element_size=8"),
+            "Vec<u64>.swap should swap the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection swap bytes element_size=8"),
+            "Vec<u64>.swap should swap stack collection element bytes:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection swap is not available for this collection"),
+            "stack-backed Vec<u64>.swap should not hit fail-closed collection path:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_swap_sum").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-swap".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
+            "stack-backed Vec<u64>.swap should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_fixed_byte_swap() {
+        let result = compile(FIXED_BYTE_STACK_VEC_SWAP_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection swap element_size=32"),
+            "Vec<Address>.swap should swap the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection swap bytes element_size=32"),
+            "Vec<Address>.swap should swap fixed-byte elements:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection swap is not available for this collection"),
+            "stack-backed Vec<Address>.swap should not hit fail-closed collection path:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_address_swap").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-swap".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string())
+                && !action.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
+            "stack-backed Vec<Address>.swap should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
     }

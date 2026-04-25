@@ -222,6 +222,7 @@ pub enum IrInstruction {
     CollectionPop { dest: IrVar, collection: IrOperand },
     CollectionReverse { collection: IrOperand },
     CollectionTruncate { collection: IrOperand, len: IrOperand },
+    CollectionSwap { collection: IrOperand, left: IrOperand, right: IrOperand },
     Call { dest: Option<IrVar>, func: String, args: Vec<IrOperand> },
     ReadRef { dest: IrVar, ty: String },
     Move { dest: IrVar, src: IrOperand },
@@ -3055,6 +3056,20 @@ impl IrGenerator {
                     self.block_mut(blocks, active)
                         .instructions
                         .push(IrInstruction::CollectionTruncate { collection: lowered_collection.operand, len: lowered_len.operand });
+                    Some(LoweredExpr { operand: IrOperand::Const(IrConst::Bool(true)), current: Some(active) })
+                }
+                "swap" if call.args.len() == 2 => {
+                    let lowered_collection = self.lower_expr(&field.expr, current, blocks, vars);
+                    let active = lowered_collection.current?;
+                    let lowered_left = self.lower_expr(&call.args[0], active, blocks, vars);
+                    let active = lowered_left.current?;
+                    let lowered_right = self.lower_expr(&call.args[1], active, blocks, vars);
+                    let active = lowered_right.current?;
+                    self.block_mut(blocks, active).instructions.push(IrInstruction::CollectionSwap {
+                        collection: lowered_collection.operand,
+                        left: lowered_left.operand,
+                        right: lowered_right.operand,
+                    });
                     Some(LoweredExpr { operand: IrOperand::Const(IrConst::Bool(true)), current: Some(active) })
                 }
                 "contains" if call.args.len() == 1 => {
