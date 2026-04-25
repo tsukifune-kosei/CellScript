@@ -88,13 +88,19 @@ Notes:
 - [x] Add explicit negative tests for unsupported helper/type combinations:
   untyped `Vec` reads that require an element type, typed `Vec<T>` value
   mismatch checks, and rejection of reference elements for mutation helpers.
-- [ ] Audit all `collection-*` fail-closed feature names for stable metadata
-  naming before 0.13 release.
-- [ ] Confirm `Vec::capacity` semantics are acceptable as fixed backing buffer
-  capacity (`256 / element_width`) and not source-requested capacity.
-- [ ] Add release notes that distinguish 0.12 schema/ABI vector support from
-  0.13 executable stack-backed vector helper support.
-- [ ] Check generated assembly/code-size impact after the helper set expansion.
+- [x] Audit all `collection-*` fail-closed feature names for stable metadata
+  naming before 0.13 release; names are centralized in code and locked by a
+  stability test.
+- [x] Confirm `Vec::capacity` semantics are fixed backing buffer capacity
+  (`256 / element_width`) rather than source-requested capacity; codegen uses
+  `RUNTIME_COLLECTION_BUFFER_SIZE` and tests assert `u64 => 32`,
+  `Address`/`Hash`-width values => 8.
+- [x] Add release notes that distinguish 0.12 schema/ABI vector support from
+  0.13 executable stack-backed vector helper support:
+  [CELLSCRIPT_0_13_RELEASE_NOTES_DRAFT.md](CELLSCRIPT_0_13_RELEASE_NOTES_DRAFT.md).
+- [x] Check generated assembly/code-size impact after the helper set expansion;
+  current bundled-example backend-shape budget test passes and the release
+  notes draft records the branch baseline snapshot.
 
 ---
 

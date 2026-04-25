@@ -8922,6 +8922,68 @@ fn body_symbolic_runtime_features(
     Vec::new()
 }
 
+const COLLECTION_FAIL_CLOSED_FEATURE_NEW: &str = "collection-new";
+const COLLECTION_FAIL_CLOSED_FEATURE_CAPACITY: &str = "collection-capacity";
+const COLLECTION_FAIL_CLOSED_FEATURE_PUSH: &str = "collection-push";
+const COLLECTION_FAIL_CLOSED_FEATURE_EXTEND: &str = "collection-extend";
+const COLLECTION_FAIL_CLOSED_FEATURE_CLEAR: &str = "collection-clear";
+const COLLECTION_FAIL_CLOSED_FEATURE_REVERSE: &str = "collection-reverse";
+const COLLECTION_FAIL_CLOSED_FEATURE_TRUNCATE: &str = "collection-truncate";
+const COLLECTION_FAIL_CLOSED_FEATURE_SWAP: &str = "collection-swap";
+const COLLECTION_FAIL_CLOSED_FEATURE_CONTAINS: &str = "collection-contains";
+const COLLECTION_FAIL_CLOSED_FEATURE_REMOVE: &str = "collection-remove";
+const COLLECTION_FAIL_CLOSED_FEATURE_INSERT: &str = "collection-insert";
+const COLLECTION_FAIL_CLOSED_FEATURE_SET: &str = "collection-set";
+const COLLECTION_FAIL_CLOSED_FEATURE_POP: &str = "collection-pop";
+
+const CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_CAPACITY: &str = "cell-backed-collection-capacity";
+const CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_PUSH: &str = "cell-backed-collection-push";
+const CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_EXTEND: &str = "cell-backed-collection-extend";
+const CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_CLEAR: &str = "cell-backed-collection-clear";
+const CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_REVERSE: &str = "cell-backed-collection-reverse";
+const CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_TRUNCATE: &str = "cell-backed-collection-truncate";
+const CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_SWAP: &str = "cell-backed-collection-swap";
+const CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_CONTAINS: &str = "cell-backed-collection-contains";
+const CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_REMOVE: &str = "cell-backed-collection-remove";
+const CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_INSERT: &str = "cell-backed-collection-insert";
+const CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_SET: &str = "cell-backed-collection-set";
+const CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_POP: &str = "cell-backed-collection-pop";
+const CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_RETURN: &str = "cell-backed-collection-return";
+
+#[cfg(test)]
+const COLLECTION_FAIL_CLOSED_FEATURE_NAMES: &[&str] = &[
+    COLLECTION_FAIL_CLOSED_FEATURE_NEW,
+    COLLECTION_FAIL_CLOSED_FEATURE_CAPACITY,
+    COLLECTION_FAIL_CLOSED_FEATURE_PUSH,
+    COLLECTION_FAIL_CLOSED_FEATURE_EXTEND,
+    COLLECTION_FAIL_CLOSED_FEATURE_CLEAR,
+    COLLECTION_FAIL_CLOSED_FEATURE_REVERSE,
+    COLLECTION_FAIL_CLOSED_FEATURE_TRUNCATE,
+    COLLECTION_FAIL_CLOSED_FEATURE_SWAP,
+    COLLECTION_FAIL_CLOSED_FEATURE_CONTAINS,
+    COLLECTION_FAIL_CLOSED_FEATURE_REMOVE,
+    COLLECTION_FAIL_CLOSED_FEATURE_INSERT,
+    COLLECTION_FAIL_CLOSED_FEATURE_SET,
+    COLLECTION_FAIL_CLOSED_FEATURE_POP,
+];
+
+#[cfg(test)]
+const CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_NAMES: &[&str] = &[
+    CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_CAPACITY,
+    CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_PUSH,
+    CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_EXTEND,
+    CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_CLEAR,
+    CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_REVERSE,
+    CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_TRUNCATE,
+    CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_SWAP,
+    CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_CONTAINS,
+    CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_REMOVE,
+    CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_INSERT,
+    CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_SET,
+    CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_POP,
+    CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_RETURN,
+];
+
 fn body_fail_closed_runtime_features(
     body: &ir::IrBody,
     param_schema_vars: &BTreeSet<usize>,
@@ -8986,15 +9048,15 @@ fn body_fail_closed_runtime_features(
                     if !prelude_availability.stack_collection_vars.contains(&dest.id)
                         && !metadata_collection_new_is_verified_create_value(dest.id, body, type_layouts, &prelude_availability)
                     {
-                        features.insert("collection-new".to_string());
+                        features.insert(COLLECTION_FAIL_CLOSED_FEATURE_NEW.to_string());
                     }
                 }
                 ir::IrInstruction::CollectionCapacity { collection, .. } => {
                     if !metadata_stack_collection_capacity_is_runtime_supported(collection, &prelude_availability, type_layouts) {
-                        features.insert("collection-capacity".to_string());
+                        features.insert(COLLECTION_FAIL_CLOSED_FEATURE_CAPACITY.to_string());
                     }
                     if ir_operand_is_cell_backed_collection(collection, cell_type_kinds) {
-                        features.insert("cell-backed-collection-capacity".to_string());
+                        features.insert(CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_CAPACITY.to_string());
                     }
                 }
                 ir::IrInstruction::CollectionPush { collection, value } => {
@@ -9008,10 +9070,10 @@ fn body_fail_closed_runtime_features(
                         )
                         && !metadata_stack_collection_push_is_runtime_supported(collection, value, &prelude_availability)
                     {
-                        features.insert("collection-push".to_string());
+                        features.insert(COLLECTION_FAIL_CLOSED_FEATURE_PUSH.to_string());
                     }
                     if ir_operand_contains_cell_backed_value(value, cell_type_kinds) {
-                        features.insert("cell-backed-collection-push".to_string());
+                        features.insert(CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_PUSH.to_string());
                     }
                 }
                 ir::IrInstruction::CollectionExtend { collection, slice } => {
@@ -9027,34 +9089,34 @@ fn body_fail_closed_runtime_features(
                         &prelude_availability,
                         type_layouts,
                     ) {
-                        features.insert("collection-extend".to_string());
+                        features.insert(COLLECTION_FAIL_CLOSED_FEATURE_EXTEND.to_string());
                     }
                     if ir_operand_is_cell_backed_collection(slice, cell_type_kinds) {
-                        features.insert("cell-backed-collection-extend".to_string());
+                        features.insert(CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_EXTEND.to_string());
                     }
                 }
                 ir::IrInstruction::CollectionClear { collection } => {
                     if !metadata_stack_collection_clear_is_runtime_supported(collection, &prelude_availability) {
-                        features.insert("collection-clear".to_string());
+                        features.insert(COLLECTION_FAIL_CLOSED_FEATURE_CLEAR.to_string());
                     }
                     if ir_operand_is_cell_backed_collection(collection, cell_type_kinds) {
-                        features.insert("cell-backed-collection-clear".to_string());
+                        features.insert(CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_CLEAR.to_string());
                     }
                 }
                 ir::IrInstruction::CollectionReverse { collection } => {
                     if !metadata_stack_collection_reverse_is_runtime_supported(collection, &prelude_availability, type_layouts) {
-                        features.insert("collection-reverse".to_string());
+                        features.insert(COLLECTION_FAIL_CLOSED_FEATURE_REVERSE.to_string());
                     }
                     if ir_operand_is_cell_backed_collection(collection, cell_type_kinds) {
-                        features.insert("cell-backed-collection-reverse".to_string());
+                        features.insert(CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_REVERSE.to_string());
                     }
                 }
                 ir::IrInstruction::CollectionTruncate { collection, len } => {
                     if !metadata_stack_collection_truncate_is_runtime_supported(collection, len, &prelude_availability) {
-                        features.insert("collection-truncate".to_string());
+                        features.insert(COLLECTION_FAIL_CLOSED_FEATURE_TRUNCATE.to_string());
                     }
                     if ir_operand_is_cell_backed_collection(collection, cell_type_kinds) {
-                        features.insert("cell-backed-collection-truncate".to_string());
+                        features.insert(CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_TRUNCATE.to_string());
                     }
                 }
                 ir::IrInstruction::CollectionSwap { collection, left, right } => {
@@ -9065,21 +9127,21 @@ fn body_fail_closed_runtime_features(
                         &prelude_availability,
                         type_layouts,
                     ) {
-                        features.insert("collection-swap".to_string());
+                        features.insert(COLLECTION_FAIL_CLOSED_FEATURE_SWAP.to_string());
                     }
                     if ir_operand_is_cell_backed_collection(collection, cell_type_kinds) {
-                        features.insert("cell-backed-collection-swap".to_string());
+                        features.insert(CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_SWAP.to_string());
                     }
                 }
                 ir::IrInstruction::CollectionContains { collection, value, .. } => {
                     if !metadata_stack_collection_contains_is_runtime_supported(collection, value, &prelude_availability, type_layouts)
                     {
-                        features.insert("collection-contains".to_string());
+                        features.insert(COLLECTION_FAIL_CLOSED_FEATURE_CONTAINS.to_string());
                     }
                     if ir_operand_is_cell_backed_collection(collection, cell_type_kinds)
                         || ir_operand_contains_cell_backed_value(value, cell_type_kinds)
                     {
-                        features.insert("cell-backed-collection-contains".to_string());
+                        features.insert(CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_CONTAINS.to_string());
                     }
                 }
                 ir::IrInstruction::CollectionRemove { dest, collection, index } => {
@@ -9090,10 +9152,10 @@ fn body_fail_closed_runtime_features(
                         &prelude_availability,
                         type_layouts,
                     ) {
-                        features.insert("collection-remove".to_string());
+                        features.insert(COLLECTION_FAIL_CLOSED_FEATURE_REMOVE.to_string());
                     }
                     if ir_operand_is_cell_backed_collection(collection, cell_type_kinds) {
-                        features.insert("cell-backed-collection-remove".to_string());
+                        features.insert(CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_REMOVE.to_string());
                     }
                 }
                 ir::IrInstruction::CollectionInsert { collection, index, value } => {
@@ -9104,12 +9166,12 @@ fn body_fail_closed_runtime_features(
                         &prelude_availability,
                         type_layouts,
                     ) {
-                        features.insert("collection-insert".to_string());
+                        features.insert(COLLECTION_FAIL_CLOSED_FEATURE_INSERT.to_string());
                     }
                     if ir_operand_is_cell_backed_collection(collection, cell_type_kinds)
                         || ir_operand_contains_cell_backed_value(value, cell_type_kinds)
                     {
-                        features.insert("cell-backed-collection-insert".to_string());
+                        features.insert(CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_INSERT.to_string());
                     }
                 }
                 ir::IrInstruction::CollectionSet { collection, index, value } => {
@@ -9120,20 +9182,20 @@ fn body_fail_closed_runtime_features(
                         &prelude_availability,
                         type_layouts,
                     ) {
-                        features.insert("collection-set".to_string());
+                        features.insert(COLLECTION_FAIL_CLOSED_FEATURE_SET.to_string());
                     }
                     if ir_operand_is_cell_backed_collection(collection, cell_type_kinds)
                         || ir_operand_contains_cell_backed_value(value, cell_type_kinds)
                     {
-                        features.insert("cell-backed-collection-set".to_string());
+                        features.insert(CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_SET.to_string());
                     }
                 }
                 ir::IrInstruction::CollectionPop { dest, collection } => {
                     if !metadata_stack_collection_pop_is_runtime_supported(dest, collection, &prelude_availability, type_layouts) {
-                        features.insert("collection-pop".to_string());
+                        features.insert(COLLECTION_FAIL_CLOSED_FEATURE_POP.to_string());
                     }
                     if ir_operand_is_cell_backed_collection(collection, cell_type_kinds) {
-                        features.insert("cell-backed-collection-pop".to_string());
+                        features.insert(CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_POP.to_string());
                     }
                 }
                 ir::IrInstruction::Consume { operand } if consumed_schema_var_id(instruction).is_none() => {
@@ -9195,7 +9257,7 @@ fn body_fail_closed_runtime_features(
         if matches!(block.terminator, ir::IrTerminator::Return(Some(_)))
             && return_type.is_some_and(|ty| ir_type_is_cell_backed_collection(ty, cell_type_kinds))
         {
-            features.insert("cell-backed-collection-return".to_string());
+            features.insert(CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_RETURN.to_string());
         }
     }
     features.into_iter().collect()
@@ -17877,6 +17939,61 @@ action bad(point: Point) -> u64 {
         for (source, expected) in cases {
             let err = compile(source, CompileOptions::default()).unwrap_err();
             assert!(err.message.contains(expected), "expected '{expected}', got: {}", err.message);
+        }
+    }
+
+    #[test]
+    fn collection_fail_closed_feature_names_are_stable() {
+        assert_eq!(
+            super::COLLECTION_FAIL_CLOSED_FEATURE_NAMES,
+            &[
+                "collection-new",
+                "collection-capacity",
+                "collection-push",
+                "collection-extend",
+                "collection-clear",
+                "collection-reverse",
+                "collection-truncate",
+                "collection-swap",
+                "collection-contains",
+                "collection-remove",
+                "collection-insert",
+                "collection-set",
+                "collection-pop",
+            ]
+        );
+        assert_eq!(
+            super::CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_NAMES,
+            &[
+                "cell-backed-collection-capacity",
+                "cell-backed-collection-push",
+                "cell-backed-collection-extend",
+                "cell-backed-collection-clear",
+                "cell-backed-collection-reverse",
+                "cell-backed-collection-truncate",
+                "cell-backed-collection-swap",
+                "cell-backed-collection-contains",
+                "cell-backed-collection-remove",
+                "cell-backed-collection-insert",
+                "cell-backed-collection-set",
+                "cell-backed-collection-pop",
+                "cell-backed-collection-return",
+            ]
+        );
+
+        let mut seen = std::collections::BTreeSet::new();
+        for feature in
+            super::COLLECTION_FAIL_CLOSED_FEATURE_NAMES.iter().chain(super::CELL_BACKED_COLLECTION_FAIL_CLOSED_FEATURE_NAMES.iter())
+        {
+            assert!(seen.insert(*feature), "duplicate collection fail-closed feature name: {feature}");
+            assert!(
+                feature.starts_with("collection-") || feature.starts_with("cell-backed-collection-"),
+                "unexpected collection fail-closed feature prefix: {feature}"
+            );
+            assert!(
+                feature.chars().all(|ch| ch.is_ascii_lowercase() || ch == '-'),
+                "collection fail-closed feature names must remain lowercase kebab-case: {feature}"
+            );
         }
     }
 
