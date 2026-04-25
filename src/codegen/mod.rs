@@ -1750,6 +1750,9 @@ impl CodeGenerator {
                     IrInstruction::CollectionInsert { collection: IrOperand::Var(collection), .. } => {
                         self.constructed_byte_vectors.remove(&collection.id);
                     }
+                    IrInstruction::CollectionSet { collection: IrOperand::Var(collection), .. } => {
+                        self.constructed_byte_vectors.remove(&collection.id);
+                    }
                     IrInstruction::CollectionPop { collection: IrOperand::Var(collection), .. } => {
                         self.constructed_byte_vectors.remove(&collection.id);
                     }
@@ -2187,6 +2190,9 @@ impl CodeGenerator {
             }
             IrInstruction::CollectionInsert { collection, index, value } => {
                 self.emit_collection_insert(collection, index, value)?;
+            }
+            IrInstruction::CollectionSet { collection, index, value } => {
+                self.emit_collection_set(collection, index, value)?;
             }
             IrInstruction::CollectionPop { dest, collection } => {
                 self.emit_collection_pop(dest, collection)?;
@@ -5678,6 +5684,11 @@ impl CodeGenerator {
                 self.record_operand(index, max_var_id);
                 self.record_operand(value, max_var_id);
             }
+            IrInstruction::CollectionSet { collection, index, value } => {
+                self.record_operand(collection, max_var_id);
+                self.record_operand(index, max_var_id);
+                self.record_operand(value, max_var_id);
+            }
             IrInstruction::CollectionPop { dest, collection } => {
                 self.record_var(dest, max_var_id);
                 self.record_operand(collection, max_var_id);
@@ -7244,6 +7255,88 @@ impl CodeGenerator {
         self.emit("ld t0, -8(t4)");
         self.emit("addi t0, t0, 1");
         self.emit("sd t0, -8(t4)");
+        true
+    }
+
+    fn emit_collection_set(&mut self, collection: &IrOperand, index: &IrOperand, value: &IrOperand) -> Result<()> {
+        self.emit("# collection set");
+        self.emit_symbolic_operand_comment("collection", collection);
+        self.emit_symbolic_operand_comment("index", index);
+        self.emit_symbolic_operand_comment("value", value);
+        if self.emit_stack_collection_set(collection, index, value) {
+            return Ok(());
+        }
+        self.emit("# cellscript abi: collection set is not available for this collection");
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        Ok(())
+    }
+
+    fn emit_stack_collection_set(&mut self, collection: &IrOperand, index: &IrOperand, value: &IrOperand) -> bool {
+        let IrOperand::Var(collection) = collection else {
+            return false;
+        };
+        if !self.stack_collection_vars.contains(&collection.id) {
+            return false;
+        }
+        let Some(value_width) = constructed_byte_vector_part_width(value) else {
+            return false;
+        };
+        let Some(element_width) = molecule_vector_element_fixed_width(&collection.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
+        else {
+            return false;
+        };
+        if element_width == 0 || element_width > RUNTIME_COLLECTION_BUFFER_SIZE || element_width != value_width {
+            return false;
+        }
+        let value_scalar = element_width <= 8 && fixed_scalar_operand_width(value).is_some();
+        let fixed_byte_source = if value_scalar {
+            None
+        } else {
+            let Some(source) = self.expected_fixed_byte_source(value, element_width) else {
+                return false;
+            };
+            Some(source)
+        };
+
+        self.emit(format!("# cellscript abi: stack collection set element_size={}", element_width));
+        if let Some(source) = fixed_byte_source.as_ref() {
+            self.emit_prepare_fixed_byte_source(source, element_width, "stack collection set");
+        }
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("ld t0, -8(t4)");
+        self.emit_operand_to_register("t1", index);
+
+        let bounds_ok = self.fresh_label("stack_collection_set_bounds_ok");
+        self.emit("sltu t2, t1, t0");
+        self.emit(format!("bnez t2, {}", bounds_ok));
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        self.emit_label(&bounds_ok);
+
+        self.emit(format!("li t2, {}", element_width));
+        self.emit("mul t3, t1, t2");
+        self.emit("add t5, t4, t3");
+        if value_scalar {
+            self.emit_operand_to_register("t1", value);
+            match element_width {
+                1 => self.emit("sb t1, 0(t5)"),
+                2 => self.emit("sh t1, 0(t5)"),
+                4 => self.emit("sw t1, 0(t5)"),
+                8 => self.emit("sd t1, 0(t5)"),
+                _ => return false,
+            }
+        } else {
+            let source = fixed_byte_source.as_ref().expect("fixed byte source");
+            self.emit(format!("# cellscript abi: stack collection set copy fixed bytes size={}", element_width));
+            for byte_index in 0..element_width {
+                self.emit_fixed_byte_source_byte_to("t1", "t6", source, byte_index);
+                if byte_index <= 2047 {
+                    self.emit(format!("sb t1, {}(t5)", byte_index));
+                } else {
+                    self.emit_large_addi("t0", "t5", byte_index as i64);
+                    self.emit("sb t1, 0(t0)");
+                }
+            }
+        }
         true
     }
 

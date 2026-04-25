@@ -4052,6 +4052,11 @@ fn collect_instruction_scope(instruction: &ir::IrInstruction, used_types: &mut B
             collect_operand_named_types(index, used_types);
             collect_operand_named_types(value, used_types);
         }
+        ir::IrInstruction::CollectionSet { collection, index, value } => {
+            collect_operand_named_types(collection, used_types);
+            collect_operand_named_types(index, used_types);
+            collect_operand_named_types(value, used_types);
+        }
         ir::IrInstruction::CollectionPop { dest, collection } => {
             collect_ir_type_named_types(&dest.ty, used_types);
             collect_operand_named_types(collection, used_types);
@@ -4934,6 +4939,11 @@ fn body_linear_collection_obligations(
                 ir::IrInstruction::CollectionInsert { value, .. } => {
                     for type_name in ir_operand_cell_backed_type_names(value, cell_type_kinds) {
                         operations_by_type.entry(type_name).or_default().insert("insert");
+                    }
+                }
+                ir::IrInstruction::CollectionSet { value, .. } => {
+                    for type_name in ir_operand_cell_backed_type_names(value, cell_type_kinds) {
+                        operations_by_type.entry(type_name).or_default().insert("set");
                     }
                 }
                 _ => {}
@@ -9102,6 +9112,22 @@ fn body_fail_closed_runtime_features(
                         features.insert("cell-backed-collection-insert".to_string());
                     }
                 }
+                ir::IrInstruction::CollectionSet { collection, index, value } => {
+                    if !metadata_stack_collection_set_is_runtime_supported(
+                        collection,
+                        index,
+                        value,
+                        &prelude_availability,
+                        type_layouts,
+                    ) {
+                        features.insert("collection-set".to_string());
+                    }
+                    if ir_operand_is_cell_backed_collection(collection, cell_type_kinds)
+                        || ir_operand_contains_cell_backed_value(value, cell_type_kinds)
+                    {
+                        features.insert("cell-backed-collection-set".to_string());
+                    }
+                }
                 ir::IrInstruction::CollectionPop { dest, collection } => {
                     if !metadata_stack_collection_pop_is_runtime_supported(dest, collection, &prelude_availability, type_layouts) {
                         features.insert("collection-pop".to_string());
@@ -9690,6 +9716,10 @@ fn metadata_prelude_availability(
                     availability.constructed_byte_vector_vars.remove(&collection.id);
                     availability.empty_molecule_vector_vars.remove(&collection.id);
                 }
+                ir::IrInstruction::CollectionSet { collection: ir::IrOperand::Var(collection), .. } => {
+                    availability.constructed_byte_vector_vars.remove(&collection.id);
+                    availability.empty_molecule_vector_vars.remove(&collection.id);
+                }
                 _ => {}
             }
         }
@@ -10077,6 +10107,16 @@ fn metadata_stack_collection_insert_is_runtime_supported(
         && element_width == value_width
         && metadata_fixed_value_available_with_width(value, availability, value_width)
         && (const_usize_operand(index).is_some() || metadata_u64_operand_available(index, availability))
+}
+
+fn metadata_stack_collection_set_is_runtime_supported(
+    collection: &ir::IrOperand,
+    index: &ir::IrOperand,
+    value: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
+    metadata_stack_collection_insert_is_runtime_supported(collection, index, value, availability, type_layouts)
 }
 
 fn metadata_stack_collection_index_is_runtime_supported(
@@ -15001,6 +15041,33 @@ action stack_vec_address_insert(owner: Address, candidate: Address) -> bool {
 }
 "#;
 
+    const STACK_VEC_SET_RUNTIME_PROGRAM: &str = r#"
+module test
+
+action stack_vec_set_middle() -> u64 {
+    let mut values = Vec::new()
+    values.push(7)
+    values.push(11)
+    values.set(1, 9)
+    return values.len() + values[0] + values[1]
+}
+"#;
+
+    const FIXED_BYTE_STACK_VEC_SET_PROGRAM: &str = r#"
+module test
+
+action stack_vec_address_set(owner: Address, candidate: Address) -> bool {
+    let mut owners = Vec::new()
+    owners.push(owner)
+    owners.push(owner)
+    owners.set(1, candidate)
+    if owners[0] == owner {
+        return owners[1] == candidate
+    }
+    return false
+}
+"#;
+
     const STACK_VEC_REVERSE_RUNTIME_PROGRAM: &str = r#"
 module test
 
@@ -17945,6 +18012,67 @@ action grant(config: read_ref Config, token: Token) -> Grant {
                 && !action.fail_closed_runtime_features.contains(&"index-access".to_string())
                 && !action.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
             "stack-backed Vec<Address>.insert should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_scalar_set() {
+        let result = compile(STACK_VEC_SET_RUNTIME_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection set element_size=8"),
+            "Vec<u64>.set should write into the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection set is not available for this collection"),
+            "stack-backed Vec<u64>.set should not hit fail-closed collection path:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_set_middle").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-set".to_string())
+                && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
+            "stack-backed Vec<u64>.set should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_fixed_byte_set() {
+        let result = compile(FIXED_BYTE_STACK_VEC_SET_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection set element_size=32"),
+            "Vec<Address>.set should write into the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection set copy fixed bytes size=32"),
+            "Vec<Address>.set should copy fixed-byte elements:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection set is not available for this collection"),
+            "stack-backed Vec<Address>.set should not hit fail-closed collection path:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_address_set").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-set".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string())
+                && !action.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
+            "stack-backed Vec<Address>.set should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
     }
