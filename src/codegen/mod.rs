@@ -538,6 +538,25 @@ pub struct CodeGenerator {
 }
 
 impl CodeGenerator {
+    fn fixed_named_type_width(&self, ty: &IrType) -> Option<usize> {
+        match ty {
+            IrType::Named(name) => self.type_fixed_sizes.get(name).copied().or_else(|| self.enum_fixed_sizes.get(name).copied()),
+            IrType::Ref(inner) | IrType::MutRef(inner) => self.fixed_named_type_width(inner),
+            _ => None,
+        }
+    }
+
+    fn fixed_byte_like_width(&self, ty: &IrType) -> Option<usize> {
+        fixed_byte_width(ty, type_static_length(ty)).or_else(|| self.fixed_named_type_width(ty))
+    }
+
+    fn constructed_byte_vector_part_width(&self, operand: &IrOperand) -> Option<usize> {
+        constructed_byte_vector_part_width(operand).or_else(|| match operand {
+            IrOperand::Var(var) => self.fixed_named_type_width(&var.ty),
+            _ => None,
+        })
+    }
+
     fn param_is_runtime_bound(&self, param: &IrParam) -> bool {
         param.is_ref || named_type_name(&param.ty).is_some_and(|name| self.cell_type_names.contains(name))
     }
@@ -1508,7 +1527,7 @@ impl CodeGenerator {
                         } else if self.stack_collection_vars.contains(&arr.id)
                             && molecule_vector_element_fixed_width(&arr.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
                                 .is_some_and(|element_width| {
-                                    fixed_byte_width(&dest.ty, type_static_length(&dest.ty))
+                                    self.fixed_byte_like_width(&dest.ty)
                                         .is_some_and(|dest_width| dest_width == element_width && dest_width > 8)
                                 })
                         {
@@ -1569,7 +1588,7 @@ impl CodeGenerator {
                         if self.stack_collection_vars.contains(&collection.id)
                             && molecule_vector_element_fixed_width(&collection.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
                                 .is_some_and(|element_width| {
-                                    fixed_byte_width(&dest.ty, type_static_length(&dest.ty))
+                                    self.fixed_byte_like_width(&dest.ty)
                                         .is_some_and(|dest_width| dest_width == element_width && dest_width > 8)
                                 }) =>
                     {
@@ -1711,7 +1730,7 @@ impl CodeGenerator {
                         self.constructed_byte_vector_roots.insert(dest.id, dest.id);
                     }
                     IrInstruction::CollectionPush { collection: IrOperand::Var(collection), value } => {
-                        let width = constructed_byte_vector_part_width(value);
+                        let width = self.constructed_byte_vector_part_width(value);
                         let source_available = width.is_some_and(|width| self.expected_fixed_byte_source(value, width).is_some());
                         if let Some(bytes) = self.constructed_byte_vectors.get_mut(&collection.id) {
                             if source_available {
@@ -4696,8 +4715,8 @@ impl CodeGenerator {
                 let bytes = fixed_byte_const_bytes(value)?;
                 (bytes.len() == expected_width).then_some(ExpectedFixedByteSource::Const(bytes))
             }
-            IrOperand::Var(var) if fixed_byte_width(&var.ty, type_static_length(&var.ty)).is_some() => {
-                let var_width = fixed_byte_width(&var.ty, type_static_length(&var.ty))?;
+            IrOperand::Var(var) if self.fixed_byte_like_width(&var.ty).is_some() => {
+                let var_width = self.fixed_byte_like_width(&var.ty)?;
                 if let Some(source) = self.schema_field_value_sources.get(&var.id).cloned() {
                     let source_width = layout_fixed_byte_width(&source.layout)?;
                     if source_width == expected_width {
@@ -4717,6 +4736,12 @@ impl CodeGenerator {
                     return Some(ExpectedFixedByteSource::StackSlot { var_id: var.id, width: expected_width });
                 }
                 if self.aggregate_pointer_sources.contains_key(&var.id) && var_width == expected_width {
+                    return Some(ExpectedFixedByteSource::PointerBytes { var_id: var.id, width: expected_width });
+                }
+                if self.schema_pointer_vars.contains(&var.id) && var_width == expected_width {
+                    if let Some(size_offset) = self.schema_pointer_size_offsets.get(&var.id).copied() {
+                        return Some(ExpectedFixedByteSource::LoadedBytes { var_id: var.id, size_offset, width: expected_width });
+                    }
                     return Some(ExpectedFixedByteSource::PointerBytes { var_id: var.id, width: expected_width });
                 }
                 if self.param_vars.contains(&var.id) && var_width == expected_width {
@@ -5293,7 +5318,7 @@ impl CodeGenerator {
         element_width: usize,
     ) {
         let Some(expected_bytes) =
-            parts.iter().try_fold(0usize, |acc, part| constructed_byte_vector_part_width(part).map(|width| acc + width))
+            parts.iter().try_fold(0usize, |acc, part| self.constructed_byte_vector_part_width(part).map(|width| acc + width))
         else {
             self.emit_fail(CellScriptRuntimeError::CellLoadFailed);
             return;
@@ -5336,7 +5361,7 @@ impl CodeGenerator {
 
         let mut cursor = 4usize;
         for part in parts {
-            let Some(width) = constructed_byte_vector_part_width(part) else {
+            let Some(width) = self.constructed_byte_vector_part_width(part) else {
                 self.emit_fail(CellScriptRuntimeError::CellLoadFailed);
                 continue;
             };
@@ -6182,7 +6207,7 @@ impl CodeGenerator {
             return false;
         };
         let dest_scalar = fixed_scalar_width(&dest.ty, Some(element_width)).is_some();
-        let dest_fixed_bytes = fixed_byte_width(&dest.ty, type_static_length(&dest.ty)).is_some_and(|width| width == element_width);
+        let dest_fixed_bytes = self.fixed_byte_like_width(&dest.ty).is_some_and(|width| width == element_width);
         if !dest_scalar && !dest_fixed_bytes {
             return false;
         }
@@ -6544,7 +6569,7 @@ impl CodeGenerator {
         if !self.stack_collection_vars.contains(&collection.id) {
             return false;
         }
-        let Some(width) = constructed_byte_vector_part_width(value) else {
+        let Some(width) = self.constructed_byte_vector_part_width(value) else {
             return false;
         };
         if width > RUNTIME_COLLECTION_BUFFER_SIZE {
@@ -6912,7 +6937,7 @@ impl CodeGenerator {
         if !self.stack_collection_vars.contains(&collection.id) {
             return false;
         }
-        let Some(value_width) = constructed_byte_vector_part_width(value) else {
+        let Some(value_width) = self.constructed_byte_vector_part_width(value) else {
             return false;
         };
         let element_width =
@@ -7003,7 +7028,7 @@ impl CodeGenerator {
             return false;
         };
         let dest_scalar = fixed_scalar_width(&dest.ty, Some(element_width)).is_some();
-        let dest_fixed_bytes = fixed_byte_width(&dest.ty, type_static_length(&dest.ty)).is_some_and(|width| width == element_width);
+        let dest_fixed_bytes = self.fixed_byte_like_width(&dest.ty).is_some_and(|width| width == element_width);
         if !dest_scalar && !dest_fixed_bytes {
             return false;
         }
@@ -7109,7 +7134,7 @@ impl CodeGenerator {
             return false;
         };
         let dest_scalar = fixed_scalar_width(&dest.ty, Some(element_width)).is_some();
-        let dest_fixed_bytes = fixed_byte_width(&dest.ty, type_static_length(&dest.ty)).is_some_and(|width| width == element_width);
+        let dest_fixed_bytes = self.fixed_byte_like_width(&dest.ty).is_some_and(|width| width == element_width);
         if !dest_scalar && !dest_fixed_bytes {
             return false;
         }
@@ -7157,7 +7182,7 @@ impl CodeGenerator {
         if !self.stack_collection_vars.contains(&collection.id) {
             return false;
         }
-        let Some(value_width) = constructed_byte_vector_part_width(value) else {
+        let Some(value_width) = self.constructed_byte_vector_part_width(value) else {
             return false;
         };
         let Some(element_width) = molecule_vector_element_fixed_width(&collection.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
@@ -7312,7 +7337,7 @@ impl CodeGenerator {
         if !self.stack_collection_vars.contains(&collection.id) {
             return false;
         }
-        let Some(value_width) = constructed_byte_vector_part_width(value) else {
+        let Some(value_width) = self.constructed_byte_vector_part_width(value) else {
             return false;
         };
         let Some(element_width) = molecule_vector_element_fixed_width(&collection.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)

@@ -21,6 +21,8 @@ New in 0.13 branch work:
 - Stack-backed local `Vec<u64>` helpers.
 - Stack-backed local fixed-byte helpers for `Vec<Address>` and `Vec<Hash>`
   width-compatible values.
+- Stack-backed fixed-width named schema values, covered by `Vec<Snapshot>`
+  push/contains/pop plus field reads from popped elements.
 - Runtime lowering for `new`, `with_capacity`, `capacity`, `push`,
   `extend_from_slice`, `len`, `is_empty`, indexing, `first`, `last`,
   `contains`, `set`, `remove`, `pop`, `insert`, `reverse`, `truncate`,

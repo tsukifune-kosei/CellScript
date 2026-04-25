@@ -198,7 +198,7 @@ Compact support matrix:
 |---|---:|---:|---:|---|
 | Stack-backed `Vec<u64>` | ✅ | ✅ | ✅ | 0.13 implemented and tested |
 | Stack-backed fixed bytes / `Address` / `Hash` | ✅ | ✅ | ✅ | 0.13 implemented and tested, including fixed-byte `remove` |
-| Stack-backed fixed-width schema values | 🟡 | 🟡 | 🟡 | supported where fixed-width layout is known; release-gate coverage still needed |
+| Stack-backed fixed-width schema values | ✅ | ✅ | 🟡 | implemented where fixed-width layout is known; release-gate coverage includes `Vec<Snapshot>` push/contains/pop/field-read |
 | Molecule dynamic fields / entry-witness vectors | ✅ read-oriented paths | ❌ local mutation helpers | ❌ local mutation helpers | 0.12 foundation; not counted as new 0.13 generic runtime |
 | Cell-backed / linear vectors | ❌ | ❌ | ❌ | fail-closed until ownership proof exists |
 

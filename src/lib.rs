@@ -4575,9 +4575,17 @@ fn body_collection_instantiation_metadata(
                     record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "capacity");
                 }
                 ir::IrInstruction::CollectionPush { collection, value }
-                    if metadata_stack_collection_push_is_runtime_supported(collection, value, &availability) =>
+                    if metadata_stack_collection_push_is_runtime_supported(collection, value, &availability, type_layouts) =>
                 {
-                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "push");
+                    record_stack_collection_push_helper(
+                        &mut builders,
+                        scope_kind,
+                        scope_name,
+                        collection,
+                        value,
+                        &availability,
+                        type_layouts,
+                    );
                 }
                 ir::IrInstruction::CollectionExtend { collection, slice }
                     if metadata_stack_collection_extend_is_runtime_supported(collection, slice, &availability, type_layouts) =>
@@ -4686,6 +4694,67 @@ fn record_stack_collection_helper(
         }
     });
     builder.helpers.insert(helper.to_string());
+}
+
+fn record_stack_collection_push_helper(
+    builders: &mut BTreeMap<String, CollectionInstantiationBuilder>,
+    scope_kind: &str,
+    scope_name: &str,
+    collection: &ir::IrOperand,
+    value: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+    type_layouts: &MetadataTypeLayouts,
+) {
+    let ir::IrOperand::Var(collection) = collection else {
+        return;
+    };
+    if metadata_vec_element_type_name(&collection.ty).is_some() {
+        record_stack_collection_helper(
+            builders,
+            scope_kind,
+            scope_name,
+            &ir::IrOperand::Var(collection.clone()),
+            type_layouts,
+            "push",
+        );
+        return;
+    }
+
+    let Some(element_width_bytes) = metadata_runtime_collection_part_width(value, availability, type_layouts) else {
+        return;
+    };
+    let Some(element_ty) = metadata_operand_type_name(value) else {
+        return;
+    };
+    let collection_ty = format!("Vec<{element_ty}>");
+    let key = format!("{scope_kind}:{scope_name}:{collection_ty}");
+    let builder = builders.entry(key).or_insert_with(|| {
+        let mut helpers = BTreeSet::new();
+        helpers.insert("new".to_string());
+        CollectionInstantiationBuilder {
+            scope_kind: scope_kind.to_string(),
+            scope_name: scope_name.to_string(),
+            collection_ty: collection_ty.clone(),
+            element_ty: element_ty.to_string(),
+            element_width_bytes,
+            helpers,
+        }
+    });
+    builder.helpers.insert("push".to_string());
+}
+
+fn metadata_operand_type_name(operand: &ir::IrOperand) -> Option<String> {
+    match operand {
+        ir::IrOperand::Var(var) => Some(ir_type_to_string(&var.ty)),
+        ir::IrOperand::Const(ir::IrConst::Bool(_)) => Some("bool".to_string()),
+        ir::IrOperand::Const(ir::IrConst::U8(_)) => Some("u8".to_string()),
+        ir::IrOperand::Const(ir::IrConst::U16(_)) => Some("u16".to_string()),
+        ir::IrOperand::Const(ir::IrConst::U32(_)) => Some("u32".to_string()),
+        ir::IrOperand::Const(ir::IrConst::U64(_)) => Some("u64".to_string()),
+        ir::IrOperand::Const(ir::IrConst::Address(_)) => Some("Address".to_string()),
+        ir::IrOperand::Const(ir::IrConst::Hash(_)) => Some("Hash".to_string()),
+        ir::IrOperand::Const(ir::IrConst::Array(_) | ir::IrConst::U128(_) | ir::IrConst::Unit) => None,
+    }
 }
 
 fn metadata_vec_element_type_name(ty: &ir::IrType) -> Option<&str> {
@@ -9305,7 +9374,7 @@ fn body_fail_closed_runtime_features(
                             type_layouts,
                             &prelude_availability,
                         )
-                        && !metadata_stack_collection_push_is_runtime_supported(collection, value, &prelude_availability)
+                        && !metadata_stack_collection_push_is_runtime_supported(collection, value, &prelude_availability, type_layouts)
                     {
                         features.insert(COLLECTION_FAIL_CLOSED_FEATURE_PUSH.to_string());
                     }
@@ -9592,6 +9661,9 @@ fn metadata_prelude_availability(
             if metadata_fixed_byte_width(&param.ty, type_static_length(&param.ty)).is_some_and(|width| width > 8) {
                 availability.aggregate_pointer_vars.insert(param.binding.id, MetadataAggregatePointerSource { ty: param.ty.clone() });
             }
+        } else if metadata_ir_type_fixed_width(&param.ty, type_layouts).is_some() {
+            availability.fixed_value_vars.insert(param.binding.id);
+            availability.aggregate_pointer_vars.insert(param.binding.id, MetadataAggregatePointerSource { ty: param.ty.clone() });
         } else if metadata_fixed_aggregate_pointer_size(&param.ty).is_some() {
             availability.aggregate_pointer_vars.insert(param.binding.id, MetadataAggregatePointerSource { ty: param.ty.clone() });
         }
@@ -9809,7 +9881,9 @@ fn metadata_prelude_availability(
                                 availability.u64_value_vars.insert(dest.id);
                                 availability.u64_operand_vars.insert(dest.id);
                             }
-                        } else if metadata_fixed_byte_width(&dest.ty, fixed_size).is_some() {
+                        } else if metadata_fixed_byte_width(&dest.ty, fixed_size).is_some()
+                            || matches!(dest.ty, ir::IrType::Named(_)) && fixed_size.is_some()
+                        {
                             availability.fixed_value_vars.insert(dest.id);
                             availability
                                 .aggregate_pointer_vars
@@ -9849,7 +9923,9 @@ fn metadata_prelude_availability(
                                 availability.u64_value_vars.insert(dest.id);
                                 availability.u64_operand_vars.insert(dest.id);
                             }
-                        } else if metadata_fixed_byte_width(&dest.ty, fixed_size).is_some() {
+                        } else if metadata_fixed_byte_width(&dest.ty, fixed_size).is_some()
+                            || matches!(dest.ty, ir::IrType::Named(_)) && fixed_size.is_some()
+                        {
                             availability
                                 .aggregate_pointer_vars
                                 .insert(dest.id, MetadataAggregatePointerSource { ty: dest.ty.clone() });
@@ -9866,7 +9942,9 @@ fn metadata_prelude_availability(
                                 availability.u64_value_vars.insert(dest.id);
                                 availability.u64_operand_vars.insert(dest.id);
                             }
-                        } else if metadata_fixed_byte_width(&dest.ty, fixed_size).is_some() {
+                        } else if metadata_fixed_byte_width(&dest.ty, fixed_size).is_some()
+                            || matches!(dest.ty, ir::IrType::Named(_)) && fixed_size.is_some()
+                        {
                             availability
                                 .aggregate_pointer_vars
                                 .insert(dest.id, MetadataAggregatePointerSource { ty: dest.ty.clone() });
@@ -9975,7 +10053,7 @@ fn metadata_prelude_availability(
                 ir::IrInstruction::CollectionPush { collection: ir::IrOperand::Var(collection), value } => {
                     if let Some(byte_count) = availability.constructed_byte_vector_vars.get(&collection.id).copied() {
                         if let Some(width) = metadata_constructed_vector_part_width(value, type_layouts) {
-                            if metadata_fixed_value_available_with_width(value, &availability, width) {
+                            if metadata_fixed_value_available_with_layout_width(value, &availability, width, type_layouts) {
                                 availability.constructed_byte_vector_vars.insert(collection.id, byte_count + width);
                                 if let Some(name) = loaded_constructed_vector_names.get(&collection.id).cloned() {
                                     named_constructed_vectors.insert(name, collection.id);
@@ -9991,7 +10069,7 @@ fn metadata_prelude_availability(
                 ir::IrInstruction::CollectionExtend { collection: ir::IrOperand::Var(collection), slice } => {
                     if let Some(byte_count) = availability.constructed_byte_vector_vars.get(&collection.id).copied() {
                         if let Some(width) = metadata_constructed_vector_part_width(slice, type_layouts) {
-                            if metadata_fixed_value_available_with_width(slice, &availability, width) {
+                            if metadata_fixed_value_available_with_layout_width(slice, &availability, width, type_layouts) {
                                 availability.constructed_byte_vector_vars.insert(collection.id, byte_count + width);
                                 if let Some(name) = loaded_constructed_vector_names.get(&collection.id).cloned() {
                                     named_constructed_vectors.insert(name, collection.id);
@@ -10187,6 +10265,31 @@ fn metadata_fixed_value_available_with_width(
         && metadata_operand_fixed_value_width(operand).is_some_and(|width| expected_width <= width)
 }
 
+fn metadata_fixed_value_available_with_layout_width(
+    operand: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+    expected_width: usize,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
+    if let ir::IrOperand::Const(value) = operand {
+        if metadata_fixed_scalar_const_value(value).is_some() {
+            return metadata_scalar_const_fits_width(value, expected_width);
+        }
+    }
+    if expected_width <= 8 && matches!(operand, ir::IrOperand::Var(_)) && metadata_scalar_available(operand, availability) {
+        return true;
+    }
+    match operand {
+        ir::IrOperand::Const(value) => metadata_fixed_byte_const_len(value).is_some_and(|width| expected_width <= width),
+        ir::IrOperand::Var(var) => {
+            availability.fixed_value_vars.contains(&var.id)
+                && metadata_ir_type_fixed_width(&var.ty, type_layouts)
+                    .or_else(|| metadata_operand_fixed_value_width(operand))
+                    .is_some_and(|width| expected_width <= width)
+        }
+    }
+}
+
 fn metadata_fixed_value_available(operand: &ir::IrOperand, availability: &MetadataPreludeAvailability) -> bool {
     if metadata_scalar_available(operand, availability) {
         return true;
@@ -10260,12 +10363,13 @@ fn metadata_stack_collection_push_is_runtime_supported(
     collection: &ir::IrOperand,
     value: &ir::IrOperand,
     availability: &MetadataPreludeAvailability,
+    type_layouts: &MetadataTypeLayouts,
 ) -> bool {
     let ir::IrOperand::Var(collection) = collection else {
         return false;
     };
     availability.stack_collection_vars.contains(&collection.id)
-        && metadata_runtime_collection_part_width(value, availability).is_some()
+        && metadata_runtime_collection_part_width(value, availability, type_layouts).is_some()
 }
 
 fn metadata_stack_collection_extend_is_runtime_supported(
@@ -10358,7 +10462,7 @@ fn metadata_stack_collection_contains_is_runtime_supported(
     if !availability.stack_collection_vars.contains(&collection.id) {
         return false;
     }
-    let Some(value_width) = metadata_runtime_collection_part_width(value, availability) else {
+    let Some(value_width) = metadata_runtime_collection_part_width(value, availability, type_layouts) else {
         return false;
     };
     let element_width = metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts).unwrap_or(value_width);
@@ -10378,7 +10482,7 @@ fn metadata_stack_collection_remove_is_runtime_supported(
     availability.stack_collection_vars.contains(&collection.id)
         && metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts).is_some_and(|width| {
             metadata_fixed_scalar_width(&dest.ty, Some(width)).is_some()
-                || metadata_fixed_byte_width(&dest.ty, type_static_length(&dest.ty)).is_some_and(|dest_width| dest_width == width)
+                || metadata_ir_type_fixed_width(&dest.ty, type_layouts).is_some_and(|dest_width| dest_width == width)
         })
         && (const_usize_operand(index).is_some() || metadata_u64_operand_available(index, availability))
 }
@@ -10395,7 +10499,7 @@ fn metadata_stack_collection_pop_is_runtime_supported(
     availability.stack_collection_vars.contains(&collection.id)
         && metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts).is_some_and(|width| {
             metadata_fixed_scalar_width(&dest.ty, Some(width)).is_some()
-                || metadata_fixed_byte_width(&dest.ty, type_static_length(&dest.ty)).is_some_and(|dest_width| dest_width == width)
+                || metadata_ir_type_fixed_width(&dest.ty, type_layouts).is_some_and(|dest_width| dest_width == width)
         })
 }
 
@@ -10412,7 +10516,7 @@ fn metadata_stack_collection_insert_is_runtime_supported(
     if !availability.stack_collection_vars.contains(&collection.id) {
         return false;
     }
-    let Some(value_width) = metadata_runtime_collection_part_width(value, availability) else {
+    let Some(value_width) = metadata_runtime_collection_part_width(value, availability, type_layouts) else {
         return false;
     };
     let Some(element_width) = metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts) else {
@@ -10420,7 +10524,7 @@ fn metadata_stack_collection_insert_is_runtime_supported(
     };
     element_width != 0
         && element_width == value_width
-        && metadata_fixed_value_available_with_width(value, availability, value_width)
+        && metadata_fixed_value_available_with_layout_width(value, availability, value_width, type_layouts)
         && (const_usize_operand(index).is_some() || metadata_u64_operand_available(index, availability))
 }
 
@@ -10447,15 +10551,20 @@ fn metadata_stack_collection_index_is_runtime_supported(
     availability.stack_collection_vars.contains(&arr.id)
         && metadata_molecule_vector_element_fixed_width(&arr.ty, type_layouts).is_some_and(|width| {
             metadata_fixed_scalar_width(&dest.ty, Some(width)).is_some()
-                || metadata_fixed_byte_width(&dest.ty, type_static_length(&dest.ty)).is_some_and(|dest_width| dest_width == width)
+                || metadata_ir_type_fixed_width(&dest.ty, type_layouts).is_some_and(|dest_width| dest_width == width)
         })
         && (const_usize_operand(idx).is_some() || metadata_u64_operand_available(idx, availability))
 }
 
-fn metadata_runtime_collection_part_width(operand: &ir::IrOperand, availability: &MetadataPreludeAvailability) -> Option<usize> {
+fn metadata_runtime_collection_part_width(
+    operand: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+    type_layouts: &MetadataTypeLayouts,
+) -> Option<usize> {
     match operand {
         ir::IrOperand::Var(var) => metadata_fixed_scalar_width(&var.ty, type_static_length(&var.ty)).or_else(|| {
-            let width = metadata_fixed_byte_width(&var.ty, type_static_length(&var.ty))?;
+            let width = metadata_fixed_byte_width(&var.ty, type_static_length(&var.ty))
+                .or_else(|| metadata_ir_type_fixed_width(&var.ty, type_layouts))?;
             availability.fixed_value_vars.contains(&var.id).then_some(width)
         }),
         ir::IrOperand::Const(ir::IrConst::Bool(_) | ir::IrConst::U8(_)) => Some(1),
@@ -15566,6 +15675,29 @@ action stack_vec_address_contains(owner: Address, candidate: Address) -> bool {
 }
 "#;
 
+    const FIXED_SCHEMA_STACK_VEC_PROGRAM: &str = r#"
+module test
+
+struct Snapshot {
+    owner: Address,
+    amount: u64,
+}
+
+action stack_vec_snapshot_roundtrip(snapshot: Snapshot) -> bool {
+    let mut snapshots = Vec::new()
+    snapshots.push(snapshot)
+
+    if snapshots.contains(snapshot) {
+        let loaded = snapshots.pop()
+        if loaded.owner == snapshot.owner {
+            return loaded.amount == snapshot.amount
+        }
+    }
+
+    return false
+}
+"#;
+
     const CELL_BACKED_VEC_PROGRAM: &str = r#"
 module test
 
@@ -19024,6 +19156,68 @@ action bad(point: Point) -> u64 {
             "stack-backed Vec<Address>.contains should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_fixed_schema_values() {
+        let result = compile(FIXED_SCHEMA_STACK_VEC_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection push element_size=40"),
+            "Vec<Snapshot>.push should copy fixed-width schema values into the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection contains element_size=40"),
+            "Vec<Snapshot>.contains should compare fixed-width schema values in the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection pop element_size=40"),
+            "Vec<Snapshot>.pop should return a fixed-width schema value pointer from the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: generic field Snapshot.owner offset=0 size=32")
+                && asm.contains("# cellscript abi: generic field Snapshot.amount offset=32 size=8"),
+            "Vec<Snapshot> elements should remain field-readable after pop:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection push is not needed for verifier execution")
+                && !asm.contains("# cellscript abi: collection contains is not available for this collection")
+                && !asm.contains("# cellscript abi: collection pop is not available for this collection")
+                && !asm.contains("# cellscript abi: fail closed because element layout is not statically computable"),
+            "stack-backed Vec<Snapshot> should not hit old fail-closed collection paths:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_snapshot_roundtrip").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-contains".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-pop".to_string())
+                && !action.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
+            "stack-backed Vec<Snapshot> should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+
+        let instantiation = result
+            .metadata
+            .runtime
+            .collection_instantiations
+            .iter()
+            .find(|instantiation| instantiation.collection_ty == "Vec<Snapshot>")
+            .expect("Vec<Snapshot> instantiation should be metadata-visible");
+        assert_eq!(instantiation.element_ty, "Snapshot");
+        assert_eq!(instantiation.element_width_bytes, 40);
+        assert_eq!(instantiation.max_elements, 6);
+        assert_eq!(instantiation.backing, "stack-fixed-buffer:256");
+        for helper in ["contains", "new", "pop", "push"] {
+            assert!(instantiation.helpers.iter().any(|value| value == helper), "missing helper {helper}: {instantiation:?}");
+        }
     }
 
     #[test]

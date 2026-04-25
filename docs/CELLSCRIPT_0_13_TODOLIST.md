@@ -75,7 +75,7 @@ by existing fixed-width machinery):
 |---|---:|---:|---:|---:|---:|---:|---|
 | Stack-backed `Vec<u64>` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | implemented and tested |
 | Stack-backed fixed bytes / `Address` / `Hash` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | implemented and tested |
-| Stack-backed fixed-width schema values | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | supported where fixed-width layout is known; release-gate coverage still needed |
+| Stack-backed fixed-width schema values | ✅ | ✅ | ✅ | ✅ | 🟡 | 🟡 | implemented where fixed-width layout is known; release-gate coverage includes `Vec<Snapshot>` push/contains/pop/field-read |
 | Molecule dynamic fields / entry-witness vectors | ❌ local construction | ❌ local mutation | ✅ read-oriented paths | 🟡 read/compare paths only | ❌ local mutation | ❌ local mutation | 0.12 foundation, not new 0.13 generic runtime |
 | Cell-backed / linear vectors | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | fail-closed until ownership proof exists |
 
@@ -101,6 +101,10 @@ Notes:
 - [x] Check generated assembly/code-size impact after the helper set expansion;
   current bundled-example backend-shape budget test passes and the release
   notes draft records the branch baseline snapshot.
+- [x] Add release-gate coverage for stack-backed fixed-width schema values:
+  `Vec<Snapshot>` now covers fixed-width named schema push/contains/pop,
+  field reads from popped elements, fail-closed metadata, and instantiation
+  metadata.
 
 ---
 
