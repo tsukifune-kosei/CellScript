@@ -9325,19 +9325,24 @@ fn metadata_prelude_availability(
                                         .insert(dest.id, MetadataAggregatePointerSource { ty: element_ty.clone() });
                                 }
                             }
-                        } else if availability.stack_collection_vars.contains(&arr.id)
-                            && metadata_molecule_vector_element_fixed_width(&arr.ty, type_layouts).is_some()
-                            && (const_usize_operand(idx).is_some() || metadata_u64_operand_available(idx, &availability))
-                        {
-                            let fixed_size = metadata_ir_type_fixed_width(&dest.ty, type_layouts);
-                            if metadata_fixed_scalar_width(&dest.ty, fixed_size).is_some() {
-                                availability.scalar_vars.insert(dest.id);
-                                availability.fixed_value_vars.insert(dest.id);
-                                if dest.ty == ir::IrType::U64 {
-                                    availability.u64_value_vars.insert(dest.id);
-                                    availability.u64_operand_vars.insert(dest.id);
-                                }
+                        }
+                    } else if availability.stack_collection_vars.contains(&arr.id)
+                        && metadata_molecule_vector_element_fixed_width(&arr.ty, type_layouts).is_some()
+                        && (const_usize_operand(idx).is_some() || metadata_u64_operand_available(idx, &availability))
+                    {
+                        let fixed_size = metadata_ir_type_fixed_width(&dest.ty, type_layouts);
+                        if metadata_fixed_scalar_width(&dest.ty, fixed_size).is_some() {
+                            availability.scalar_vars.insert(dest.id);
+                            availability.fixed_value_vars.insert(dest.id);
+                            if dest.ty == ir::IrType::U64 {
+                                availability.u64_value_vars.insert(dest.id);
+                                availability.u64_operand_vars.insert(dest.id);
                             }
+                        } else if metadata_fixed_byte_width(&dest.ty, fixed_size).is_some() {
+                            availability.fixed_value_vars.insert(dest.id);
+                            availability
+                                .aggregate_pointer_vars
+                                .insert(dest.id, MetadataAggregatePointerSource { ty: dest.ty.clone() });
                         }
                     }
                 }
@@ -9707,7 +9712,8 @@ fn metadata_stack_collection_push_is_runtime_supported(
     let ir::IrOperand::Var(collection) = collection else {
         return false;
     };
-    availability.stack_collection_vars.contains(&collection.id) && metadata_runtime_collection_scalar_width(value).is_some()
+    availability.stack_collection_vars.contains(&collection.id)
+        && metadata_runtime_collection_part_width(value, availability).is_some()
 }
 
 fn metadata_stack_collection_index_is_runtime_supported(
@@ -9721,19 +9727,24 @@ fn metadata_stack_collection_index_is_runtime_supported(
         return false;
     };
     availability.stack_collection_vars.contains(&arr.id)
-        && metadata_molecule_vector_element_fixed_width(&arr.ty, type_layouts)
-            .is_some_and(|width| metadata_fixed_scalar_width(&dest.ty, Some(width)).is_some())
+        && metadata_molecule_vector_element_fixed_width(&arr.ty, type_layouts).is_some_and(|width| {
+            metadata_fixed_scalar_width(&dest.ty, Some(width)).is_some()
+                || metadata_fixed_byte_width(&dest.ty, type_static_length(&dest.ty)).is_some_and(|dest_width| dest_width == width)
+        })
         && (const_usize_operand(idx).is_some() || metadata_u64_operand_available(idx, availability))
 }
 
-fn metadata_runtime_collection_scalar_width(operand: &ir::IrOperand) -> Option<usize> {
+fn metadata_runtime_collection_part_width(operand: &ir::IrOperand, availability: &MetadataPreludeAvailability) -> Option<usize> {
     match operand {
-        ir::IrOperand::Var(var) => metadata_fixed_scalar_width(&var.ty, type_static_length(&var.ty)),
+        ir::IrOperand::Var(var) => metadata_fixed_scalar_width(&var.ty, type_static_length(&var.ty)).or_else(|| {
+            let width = metadata_fixed_byte_width(&var.ty, type_static_length(&var.ty))?;
+            availability.fixed_value_vars.contains(&var.id).then_some(width)
+        }),
         ir::IrOperand::Const(ir::IrConst::Bool(_) | ir::IrConst::U8(_)) => Some(1),
         ir::IrOperand::Const(ir::IrConst::U16(_)) => Some(2),
         ir::IrOperand::Const(ir::IrConst::U32(_)) => Some(4),
         ir::IrOperand::Const(ir::IrConst::U64(_)) => Some(8),
-        _ => None,
+        ir::IrOperand::Const(value) => metadata_fixed_byte_const_len(value),
     }
 }
 
@@ -14534,6 +14545,16 @@ action stack_vec_sum() -> u64 {
 }
 "#;
 
+    const FIXED_BYTE_STACK_VEC_RUNTIME_PROGRAM: &str = r#"
+module test
+
+action stack_vec_address_roundtrip(owner: Address) -> bool {
+    let mut owners = Vec::new()
+    owners.push(owner)
+    return owners[0] == owner
+}
+"#;
+
     const CELL_BACKED_VEC_PROGRAM: &str = r#"
 module test
 
@@ -17068,6 +17089,44 @@ action grant(config: read_ref Config, token: Token) -> Grant {
                 && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
                 && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
             "stack-backed scalar Vec runtime should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_fixed_byte_runtime_push_index() {
+        let result = compile(FIXED_BYTE_STACK_VEC_RUNTIME_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection push element_size=32"),
+            "Vec<Address> push should execute against the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection copy fixed bytes size=32"),
+            "Vec<Address> push should copy fixed-byte elements into the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection index element_size=32"),
+            "Vec<Address> index should return a pointer into the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection push is not needed for verifier execution")
+                && !asm.contains("# cellscript abi: fail closed because element layout is not statically computable"),
+            "stack-backed Vec<Address> runtime should not hit the old fail-closed collection paths:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_address_roundtrip").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string())
+                && !action.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
+            "stack-backed Vec<Address> runtime should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
     }

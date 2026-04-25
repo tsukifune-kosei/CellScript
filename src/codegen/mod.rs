@@ -249,7 +249,7 @@ fn constructed_byte_vector_part_width(operand: &IrOperand) -> Option<usize> {
     })
 }
 
-fn runtime_collection_scalar_width(operand: &IrOperand) -> Option<usize> {
+fn fixed_scalar_operand_width(operand: &IrOperand) -> Option<usize> {
     match operand {
         IrOperand::Var(var) => fixed_scalar_width(&var.ty, type_static_length(&var.ty)),
         IrOperand::Const(IrConst::Bool(_)) | IrOperand::Const(IrConst::U8(_)) => Some(1),
@@ -493,8 +493,10 @@ pub struct CodeGenerator {
     stack_collection_vars: BTreeSet<usize>,
     /// Locally constructed `Vec<u8>` bytes keyed by collection variable id.
     constructed_byte_vectors: HashMap<usize, Vec<IrOperand>>,
-    /// Collection mutation value ids that are covered by create-output vector verification.
-    verified_collection_construction_values: BTreeSet<usize>,
+    /// Root `CollectionNew` variable for aliases of locally constructed vectors.
+    constructed_byte_vector_roots: HashMap<usize, usize>,
+    /// Collection variable ids whose full construction is covered by create-output vector verification.
+    verified_collection_construction_vectors: BTreeSet<usize>,
     /// `type_hash()` temporaries that can be loaded from a created Output cell's TypeHash field.
     output_type_hash_sources: HashMap<usize, usize>,
     /// Schema parameter TypeHash pointer slots, keyed by source parameter variable id.
@@ -575,7 +577,8 @@ impl CodeGenerator {
             empty_molecule_vector_vars: BTreeSet::new(),
             stack_collection_vars: BTreeSet::new(),
             constructed_byte_vectors: HashMap::new(),
-            verified_collection_construction_values: BTreeSet::new(),
+            constructed_byte_vector_roots: HashMap::new(),
+            verified_collection_construction_vectors: BTreeSet::new(),
             output_type_hash_sources: HashMap::new(),
             param_type_hash_pointer_offsets: HashMap::new(),
             param_type_hash_size_offsets: HashMap::new(),
@@ -1194,7 +1197,8 @@ impl CodeGenerator {
         self.verified_collection_push_values.clear();
         self.stack_collection_vars.clear();
         self.constructed_byte_vectors.clear();
-        self.verified_collection_construction_values.clear();
+        self.constructed_byte_vector_roots.clear();
+        self.verified_collection_construction_vectors.clear();
         self.param_vars.clear();
         Ok(())
     }
@@ -1243,7 +1247,8 @@ impl CodeGenerator {
         self.verified_collection_push_values.clear();
         self.stack_collection_vars.clear();
         self.constructed_byte_vectors.clear();
-        self.verified_collection_construction_values.clear();
+        self.constructed_byte_vector_roots.clear();
+        self.verified_collection_construction_vectors.clear();
         self.param_vars.clear();
         Ok(())
     }
@@ -1297,7 +1302,8 @@ impl CodeGenerator {
         self.verified_collection_push_values.clear();
         self.stack_collection_vars.clear();
         self.constructed_byte_vectors.clear();
-        self.verified_collection_construction_values.clear();
+        self.constructed_byte_vector_roots.clear();
+        self.verified_collection_construction_vectors.clear();
         self.param_vars.clear();
         Ok(())
     }
@@ -1395,9 +1401,20 @@ impl CodeGenerator {
         self.tuple_call_return_vars.clear();
         self.tuple_call_return_field_slots.clear();
         self.tuple_aggregate_fields.clear();
+        let mut named_stack_collections = HashMap::<String, usize>::new();
         for block in &body.blocks {
             for instruction in &block.instructions {
                 match instruction {
+                    IrInstruction::StoreVar { name, src: IrOperand::Var(src) } => {
+                        if self.stack_collection_vars.contains(&src.id) {
+                            named_stack_collections.insert(name.clone(), src.id);
+                        }
+                    }
+                    IrInstruction::LoadVar { dest, name } => {
+                        if named_stack_collections.contains_key(name) {
+                            self.stack_collection_vars.insert(dest.id);
+                        }
+                    }
                     IrInstruction::Tuple { dest, fields } => {
                         self.tuple_aggregate_fields.insert(dest.id, fields.clone());
                     }
@@ -1488,6 +1505,14 @@ impl CodeGenerator {
                                     }
                                 }
                             }
+                        } else if self.stack_collection_vars.contains(&arr.id)
+                            && molecule_vector_element_fixed_width(&arr.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
+                                .is_some_and(|element_width| {
+                                    fixed_byte_width(&dest.ty, type_static_length(&dest.ty))
+                                        .is_some_and(|dest_width| dest_width == element_width && dest_width > 8)
+                                })
+                        {
+                            self.aggregate_pointer_sources.insert(dest.id, AggregatePointerSource { ty: dest.ty.clone() });
                         }
                     }
                     IrInstruction::Binary { dest, op, left, right }
@@ -1548,9 +1573,15 @@ impl CodeGenerator {
                     }
                     IrInstruction::Move { dest, src: IrOperand::Var(src) }
                     | IrInstruction::Unary { dest, op: UnaryOp::Ref | UnaryOp::Deref, operand: IrOperand::Var(src) } => {
+                        if self.stack_collection_vars.contains(&src.id) && dest.ty == src.ty {
+                            self.stack_collection_vars.insert(dest.id);
+                        }
                         if let Some(source) = self.schema_field_value_sources.get(&src.id).cloned() {
                             self.schema_field_value_sources.insert(dest.id, source);
                         }
+                    }
+                    IrInstruction::CollectionNew { dest, .. } => {
+                        self.stack_collection_vars.insert(dest.id);
                     }
                     _ => {}
                 }
@@ -1616,7 +1647,8 @@ impl CodeGenerator {
     fn set_constructed_byte_vectors(&mut self, body: &IrBody) {
         self.stack_collection_vars.clear();
         self.constructed_byte_vectors.clear();
-        self.verified_collection_construction_values.clear();
+        self.constructed_byte_vector_roots.clear();
+        self.verified_collection_construction_vectors.clear();
         let mut named_vectors = HashMap::<String, usize>::new();
         let mut named_stack_collections = HashMap::<String, usize>::new();
         let mut loaded_vector_names = HashMap::<usize, String>::new();
@@ -1637,6 +1669,9 @@ impl CodeGenerator {
                             named_stack_collections.insert(name.clone(), dest.id);
                             if let Some(bytes) = self.constructed_byte_vectors.get(&source_id).cloned() {
                                 self.constructed_byte_vectors.insert(dest.id, bytes);
+                                if let Some(root_id) = self.constructed_byte_vector_roots.get(&source_id).copied() {
+                                    self.constructed_byte_vector_roots.insert(dest.id, root_id);
+                                }
                                 loaded_vector_names.insert(dest.id, name.clone());
                             }
                             continue;
@@ -1644,6 +1679,9 @@ impl CodeGenerator {
                         if let Some(source_id) = named_vectors.get(name).copied() {
                             if let Some(bytes) = self.constructed_byte_vectors.get(&source_id).cloned() {
                                 self.constructed_byte_vectors.insert(dest.id, bytes);
+                                if let Some(root_id) = self.constructed_byte_vector_roots.get(&source_id).copied() {
+                                    self.constructed_byte_vector_roots.insert(dest.id, root_id);
+                                }
                                 loaded_vector_names.insert(dest.id, name.clone());
                             }
                         }
@@ -1651,6 +1689,7 @@ impl CodeGenerator {
                     IrInstruction::CollectionNew { dest, .. } => {
                         self.stack_collection_vars.insert(dest.id);
                         self.constructed_byte_vectors.insert(dest.id, Vec::new());
+                        self.constructed_byte_vector_roots.insert(dest.id, dest.id);
                     }
                     IrInstruction::CollectionPush { collection: IrOperand::Var(collection), value } => {
                         let width = constructed_byte_vector_part_width(value);
@@ -1658,9 +1697,6 @@ impl CodeGenerator {
                         if let Some(bytes) = self.constructed_byte_vectors.get_mut(&collection.id) {
                             if source_available {
                                 bytes.push(value.clone());
-                                if let IrOperand::Var(var) = value {
-                                    self.verified_collection_construction_values.insert(var.id);
-                                }
                                 if let Some(name) = loaded_vector_names.get(&collection.id).cloned() {
                                     named_vectors.insert(name, collection.id);
                                 }
@@ -1678,9 +1714,6 @@ impl CodeGenerator {
                         if let Some(bytes) = self.constructed_byte_vectors.get_mut(&collection.id) {
                             if source_available {
                                 bytes.push(slice.clone());
-                                if let IrOperand::Var(var) = slice {
-                                    self.verified_collection_construction_values.insert(var.id);
-                                }
                                 if let Some(name) = loaded_vector_names.get(&collection.id).cloned() {
                                     named_vectors.insert(name, collection.id);
                                 }
@@ -1696,10 +1729,38 @@ impl CodeGenerator {
                         }
                         if let Some(bytes) = self.constructed_byte_vectors.get(&src.id).cloned() {
                             self.constructed_byte_vectors.insert(dest.id, bytes);
+                            if let Some(root_id) = self.constructed_byte_vector_roots.get(&src.id).copied() {
+                                self.constructed_byte_vector_roots.insert(dest.id, root_id);
+                            }
                         }
                     }
                     _ => {}
                 }
+            }
+        }
+        let mut verified_roots = BTreeSet::new();
+        for pattern in &body.create_set {
+            let Some(layouts) = self.type_layouts.get(&pattern.ty) else {
+                continue;
+            };
+            for (field, value) in &pattern.fields {
+                let Some(layout) = layouts.get(field) else {
+                    continue;
+                };
+                if molecule_vector_element_fixed_width(&layout.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes).is_none() {
+                    continue;
+                }
+                let IrOperand::Var(var) = value else {
+                    continue;
+                };
+                if self.constructed_byte_vectors.contains_key(&var.id) {
+                    verified_roots.insert(self.constructed_byte_vector_roots.get(&var.id).copied().unwrap_or(var.id));
+                }
+            }
+        }
+        for (var_id, root_id) in &self.constructed_byte_vector_roots {
+            if verified_roots.contains(root_id) {
+                self.verified_collection_construction_vectors.insert(*var_id);
             }
         }
     }
@@ -2273,7 +2334,8 @@ impl CodeGenerator {
         self.dynamic_value_size_offsets.clear();
         self.empty_molecule_vector_vars.clear();
         self.constructed_byte_vectors.clear();
-        self.verified_collection_construction_values.clear();
+        self.constructed_byte_vector_roots.clear();
+        self.verified_collection_construction_vectors.clear();
         self.output_type_hash_sources.clear();
         self.consume_order.clear();
         self.consume_indices.clear();
@@ -5996,7 +6058,9 @@ impl CodeGenerator {
         else {
             return false;
         };
-        if fixed_scalar_width(&dest.ty, Some(element_width)).is_none() {
+        let dest_scalar = fixed_scalar_width(&dest.ty, Some(element_width)).is_some();
+        let dest_fixed_bytes = fixed_byte_width(&dest.ty, type_static_length(&dest.ty)).is_some_and(|width| width == element_width);
+        if !dest_scalar && !dest_fixed_bytes {
             return false;
         }
 
@@ -6015,7 +6079,11 @@ impl CodeGenerator {
         self.emit(format!("li t2, {}", element_width));
         self.emit("mul t1, t1, t2");
         self.emit("add t4, t4, t1");
-        self.emit_unaligned_scalar_load("t4", "t0", "t2", 0, element_width);
+        if dest_scalar {
+            self.emit_unaligned_scalar_load("t4", "t0", "t2", 0, element_width);
+        } else {
+            self.emit("addi t0, t4, 0");
+        }
         self.emit(format!("sd t0, {}(sp)", dest.id * 8));
         true
     }
@@ -6288,7 +6356,7 @@ impl CodeGenerator {
             self.emit("# cellscript abi: collection push is covered by mutate append verifier");
             return Ok(());
         }
-        if matches!(value, IrOperand::Var(var) if self.verified_collection_construction_values.contains(&var.id)) {
+        if matches!(collection, IrOperand::Var(var) if self.verified_collection_construction_vectors.contains(&var.id)) {
             self.emit("# cellscript abi: collection push is covered by create-output vector verifier");
             return Ok(());
         }
@@ -6314,9 +6382,12 @@ impl CodeGenerator {
         if !self.stack_collection_vars.contains(&collection.id) {
             return false;
         }
-        let Some(width) = runtime_collection_scalar_width(value) else {
+        let Some(width) = constructed_byte_vector_part_width(value) else {
             return false;
         };
+        if width > RUNTIME_COLLECTION_BUFFER_SIZE {
+            return false;
+        }
 
         self.emit(format!("# cellscript abi: stack collection push element_size={}", width));
         self.emit(format!("ld t4, {}(sp)", collection.id * 8));
@@ -6332,14 +6403,38 @@ impl CodeGenerator {
         self.emit_label(&capacity_ok);
 
         self.emit("add t5, t4, t2");
-        self.emit_operand_to_register("t1", value);
-        match width {
-            1 => self.emit("sb t1, 0(t5)"),
-            2 => self.emit("sh t1, 0(t5)"),
-            4 => self.emit("sw t1, 0(t5)"),
-            8 => self.emit("sd t1, 0(t5)"),
-            _ => return false,
+        if width <= 8 && fixed_scalar_operand_width(value).is_some() {
+            self.emit_operand_to_register("t1", value);
+            match width {
+                1 => self.emit("sb t1, 0(t5)"),
+                2 => self.emit("sh t1, 0(t5)"),
+                4 => self.emit("sw t1, 0(t5)"),
+                8 => self.emit("sd t1, 0(t5)"),
+                _ => return false,
+            }
+        } else {
+            let Some(source) = self.expected_fixed_byte_source(value, width) else {
+                return false;
+            };
+            self.emit_prepare_fixed_byte_source(&source, width, "stack collection push");
+            self.emit(format!("# cellscript abi: stack collection copy fixed bytes size={}", width));
+            for byte_index in 0..width {
+                self.emit_fixed_byte_source_byte_to("t1", "t6", &source, byte_index);
+                self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+                self.emit("ld t0, -8(t4)");
+                self.emit(format!("li t2, {}", width));
+                self.emit("mul t2, t0, t2");
+                self.emit("add t4, t4, t2");
+                if byte_index <= 2047 {
+                    self.emit(format!("sb t1, {}(t4)", byte_index));
+                } else {
+                    self.emit_large_addi("t0", "t4", byte_index as i64);
+                    self.emit("sb t1, 0(t0)");
+                }
+            }
         }
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("ld t0, -8(t4)");
         self.emit("addi t0, t0, 1");
         self.emit("sd t0, -8(t4)");
         true
@@ -6349,7 +6444,7 @@ impl CodeGenerator {
         self.emit("# collection extend_from_slice");
         self.emit_symbolic_operand_comment("collection", collection);
         self.emit_symbolic_operand_comment("slice", slice);
-        if matches!(slice, IrOperand::Var(var) if self.verified_collection_construction_values.contains(&var.id)) {
+        if matches!(collection, IrOperand::Var(var) if self.verified_collection_construction_vectors.contains(&var.id)) {
             self.emit("# cellscript abi: collection extend is covered by create-output vector verifier");
             return Ok(());
         }
