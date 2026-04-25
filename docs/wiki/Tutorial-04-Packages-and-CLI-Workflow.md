@@ -1,4 +1,14 @@
-CellScript includes a beta package manager. It is stable enough for local package workflows, local path dependencies, build/check/doc/fmt flows, and lockfile validation. Registry publishing and remote package workflows should still be treated as experimental.
+Small experiments can be compiled as single `.cell` files. Once a contract has more than one source file, dependency, or release target, use a package.
+
+CellScript packages are described by `Cell.toml`. The 0.12 workflow is production-style for local source roots, path dependencies, package build/check/doc/fmt flows, lockfile validation, and release policy checks. Registry publishing and registry dependency resolution are intentionally experimental/fail-closed until a trusted registry path is ready.
+
+## What You Will Learn
+
+- how to create a package;
+- what belongs in `Cell.toml`;
+- how to build, check, format, and document a package;
+- which reports help during audit and release preparation;
+- where the current package workflow intentionally stops.
 
 ## Create a Package
 
@@ -7,7 +17,7 @@ cellc init my_contract
 cd my_contract
 ```
 
-This creates a `Cell.toml` manifest and a source entry.
+This creates a `Cell.toml` manifest and a source entry. Use this when you want repeatable builds instead of one-off compiler commands.
 
 Library package:
 
@@ -58,7 +68,11 @@ cellc build --production
 cellc build --json
 ```
 
-`build` writes the artifact and metadata sidecar under the configured output directory.
+`build` reads `Cell.toml`, compiles the current package entry, and writes the artifact plus metadata sidecar under the configured output directory. For a one-off source file, use the top-level compiler form instead:
+
+```bash
+cellc path/to/file.cell
+```
 
 ## Check Without Writing Artifacts
 
@@ -71,7 +85,7 @@ cellc check --deny-runtime-obligations
 cellc check --json
 ```
 
-Use `check --all-targets` to verify both assembly and ELF-compatible paths without producing files.
+Use `check --all-targets` when you want fast feedback across assembly and ELF-compatible paths without producing files.
 
 ## Format
 
@@ -90,6 +104,30 @@ cellc doc --json
 
 Generated docs summarize modules, actions, resources, receipts, locks, lifecycle rules, and lowering metadata.
 
+## Audit and Evidence Reports
+
+When a package is ready for review, ask the compiler for the facts it already knows. These commands are useful when reviewing a package boundary or preparing release evidence:
+
+```bash
+cellc metadata . --target riscv64-elf --target-profile spora -o build/main.metadata.json
+cellc constraints . --target riscv64-elf --target-profile spora -o build/main.constraints.json
+cellc abi . --target-profile spora
+cellc scheduler-plan . --target-profile spora --json
+cellc opt-report . --target riscv64-elf --target-profile spora --json
+```
+
+For CKB-specific builder and deployment review:
+
+```bash
+cellc constraints . --target riscv64-elf --target-profile ckb --json
+cellc abi . --target-profile ckb --action transfer
+cellc entry-witness . --target-profile ckb --action transfer --json
+cellc ckb-hash --file build/main.elf
+cellc verify-artifact build/main.elf --expect-target-profile ckb --verify-sources --production
+```
+
+`metadata` and `constraints` expose the compiler-side production contract. They do not replace chain acceptance reports, builder-generated transactions, occupied-capacity evidence, or Spora/CKB production gates.
+
 ## Local Dependencies
 
 Add a local dependency:
@@ -98,13 +136,25 @@ Add a local dependency:
 cellc add my_lib --path ../my_lib
 ```
 
+`add --path` records the dependency in `Cell.toml`. To resolve the dependency graph and write `Cell.lock`, run:
+
+```bash
+cellc install
+```
+
+You can also add and lock a local dependency in one command:
+
+```bash
+cellc install my_lib --path ../my_lib
+```
+
 Remove it:
 
 ```bash
 cellc remove my_lib
 ```
 
-The lockfile is updated so stale path dependencies can be detected.
+`install`, `update`, and normal dependency removal refresh the lockfile so direct and transitive local path dependencies stay consistent.
 
 ## Package Information
 
@@ -115,9 +165,8 @@ cellc info --json
 
 ## Experimental Commands
 
-The CLI contains command entries for future package workflows such as publish, update, login, install, run, and repl. Treat these as experimental unless the command reports a completed workflow in your current build.
+Registry publishing, registry package installation, `login`, `run`, and `repl` remain experimental/future-facing. Local `install --path` and `update` are supported as lockfile helpers for local path dependency workflows.
 
 ## Next
 
-Continue with [Spora and CKB Target Profiles](Tutorial-05-Spora-and-CKB-Target-Profiles).
-
+With a repeatable package workflow in place, continue with [Spora and CKB Target Profiles](Tutorial-05-Spora-and-CKB-Target-Profiles).

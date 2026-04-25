@@ -329,17 +329,23 @@ function buildReportPlan(document, kind, cwd) {
     };
   }
 
-  const outputPath = getScratchOutputPath(document, cwd, "compile.s");
+  const target = compilerTarget(document);
+  const outputPath = getScratchOutputPath(document, cwd, `compile.${targetFileExtension(target)}`);
   return {
-    args: [document.uri.fsPath, "--target", "riscv64-asm", ...targetProfileArgs(document), "-o", outputPath],
+    args: [document.uri.fsPath, ...targetProfileArgs(document), "-o", outputPath],
     outputPath,
     source: "cellc compile"
   };
 }
 
+function compilerTarget(document) {
+  const config = vscode.workspace.getConfiguration("cellscript", document.uri);
+  return config.get("target", "riscv64-asm");
+}
+
 function targetProfileArgs(document) {
   const config = vscode.workspace.getConfiguration("cellscript", document.uri);
-  const target = config.get("target", "riscv64-asm");
+  const target = compilerTarget(document);
   const profile = config.get("targetProfile", "spora");
   const args = [];
   if (target) {
@@ -349,6 +355,10 @@ function targetProfileArgs(document) {
     args.push("--target-profile", profile);
   }
   return args;
+}
+
+function targetFileExtension(target) {
+  return target === "riscv64-elf" ? "elf" : "s";
 }
 
 function getScratchOutputPath(document, cwd, suffix) {

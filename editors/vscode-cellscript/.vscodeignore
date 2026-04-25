@@ -1,5 +1,4 @@
 .gitignore
 .vscode/**
-node_modules/**
 scripts/**
 *.vsix

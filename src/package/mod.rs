@@ -45,6 +45,8 @@ pub struct PackageInfo {
     #[serde(default = "default_entry")]
     pub entry: String,
     #[serde(default)]
+    pub source_roots: Vec<String>,
+    #[serde(default)]
     pub include: Vec<String>,
     #[serde(default)]
     pub exclude: Vec<String>,
@@ -95,6 +97,12 @@ fn default_any_version() -> String {
 pub struct BuildConfig {
     #[serde(default)]
     pub script: Option<String>,
+    #[serde(default)]
+    pub target: Option<String>,
+    #[serde(default)]
+    pub target_profile: Option<String>,
+    #[serde(default)]
+    pub out_dir: Option<String>,
     #[serde(default)]
     pub dependencies: HashMap<String, Dependency>,
 }
@@ -228,6 +236,24 @@ impl PackageManager {
     }
 
     pub fn init(&self, name: &str) -> Result<()> {
+        self.init_with_entry(
+            name,
+            "src/main.cell",
+            format!(
+                r#"module {};
+
+// Entry point for {}
+"#,
+                name, name
+            ),
+        )
+    }
+
+    pub fn init_library(&self, name: &str) -> Result<()> {
+        self.init_with_entry(name, "src/lib.cell", format!("module {};\n", name))
+    }
+
+    fn init_with_entry(&self, name: &str, entry: &str, entry_content: String) -> Result<()> {
         std::fs::create_dir_all(self.root.join("src"))?;
         std::fs::create_dir_all(self.root.join("tests"))?;
         std::fs::create_dir_all(self.root.join("examples"))?;
@@ -245,7 +271,8 @@ impl PackageManager {
                 keywords: vec![],
                 categories: vec![],
                 cellscript_version: String::new(),
-                entry: "src/main.cell".to_string(),
+                entry: entry.to_string(),
+                source_roots: vec![],
                 include: vec![],
                 exclude: vec![],
             },
@@ -258,15 +285,7 @@ impl PackageManager {
         };
 
         self.write_manifest(&manifest)?;
-
-        let main_content = format!(
-            r#"module {};
-
-// Entry point for {}
-"#,
-            name, name
-        );
-        std::fs::write(self.root.join("src/main.cell"), main_content)?;
+        std::fs::write(self.root.join(entry), entry_content)?;
 
         let gitignore = r#"# CellScript
 .cell/
@@ -300,31 +319,48 @@ dist/
         let manifest = self.read_manifest()?;
 
         for (name, dep) in &manifest.dependencies {
-            self.resolve_dependency(name, dep)?;
+            self.resolve_dependency_from_root(name, dep, &self.root.clone(), &mut Vec::new())?;
         }
 
         Ok(())
     }
 
-    fn resolve_dependency(&mut self, name: &str, dep: &Dependency) -> Result<()> {
+    fn resolve_dependency_from_root(&mut self, name: &str, dep: &Dependency, base_root: &Path, stack: &mut Vec<String>) -> Result<()> {
+        if stack.iter().any(|item| item == name) {
+            let mut cycle = stack.clone();
+            cycle.push(name.to_string());
+            return Err(CompileError::without_span(format!("Circular dependency detected: {}", cycle.join(" -> "))));
+        }
+
         if self.resolved.contains_key(name) {
             return Ok(());
         }
 
-        let resolved = match dep {
-            Dependency::Simple(version) => self.resolve_from_registry(name, version)?,
+        stack.push(name.to_string());
+
+        let (resolved, child_dependencies) = match dep {
+            Dependency::Simple(version) => (self.resolve_from_registry(name, version)?, HashMap::new()),
             Dependency::Detailed(detailed) => {
                 if let Some(path) = &detailed.path {
-                    self.resolve_from_path(name, path)?
+                    let (resolved, manifest) = self.resolve_from_path_at(name, path, base_root)?;
+                    (resolved, manifest.dependencies)
                 } else if let Some(git) = &detailed.git {
-                    self.resolve_from_git(name, git, detailed)?
+                    let (resolved, manifest) = self.resolve_from_git_with_manifest(name, git, detailed)?;
+                    (resolved, manifest.dependencies)
                 } else {
-                    self.resolve_from_registry(name, &detailed.version)?
+                    (self.resolve_from_registry(name, &detailed.version)?, HashMap::new())
                 }
             }
         };
 
+        let package_root = resolved.path.clone();
         self.resolved.insert(name.to_string(), resolved);
+
+        for (child_name, child_dep) in child_dependencies {
+            self.resolve_dependency_from_root(&child_name, &child_dep, &package_root, stack)?;
+        }
+
+        stack.pop();
         Ok(())
     }
 
@@ -336,7 +372,12 @@ dist/
     }
 
     pub fn resolve_from_path(&self, name: &str, path: &str) -> Result<ResolvedPackage> {
-        let package_path = self.root.join(path);
+        let (resolved, _) = self.resolve_from_path_at(name, path, &self.root)?;
+        Ok(resolved)
+    }
+
+    fn resolve_from_path_at(&self, name: &str, path: &str, base_root: &Path) -> Result<(ResolvedPackage, PackageManifest)> {
+        let package_path = base_root.join(path);
         let manifest_path = package_path.join("Cell.toml");
 
         if !manifest_path.exists() {
@@ -346,22 +387,43 @@ dist/
         let content = std::fs::read_to_string(&manifest_path)?;
         let manifest: PackageManifest = toml::from_str(&content)?;
 
-        Ok(ResolvedPackage {
-            name: name.to_string(),
-            version: manifest.package.version,
-            path: package_path,
-            source: PackageSource::Local(PathBuf::from(path)),
-            dependencies: manifest.dependencies.keys().cloned().collect(),
-        })
+        let source_path = if base_root == self.root {
+            PathBuf::from(path)
+        } else {
+            package_path.strip_prefix(&self.root).unwrap_or(&package_path).to_path_buf()
+        };
+
+        Ok((
+            ResolvedPackage {
+                name: name.to_string(),
+                version: manifest.package.version.clone(),
+                path: package_path,
+                source: PackageSource::Local(source_path),
+                dependencies: manifest.dependencies.keys().cloned().collect(),
+            },
+            manifest,
+        ))
     }
 
     pub fn resolve_from_git(&self, name: &str, url: &str, detailed: &DetailedDependency) -> Result<ResolvedPackage> {
+        let (resolved, _) = self.resolve_from_git_with_manifest(name, url, detailed)?;
+        Ok(resolved)
+    }
+
+    fn resolve_from_git_with_manifest(
+        &self,
+        name: &str,
+        url: &str,
+        detailed: &DetailedDependency,
+    ) -> Result<(ResolvedPackage, PackageManifest)> {
         let cache_dir = self.git_cache_dir();
         std::fs::create_dir_all(&cache_dir).map_err(|e| {
             CompileError::without_span(format!("failed to create git cache directory '{}': {}", cache_dir.display(), e))
         })?;
 
-        let cache_name = format!("{}-{:016x}", name, simple_hash(url));
+        let requested_ref = detailed.rev.as_ref().or(detailed.tag.as_ref()).or(detailed.branch.as_ref());
+        let cache_key = format!("{}#{}", url, requested_ref.map(String::as_str).unwrap_or("HEAD"));
+        let cache_name = format!("{}-{:016x}", name, simple_hash(&cache_key));
         let clone_dir = cache_dir.join(&cache_name);
 
         let git_result = if clone_dir.exists() && clone_dir.join(".git").exists() {
@@ -373,7 +435,7 @@ dist/
 
         git_result.map_err(|e| CompileError::without_span(format!("git dependency '{}' from '{}' failed: {}", name, url, e)))?;
 
-        if let Some(ref_str) = detailed.rev.as_ref().or(detailed.tag.as_ref()).or(detailed.branch.as_ref()) {
+        if let Some(ref_str) = requested_ref {
             Self::git_checkout(&clone_dir, ref_str).map_err(|e| {
                 CompileError::without_span(format!("git dependency '{}' failed to checkout '{}': {}", name, ref_str, e))
             })?;
@@ -392,13 +454,16 @@ dist/
         let content = std::fs::read_to_string(&manifest_path)?;
         let manifest: PackageManifest = toml::from_str(&content)?;
 
-        Ok(ResolvedPackage {
-            name: name.to_string(),
-            version: manifest.package.version.clone(),
-            path: clone_dir.clone(),
-            source: PackageSource::Git { url: url.to_string(), revision },
-            dependencies: manifest.dependencies.keys().cloned().collect(),
-        })
+        Ok((
+            ResolvedPackage {
+                name: name.to_string(),
+                version: manifest.package.version.clone(),
+                path: clone_dir.clone(),
+                source: PackageSource::Git { url: url.to_string(), revision },
+                dependencies: manifest.dependencies.keys().cloned().collect(),
+            },
+            manifest,
+        ))
     }
 
     fn git_cache_dir(&self) -> PathBuf {
@@ -407,7 +472,7 @@ dist/
 
     fn git_clone(url: &str, target: &Path) -> std::result::Result<(), String> {
         let output = std::process::Command::new("git")
-            .args(["clone", "--depth", "1", url, &target.to_string_lossy()])
+            .args(["clone", url, &target.to_string_lossy()])
             .output()
             .map_err(|e| format!("failed to execute git: {}", e))?;
 
@@ -421,7 +486,7 @@ dist/
 
     fn git_update(clone_dir: &Path) -> std::result::Result<(), String> {
         let output = std::process::Command::new("git")
-            .args(["pull", "--ff-only"])
+            .args(["fetch", "--tags", "--prune", "origin"])
             .current_dir(clone_dir)
             .output()
             .map_err(|e| format!("failed to execute git: {}", e))?;
@@ -457,7 +522,7 @@ dist/
 
     fn git_revision(clone_dir: &Path) -> std::result::Result<String, String> {
         let output = std::process::Command::new("git")
-            .args(["rev-parse", "--short", "HEAD"])
+            .args(["rev-parse", "HEAD"])
             .current_dir(clone_dir)
             .output()
             .map_err(|e| format!("failed to execute git rev-parse: {}", e))?;
@@ -588,13 +653,16 @@ impl Lockfile {
         Self { version: Self::CURRENT_VERSION, dependencies: BTreeMap::new() }
     }
 
-    pub fn read_from_root(root: &Path) -> Option<Self> {
+    pub fn read_from_root(root: &Path) -> Result<Option<Self>> {
         let lock_path = root.join("Cell.lock");
         if !lock_path.exists() {
-            return None;
+            return Ok(None);
         }
-        let content = std::fs::read_to_string(&lock_path).ok()?;
-        toml::from_str(&content).ok()
+        let content = std::fs::read_to_string(&lock_path)
+            .map_err(|error| CompileError::without_span(format!("failed to read lockfile '{}': {}", lock_path.display(), error)))?;
+        let lockfile = toml::from_str(&content)
+            .map_err(|error| CompileError::without_span(format!("failed to parse lockfile '{}': {}", lock_path.display(), error)))?;
+        Ok(Some(lockfile))
     }
 
     pub fn write_to_root(&self, root: &Path) -> Result<()> {
@@ -630,6 +698,22 @@ impl Lockfile {
     }
 
     pub fn consistency_issues(&self, manifest: &PackageManifest) -> Vec<String> {
+        self.consistency_issues_with_expected(manifest, None)
+    }
+
+    pub fn consistency_issues_with_resolved(
+        &self,
+        manifest: &PackageManifest,
+        resolved: &HashMap<String, ResolvedPackage>,
+    ) -> Vec<String> {
+        self.consistency_issues_with_expected(manifest, Some(resolved))
+    }
+
+    fn consistency_issues_with_expected(
+        &self,
+        manifest: &PackageManifest,
+        resolved: Option<&HashMap<String, ResolvedPackage>>,
+    ) -> Vec<String> {
         let mut issues = Vec::new();
         if self.version != Self::CURRENT_VERSION {
             issues.push(format!("Cell.lock version {} is not supported; expected {}", self.version, Self::CURRENT_VERSION));
@@ -645,14 +729,55 @@ impl Lockfile {
             }
         }
 
+        if let Some(resolved) = resolved {
+            for (name, package) in resolved {
+                let Some(locked) = self.dependencies.get(name) else {
+                    issues.push(format!("resolved dependency '{}' is missing from Cell.lock", name));
+                    continue;
+                };
+                issues.extend(resolved_dependency_consistency_issues(name, package, locked));
+            }
+        }
+
         for name in self.dependencies.keys() {
-            if !manifest.dependencies.contains_key(name) {
+            let expected_by_manifest = manifest.dependencies.contains_key(name);
+            let expected_by_resolved = resolved.is_some_and(|resolved| resolved.contains_key(name));
+            if !expected_by_manifest && !expected_by_resolved {
                 issues.push(format!("Cell.lock contains stale dependency '{}' not present in Cell.toml", name));
             }
         }
 
         issues
     }
+}
+
+fn resolved_dependency_consistency_issues(name: &str, package: &ResolvedPackage, locked: &LockedDependency) -> Vec<String> {
+    let mut issues = Vec::new();
+
+    if locked.version != package.version {
+        issues.push(format!(
+            "resolved dependency '{}' has package version '{}' but Cell.lock records '{}'",
+            name, package.version, locked.version
+        ));
+    }
+
+    match (&package.source, &locked.source) {
+        (PackageSource::Local(path), LockedSource::Path { path: locked_path }) if locked_path == path.to_string_lossy().as_ref() => {}
+        (PackageSource::Git { url, revision }, LockedSource::Git { url: locked_url, revision: locked_revision })
+            if locked_url == url && locked_revision == revision => {}
+        (
+            PackageSource::Registry { name: package_name, version: package_version },
+            LockedSource::Registry { name: locked_name, version: locked_version },
+        ) if locked_name == package_name && locked_version == package_version => {}
+        (_, source) => issues.push(format!(
+            "resolved dependency '{}' expects {} but Cell.lock records {}",
+            name,
+            package_source_display(&package.source),
+            locked_source_display(source)
+        )),
+    }
+
+    issues
 }
 
 fn lock_dependency_consistency_issues(name: &str, dep: &Dependency, locked: &LockedDependency) -> Vec<String> {
@@ -736,6 +861,14 @@ fn locked_source_display(source: &LockedSource) -> String {
     }
 }
 
+fn package_source_display(source: &PackageSource) -> String {
+    match source {
+        PackageSource::Local(path) => format!("path '{}'", path.display()),
+        PackageSource::Git { url, revision } => format!("git '{}#{}'", url, revision),
+        PackageSource::Registry { name, version } => format!("registry {}@{}", name, version),
+    }
+}
+
 impl Default for Lockfile {
     fn default() -> Self {
         Self::new()
@@ -812,7 +945,61 @@ pub mod version {
     }
 
     fn satisfies_range(_version: &str, _range: &str) -> bool {
+        for clause in _range.split(',').map(str::trim).filter(|clause| !clause.is_empty()) {
+            let Some((op, expected)) = parse_range_clause(clause) else {
+                return false;
+            };
+            let Some(ordering) = compare_versions(_version, expected) else {
+                return false;
+            };
+            let satisfied = match op {
+                ">" => ordering.is_gt(),
+                ">=" => ordering.is_gt() || ordering.is_eq(),
+                "<" => ordering.is_lt(),
+                "<=" => ordering.is_lt() || ordering.is_eq(),
+                "=" | "==" => ordering.is_eq(),
+                _ => false,
+            };
+            if !satisfied {
+                return false;
+            }
+        }
         true
+    }
+
+    fn parse_range_clause(clause: &str) -> Option<(&str, &str)> {
+        for op in [">=", "<=", "==", ">", "<", "="] {
+            if let Some(version) = clause.strip_prefix(op) {
+                return Some((op, version.trim()));
+            }
+        }
+        None
+    }
+
+    fn compare_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+        let left = parse_numeric_version(left)?;
+        let right = parse_numeric_version(right)?;
+        let max_len = left.len().max(right.len());
+        for idx in 0..max_len {
+            let lhs = *left.get(idx).unwrap_or(&0);
+            let rhs = *right.get(idx).unwrap_or(&0);
+            match lhs.cmp(&rhs) {
+                std::cmp::Ordering::Equal => {}
+                ordering => return Some(ordering),
+            }
+        }
+        Some(std::cmp::Ordering::Equal)
+    }
+
+    fn parse_numeric_version(version: &str) -> Option<Vec<u32>> {
+        let core = version.split_once('-').map(|(core, _)| core).unwrap_or(version);
+        let parts: Option<Vec<u32>> = core.split('.').map(|part| part.parse().ok()).collect();
+        let parts = parts?;
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts)
+        }
     }
 }
 
@@ -837,6 +1024,7 @@ mod tests {
                 categories: vec!["test".to_string()],
                 cellscript_version: String::new(),
                 entry: "src/main.cell".to_string(),
+                source_roots: vec![],
                 include: vec![],
                 exclude: vec![],
             },
@@ -875,6 +1063,9 @@ mod tests {
         assert!(!version::satisfies("2.0.0", &VersionReq::Compatible("1.0.0".to_string())));
         assert!(!version::satisfies("0.2.0", &VersionReq::Compatible("0.1.0".to_string())));
         assert!(version::satisfies("0.1.5", &VersionReq::Compatible("0.1.0".to_string())));
+        assert!(version::satisfies("1.2.3", &VersionReq::Range(">=1.0.0, <2.0.0".to_string())));
+        assert!(!version::satisfies("2.0.0", &VersionReq::Range(">=1.0.0, <2.0.0".to_string())));
+        assert!(!version::satisfies("1.2.3", &VersionReq::Range(">=1.3.0".to_string())));
     }
 
     #[test]
@@ -950,6 +1141,106 @@ version = "0.2.0"
     }
 
     #[test]
+    fn package_manager_resolves_transitive_local_path_dependencies() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join("deps/math/src")).unwrap();
+        std::fs::create_dir_all(root.join("deps/util/src")).unwrap();
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[dependencies.math]
+version = "0.1.0"
+path = "deps/math"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("deps/math/Cell.toml"),
+            r#"
+[package]
+name = "math"
+version = "0.1.0"
+
+[dependencies.util]
+version = "0.1.0"
+path = "../util"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("deps/util/Cell.toml"),
+            r#"
+[package]
+name = "util"
+version = "0.1.0"
+"#,
+        )
+        .unwrap();
+
+        let mut manager = PackageManager::new(root);
+        manager.resolve_dependencies().unwrap();
+
+        assert!(manager.get_resolved().contains_key("math"));
+        assert!(manager.get_resolved().contains_key("util"));
+        assert_eq!(manager.get_resolved()["math"].dependencies, vec!["util"]);
+    }
+
+    #[test]
+    fn package_manager_rejects_transitive_path_dependency_cycles() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join("deps/a/src")).unwrap();
+        std::fs::create_dir_all(root.join("deps/b/src")).unwrap();
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[dependencies.a]
+path = "deps/a"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("deps/a/Cell.toml"),
+            r#"
+[package]
+name = "a"
+version = "0.1.0"
+
+[dependencies.b]
+path = "../b"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("deps/b/Cell.toml"),
+            r#"
+[package]
+name = "b"
+version = "0.1.0"
+
+[dependencies.a]
+path = "../a"
+"#,
+        )
+        .unwrap();
+
+        let mut manager = PackageManager::new(root);
+        let error = manager.resolve_dependencies().unwrap_err();
+
+        assert!(error.message.contains("Circular dependency detected"), "{}", error.message);
+        assert!(error.message.contains("a -> b -> a"), "{}", error.message);
+    }
+
+    #[test]
     fn lockfile_consistency_reports_stale_and_mismatched_path_sources() {
         let manifest: PackageManifest = toml::from_str(
             r#"
@@ -985,6 +1276,56 @@ path = "deps/math"
     }
 
     #[test]
+    fn lockfile_consistency_allows_resolved_transitive_path_dependencies() {
+        let manifest: PackageManifest = toml::from_str(
+            r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[dependencies.math]
+version = "0.1.0"
+path = "deps/math"
+"#,
+        )
+        .unwrap();
+        let mut lockfile = Lockfile::new();
+        lockfile.dependencies.insert(
+            "math".to_string(),
+            LockedDependency { version: "0.1.0".to_string(), source: LockedSource::Path { path: "deps/math".to_string() } },
+        );
+        lockfile.dependencies.insert(
+            "util".to_string(),
+            LockedDependency { version: "0.1.0".to_string(), source: LockedSource::Path { path: "deps/math/../util".to_string() } },
+        );
+        let mut resolved = HashMap::new();
+        resolved.insert(
+            "math".to_string(),
+            ResolvedPackage {
+                name: "math".to_string(),
+                version: "0.1.0".to_string(),
+                path: PathBuf::from("deps/math"),
+                source: PackageSource::Local(PathBuf::from("deps/math")),
+                dependencies: vec!["util".to_string()],
+            },
+        );
+        resolved.insert(
+            "util".to_string(),
+            ResolvedPackage {
+                name: "util".to_string(),
+                version: "0.1.0".to_string(),
+                path: PathBuf::from("deps/util"),
+                source: PackageSource::Local(PathBuf::from("deps/math/../util")),
+                dependencies: Vec::new(),
+            },
+        );
+
+        let issues = lockfile.consistency_issues_with_resolved(&manifest, &resolved);
+
+        assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
     fn lockfile_replace_with_resolved_prunes_removed_dependencies() {
         let mut lockfile = Lockfile::new();
         lockfile.dependencies.insert(
@@ -1011,6 +1352,16 @@ path = "deps/math"
 
         assert!(lockfile.dependencies.contains_key("math"));
         assert!(!lockfile.dependencies.contains_key("old"));
+    }
+
+    #[test]
+    fn lockfile_read_from_root_rejects_malformed_lockfiles() {
+        let temp = tempdir().unwrap();
+        std::fs::write(temp.path().join("Cell.lock"), "not = [valid").unwrap();
+
+        let error = Lockfile::read_from_root(temp.path()).unwrap_err();
+
+        assert!(error.message.contains("failed to parse lockfile"), "{}", error.message);
     }
 
     #[test]

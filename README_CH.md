@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
 [![Targets: Spora and CKB](https://img.shields.io/badge/targets-Spora%20%7C%20CKB-2f6f4e.svg)](#target-profiles)
-[![Package Manager: Beta](https://img.shields.io/badge/package%20manager-beta-f0ad4e.svg)](#包管理器-beta)
+[![Package Workflow: Local First](https://img.shields.io/badge/package%20workflow-local%20first-2f6f4e.svg)](#包工作流)
 [![LSP: Production Tooling](https://img.shields.io/badge/LSP-production%20tooling-2f6f4e.svg)](#编辑器支持)
 [![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](https://github.com/tsukifune-kosei/CellScript/wiki)
 
@@ -180,8 +180,12 @@ receipt VestingGrant has store, claim {
     unlock_epoch: u64
 }
 
-lock owner_only(owner: Address, signature: Signature) {
-    assert_invariant(verify_signature(owner, signature), "invalid signature")
+struct Wallet {
+    owner: Address
+}
+
+lock owner_only(wallet: &Wallet, signer: Address) -> bool {
+    wallet.owner == signer
 }
 ```
 
@@ -407,7 +411,7 @@ mass 估算。
 
 | 模块 | 作用 |
 |---|---|
-| **包管理器**（`package/`） | `Cell.toml` 解析、依赖解析（`--path`/`--git`）、`Cell.lock` 可复现性、`cellc init`/`add`/`remove`/`info`。Registry 命令已具形状但 fail-closed。 |
+| **包工作流**（`package/`） | `Cell.toml` 解析、本地 path 依赖解析、传递 `Cell.lock` 可复现性、`cellc init`/`add`/`remove`/`install --path`/`update`/`info`。Registry publish 与 registry 依赖解析已具形状但 fail-closed。 |
 | **增量编译器**（`incremental/`） | 依赖图感知构建缓存——输入未变时跳过重编译。 |
 | **构建集成**（`lib.rs`） | 解析 `Cell.toml` → `CellBuildConfig`，合并 CLI + manifest 选项，选择入口 scope，运行策略门禁，写入 artifact + metadata。 |
 
@@ -476,27 +480,33 @@ deny_runtime_obligations = false
 
 命令行 flags 可以在构建或 CI 中进一步收紧策略检查。
 
-### 包管理器 Beta
+### 包工作流
 
-CellScript 在 `cellc` 中提供 beta 包管理器。当前设计刻意保持本地优先和
-fail-closed；远端 registry resolution 仍属于后续协议工作。
+CellScript 在 `cellc` 中提供本地优先的包工作流。本地包、source roots、
+path dependencies、lockfile 刷新，以及 package build/check/doc/fmt 流程
+已经按生产式工作流收口。Registry publish 和 registry 依赖解析仍是实验性
+能力，并保持 fail-closed。
 
 **当前支持：**
 
 - `cellc init` — 创建带 `Cell.toml` 的应用包或 library package
-- `cellc build` / `check` / `metadata` / `test` — 接受包目录或 manifest
-  作为输入
-- `cellc add --path` / `--git` — 把依赖写入 `Cell.toml`
-- 本地 path dependencies 递归解析，参与 module loading、source hashing
+- `cellc build` / `check` / `doc` / `fmt` — 操作当前 package
+- 顶层 `cellc <input>` 和报告类命令在支持输入参数时接受 `.cell` 文件、
+  package 目录或 `Cell.toml` manifest
+- `cellc add --path` — 把本地 path 依赖写入 `Cell.toml`
+- `cellc install --path` 与 `cellc update` — 解析本地 path 依赖图并刷新
+  `Cell.lock`
+- 本地 path dependencies 会递归解析，参与 module loading、source hashing
   和 metadata
-- `Cell.lock` — 记录解析后的依赖身份，用于可复现检查
+- `Cell.lock` — 记录直接和传递依赖的解析身份，用于可复现检查
 - `cellc info --json` — 为 CI 和工具输出 package metadata
 
-**仍处于 beta：**
+**实验性 / fail-closed：**
 
-- Registry `publish`、`install`、`update` 和 `login` 已有命令形状，但在
-  registry backend 和 trust model 定稿前会 fail closed
-- Package name、lockfile 字段和 registry authentication 还不是稳定生产接口
+- Registry `publish`、registry package install/resolution 和 `login` 已有命令
+  形状，但在 registry backend 和 trust model 定稿前会 fail closed
+- Git dependencies 是显式 remote source fetch；应当作为需要审查的输入，
+  而不是 registry 生产路径
 
 ### CLI 命令
 
@@ -518,10 +528,11 @@ fail-closed；远端 registry resolution 仍属于后续协议工作。
 | `cellc fmt` | 格式化 `.cell` 源码或检查格式 |
 | `cellc init` | 创建 package skeleton |
 | `cellc add` / `remove` | 修改本地包依赖 |
+| `cellc install --path` / `update` | 解析本地 path 依赖并刷新 `Cell.lock` |
 | `cellc info` | 输出 manifest 和 package 信息 |
 | `cellc repl` | 启动交互式 REPL |
 | `cellc run` | 通过 VM runner 或 simulator 运行 ELF 入口 |
-| `cellc publish` / `install` / `update` / `login` | Beta — registry 形状，fail-closed |
+| `cellc publish` / registry `install` / registry-backed `update` / `login` | 实验性 registry 流程，fail-closed |
 
 ### CLI 选项
 

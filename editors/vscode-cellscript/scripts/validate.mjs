@@ -8,6 +8,7 @@ const requiredFiles = [
   "extension.js",
   "README.md",
   "CHANGELOG.md",
+  ".vscodeignore",
   "language-configuration.json",
   "syntaxes/cellscript.tmLanguage.json",
   "snippets/cellscript.json"
@@ -89,6 +90,7 @@ if (typeof snippets !== "object" || snippets === null || Object.keys(snippets).l
 }
 
 const extensionSource = fs.readFileSync(path.join(root, "extension.js"), "utf8");
+const vscodeIgnore = fs.readFileSync(path.join(root, ".vscodeignore"), "utf8");
 for (const token of [
   "LanguageClient",
   "vscode-languageclient",
@@ -104,6 +106,14 @@ for (const token of [
   if (!extensionSource.includes(token)) {
     throw new Error(`extension runtime is missing expected wiring: ${token}`);
   }
+}
+
+if (pkg.dependencies?.["vscode-languageclient"] && /^\s*node_modules\/\*\*/m.test(vscodeIgnore)) {
+  throw new Error("packaged extension must include vscode-languageclient runtime dependencies");
+}
+
+if (extensionSource.includes('"--target", "riscv64-asm", ...targetProfileArgs(document)')) {
+  throw new Error("compile command must not hard-code a second target before configured targetProfileArgs");
 }
 
 const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");

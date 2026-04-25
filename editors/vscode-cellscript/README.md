@@ -34,7 +34,7 @@ outside the LSP scope.
 
 ### CLI-backed
 
-- compile to scratch RISC-V assembly
+- compile to a scratch artifact for the configured RISC-V target
 - `cellc metadata` JSON report
 - `cellc constraints` JSON report
 - production report (version + metadata + constraints)

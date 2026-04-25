@@ -1,4 +1,11 @@
-The repository includes bundled examples that exercise the v1 language surface and compiler gates.
+The repository includes seven bundled examples. Treat them as guided reading, not just sample files. Each one shows a different part of the CellScript 0.12 language surface and the current production gates.
+
+## What You Will Learn
+
+- which example to read first;
+- how the token example maps resources to actions;
+- what the bundled suite currently proves for the CKB profile;
+- what extra evidence your own contract still needs.
 
 | Example | Purpose |
 |---|---|
@@ -22,6 +29,8 @@ done
 ```
 
 ## Token Walkthrough
+
+Start with the token example. It is the smallest bundled contract that still shows the resource lifecycle clearly.
 
 The token example declares two resources:
 
@@ -76,6 +85,8 @@ action burn(token: Token) {
 
 ## What to Learn from Each Example
 
+Read the examples in this order if you are learning the language:
+
 - Start with `token.cell` to learn linear resources and creation.
 - Read `nft.cell` to learn fixed ownership and unique-asset state.
 - Read `timelock.cell` to learn time guards and state replacement.
@@ -84,31 +95,38 @@ action burn(token: Token) {
 - Read `amm_pool.cell` after you understand `shared`, because pools introduce contention-sensitive state.
 - Read `launch.cell` last; it composes multiple protocol patterns.
 
-## Spora vs CKB Expectations
+## CKB Production Expectations
 
-Spora profile should compile the bundled examples as Spora artifacts.
+The CKB profile is strict, and the current bundled-example suite is closed for the 0.12 production boundary:
 
-CKB profile is stricter. Pure or admitted subsets should compile to CKB ELF without a Spora ABI trailer. Complex examples may be rejected by policy if they require unsupported runtime or Spora-only behavior. A policy rejection is preferable to producing an artifact with incorrect CKB assumptions.
+- all seven bundled examples strict-admit under the CKB profile;
+- all 43 bundled business actions have scoped CKB production harnesses;
+- all 15 bundled locks strict-compile;
+- valid CKB transactions are builder-generated and dry-run;
+- malformed transactions are rejected for non-policy/non-capacity reasons;
+- tx-size, cycle, and occupied-capacity evidence is retained;
+- all seven bundled examples are deployed in the CKB production acceptance report;
+- the final production hardening gate must pass.
+
+This does not mean arbitrary new contracts are automatically production-ready. Use the examples as patterns, then run your own constraints review, entry ABI review, builder evidence, and chain acceptance evidence.
 
 ## Production Checklist
 
-Before treating an example-derived contract as deployable:
+Before treating an example-derived contract as deployable, run the compiler-side checks:
 
 ```bash
 cellc fmt --check
-cellc check --all-targets --production
-cellc build --target riscv64-elf --target-profile spora --production
-cellc verify-artifact build/main.elf --verify-sources --expect-target-profile spora --production
-```
-
-For CKB, run the same production gate only for whole examples or scoped entries
-that are admitted by the CKB profile. If a bundled example contains a
-CKB-incompatible action, compile the admitted action explicitly and keep the
-whole-file rejection as a policy signal:
-
-```bash
 cellc check --target-profile ckb --production
 cellc build --target riscv64-elf --target-profile ckb --production
 cellc verify-artifact build/main.elf --verify-sources --expect-target-profile ckb --production
 cellc examples/nft.cell --entry-action transfer --target riscv64-elf --target-profile ckb --production
 ```
+
+For release-facing CKB evidence, run the CellScript acceptance gate:
+
+```bash
+./scripts/ckb_cellscript_acceptance.sh --production
+python3 scripts/validate_ckb_cellscript_production_evidence.py target/ckb-cellscript-acceptance/<run>/ckb-cellscript-acceptance-report.json
+```
+
+Do not use compile-only or bounded diagnostic runs as production release evidence.

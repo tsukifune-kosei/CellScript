@@ -3321,6 +3321,13 @@ fn cellc_add_and_remove_subcommands_honor_dev_path_and_json() {
 [package]
 name = "demo"
 version = "0.1.0"
+entry = "src/main.cell"
+source_roots = ["contracts", "shared"]
+
+[build]
+target = "riscv64-elf"
+target_profile = "ckb"
+out_dir = "artifacts"
 "#,
     )
     .unwrap();
@@ -3344,6 +3351,10 @@ version = "0.1.0"
     assert_eq!(add_summary["dependency"]["path"], "../math");
 
     let manifest: toml::Value = std::fs::read_to_string(root.join("Cell.toml")).unwrap().parse().unwrap();
+    assert_eq!(manifest["package"]["source_roots"].as_array().unwrap().len(), 2);
+    assert_eq!(manifest["build"]["target"].as_str().unwrap(), "riscv64-elf");
+    assert_eq!(manifest["build"]["target_profile"].as_str().unwrap(), "ckb");
+    assert_eq!(manifest["build"]["out_dir"].as_str().unwrap(), "artifacts");
     assert_eq!(manifest["dev_dependencies"]["math"]["path"].as_str().unwrap(), "../math");
     assert!(manifest.get("dependencies").and_then(|value| value.get("math")).is_none());
 
@@ -3364,6 +3375,10 @@ version = "0.1.0"
     assert!(remove_summary["missing"].as_array().unwrap().is_empty());
 
     let manifest_after: toml::Value = std::fs::read_to_string(root.join("Cell.toml")).unwrap().parse().unwrap();
+    assert_eq!(manifest_after["package"]["source_roots"].as_array().unwrap().len(), 2);
+    assert_eq!(manifest_after["build"]["target"].as_str().unwrap(), "riscv64-elf");
+    assert_eq!(manifest_after["build"]["target_profile"].as_str().unwrap(), "ckb");
+    assert_eq!(manifest_after["build"]["out_dir"].as_str().unwrap(), "artifacts");
     assert!(manifest_after.get("dev_dependencies").and_then(|value| value.get("math")).is_none());
 }
 
@@ -3372,8 +3387,10 @@ fn cellc_install_path_updates_lockfile_and_remove_prunes_it() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let dep_root = root.join("math");
+    let util_root = root.join("util");
 
     std::fs::create_dir_all(dep_root.join("src")).unwrap();
+    std::fs::create_dir_all(util_root.join("src")).unwrap();
     std::fs::write(
         root.join("Cell.toml"),
         r#"
@@ -3389,6 +3406,19 @@ version = "0.1.0"
 [package]
 name = "math"
 version = "0.2.0"
+
+[dependencies.util]
+version = "0.1.0"
+path = "../util"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        util_root.join("Cell.toml"),
+        r#"
+[package]
+name = "util"
+version = "0.1.0"
 "#,
     )
     .unwrap();
@@ -3410,12 +3440,21 @@ version = "0.2.0"
     let locked = lockfile.dependencies.get("math").expect("math should be locked");
     assert_eq!(locked.version, "0.2.0");
     assert!(matches!(&locked.source, cellscript::package::LockedSource::Path { path } if path == "math"));
+    let util = lockfile.dependencies.get("util").expect("transitive util should be locked");
+    assert_eq!(util.version, "0.1.0");
+
+    let update = Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("update").output().unwrap();
+    assert!(update.status.success(), "stderr: {}", String::from_utf8_lossy(&update.stderr));
+    let update_stdout = String::from_utf8_lossy(&update.stdout);
+    assert!(update_stdout.contains("Updated 2 dependencies"), "{update_stdout}");
+    assert!(!update_stdout.contains("Warning: lockfile is not consistent"), "{update_stdout}");
 
     let remove = Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("remove").arg("math").output().unwrap();
     assert!(remove.status.success(), "stderr: {}", String::from_utf8_lossy(&remove.stderr));
 
     let pruned: cellscript::package::Lockfile = toml::from_str(&std::fs::read_to_string(root.join("Cell.lock")).unwrap()).unwrap();
     assert!(!pruned.dependencies.contains_key("math"));
+    assert!(!pruned.dependencies.contains_key("util"));
 }
 
 #[test]

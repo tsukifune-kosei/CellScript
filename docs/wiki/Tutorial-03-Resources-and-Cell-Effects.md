@@ -1,4 +1,11 @@
-CellScript is built around explicit Cell transaction effects. These operations are not ordinary function calls; they describe how a transaction consumes inputs, creates outputs, reads dependencies, and proves state transitions.
+CellScript is built around explicit Cell transaction effects. An effect is not just a helper call. It is a statement about the transaction you expect to build: which inputs are consumed, which outputs are created, which dependencies are read, and which state transition is being proved.
+
+## What You Will Learn
+
+- how linear resources move through an action;
+- why `create`, `consume`, `destroy`, `claim`, and `settle` are explicit;
+- how mutable state turns into replacement-output style transitions;
+- what to avoid when the same source must stay portable to CKB.
 
 ## The Main Effects
 
@@ -14,7 +21,7 @@ CellScript is built around explicit Cell transaction effects. These operations a
 
 ## Linear Values
 
-Resources are linear. This means the compiler expects each value to have a clear lifecycle:
+Resources are linear. This means the compiler expects each value to have a clear lifecycle. In plain terms: if an action receives a resource, the action must say where it goes.
 
 ```cellscript
 action burn(token: Token) {
@@ -40,7 +47,7 @@ Persistent state is created only by explicit `create`. Local variables are not p
 
 ## Mutating Existing State
 
-Use mutable references for replacement-output style transitions:
+Use mutable references for replacement-output style transitions. You change the logical state in source; the transaction model still needs an input and a matching replacement output.
 
 ```cellscript
 action mint(auth: &mut MintAuthority, to: Address, amount: u64) -> Token {
@@ -58,13 +65,13 @@ Under the hood, mutable Cell-backed state must be tied to transaction inputs and
 
 ## Read-Only Dependencies
 
-Use read-only forms for configuration, registry data, or dependency-backed state. These should become CellDep-style access in the target transaction model.
+Use read-only forms for configuration, registry data, or dependency-backed state. The value is consulted, but it is not spent. On CKB, this should become CellDep-style access in the target transaction model.
 
 The compiler records read-only accesses so schedulers, wallet builders, and policy checks can decide which CellDeps must be present.
 
 ## CKB Portability Notes
 
-The CKB profile is strict:
+The CKB profile is intentionally strict. If the compiler rejects a shape that depends on Spora-only runtime behavior, that is the right outcome:
 
 - no Spora-only helper syscalls;
 - CKB syscall numbers and source constants;
@@ -76,5 +83,4 @@ For portable code, keep persistent schemas fixed and avoid Spora-only scheduler,
 
 ## Next
 
-Continue with [Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow).
-
+After you know how values move, continue with [Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow).
