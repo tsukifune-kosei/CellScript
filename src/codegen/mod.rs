@@ -1733,6 +1733,9 @@ impl CodeGenerator {
                     IrInstruction::CollectionReverse { collection: IrOperand::Var(collection) } => {
                         self.constructed_byte_vectors.remove(&collection.id);
                     }
+                    IrInstruction::CollectionTruncate { collection: IrOperand::Var(collection), .. } => {
+                        self.constructed_byte_vectors.remove(&collection.id);
+                    }
                     IrInstruction::CollectionInsert { collection: IrOperand::Var(collection), .. } => {
                         self.constructed_byte_vectors.remove(&collection.id);
                     }
@@ -2155,6 +2158,9 @@ impl CodeGenerator {
             }
             IrInstruction::CollectionReverse { collection } => {
                 self.emit_collection_reverse(collection)?;
+            }
+            IrInstruction::CollectionTruncate { collection, len } => {
+                self.emit_collection_truncate(collection, len)?;
             }
             IrInstruction::CollectionContains { dest, collection, value } => {
                 self.emit_collection_contains(dest, collection, value)?;
@@ -5627,6 +5633,10 @@ impl CodeGenerator {
             IrInstruction::CollectionReverse { collection } => {
                 self.record_operand(collection, max_var_id);
             }
+            IrInstruction::CollectionTruncate { collection, len } => {
+                self.record_operand(collection, max_var_id);
+                self.record_operand(len, max_var_id);
+            }
             IrInstruction::CollectionContains { dest, collection, value } => {
                 self.record_var(dest, max_var_id);
                 self.record_operand(collection, max_var_id);
@@ -6694,6 +6704,38 @@ impl CodeGenerator {
         self.emit("addi t1, t1, -1");
         self.emit_stack_sd("t1", right_offset);
         self.emit(format!("j {}", loop_label));
+        self.emit_label(&done_label);
+        true
+    }
+
+    fn emit_collection_truncate(&mut self, collection: &IrOperand, len: &IrOperand) -> Result<()> {
+        self.emit("# collection truncate");
+        self.emit_symbolic_operand_comment("collection", collection);
+        self.emit_symbolic_operand_comment("len", len);
+        if self.emit_stack_collection_truncate(collection, len) {
+            return Ok(());
+        }
+        self.emit("# cellscript abi: collection truncate is not available for this collection");
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        Ok(())
+    }
+
+    fn emit_stack_collection_truncate(&mut self, collection: &IrOperand, len: &IrOperand) -> bool {
+        let IrOperand::Var(collection) = collection else {
+            return false;
+        };
+        if !self.stack_collection_vars.contains(&collection.id) {
+            return false;
+        }
+
+        self.emit("# cellscript abi: stack collection truncate");
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("ld t0, -8(t4)");
+        self.emit_operand_to_register("t1", len);
+        let done_label = self.fresh_label("stack_collection_truncate_done");
+        self.emit("sltu t2, t0, t1");
+        self.emit(format!("bnez t2, {}", done_label));
+        self.emit("sd t1, -8(t4)");
         self.emit_label(&done_label);
         true
     }

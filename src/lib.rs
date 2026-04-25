@@ -4024,6 +4024,10 @@ fn collect_instruction_scope(instruction: &ir::IrInstruction, used_types: &mut B
         ir::IrInstruction::CollectionReverse { collection } => {
             collect_operand_named_types(collection, used_types);
         }
+        ir::IrInstruction::CollectionTruncate { collection, len } => {
+            collect_operand_named_types(collection, used_types);
+            collect_operand_named_types(len, used_types);
+        }
         ir::IrInstruction::CollectionContains { dest, collection, value } => {
             collect_ir_type_named_types(&dest.ty, used_types);
             collect_operand_named_types(collection, used_types);
@@ -9018,6 +9022,14 @@ fn body_fail_closed_runtime_features(
                         features.insert("cell-backed-collection-reverse".to_string());
                     }
                 }
+                ir::IrInstruction::CollectionTruncate { collection, len } => {
+                    if !metadata_stack_collection_truncate_is_runtime_supported(collection, len, &prelude_availability) {
+                        features.insert("collection-truncate".to_string());
+                    }
+                    if ir_operand_is_cell_backed_collection(collection, cell_type_kinds) {
+                        features.insert("cell-backed-collection-truncate".to_string());
+                    }
+                }
                 ir::IrInstruction::CollectionContains { collection, value, .. } => {
                     if !metadata_stack_collection_contains_is_runtime_supported(collection, value, &prelude_availability, type_layouts)
                     {
@@ -9627,6 +9639,10 @@ fn metadata_prelude_availability(
                     availability.constructed_byte_vector_vars.remove(&collection.id);
                     availability.empty_molecule_vector_vars.remove(&collection.id);
                 }
+                ir::IrInstruction::CollectionTruncate { collection: ir::IrOperand::Var(collection), .. } => {
+                    availability.constructed_byte_vector_vars.remove(&collection.id);
+                    availability.empty_molecule_vector_vars.remove(&collection.id);
+                }
                 ir::IrInstruction::CollectionInsert { collection: ir::IrOperand::Var(collection), .. } => {
                     availability.constructed_byte_vector_vars.remove(&collection.id);
                     availability.empty_molecule_vector_vars.remove(&collection.id);
@@ -9902,6 +9918,18 @@ fn metadata_stack_collection_reverse_is_runtime_supported(
     };
     availability.stack_collection_vars.contains(&collection.id)
         && metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts).is_some_and(|width| width != 0)
+}
+
+fn metadata_stack_collection_truncate_is_runtime_supported(
+    collection: &ir::IrOperand,
+    len: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+) -> bool {
+    let ir::IrOperand::Var(collection) = collection else {
+        return false;
+    };
+    availability.stack_collection_vars.contains(&collection.id)
+        && (const_usize_operand(len).is_some() || metadata_u64_operand_available(len, availability))
 }
 
 fn metadata_stack_collection_contains_is_runtime_supported(
@@ -14910,6 +14938,34 @@ action stack_vec_address_reverse(first: Address, second: Address) -> bool {
 }
 "#;
 
+    const STACK_VEC_TRUNCATE_RUNTIME_PROGRAM: &str = r#"
+module test
+
+action stack_vec_truncate_len() -> u64 {
+    let mut values = Vec::new()
+    values.push(7)
+    values.push(9)
+    values.push(11)
+    values.truncate(2)
+    return values.len() + values[1]
+}
+"#;
+
+    const FIXED_BYTE_STACK_VEC_TRUNCATE_PROGRAM: &str = r#"
+module test
+
+action stack_vec_address_truncate(first: Address, second: Address) -> bool {
+    let mut owners = Vec::new()
+    owners.push(first)
+    owners.push(second)
+    owners.truncate(1)
+    if owners.len() == 1 {
+        return owners[0] == first
+    }
+    return false
+}
+"#;
+
     const FIXED_BYTE_STACK_VEC_RUNTIME_PROGRAM: &str = r#"
 module test
 
@@ -17755,6 +17811,63 @@ action grant(config: read_ref Config, token: Token) -> Grant {
                 && !action.fail_closed_runtime_features.contains(&"index-access".to_string())
                 && !action.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
             "stack-backed Vec<Address>.reverse should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_scalar_truncate() {
+        let result = compile(STACK_VEC_TRUNCATE_RUNTIME_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection truncate"),
+            "Vec<u64>.truncate should update the stack collection length word:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection truncate is not available for this collection"),
+            "stack-backed Vec<u64>.truncate should not hit fail-closed collection path:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_truncate_len").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-truncate".to_string())
+                && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
+            "stack-backed Vec<u64>.truncate should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_fixed_byte_truncate() {
+        let result = compile(FIXED_BYTE_STACK_VEC_TRUNCATE_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection truncate"),
+            "Vec<Address>.truncate should update the stack collection length word:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection truncate is not available for this collection"),
+            "stack-backed Vec<Address>.truncate should not hit fail-closed collection path:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_address_truncate").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-truncate".to_string())
+                && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string())
+                && !action.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
+            "stack-backed Vec<Address>.truncate should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
     }

@@ -2231,6 +2231,18 @@ impl<'a> TypeChecker<'a> {
                             _ => Err(CompileError::new("reverse is only supported on Vec values", call.span)),
                         }
                     }
+                    "truncate" => {
+                        self.validate_builtin_arity("Vec.truncate", 1, arg_types, call.span)?;
+                        if arg_types[0] != Type::U64 {
+                            return Err(CompileError::new("Vec.truncate expects a u64 length", call.span));
+                        }
+                        match &receiver_ty {
+                            Type::Named(name) if name == "Vec" || self.parse_named_collection_item_type(name).is_some() => {
+                                Ok(Type::Unit)
+                            }
+                            _ => Err(CompileError::new("truncate is only supported on Vec values", call.span)),
+                        }
+                    }
                     "contains" => {
                         self.validate_builtin_arity("Vec.contains", 1, arg_types, call.span)?;
                         let arg_ty = &arg_types[0];
