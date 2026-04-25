@@ -15683,7 +15683,54 @@ struct Snapshot {
     amount: u64,
 }
 
-action stack_vec_snapshot_roundtrip(snapshot: Snapshot) -> bool {
+action stack_vec_snapshot_roundtrip(first: Snapshot, second: Snapshot, third: Snapshot) -> bool {
+    let mut snapshots = Vec::with_capacity(3)
+    snapshots.push(first)
+    snapshots.insert(0, second)
+    snapshots.swap(0, 1)
+    snapshots.set(1, third)
+    snapshots.reverse()
+    let removed = snapshots.remove(0)
+    snapshots.push(removed)
+    snapshots.truncate(2)
+
+    if snapshots.capacity() == 6 {
+        if snapshots.contains(third) {
+            let loaded = snapshots.pop()
+            if loaded.owner == third.owner {
+                return loaded.amount == third.amount
+            }
+        }
+    }
+
+    return false
+}
+
+action stack_vec_snapshot_first_last(first: Snapshot, second: Snapshot) -> bool {
+    let mut snapshots = Vec::new()
+    snapshots.push(first)
+    snapshots.push(second)
+
+    if snapshots.first().owner == first.owner {
+        return snapshots.last().amount == second.amount
+    }
+
+    return false
+}
+
+action stack_vec_snapshot_clear(snapshot: Snapshot) -> u64 {
+    let mut snapshots = Vec::new()
+    snapshots.push(snapshot)
+    snapshots.clear()
+
+    if snapshots.is_empty() {
+        return snapshots.len()
+    }
+
+    return 99
+}
+
+action stack_vec_snapshot_pop(snapshot: Snapshot) -> bool {
     let mut snapshots = Vec::new()
     snapshots.push(snapshot)
 
@@ -19169,6 +19216,46 @@ action bad(point: Point) -> u64 {
             asm
         );
         assert!(
+            asm.contains("# cellscript abi: stack collection with_capacity uses fixed backing buffer"),
+            "Vec<Snapshot>::with_capacity should use the stack collection backing buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection capacity element_size=40"),
+            "Vec<Snapshot>.capacity should report fixed backing capacity:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection insert element_size=40"),
+            "Vec<Snapshot>.insert should shift fixed-width schema values in the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection set element_size=40"),
+            "Vec<Snapshot>.set should write fixed-width schema values into the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection reverse element_size=40"),
+            "Vec<Snapshot>.reverse should reverse fixed-width schema values in the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection swap element_size=40"),
+            "Vec<Snapshot>.swap should swap fixed-width schema values in the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection remove element_size=40"),
+            "Vec<Snapshot>.remove should return fixed-width schema values from the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection truncate"),
+            "Vec<Snapshot>.truncate should update stack collection length:\n{}",
+            asm
+        );
+        assert!(
             asm.contains("# cellscript abi: stack collection contains element_size=40"),
             "Vec<Snapshot>.contains should compare fixed-width schema values in the stack collection buffer:\n{}",
             asm
@@ -19176,6 +19263,13 @@ action bad(point: Point) -> u64 {
         assert!(
             asm.contains("# cellscript abi: stack collection pop element_size=40"),
             "Vec<Snapshot>.pop should return a fixed-width schema value pointer from the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection index element_size=40")
+                && asm.contains("# cellscript abi: stack collection clear")
+                && asm.contains("# cellscript abi: stack collection length"),
+            "Vec<Snapshot>.first/last/clear/is_empty/len should lower through stack collection paths:\n{}",
             asm
         );
         assert!(
@@ -19188,35 +19282,70 @@ action bad(point: Point) -> u64 {
             !asm.contains("# cellscript abi: collection push is not needed for verifier execution")
                 && !asm.contains("# cellscript abi: collection contains is not available for this collection")
                 && !asm.contains("# cellscript abi: collection pop is not available for this collection")
+                && !asm.contains("# cellscript abi: collection insert is not available for this collection")
+                && !asm.contains("# cellscript abi: collection remove is not available for this collection")
+                && !asm.contains("# cellscript abi: collection set is not available for this collection")
+                && !asm.contains("# cellscript abi: collection reverse is not available for this collection")
+                && !asm.contains("# cellscript abi: collection swap is not available for this collection")
+                && !asm.contains("# cellscript abi: collection truncate is not available for this collection")
+                && !asm.contains("# index access (unresolved)")
                 && !asm.contains("# cellscript abi: fail closed because element layout is not statically computable"),
             "stack-backed Vec<Snapshot> should not hit old fail-closed collection paths:\n{}",
             asm
         );
 
-        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_snapshot_roundtrip").unwrap();
-        assert!(
-            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
-                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
-                && !action.fail_closed_runtime_features.contains(&"collection-contains".to_string())
-                && !action.fail_closed_runtime_features.contains(&"collection-pop".to_string())
-                && !action.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
-            "stack-backed Vec<Snapshot> should not be reported as fail-closed: {:?}",
-            action.fail_closed_runtime_features
-        );
+        for action_name in
+            ["stack_vec_snapshot_roundtrip", "stack_vec_snapshot_first_last", "stack_vec_snapshot_clear", "stack_vec_snapshot_pop"]
+        {
+            let action = result.metadata.actions.iter().find(|action| action.name == action_name).unwrap();
+            for feature in [
+                "collection-new",
+                "collection-push",
+                "collection-capacity",
+                "collection-insert",
+                "collection-remove",
+                "collection-set",
+                "collection-reverse",
+                "collection-swap",
+                "collection-truncate",
+                "collection-contains",
+                "collection-pop",
+                "collection-clear",
+                "dynamic-length",
+                "index-access",
+                "field-access",
+                "fixed-byte-comparison",
+            ] {
+                assert!(
+                    !action.fail_closed_runtime_features.contains(&feature.to_string()),
+                    "{action_name} should not report {feature}: {:?}",
+                    action.fail_closed_runtime_features
+                );
+            }
+        }
 
-        let instantiation = result
+        let instantiations = result
             .metadata
             .runtime
             .collection_instantiations
             .iter()
-            .find(|instantiation| instantiation.collection_ty == "Vec<Snapshot>")
-            .expect("Vec<Snapshot> instantiation should be metadata-visible");
-        assert_eq!(instantiation.element_ty, "Snapshot");
-        assert_eq!(instantiation.element_width_bytes, 40);
-        assert_eq!(instantiation.max_elements, 6);
-        assert_eq!(instantiation.backing, "stack-fixed-buffer:256");
-        for helper in ["contains", "new", "pop", "push"] {
-            assert!(instantiation.helpers.iter().any(|value| value == helper), "missing helper {helper}: {instantiation:?}");
+            .filter(|instantiation| instantiation.collection_ty == "Vec<Snapshot>")
+            .collect::<Vec<_>>();
+        assert!(!instantiations.is_empty(), "Vec<Snapshot> instantiation should be metadata-visible");
+        for instantiation in &instantiations {
+            assert_eq!(instantiation.element_ty, "Snapshot");
+            assert_eq!(instantiation.element_width_bytes, 40);
+            assert_eq!(instantiation.max_elements, 6);
+            assert_eq!(instantiation.backing, "stack-fixed-buffer:256");
+        }
+        for helper in [
+            "capacity", "clear", "contains", "index", "insert", "len", "new", "pop", "push", "remove", "reverse", "set", "swap",
+            "truncate",
+        ] {
+            assert!(
+                instantiations.iter().any(|instantiation| instantiation.helpers.iter().any(|value| value == helper)),
+                "missing helper {helper}: {instantiations:?}"
+            );
         }
     }
 
