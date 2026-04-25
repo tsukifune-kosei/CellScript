@@ -1,7 +1,7 @@
 # CellScript v0.13 Roadmap
 
 **Date**: 2026-04-24  
-**Status**: Draft (Pending Team Review)  
+**Status**: Release-gate draft (review findings integrated)
 **Scope**: Zero-cost Abstractions, Bounded Collection Runtime Gaps, CLI Ergonomics
 **Dependencies**: v0.12 released (dual-chain production closure)
 **Live TODO**: [CELLSCRIPT_0_13_TODOLIST.md](CELLSCRIPT_0_13_TODOLIST.md)
@@ -33,7 +33,7 @@ From "can run" to "runs well", from "feature-complete" to "excellent UX".
 ### Three Pillars
 
 1. **Zero-Cost Abstractions** - Eliminate known runtime overhead (30-40% perf improvement)
-2. **Collections Generics** - Unlock complex protocol development (AMM/Registry/OrderBook)
+2. **Bounded Collections** - Ship stack-backed fixed-width `Vec<T>` helpers while keeping maps and cell-backed ownership explicit/fail-closed
 3. **Developer Experience** - CLI ergonomics, diagnostic presentation, and DSL features
 
 ---
@@ -42,19 +42,19 @@ From "can run" to "runs well", from "feature-complete" to "excellent UX".
 
 ### P0 - Blocking (Must Complete in v0.13)
 
-#### 1. Bounded Generics for CKB Design Patterns 🔴
+#### 1. Bounded Collection Runtime for CKB Design Patterns ✅
 
-**Philosophy**: **Generic patterns, not unconstrained generics.**
+**Philosophy**: **Bounded collection patterns, not unconstrained generics.**
 
 > "Generics that serve design patterns are valuable; generics that hide cell ownership are disastrous."
 
-**Problem**: 0.12 supports several schema/ABI dynamic vector paths, but runtime
-collection helpers and cell-backed collection ownership remain intentionally
-bounded. `Vec<Address>` can be declared and used for documented Molecule
-dynamic-field and entry-witness paths; the remaining gap is generic executable
-runtime support such as `HashMap<Hash, Order>`, `HashSet<Address>`, local
-`Vec<T>` operations beyond the verified paths, and verifier-backed ownership for
-cell-backed `Vec<Resource>` values.
+**Problem**: 0.12 supports several schema/ABI dynamic vector paths, and the
+current 0.13 branch adds executable stack-backed value-vector helpers for
+fixed-width elements. `Vec<Address>` can be declared and used for documented
+Molecule dynamic-field and entry-witness paths; the 0.13 runtime helper work is
+the checked local `Vec<T: FixedWidth>` layer. Remaining gaps are full
+`HashMap`/`HashSet` runtime support, dynamic nested container mutation, and
+verifier-backed ownership for cell-backed `Vec<Resource>` values.
 
 **Real Demand Analysis**:
 
@@ -76,7 +76,7 @@ attributes: Vec<(String, String)>,  // ✅ Tuple vector
 **Industry Comparison**:
 - **Sway (Fuel)**: ✅ Full generics (structs, enums, functions, traits)
 - **Move (Sui/Aptos)**: ✅ Full generics + phantom types (`Coin<phantom T>`)
-- **CellScript**: ⚠️ Partial (schema/ABI paths only, not runtime operations)
+- **CellScript**: ✅ Bounded (`Vec<Address>` / `Vec<Hash>` schema+ABI paths, plus 0.13 stack-backed fixed-width value `Vec<T>` helpers); ❌ no general user-defined generics or cell-backed collections
 
 **Why CellScript Cannot Copy Sway/Move Directly**:
 
@@ -106,19 +106,21 @@ CKB/Spora's core is **NOT** account storage or native object packages. It's:
 
 **CKB/Spora Need**:
 - ✅ **CKB**: Multisig/timelock need `Vec<Address>` schema/ABI support and local helper parity for common value-vector patterns
-- ✅ **Spora**: AMM/Registry/OrderBook need bounded executable collection patterns (`Vec<Hash>`, `Vec<Address>`, fixed-width values, and explicit map-like representations), not full generic `HashMap<K, V>`
+- ✅ **Spora**: AMM/Registry/OrderBook need bounded executable collection patterns (`Vec<Hash>`, `Vec<Address>`, fixed-width values, and explicit map-like representations), not full generic `HashMap<K, V>` in 0.13
 - ⚠️ **CKB raw scripts**: Usually rely on Rust -> RISC-V generics; CellScript must expose bounded patterns explicitly instead of inheriting unconstrained Rust generics
 
-**v0.13 Goal**: **Bounded generics / reusable pattern layer**, NOT full Rust/Sway-style generics.
+**v0.13 Goal**: **Bounded collection runtime / reusable value-vector layer**, NOT full Rust/Sway-style generics.
 
 > "0.13 引入受限泛型，用来复用 CKB 设计模式，但不把 cell-backed / linear ownership 问题偷偷藏进泛型里。"
 
-**What v0.13 WILL do** (bounded generics):
+**What the current 0.13 branch DOES** (implemented bounded collections):
 
-**1. Value-level generics only** (no linear ownership)
+**1. Value-vector helpers only** (no linear ownership)
 ```cellscript
-fn require_eq<T: FixedWidth>(a: T, b: T)
-fn contains<T: FixedWidth>(xs: Vec<T>, x: T) -> bool
+let mut owners = Vec::with_capacity(2)
+owners.push(owner)
+owners.insert(0, candidate)
+owners.contains(owner)
 ```
 Supported types:
 - `u8`, `u64`
@@ -127,7 +129,11 @@ Supported types:
 - fixed bytes
 - simple ABI/schema-backed values
 
-**DOES NOT support**: `T: CellBacked` or `T: Linear`
+Metadata and `cellc explain-generics` expose concrete checked `Vec<T>`
+instantiations with element width, backing capacity, helper set, and status.
+
+**DOES NOT support**: source-level unconstrained generic functions,
+`T: CellBacked`, or `T: Linear`
 
 ---
 
@@ -159,9 +165,10 @@ Benefits:
 
 ---
 
-**4. Minimal trait constraints**
+**4. Minimal trait constraint vocabulary**
 
-**Allowed in 0.13** (with explicit definitions):
+**Design vocabulary used to bound future generic syntax** (not a general
+source-level trait system in this branch):
 
 ```text
 FixedWidth:     value has statically known ABI width.
@@ -596,12 +603,12 @@ with_default_hash_type(Data1)
 
 | Week | Task | Deliverable |
 |------|------|-------------|
-| W1-2 | Collections Generics | Generic stdlib + monomorphization + tests |
+| W1-2 | Bounded Collections | Fixed-width `Vec<T>` helper runtime + metadata/explain coverage + tests |
 | W2 | CLI: `build` default O1 + `cellc new` | Immediate UX improvement |
 | W3 | Deserialization Specialization | Type layout cache + codegen specialization |
 | W3-4 | CLI: Error Codes + `explain` | `codespan-reporting` integration |
 
-**Milestone**: v0.13.0-alpha1 (Collections generics usable)
+**Milestone**: v0.13.0-alpha1 (bounded collections usable)
 
 ---
 
@@ -665,9 +672,9 @@ with_default_hash_type(Data1)
 
 ## ⚠️ Risks and Mitigations
 
-### Risk 1: Collections Generics Monomorphization Causes ELF Bloat
+### Risk 1: Bounded Collection Helper Expansion Causes ELF Bloat
 
-**Scenario**: `HashMap<Hash, Order>` + `HashMap<Address, Entry>` + `HashSet<Address>` generates multiple helper instances.
+**Scenario**: Multiple fixed-width `Vec<T>` helper instantiations (`Vec<Hash>`, `Vec<Address>`, schema-backed fixed-width values) generate duplicate helper paths.
 
 **Mitigation**:
 - Only monomorphize actually used types
@@ -714,7 +721,7 @@ v0.13 **does not change** dual-chain production plan, only enhances it:
 
 **v0.13 New Deliverables**:
 - `examples/registry.cell` - Exercises executable address membership/mapping beyond the 0.12 schema-vector boundary
-- `examples/order_book.cell` - Uses `HashMap<Hash, Order>` or an explicitly verifier-backed map representation
+- `examples/order_book.cell` - Uses explicit map-like representations until full `HashMap<K, V>` has verifier-backed runtime support
 - Performance benchmark reports
 - CLI diagnostic presentation backed by existing runtime error documentation
 
@@ -740,7 +747,7 @@ All audit findings integrated into v0.13 roadmap:
 
 ### How Developers Can Contribute
 
-1. **Collections Generics** - Review `stdlib/collections.rs`, contribute runtime helper monomorphization and ownership logic
+1. **Bounded Collections** - Review `stdlib/collections.rs`, contribute fixed-width `Vec<T>` helper coverage and fail-closed ownership checks
 2. **CLI Improvements** - Add `cellc new`, integrate `codespan-reporting`
 3. **Performance Benchmarks** - Run `scripts/benchmark_cellscript.sh` (TBD)
 4. **New Examples** - Extend `examples/registry.cell` to test bounded executable collection patterns (`Vec<Address>`/`Vec<Hash>` helpers and explicit map-like representations)
@@ -834,7 +841,7 @@ ownership gaps.
 
 | v0.13 Feature | v0.12 Status | Overlap? | Notes |
 |---------------|--------------|----------|-------|
-| Collections Generics | 🟡 Partial | ⚠️ Partial | `Vec<Address>`/`Vec<Hash>` schema and ABI paths are 0.12; runtime generic `HashMap<K,V>`, `HashSet<T>`, broader local `Vec<T>`, and cell-backed ownership are v0.13 candidates |
+| Bounded Collections | 🟡 Partial | ⚠️ Partial | `Vec<Address>`/`Vec<Hash>` schema and ABI paths are 0.12; stack-backed fixed-width `Vec<T>` helper runtime is implemented in 0.13; `HashMap`/`HashSet`, dynamic nested mutation, and cell-backed ownership remain future/non-goal |
 | Deserialization Specialization | ❌ Not mentioned | ✅ No | Genuine new optimization |
 | CLI: `build` default O1 | ✅ Implemented in branch | ✅ No | Genuine UX fix; `cellc build` JSON exposes `opt_level = 1` for dev builds |
 | CLI: `cellc new` | ✅ Implemented in branch on top of `cellc init` foundation | ⚠️ Partial | New work is the Cargo-style `new` workflow, optional git behavior, and `--lib` manifest/file-layout correctness, not initial project scaffolding from scratch |
@@ -853,7 +860,7 @@ ownership gaps.
 From `CELLSCRIPT_0_12_COMPREHENSIVE_PLAN.md` Section 6:
 
 > 0.12 explicitly does not claim:
-> - full generic `HashMap<K, V>` runtime support ← **v0.13 Collections Generics**
+> - full generic `HashMap<K, V>` runtime support ← **still future/non-goal after bounded 0.13 `Vec<T>` helpers**
 > - complete linear ownership for cell-backed collections
 > - in-script dynamic CKB Blake2b lowering ← **P3 conditional, not part of current bundled-example requirement**
 > - a consensus-level scheduler rewrite
@@ -864,7 +871,7 @@ From `CELLSCRIPT_0_12_COMPREHENSIVE_PLAN.md` Section 6:
 ### Conclusion
 
 **v0.13 roadmap is viable after scope correction**:
-- ✅ Runtime generic collection helpers and cell-backed collection ownership remain valid future work
+- ✅ Stack-backed fixed-width `Vec<T>` helper runtime is current 0.13 work; full maps/sets and cell-backed collection ownership remain future work
 - ✅ `Vec<Address>` declaration, Molecule dynamic fields, and entry-witness payloads are 0.12 work and must not be counted again
 - ✅ `cellc init`, runtime error registry docs, and CKB Blake2b builder/release helpers are 0.12 work and must be treated as foundations
 - ✅ Remaining optimizer, DSL, transaction-builder, and fuzzing tracks still build on the 0.12 production boundary
