@@ -3551,12 +3551,16 @@ action hash_helpers(first: Hash, second: Hash) -> bool {
     assert_eq!(address["backing"], "stack-fixed-buffer:256");
     assert_eq!(address["status"], "checked-runtime");
     let address_helpers = address["helpers"].as_array().unwrap();
-    for helper in ["contains", "index", "insert", "new", "push", "remove", "set", "swap", "truncate"] {
+    for helper in ["contains", "index", "insert", "push", "remove", "set", "swap", "truncate", "with_capacity"] {
         assert!(
             address_helpers.iter().any(|value| value.as_str() == Some(helper)),
             "missing Address helper {helper}: {address_helpers:?}"
         );
     }
+    assert!(
+        !address_helpers.iter().any(|value| value.as_str() == Some("new")),
+        "Vec<Address> was constructed with Vec::with_capacity, not Vec::new: {address_helpers:?}"
+    );
 
     let hash = instantiations
         .iter()
@@ -3580,6 +3584,7 @@ action hash_helpers(first: Hash, second: Hash) -> bool {
     assert!(stdout.contains("Checked bounded generic collection instantiations"), "{}", stdout);
     assert!(stdout.contains("Vec<Address> -> Address"), "{}", stdout);
     assert!(stdout.contains("Vec<Hash> -> Hash"), "{}", stdout);
+    assert!(stdout.contains("with_capacity"), "{}", stdout);
 }
 
 #[test]

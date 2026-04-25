@@ -209,7 +209,8 @@ Vec<T: FixedWidth>
 ```
 
 Runtime and constraints metadata expose each concrete `Vec<T>` instance with
-scope, element type/width, fixed backing capacity, status, and helper set.
+scope, element type/width, fixed backing capacity, status, and exact helper set
+including the constructor path (`Vec::new` or `Vec::with_capacity`).
 
 `Option<T: FixedWidth>` remains an investigation item, not a current 0.13
 release claim.

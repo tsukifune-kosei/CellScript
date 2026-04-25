@@ -449,13 +449,18 @@ fn registry_example_uses_bounded_local_vec_helpers_without_collection_debt() {
     assert_eq!(membership_vec.element_ty, "Address");
     assert_eq!(membership_vec.element_width_bytes, 32);
     assert_eq!(membership_vec.max_elements, 8);
-    for helper in ["new", "push", "insert", "swap", "remove", "truncate", "set", "contains", "index"] {
+    for helper in ["with_capacity", "push", "insert", "swap", "remove", "truncate", "set", "contains", "index"] {
         assert!(
             membership_vec.helpers.contains(&helper.to_string()),
             "Vec<Address> metadata should expose helper {helper}: {:?}",
             membership_vec.helpers
         );
     }
+    assert!(
+        !membership_vec.helpers.contains(&"new".to_string()),
+        "Vec<Address> metadata should preserve Vec::with_capacity instead of collapsing it to new: {:?}",
+        membership_vec.helpers
+    );
 
     let hash_vec = result
         .metadata

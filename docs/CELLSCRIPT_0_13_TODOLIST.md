@@ -112,7 +112,11 @@ Notes:
 
 ## ⏭️ Next Candidate Work
 
-- [ ] Improve docs for bounded collection runtime behavior.
+- [x] Improve docs for bounded collection runtime behavior.
+  - `docs/examples/collections_matrix.md` now separates stack-backed
+    `Vec<T: FixedWidth>` helper behavior from Molecule/schema vectors, records
+    the fixed backing capacity rule, points users at `cellc explain-generics`,
+    and shows cell-backed ownership shapes as non-goals.
 - [x] Add examples showing supported local `Vec<Address>` / `Vec<Hash>` helper
   usage without implying full generic collection support.
   - Added `examples/registry.cell` plus an integration test for stack-backed
@@ -121,7 +125,8 @@ Notes:
   checked stack-backed instantiation visible in runtime and constraints
   metadata.
   - Metadata records scope, concrete `Vec<T>` type, element type/width, fixed
-    backing capacity, status, and used helper set.
+    backing capacity, status, and exact helper set, including `Vec::new` versus
+    `Vec::with_capacity`.
   - `cellc explain-generics` exposes the same checked instantiation set in text
     and JSON form for local audit.
 - [ ] Investigate a bounded `Option<T: FixedWidth>` representation.

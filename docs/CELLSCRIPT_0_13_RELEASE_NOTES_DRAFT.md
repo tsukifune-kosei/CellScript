@@ -33,7 +33,8 @@ New in 0.13 branch work:
   `Vec<Hash>` helper usage without implying full `HashMap<K, V>` support.
 - Runtime and constraints metadata expose each checked stack-backed
   fixed-width `Vec<T>` instantiation, including scope, element type/width,
-  backing capacity, status, and helper set.
+  backing capacity, status, and helper set. Constructor helpers now preserve
+  `Vec::new` versus `Vec::with_capacity` instead of collapsing both to `new`.
 - `cellc explain-generics` exposes the checked bounded `Vec<T>` instantiation
   set in text or JSON form for local audit.
 - Metadata schema version is now 30.
@@ -76,7 +77,7 @@ New in 0.13 branch work:
 - `cellc explain <error-code>` reports runtime error registry entries.
 - `cellc explain-generics [--json]` reports checked stack-backed
   `Vec<T: FixedWidth>` instantiations, including element width, fixed backing
-  capacity, backing model, status, and helper set.
+  capacity, backing model, status, and exact helper set.
 - CLI stderr uses `error[E####]` plus a `cellc explain E####` hint when a
   policy or compile error maps to the runtime error registry.
 

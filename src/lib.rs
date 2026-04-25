@@ -4556,6 +4556,7 @@ fn body_collection_instantiation_metadata(
     let param_schema_vars =
         params.iter().filter(|param| named_type_name(&param.ty).is_some()).map(|param| param.binding.id).collect::<BTreeSet<_>>();
     let availability = metadata_prelude_availability(body, &param_schema_vars, type_layouts, params, pure_const_returns);
+    let constructor_helpers = collection_constructor_helpers(body);
     let mut builders = BTreeMap::<String, CollectionInstantiationBuilder>::new();
 
     for block in &body.blocks {
@@ -4564,15 +4565,42 @@ fn body_collection_instantiation_metadata(
                 ir::IrInstruction::Index { dest, arr, idx }
                     if metadata_stack_collection_index_is_runtime_supported(dest, arr, idx, &availability, type_layouts) =>
                 {
-                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, arr, type_layouts, "index");
+                    record_stack_collection_helper(
+                        &mut builders,
+                        scope_kind,
+                        scope_name,
+                        arr,
+                        &availability,
+                        &constructor_helpers,
+                        type_layouts,
+                        "index",
+                    );
                 }
                 ir::IrInstruction::Length { operand, .. } if metadata_operand_is_stack_collection(operand, &availability) => {
-                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, operand, type_layouts, "len");
+                    record_stack_collection_helper(
+                        &mut builders,
+                        scope_kind,
+                        scope_name,
+                        operand,
+                        &availability,
+                        &constructor_helpers,
+                        type_layouts,
+                        "len",
+                    );
                 }
                 ir::IrInstruction::CollectionCapacity { collection, .. }
                     if metadata_stack_collection_capacity_is_runtime_supported(collection, &availability, type_layouts) =>
                 {
-                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "capacity");
+                    record_stack_collection_helper(
+                        &mut builders,
+                        scope_kind,
+                        scope_name,
+                        collection,
+                        &availability,
+                        &constructor_helpers,
+                        type_layouts,
+                        "capacity",
+                    );
                 }
                 ir::IrInstruction::CollectionPush { collection, value }
                     if metadata_stack_collection_push_is_runtime_supported(collection, value, &availability, type_layouts) =>
@@ -4584,6 +4612,7 @@ fn body_collection_instantiation_metadata(
                         collection,
                         value,
                         &availability,
+                        &constructor_helpers,
                         type_layouts,
                     );
                 }
@@ -4595,6 +4624,8 @@ fn body_collection_instantiation_metadata(
                         scope_kind,
                         scope_name,
                         collection,
+                        &availability,
+                        &constructor_helpers,
                         type_layouts,
                         "extend_from_slice",
                     );
@@ -4602,37 +4633,100 @@ fn body_collection_instantiation_metadata(
                 ir::IrInstruction::CollectionClear { collection }
                     if metadata_stack_collection_clear_is_runtime_supported(collection, &availability) =>
                 {
-                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "clear");
+                    record_stack_collection_helper(
+                        &mut builders,
+                        scope_kind,
+                        scope_name,
+                        collection,
+                        &availability,
+                        &constructor_helpers,
+                        type_layouts,
+                        "clear",
+                    );
                 }
                 ir::IrInstruction::CollectionReverse { collection }
                     if metadata_stack_collection_reverse_is_runtime_supported(collection, &availability, type_layouts) =>
                 {
-                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "reverse");
+                    record_stack_collection_helper(
+                        &mut builders,
+                        scope_kind,
+                        scope_name,
+                        collection,
+                        &availability,
+                        &constructor_helpers,
+                        type_layouts,
+                        "reverse",
+                    );
                 }
                 ir::IrInstruction::CollectionTruncate { collection, len }
                     if metadata_stack_collection_truncate_is_runtime_supported(collection, len, &availability) =>
                 {
-                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "truncate");
+                    record_stack_collection_helper(
+                        &mut builders,
+                        scope_kind,
+                        scope_name,
+                        collection,
+                        &availability,
+                        &constructor_helpers,
+                        type_layouts,
+                        "truncate",
+                    );
                 }
                 ir::IrInstruction::CollectionSwap { collection, left, right }
                     if metadata_stack_collection_swap_is_runtime_supported(collection, left, right, &availability, type_layouts) =>
                 {
-                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "swap");
+                    record_stack_collection_helper(
+                        &mut builders,
+                        scope_kind,
+                        scope_name,
+                        collection,
+                        &availability,
+                        &constructor_helpers,
+                        type_layouts,
+                        "swap",
+                    );
                 }
                 ir::IrInstruction::CollectionContains { collection, value, .. }
                     if metadata_stack_collection_contains_is_runtime_supported(collection, value, &availability, type_layouts) =>
                 {
-                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "contains");
+                    record_stack_collection_helper(
+                        &mut builders,
+                        scope_kind,
+                        scope_name,
+                        collection,
+                        &availability,
+                        &constructor_helpers,
+                        type_layouts,
+                        "contains",
+                    );
                 }
                 ir::IrInstruction::CollectionRemove { dest, collection, index }
                     if metadata_stack_collection_remove_is_runtime_supported(dest, collection, index, &availability, type_layouts) =>
                 {
-                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "remove");
+                    record_stack_collection_helper(
+                        &mut builders,
+                        scope_kind,
+                        scope_name,
+                        collection,
+                        &availability,
+                        &constructor_helpers,
+                        type_layouts,
+                        "remove",
+                    );
                 }
                 ir::IrInstruction::CollectionPop { dest, collection }
                     if metadata_stack_collection_pop_is_runtime_supported(dest, collection, &availability, type_layouts) =>
                 {
-                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "pop");
+                    record_stack_collection_helper(
+                        &mut builders,
+                        scope_kind,
+                        scope_name,
+                        collection,
+                        &availability,
+                        &constructor_helpers,
+                        type_layouts,
+                        "pop",
+                    );
                 }
                 ir::IrInstruction::CollectionInsert { collection, index, value }
                     if metadata_stack_collection_insert_is_runtime_supported(
@@ -4643,12 +4737,30 @@ fn body_collection_instantiation_metadata(
                         type_layouts,
                     ) =>
                 {
-                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "insert");
+                    record_stack_collection_helper(
+                        &mut builders,
+                        scope_kind,
+                        scope_name,
+                        collection,
+                        &availability,
+                        &constructor_helpers,
+                        type_layouts,
+                        "insert",
+                    );
                 }
                 ir::IrInstruction::CollectionSet { collection, index, value }
                     if metadata_stack_collection_set_is_runtime_supported(collection, index, value, &availability, type_layouts) =>
                 {
-                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "set");
+                    record_stack_collection_helper(
+                        &mut builders,
+                        scope_kind,
+                        scope_name,
+                        collection,
+                        &availability,
+                        &constructor_helpers,
+                        type_layouts,
+                        "set",
+                    );
                 }
                 _ => {}
             }
@@ -4662,11 +4774,38 @@ fn metadata_operand_is_stack_collection(operand: &ir::IrOperand, availability: &
     matches!(operand, ir::IrOperand::Var(var) if availability.stack_collection_vars.contains(&var.id))
 }
 
+fn collection_constructor_helpers(body: &ir::IrBody) -> HashMap<usize, &'static str> {
+    let mut constructors = HashMap::new();
+    for block in &body.blocks {
+        for instruction in &block.instructions {
+            if let ir::IrInstruction::CollectionNew { dest, capacity, .. } = instruction {
+                let helper = if capacity.is_some() { "with_capacity" } else { "new" };
+                constructors.insert(dest.id, helper);
+            }
+        }
+    }
+    constructors
+}
+
+fn stack_collection_constructor_helper(
+    collection: &ir::IrVar,
+    availability: &MetadataPreludeAvailability,
+    constructor_helpers: &HashMap<usize, &'static str>,
+) -> &'static str {
+    availability
+        .constructed_byte_vector_roots
+        .get(&collection.id)
+        .and_then(|root_id| constructor_helpers.get(root_id).copied())
+        .unwrap_or("new")
+}
+
 fn record_stack_collection_helper(
     builders: &mut BTreeMap<String, CollectionInstantiationBuilder>,
     scope_kind: &str,
     scope_name: &str,
     collection: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+    constructor_helpers: &HashMap<usize, &'static str>,
     type_layouts: &MetadataTypeLayouts,
     helper: &str,
 ) {
@@ -4680,10 +4819,11 @@ fn record_stack_collection_helper(
     let Some(element_width_bytes) = metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts) else {
         return;
     };
+    let constructor_helper = stack_collection_constructor_helper(collection, availability, constructor_helpers);
     let key = format!("{scope_kind}:{scope_name}:{collection_ty}");
     let builder = builders.entry(key).or_insert_with(|| {
         let mut helpers = BTreeSet::new();
-        helpers.insert("new".to_string());
+        helpers.insert(constructor_helper.to_string());
         CollectionInstantiationBuilder {
             scope_kind: scope_kind.to_string(),
             scope_name: scope_name.to_string(),
@@ -4703,6 +4843,7 @@ fn record_stack_collection_push_helper(
     collection: &ir::IrOperand,
     value: &ir::IrOperand,
     availability: &MetadataPreludeAvailability,
+    constructor_helpers: &HashMap<usize, &'static str>,
     type_layouts: &MetadataTypeLayouts,
 ) {
     let ir::IrOperand::Var(collection) = collection else {
@@ -4714,6 +4855,8 @@ fn record_stack_collection_push_helper(
             scope_kind,
             scope_name,
             &ir::IrOperand::Var(collection.clone()),
+            availability,
+            constructor_helpers,
             type_layouts,
             "push",
         );
@@ -4726,11 +4869,12 @@ fn record_stack_collection_push_helper(
     let Some(element_ty) = metadata_operand_type_name(value) else {
         return;
     };
+    let constructor_helper = stack_collection_constructor_helper(collection, availability, constructor_helpers);
     let collection_ty = format!("Vec<{element_ty}>");
     let key = format!("{scope_kind}:{scope_name}:{collection_ty}");
     let builder = builders.entry(key).or_insert_with(|| {
         let mut helpers = BTreeSet::new();
-        helpers.insert("new".to_string());
+        helpers.insert(constructor_helper.to_string());
         CollectionInstantiationBuilder {
             scope_kind: scope_kind.to_string(),
             scope_name: scope_name.to_string(),
@@ -19339,8 +19483,21 @@ action bad(point: Point) -> u64 {
             assert_eq!(instantiation.backing, "stack-fixed-buffer:256");
         }
         for helper in [
-            "capacity", "clear", "contains", "index", "insert", "len", "new", "pop", "push", "remove", "reverse", "set", "swap",
+            "capacity",
+            "clear",
+            "contains",
+            "index",
+            "insert",
+            "len",
+            "new",
+            "pop",
+            "push",
+            "remove",
+            "reverse",
+            "set",
+            "swap",
             "truncate",
+            "with_capacity",
         ] {
             assert!(
                 instantiations.iter().any(|instantiation| instantiation.helpers.iter().any(|value| value == helper)),
