@@ -2182,6 +2182,24 @@ impl<'a> TypeChecker<'a> {
                         self.validate_builtin_arity(&field.field, 0, arg_types, call.span)?;
                         Ok(Type::Bool)
                     }
+                    "first" | "last" => {
+                        self.validate_builtin_arity(&format!("Vec.{}", field.field), 0, arg_types, call.span)?;
+                        match &receiver_ty {
+                            Type::Named(name) => {
+                                let Some(item_ty) = self.parse_named_collection_item_type(name) else {
+                                    return Err(CompileError::new(
+                                        format!(
+                                            "Vec.{} requires a typed Vec<T>; push or annotate the Vec before reading",
+                                            field.field
+                                        ),
+                                        call.span,
+                                    ));
+                                };
+                                Ok(item_ty)
+                            }
+                            _ => Err(CompileError::new(format!("{} is only supported on Vec values", field.field), call.span)),
+                        }
+                    }
                     "push" => {
                         self.validate_builtin_arity("Vec.push", 1, arg_types, call.span)?;
                         let arg_ty = &arg_types[0];

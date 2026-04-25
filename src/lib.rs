@@ -15005,6 +15005,32 @@ action stack_vec_address_swap(first: Address, second: Address) -> bool {
 }
 "#;
 
+    const STACK_VEC_FIRST_LAST_RUNTIME_PROGRAM: &str = r#"
+module test
+
+action stack_vec_first_last_sum() -> u64 {
+    let mut values = Vec::new()
+    values.push(7)
+    values.push(9)
+    values.push(11)
+    return values.first() + values.last()
+}
+"#;
+
+    const FIXED_BYTE_STACK_VEC_FIRST_LAST_PROGRAM: &str = r#"
+module test
+
+action stack_vec_address_first_last(first: Address, second: Address) -> bool {
+    let mut owners = Vec::new()
+    owners.push(first)
+    owners.push(second)
+    if owners.first() == first {
+        return owners.last() == second
+    }
+    return false
+}
+"#;
+
     const STACK_VEC_TRUNCATE_RUNTIME_PROGRAM: &str = r#"
 module test
 
@@ -17943,6 +17969,71 @@ action grant(config: read_ref Config, token: Token) -> Grant {
                 && !action.fail_closed_runtime_features.contains(&"index-access".to_string())
                 && !action.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
             "stack-backed Vec<Address>.swap should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_scalar_first_last() {
+        let result = compile(STACK_VEC_FIRST_LAST_RUNTIME_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection index element_size=8"),
+            "Vec<u64>.first/last should reuse stack collection indexing:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection length"),
+            "Vec<u64>.last should compute the stack collection length:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# index access (unresolved)"),
+            "stack-backed Vec<u64>.first/last should not hit unresolved index access:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_first_last_sum").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
+            "stack-backed Vec<u64>.first/last should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_fixed_byte_first_last() {
+        let result = compile(FIXED_BYTE_STACK_VEC_FIRST_LAST_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection index element_size=32"),
+            "Vec<Address>.first/last should reuse stack collection indexing:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection length"),
+            "Vec<Address>.last should compute the stack collection length:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# index access (unresolved)"),
+            "stack-backed Vec<Address>.first/last should not hit unresolved index access:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_address_first_last").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string())
+                && !action.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
+            "stack-backed Vec<Address>.first/last should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
     }

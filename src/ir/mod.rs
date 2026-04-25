@@ -2984,6 +2984,42 @@ impl IrGenerator {
                     });
                     Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
                 }
+                "first" if call.args.is_empty() => {
+                    let lowered_collection = self.lower_expr(&field.expr, current, blocks, vars);
+                    let active = lowered_collection.current?;
+                    let item_ty = collection_item_ir_type(&self.operand_type(&lowered_collection.operand)).unwrap_or(IrType::U64);
+                    let dest = self.new_var("first_tmp", item_ty);
+                    self.block_mut(blocks, active).instructions.push(IrInstruction::Index {
+                        dest: dest.clone(),
+                        arr: lowered_collection.operand,
+                        idx: IrOperand::Const(IrConst::U64(0)),
+                    });
+                    Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
+                }
+                "last" if call.args.is_empty() => {
+                    let lowered_collection = self.lower_expr(&field.expr, current, blocks, vars);
+                    let active = lowered_collection.current?;
+                    let item_ty = collection_item_ir_type(&self.operand_type(&lowered_collection.operand)).unwrap_or(IrType::U64);
+                    let len_dest = self.new_var("last_len_tmp", IrType::U64);
+                    let index_dest = self.new_var("last_index_tmp", IrType::U64);
+                    let dest = self.new_var("last_tmp", item_ty);
+                    let block = self.block_mut(blocks, active);
+                    block
+                        .instructions
+                        .push(IrInstruction::Length { dest: len_dest.clone(), operand: lowered_collection.operand.clone() });
+                    block.instructions.push(IrInstruction::Binary {
+                        dest: index_dest.clone(),
+                        op: BinaryOp::Sub,
+                        left: IrOperand::Var(len_dest),
+                        right: IrOperand::Const(IrConst::U64(1)),
+                    });
+                    block.instructions.push(IrInstruction::Index {
+                        dest: dest.clone(),
+                        arr: lowered_collection.operand,
+                        idx: IrOperand::Var(index_dest),
+                    });
+                    Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
+                }
                 "type_hash" if call.args.is_empty() => {
                     let lowered = self.lower_expr(&field.expr, current, blocks, vars);
                     let active = lowered.current?;
