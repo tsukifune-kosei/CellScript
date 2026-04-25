@@ -408,6 +408,34 @@ fn action<'a>(metadata: &'a cellscript::CompileMetadata, name: &str) -> &'a cell
     metadata.actions.iter().find(|action| action.name == name).unwrap_or_else(|| panic!("missing {name} action metadata"))
 }
 
+#[test]
+fn registry_example_uses_bounded_local_vec_helpers_without_collection_debt() {
+    let result = compile_file(example_path("registry.cell"), CompileOptions::default()).expect("registry example should compile");
+    let asm = String::from_utf8(result.artifact_bytes.clone()).expect("registry asm should be utf8");
+
+    for marker in [
+        "# cellscript abi: stack collection push element_size=32",
+        "# cellscript abi: stack collection insert element_size=32",
+        "# cellscript abi: stack collection remove element_size=32",
+        "# cellscript abi: stack collection contains element_size=32",
+        "# cellscript abi: stack collection pop element_size=32",
+        "# cellscript abi: stack collection reverse element_size=32",
+        "# cellscript abi: stack collection swap element_size=32",
+        "# cellscript abi: stack collection truncate",
+    ] {
+        assert!(asm.contains(marker), "registry example should lower bounded Vec helper marker {marker}:\n{asm}");
+    }
+
+    for name in ["local_registry_membership", "local_registry_key_roundtrip"] {
+        let action = action(&result.metadata, name);
+        assert!(
+            action.fail_closed_runtime_features.is_empty(),
+            "registry {name} should not carry collection fail-closed debt: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+}
+
 fn assert_create(action: &cellscript::ActionMetadata, ty: &str, context: &str) {
     assert!(
         action.create_set.iter().any(|pattern| pattern.ty == ty && pattern.operation == "create"),

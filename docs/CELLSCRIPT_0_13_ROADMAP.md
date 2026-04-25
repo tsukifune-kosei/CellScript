@@ -726,7 +726,7 @@ All audit findings integrated into v0.13 roadmap:
 1. **Collections Generics** - Review `stdlib/collections.rs`, contribute runtime helper monomorphization and ownership logic
 2. **CLI Improvements** - Add `cellc new`, integrate `codespan-reporting`
 3. **Performance Benchmarks** - Run `scripts/benchmark_cellscript.sh` (TBD)
-4. **New Examples** - Write `examples/registry.cell` to test bounded executable collection patterns (`Vec<Address>`/`Vec<Hash>` helpers and explicit map-like representations)
+4. **New Examples** - Extend `examples/registry.cell` to test bounded executable collection patterns (`Vec<Address>`/`Vec<Hash>` helpers and explicit map-like representations)
 
 ### Test Commands
 

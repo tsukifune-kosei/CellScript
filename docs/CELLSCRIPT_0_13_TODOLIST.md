@@ -107,8 +107,10 @@ Notes:
 ## ⏭️ Next Candidate Work
 
 - [ ] Improve docs for bounded collection runtime behavior.
-- [ ] Add examples showing supported local `Vec<Address>` / `Vec<Hash>` helper
+- [x] Add examples showing supported local `Vec<Address>` / `Vec<Hash>` helper
   usage without implying full generic collection support.
+  - Added `examples/registry.cell` plus an integration test for stack-backed
+    fixed-byte helper lowering and empty collection fail-closed debt.
 - [ ] Consider `Vec<T: FixedWidth>` monomorphization metadata output, with every
   instantiation visible in ABI/constraints metadata.
 - [ ] Investigate a bounded `Option<T: FixedWidth>` representation.

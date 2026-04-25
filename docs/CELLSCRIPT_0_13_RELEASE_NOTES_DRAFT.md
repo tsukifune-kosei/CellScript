@@ -27,6 +27,8 @@ New in 0.13 branch work:
   `swap`, and `clear`.
 - Negative type-check coverage for unsupported helper/type combinations.
 - Stable fail-closed metadata names for unsupported collection paths.
+- `examples/registry.cell` documents supported local `Vec<Address>` /
+  `Vec<Hash>` helper usage without implying full `HashMap<K, V>` support.
 
 Important boundaries:
 
