@@ -2,6 +2,7 @@ use crate::docgen::{DocGenerator, OutputFormat};
 use crate::error::Result;
 use crate::fmt::format_default;
 use crate::package::{Dependency, DetailedDependency, Lockfile, PackageManager, PolicyConfig};
+use crate::runtime_errors::{runtime_error_info, runtime_error_info_by_code, CellScriptRuntimeErrorInfo, ALL_RUNTIME_ERRORS};
 use crate::{
     compile_path, compile_path_with_entry_action, compile_path_with_entry_lock, default_metadata_path_for_artifact,
     default_output_path_for_input, load_modules_for_input, resolve_input_path, validate_artifact_metadata,
@@ -25,6 +26,7 @@ pub enum Command {
     Doc(DocArgs),
     Fmt(FmtArgs),
     Init(InitArgs),
+    New(NewArgs),
     Add(AddArgs),
     Remove(RemoveArgs),
     Clean(CleanArgs),
@@ -35,6 +37,7 @@ pub enum Command {
     Abi(AbiArgs),
     SchedulerPlan(SchedulerPlanArgs),
     CkbHash(CkbHashArgs),
+    Explain(ExplainArgs),
     OptReport(OptReportArgs),
     /// Encode generated entry wrapper witness bytes
     EntryWitness(EntryWitnessArgs),
@@ -100,6 +103,15 @@ pub struct InitArgs {
     pub name: Option<String>,
     pub path: Option<PathBuf>,
     pub lib: bool,
+    pub json: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct NewArgs {
+    pub name: String,
+    pub path: Option<PathBuf>,
+    pub lib: bool,
+    pub vcs: String,
     pub json: bool,
 }
 
@@ -189,6 +201,12 @@ pub struct CkbHashArgs {
 }
 
 #[derive(Debug, Default)]
+pub struct ExplainArgs {
+    pub code: String,
+    pub json: bool,
+}
+
+#[derive(Debug, Default)]
 pub struct OptReportArgs {
     pub input: Option<PathBuf>,
     pub output: Option<PathBuf>,
@@ -266,6 +284,7 @@ impl CommandExecutor {
             Command::Doc(args) => Self::doc(args),
             Command::Fmt(args) => Self::fmt(args),
             Command::Init(args) => Self::init(args),
+            Command::New(args) => Self::create_new(args),
             Command::Add(args) => Self::add(args),
             Command::Remove(args) => Self::remove(args),
             Command::Clean(args) => Self::clean(args),
@@ -276,6 +295,7 @@ impl CommandExecutor {
             Command::Abi(args) => Self::abi(args),
             Command::SchedulerPlan(args) => Self::scheduler_plan(args),
             Command::CkbHash(args) => Self::ckb_hash(args),
+            Command::Explain(args) => Self::explain(args),
             Command::OptReport(args) => Self::opt_report(args),
             Command::EntryWitness(args) => Self::entry_witness(args),
             Command::VerifyArtifact(args) => Self::verify_artifact(args),
@@ -289,7 +309,7 @@ impl CommandExecutor {
     }
 
     fn build(args: BuildArgs) -> Result<()> {
-        let opt_level = if args.release { 3 } else { 0 };
+        let opt_level = if args.release { 3 } else { 1 };
         let input = Utf8Path::new(".");
         let options = CompileOptions {
             opt_level,
@@ -326,6 +346,7 @@ impl CommandExecutor {
                 "artifact": output_path.to_string(),
                 "metadata": metadata_path.to_string(),
                 "artifact_format": result.artifact_format.display_name(),
+                "opt_level": opt_level,
                 "target_profile": result.metadata.target_profile.name.as_str(),
                 "artifact_hash_blake3": result.metadata.artifact_hash_blake3,
                 "artifact_size_bytes": result.artifact_bytes.len(),
@@ -681,6 +702,60 @@ impl CommandExecutor {
         println!("    cd {}", path.display());
         println!("    cellc build");
 
+        Ok(())
+    }
+
+    fn create_new(args: NewArgs) -> Result<()> {
+        let path = args.path.unwrap_or_else(|| PathBuf::from(&args.name));
+        ensure_new_package_destination(&path)?;
+
+        if !args.json {
+            println!("{} {} in {}", "Creating".cyan(), if args.lib { "library" } else { "binary" }, path.display());
+        }
+
+        let pm = PackageManager::new(&path);
+        pm.init(&args.name)?;
+
+        if args.lib {
+            std::fs::write(path.join("src/lib.cell"), format!("module {};\n", args.name))?;
+        }
+
+        let git_initialized = match args.vcs.as_str() {
+            "git" => init_git_repo(&path)?,
+            "none" => false,
+            other => {
+                return Err(crate::error::CompileError::without_span(format!("unsupported VCS '{}'; expected 'git' or 'none'", other)))
+            }
+        };
+
+        if args.json {
+            let entry = if args.lib { "src/lib.cell" } else { "src/main.cell" };
+            let summary = serde_json::json!({
+                "status": "ok",
+                "command": "new",
+                "kind": if args.lib { "library" } else { "binary" },
+                "package": args.name,
+                "path": path.display().to_string(),
+                "manifest": path.join("Cell.toml").display().to_string(),
+                "entry": entry,
+                "vcs": args.vcs,
+                "git_initialized": git_initialized,
+                "created_files": [
+                    path.join("Cell.toml").display().to_string(),
+                    path.join(entry).display().to_string(),
+                    path.join(".gitignore").display().to_string(),
+                ],
+            });
+            let json = serde_json::to_string_pretty(&summary)
+                .map_err(|error| crate::error::CompileError::without_span(format!("failed to serialize new summary: {}", error)))?;
+            println!("{}", json);
+            return Ok(());
+        }
+
+        println!("{}", "Created package successfully".green());
+        println!("  To get started:");
+        println!("    cd {}", path.display());
+        println!("    cellc build");
         Ok(())
     }
 
@@ -1176,6 +1251,36 @@ impl CommandExecutor {
         } else {
             println!("{}", hash_hex);
         }
+        Ok(())
+    }
+
+    fn explain(args: ExplainArgs) -> Result<()> {
+        let info = runtime_error_info_from_query(&args.code).ok_or_else(|| {
+            crate::error::CompileError::without_span(format!(
+                "unknown CellScript runtime error '{}'; use a numeric code, E-code, or runtime error name",
+                args.code
+            ))
+        })?;
+
+        if args.json {
+            let summary = serde_json::json!({
+                "status": "ok",
+                "code": info.code,
+                "ecode": format!("E{:04}", info.code),
+                "name": info.name,
+                "description": info.description,
+                "hint": info.hint,
+            });
+            let json = serde_json::to_string_pretty(&summary).map_err(|error| {
+                crate::error::CompileError::without_span(format!("failed to serialize error explanation: {}", error))
+            })?;
+            println!("{}", json);
+            return Ok(());
+        }
+
+        println!("CellScript runtime error E{:04} ({}): {}", info.code, info.code, info.name);
+        println!("  Description: {}", info.description);
+        println!("  Hint: {}", info.hint);
         Ok(())
     }
 
@@ -1926,6 +2031,45 @@ fn display_doc_output_format(format: &OutputFormat) -> &'static str {
         OutputFormat::Markdown => "markdown",
         OutputFormat::Json => "json",
     }
+}
+
+fn ensure_new_package_destination(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let mut entries = std::fs::read_dir(path)
+        .map_err(|error| crate::error::CompileError::without_span(format!("failed to inspect '{}': {}", path.display(), error)))?;
+    if entries.next().is_none() {
+        return Ok(());
+    }
+
+    Err(crate::error::CompileError::without_span(format!("destination '{}' already exists and is not empty", path.display())))
+}
+
+fn init_git_repo(path: &Path) -> Result<bool> {
+    let output = std::process::Command::new("git").arg("init").arg("--quiet").arg(path).output().map_err(|error| {
+        crate::error::CompileError::without_span(format!("failed to run git init for '{}': {}", path.display(), error))
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(crate::error::CompileError::without_span(format!("git init failed for '{}': {}", path.display(), stderr.trim())));
+    }
+    Ok(true)
+}
+
+fn runtime_error_info_from_query(query: &str) -> Option<CellScriptRuntimeErrorInfo> {
+    let trimmed = query.trim().trim_matches('`');
+    let numeric = trimmed
+        .parse::<u64>()
+        .ok()
+        .or_else(|| trimmed.strip_prefix('E').or_else(|| trimmed.strip_prefix('e')).and_then(|code| code.parse::<u64>().ok()));
+
+    if let Some(code) = numeric {
+        return runtime_error_info_by_code(code);
+    }
+
+    ALL_RUNTIME_ERRORS.iter().copied().map(runtime_error_info).find(|info| info.name == trimmed)
 }
 
 fn validate_dependency_target_flags(dev: bool, build: bool) -> Result<()> {
@@ -3320,6 +3464,22 @@ impl CliParser {
                     .arg(Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON init summary")),
             )
             .subcommand(
+                ClapCommand::new("new")
+                    .about("Create a new package directory")
+                    .arg(Arg::new("name").value_name("NAME").required(true).help("Package name"))
+                    .arg(Arg::new("path").long("path").value_name("PATH").help("Path to create package"))
+                    .arg(Arg::new("lib").long("lib").action(ArgAction::SetTrue).help("Create a library package"))
+                    .arg(
+                        Arg::new("vcs")
+                            .long("vcs")
+                            .value_name("VCS")
+                            .default_value("git")
+                            .value_parser(["git", "none"])
+                            .help("Initialize version control: git or none"),
+                    )
+                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON new summary")),
+            )
+            .subcommand(
                 ClapCommand::new("add")
                     .about("Add dependencies")
                     .arg(Arg::new("crates").value_name("CRATES").required(true).num_args(1..).help("Crates to add"))
@@ -3458,6 +3618,12 @@ impl CliParser {
                     .arg(Arg::new("hex").long("hex").value_name("HEX").help("Hex bytes to hash"))
                     .arg(Arg::new("file").long("file").value_name("FILE").help("File bytes to hash"))
                     .arg(Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON summary")),
+            )
+            .subcommand(
+                ClapCommand::new("explain")
+                    .about("Explain a CellScript runtime error code")
+                    .arg(Arg::new("code").value_name("CODE").required(true).help("Runtime error code, E-code, or error name"))
+                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON explanation")),
             )
             .subcommand(
                 ClapCommand::new("opt-report")
@@ -3666,6 +3832,13 @@ impl CliParser {
                 lib: m.get_flag("lib"),
                 json: m.get_flag("json"),
             }),
+            Some(("new", m)) => Command::New(NewArgs {
+                name: m.get_one::<String>("name").cloned().expect("required package name"),
+                path: m.get_one::<String>("path").map(PathBuf::from),
+                lib: m.get_flag("lib"),
+                vcs: m.get_one::<String>("vcs").cloned().unwrap_or_else(|| "git".to_string()),
+                json: m.get_flag("json"),
+            }),
             Some(("add", m)) => Command::Add(AddArgs {
                 crates: m.get_many::<String>("crates").map(|v| v.cloned().collect()).unwrap_or_default(),
                 dev: m.get_flag("dev"),
@@ -3725,6 +3898,10 @@ impl CliParser {
                 input: m.get_one::<String>("input").cloned(),
                 hex: m.get_one::<String>("hex").cloned(),
                 file: m.get_one::<String>("file").map(PathBuf::from),
+                json: m.get_flag("json"),
+            }),
+            Some(("explain", m)) => Command::Explain(ExplainArgs {
+                code: m.get_one::<String>("code").cloned().expect("required runtime error code"),
                 json: m.get_flag("json"),
             }),
             Some(("opt-report", m)) => Command::OptReport(OptReportArgs {

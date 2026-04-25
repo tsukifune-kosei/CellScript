@@ -877,6 +877,7 @@ action ping() -> u64 {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["status"], "ok");
     assert_eq!(stdout["artifact_format"], "RISC-V assembly");
+    assert_eq!(stdout["opt_level"], 1);
     assert_eq!(stdout["target_profile"], "spora");
     assert_eq!(stdout["policy_verified"], false);
     assert_eq!(stdout["runtime_required_verifier_obligations"], 0);
@@ -3134,6 +3135,52 @@ fn cellc_init_subcommand_supports_json_summary() {
     assert_eq!(summary["entry"], "src/lib.cell");
     assert!(root.join("Cell.toml").exists());
     assert!(root.join("src").join("lib.cell").exists());
+}
+
+#[test]
+fn cellc_new_subcommand_supports_json_summary_and_vcs_none() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("demo_pkg");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .arg("new")
+        .arg("demo")
+        .arg("--path")
+        .arg(&root)
+        .arg("--lib")
+        .arg("--vcs")
+        .arg("none")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["status"], "ok");
+    assert_eq!(summary["command"], "new");
+    assert_eq!(summary["kind"], "library");
+    assert_eq!(summary["package"], "demo");
+    assert_eq!(summary["vcs"], "none");
+    assert_eq!(summary["git_initialized"], false);
+    assert!(summary["manifest"].as_str().unwrap().ends_with("demo_pkg/Cell.toml"));
+    assert_eq!(summary["entry"], "src/lib.cell");
+    assert!(root.join("Cell.toml").exists());
+    assert!(root.join("src").join("lib.cell").exists());
+    assert!(!root.join(".git").exists());
+}
+
+#[test]
+fn cellc_explain_subcommand_reports_runtime_error() {
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc")).arg("explain").arg("E0018").arg("--json").output().unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["status"], "ok");
+    assert_eq!(summary["code"], 18);
+    assert_eq!(summary["ecode"], "E0018");
+    assert_eq!(summary["name"], "fixed-byte-comparison-unresolved");
+    assert!(summary["description"].as_str().unwrap().contains("fixed-byte verifier comparison"));
+    assert!(summary["hint"].as_str().unwrap().contains("schema-backed"));
 }
 
 #[test]
