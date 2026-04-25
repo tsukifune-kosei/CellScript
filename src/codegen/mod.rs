@@ -6603,16 +6603,16 @@ impl CodeGenerator {
 
     fn static_length(&self, operand: &IrOperand) -> Option<usize> {
         match operand {
-            IrOperand::Var(var) => self.static_length_from_type(&var.ty),
+            IrOperand::Var(var) => Self::static_length_from_type(&var.ty),
             IrOperand::Const(IrConst::Array(items)) => Some(items.len()),
             _ => None,
         }
     }
 
-    fn static_length_from_type(&self, ty: &IrType) -> Option<usize> {
+    fn static_length_from_type(ty: &IrType) -> Option<usize> {
         match ty {
             IrType::Array(_, size) => Some(*size),
-            IrType::Ref(inner) | IrType::MutRef(inner) => self.static_length_from_type(inner),
+            IrType::Ref(inner) | IrType::MutRef(inner) => Self::static_length_from_type(inner),
             _ => None,
         }
     }

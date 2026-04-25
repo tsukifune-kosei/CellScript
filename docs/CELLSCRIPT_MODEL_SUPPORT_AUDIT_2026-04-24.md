@@ -1,7 +1,7 @@
 # CellScript 模型支持完备性审计报告
 
 **日期**: 2026-04-24  
-**审计对象**: `cellscript/` 编译器、`testing/integration/` 验收路径、`scripts/ckb_cellscript_acceptance.sh` 与 `scripts/devnet_acceptance.sh`  
+**审计对象**: `cellscript/` 编译器、`testing/integration/` 验收路径、`scripts/ckb_cellscript_acceptance.sh` 与 `scripts/spora_cellscript_acceptance.sh`  
 **审计口径**: 只评估 **CellScript 语言/编译器/验收体系** 对 CKB Cell 模型与 Spora CellTx 扩展模型的支持完备性；不再混入底层 `CellTx` 结构体对比或 VM 总体完备性审计。
 
 ---
@@ -310,7 +310,7 @@ Spora 特性支持目前已经进入本地 production gate 闭合状态。
 
 当前 `spora-standard-relay-probe` 的定位是调试和回归证据：
 
-> 单点 standard relay / deployment mass 问题可以用独立 probe 快速定位；正式 release 结论仍以 `scripts/devnet_acceptance.sh --profile production` 为准。
+> 单点 standard relay / deployment mass 问题可以用独立 probe 快速定位；正式 release 结论仍以 `scripts/spora_cellscript_acceptance.sh --profile production` 为准。
 
 ---
 
@@ -345,7 +345,7 @@ Spora 特性支持目前已经进入本地 production gate 闭合状态。
    在当前 acceptance 体系下，`production_gate` 与 `final hardening gate` 都已闭合。
 
 2. **Spora 线**  
-   `scripts/devnet_acceptance.sh --profile production` 已闭合，scoped action coverage `43/43`，malformed matrix `43/43`，full-file bundled code-cell deployment `7/7`。
+   `scripts/spora_cellscript_acceptance.sh --profile production` 已闭合，scoped action coverage `43/43`，malformed matrix `43/43`，full-file bundled code-cell deployment `7/7`。
 
 3. **语言/编译器本体**  
    已经进入生产门禁闭合区间。当前 release gate 不再只依赖本地口头结论，而是要求 `production-evidence.json`、详细 report artifact、标准 mass policy、Spora production gate、CKB final hardening gate、以及独立 evidence validator 全部通过。后续工作主要是语言体验和治理层增强：

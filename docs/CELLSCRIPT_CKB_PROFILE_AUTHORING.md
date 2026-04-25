@@ -42,8 +42,9 @@ release evidence for the produced transaction.
 
 ## Hashing
 
-CKB artifact identity and release evidence use Blake2b-256 with the
-`ckb-default-hash` personalization.
+CKB deployment artifact hashes and release evidence use Blake2b-256 with the
+`ckb-default-hash` personalization. This is distinct from CellScript metadata
+fields such as `artifact_hash_blake3`, which remain BLAKE3 compiler metadata.
 
 Use:
 

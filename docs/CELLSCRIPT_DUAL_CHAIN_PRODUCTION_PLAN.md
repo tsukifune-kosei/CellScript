@@ -21,7 +21,7 @@ The current production-readiness verdict is deliberately stricter:
 
 | Area | Current state | Production verdict |
 |---|---|---|
-| Spora examples | All seven bundled examples compile under `spora`; current devnet coverage deploys every bundled example as a real Spora code cell and records a structured `production_gate` over the 43 source-local bundled actions. Scoped action artifacts, valid lifecycle transactions, malformed action matrices, scheduler-witness transaction-shape coverage, and the standard-mass-policy production path are closed at `43/43`. Full-file bundled-example code-cell deployments are standard-relay compatible at `7/7` under the current `500000` standard relay transaction mass and `2000000` standard block mass. | Spora production acceptance is closed for the current suite: `scripts/devnet_acceptance.sh --profile production` passes with `production_gate.production_ready == true`, scoped actions `43/43`, malformed action matrix `43/43`, full-file deployment `7/7`, and independently validated `production-evidence.json`. |
+| Spora examples | All seven bundled examples compile under `spora`; current devnet coverage deploys every bundled example as a real Spora code cell and records a structured `production_gate` over the 43 source-local bundled actions. Scoped action artifacts, valid lifecycle transactions, malformed action matrices, scheduler-witness transaction-shape coverage, and the standard-mass-policy production path are closed at `43/43`. Full-file bundled-example code-cell deployments are standard-relay compatible at `7/7` under the current `500000` standard relay transaction mass and `2000000` standard block mass. | Spora production acceptance is closed for the current suite: `scripts/spora_cellscript_acceptance.sh --profile production` passes with `production_gate.production_ready == true`, scoped actions `43/43`, malformed action matrix `43/43`, full-file deployment `7/7`, and independently validated `production-evidence.json`. |
 | CKB examples | Whole original CKB strict admission passes for all seven bundled examples. Original scoped artifacts compile for all 43 source actions plus all 15 locks with zero expected fail-closed entries. The default on-chain production gate runs all 43 bundled business actions, and the stricter `final_production_hardening_gate` now also passes with builder-generated transactions plus measured cycles, consensus-serialized tx size, and occupied-capacity evidence for all 43 actions. | CKB bundled-example production acceptance and final hardening are closed for the current suite. External release assurance now treats CKB reports as release artifacts rather than local-only smoke output. |
 | Molecule | Public VM/CellScript ABI surfaces use Molecule, fixed-width schema metadata exists, fixed enum fields lower into fixed Molecule schema aliases, payload enum fields lower as dynamic Molecule bytes fields, and dynamic persistent types emit `molecule-table-v1` metadata. Metadata schema 29 now also emits an authoritative `molecule_schema_manifest` with sorted type entries, field offsets, dynamic fields, schema hashes, and a manifest hash. Bundled examples generate a schema-manifest report artifact in the release gate. | Closed for current production scope. Unsupported generic dynamic shapes remain fail-closed and visible; supported persistent layouts now have deterministic manifest evidence. |
 | Package/tooling | Local package workflow, lockfile validation, README/wiki docs, JSON-RPC stdio LSP, VS Code LanguageClient integration, compiler-backed reports, release packaging controls, and tooling release-boundary validation exist. Registry publishing and remote package resolution remain fail-closed until the signed trust model is activated. | Closed for current production scope. The release gate validates the local package/LSP surface and keeps untrusted registry resolution disabled. |
@@ -84,7 +84,7 @@ and CKB suites:
   immediately validates the evidence with
   `scripts/validate_spora_production_evidence.py`; release jobs archive the file
   together with the detailed reports under `target/devnet-acceptance/`.
-- `scripts/devnet_acceptance.sh --profile production` is the fail-closed Spora
+- `scripts/spora_cellscript_acceptance.sh --profile production` is the fail-closed Spora
   production entrypoint. It now runs the base acceptance path under standard
   mass policy and then fails unless the structured Spora production gate
   reports `production_ready: true`. The production gate records both scoped
@@ -626,7 +626,7 @@ Required adversarial coverage:
 - Do not mark CKB `production_ready=true` unless the default production CKB gate
   passes.
 - Do not mark Spora `production_gate.production_ready=true` unless
-  `scripts/devnet_acceptance.sh --profile production` passes under standard
+  `scripts/spora_cellscript_acceptance.sh --profile production` passes under standard
   mass policy with scoped Spora action artifacts, compiled scheduler-shape
   preflight coverage, audited per-action builder requirements,
   action-specific valid builder coverage, and malformed action-matrix coverage.
@@ -638,7 +638,7 @@ Required adversarial coverage:
 
 ## Immediate Next Work
 
-1. Keep `scripts/devnet_acceptance.sh --profile production` as the Spora
+1. Keep `scripts/spora_cellscript_acceptance.sh --profile production` as the Spora
    release gate and fail it on any scoped-action, malformed-matrix,
    scheduler-witness, standard-mass, or full-file deployment regression.
 2. Keep `scripts/ckb_cellscript_acceptance.sh --production` as the CKB release

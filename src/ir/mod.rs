@@ -382,29 +382,29 @@ impl IrGenerator {
                     self.type_kinds.insert(r.name.clone(), IrTypeKind::Resource);
                     self.type_fields.insert(
                         r.name.clone(),
-                        r.fields.iter().map(|field| (field.name.clone(), self.convert_type(&field.ty))).collect(),
+                        r.fields.iter().map(|field| (field.name.clone(), Self::convert_type(&field.ty))).collect(),
                     );
                 }
                 Item::Shared(s) => {
                     self.type_kinds.insert(s.name.clone(), IrTypeKind::Shared);
                     self.type_fields.insert(
                         s.name.clone(),
-                        s.fields.iter().map(|field| (field.name.clone(), self.convert_type(&field.ty))).collect(),
+                        s.fields.iter().map(|field| (field.name.clone(), Self::convert_type(&field.ty))).collect(),
                     );
                 }
                 Item::Receipt(r) => {
                     self.type_kinds.insert(r.name.clone(), IrTypeKind::Receipt);
-                    self.receipt_claim_outputs.insert(r.name.clone(), r.claim_output.as_ref().map(|ty| self.convert_type(ty)));
+                    self.receipt_claim_outputs.insert(r.name.clone(), r.claim_output.as_ref().map(Self::convert_type));
                     self.type_fields.insert(
                         r.name.clone(),
-                        r.fields.iter().map(|field| (field.name.clone(), self.convert_type(&field.ty))).collect(),
+                        r.fields.iter().map(|field| (field.name.clone(), Self::convert_type(&field.ty))).collect(),
                     );
                 }
                 Item::Struct(s) => {
                     self.type_kinds.insert(s.name.clone(), IrTypeKind::Struct);
                     self.type_fields.insert(
                         s.name.clone(),
-                        s.fields.iter().map(|field| (field.name.clone(), self.convert_type(&field.ty))).collect(),
+                        s.fields.iter().map(|field| (field.name.clone(), Self::convert_type(&field.ty))).collect(),
                     );
                 }
                 Item::Enum(e) => {
@@ -514,7 +514,7 @@ impl IrGenerator {
             kind: IrTypeKind::Receipt,
             fields: self.layout_fields(&receipt.fields),
             capabilities: receipt.capabilities.clone(),
-            claim_output: receipt.claim_output.as_ref().map(|ty| self.convert_type(ty)),
+            claim_output: receipt.claim_output.as_ref().map(Self::convert_type),
             lifecycle_states: receipt.lifecycle.as_ref().map(|lifecycle| lifecycle.states.clone()),
             lifecycle_rules: receipt
                 .lifecycle
@@ -609,12 +609,7 @@ impl IrGenerator {
         self.transition_coverable_value_ids.clear();
         let (params, body) = self.lower_signature_and_body(&function.params, &function.body, function.return_type.is_some());
 
-        IrPureFn {
-            name: function.name.clone(),
-            params,
-            return_type: function.return_type.as_ref().map(|t| self.convert_type(t)),
-            body,
-        }
+        IrPureFn { name: function.name.clone(), params, return_type: function.return_type.as_ref().map(Self::convert_type), body }
     }
 
     fn layout_fields(&self, fields: &[Field]) -> Vec<IrField> {
@@ -622,7 +617,7 @@ impl IrGenerator {
         fields
             .iter()
             .map(|field| {
-                let ty = self.convert_type(&field.ty);
+                let ty = Self::convert_type(&field.ty);
                 let fixed_size = self.fixed_encoded_size(&ty);
                 let offset = next_offset.unwrap_or(0);
                 next_offset = next_offset.and_then(|current| fixed_size.map(|size| current + size));
@@ -703,7 +698,7 @@ impl IrGenerator {
         IrAction {
             name: action.name.clone(),
             params,
-            return_type: action.return_type.as_ref().map(|t| self.convert_type(t)),
+            return_type: action.return_type.as_ref().map(Self::convert_type),
             body,
             effect_class: if action.effect_declared { declared_effect_class } else { effect_class },
             scheduler_hints: action
@@ -733,7 +728,7 @@ impl IrGenerator {
         IrLock { name: lock.name.clone(), params, body }
     }
 
-    fn convert_type(&self, ty: &Type) -> IrType {
+    fn convert_type(ty: &Type) -> IrType {
         match ty {
             Type::U8 => IrType::U8,
             Type::U16 => IrType::U16,
@@ -744,11 +739,11 @@ impl IrGenerator {
             Type::Unit => IrType::Unit,
             Type::Address => IrType::Address,
             Type::Hash => IrType::Hash,
-            Type::Array(elem, size) => IrType::Array(Box::new(self.convert_type(elem)), *size),
-            Type::Tuple(types) => IrType::Tuple(types.iter().map(|t| self.convert_type(t)).collect()),
+            Type::Array(elem, size) => IrType::Array(Box::new(Self::convert_type(elem)), *size),
+            Type::Tuple(types) => IrType::Tuple(types.iter().map(Self::convert_type).collect()),
             Type::Named(name) => IrType::Named(name.clone()),
-            Type::Ref(inner) => IrType::Ref(Box::new(self.convert_type(inner))),
-            Type::MutRef(inner) => IrType::MutRef(Box::new(self.convert_type(inner))),
+            Type::Ref(inner) => IrType::Ref(Box::new(Self::convert_type(inner))),
+            Type::MutRef(inner) => IrType::MutRef(Box::new(Self::convert_type(inner))),
         }
     }
 
@@ -954,11 +949,11 @@ impl IrGenerator {
         let ir_params = params
             .iter()
             .map(|param| {
-                let binding = self.new_var(param.name.clone(), self.convert_type(&param.ty));
+                let binding = self.new_var(param.name.clone(), Self::convert_type(&param.ty));
                 vars.insert(param.name.clone(), binding.clone());
                 IrParam {
                     name: param.name.clone(),
-                    ty: self.convert_type(&param.ty),
+                    ty: Self::convert_type(&param.ty),
                     is_mut: param.is_mut,
                     is_ref: param.is_ref,
                     is_read_ref: param.is_read_ref,
@@ -1055,7 +1050,7 @@ impl IrGenerator {
             .iter()
             .filter(|param| param.is_read_ref)
             .filter_map(|param| {
-                self.named_type_name_from_ir_type(&param.ty).map(|type_name| CellPattern {
+                Self::named_type_name_from_ir_type(&param.ty).map(|type_name| CellPattern {
                     operation: "read_ref".to_string(),
                     type_hash: Some(type_hash_for_name(type_name)),
                     binding: param.name.clone(),
@@ -1095,7 +1090,7 @@ impl IrGenerator {
             if !(param.is_mut || matches!(param.ty, IrType::MutRef(_))) {
                 continue;
             }
-            let Some(type_name) = self.named_type_name_from_ir_type(&param.ty) else {
+            let Some(type_name) = Self::named_type_name_from_ir_type(&param.ty) else {
                 continue;
             };
             if !matches!(self.type_kinds.get(type_name), Some(IrTypeKind::Resource | IrTypeKind::Shared | IrTypeKind::Receipt)) {
@@ -1188,17 +1183,17 @@ impl IrGenerator {
         Some(CreatePattern { operation: operation.to_string(), ty: type_name.to_string(), binding: var.name.clone(), fields, lock })
     }
 
-    fn named_type_name_from_ir_type<'a>(&self, ty: &'a IrType) -> Option<&'a str> {
+    fn named_type_name_from_ir_type(ty: &IrType) -> Option<&str> {
         match ty {
             IrType::Named(name) => Some(name.as_str()),
-            IrType::Ref(inner) | IrType::MutRef(inner) => self.named_type_name_from_ir_type(inner),
+            IrType::Ref(inner) | IrType::MutRef(inner) => Self::named_type_name_from_ir_type(inner),
             _ => None,
         }
     }
 
     fn claim_output_type_for_operand(&self, operand: &IrOperand) -> IrType {
         let ty = self.operand_type(operand);
-        self.named_type_name_from_ir_type(&ty)
+        Self::named_type_name_from_ir_type(&ty)
             .and_then(|name| self.receipt_claim_outputs.get(name))
             .and_then(Clone::clone)
             .unwrap_or(IrType::U64)
@@ -1211,7 +1206,7 @@ impl IrGenerator {
         active: BlockId,
         blocks: &mut Vec<IrBlock>,
     ) -> HashMap<String, IrVar> {
-        let (IrOperand::Var(source_var), Some(output_type_name)) = (source, self.named_type_name_from_ir_type(output_ty)) else {
+        let (IrOperand::Var(source_var), Some(output_type_name)) = (source, Self::named_type_name_from_ir_type(output_ty)) else {
             return HashMap::new();
         };
         let Some(output_fields) = self.type_fields.get(output_type_name).cloned() else {
@@ -1278,7 +1273,7 @@ impl IrGenerator {
     }
 
     fn param_shared_type_name<'a>(&self, param: &'a IrParam) -> Option<&'a str> {
-        let type_name = self.named_type_name_from_ir_type(&param.ty)?;
+        let type_name = Self::named_type_name_from_ir_type(&param.ty)?;
         (self.type_kinds.get(type_name) == Some(&IrTypeKind::Shared)).then_some(type_name)
     }
 
@@ -1362,7 +1357,7 @@ impl IrGenerator {
                 let active = lowered.current?;
                 let block = self.block_mut(blocks, active);
                 if let (BindingPattern::Name(name), Some(declared_ty)) = (&let_stmt.pattern, &let_stmt.ty) {
-                    let declared_ty = self.convert_type(declared_ty);
+                    let declared_ty = Self::convert_type(declared_ty);
                     let var = if let_stmt.is_mut {
                         let owned = self.materialize_owned_operand(name, lowered.operand, block);
                         if owned.ty == declared_ty {
@@ -2380,7 +2375,7 @@ impl IrGenerator {
     }
 
     fn lower_empty_array_expr_with_type(&mut self, declared_ty: &Type, current: BlockId, blocks: &mut Vec<IrBlock>) -> LoweredExpr {
-        let ir_ty = self.convert_type(declared_ty);
+        let ir_ty = Self::convert_type(declared_ty);
         if !matches!(ir_ty, IrType::Array(_, 0)) {
             self.record_error("empty array literal requires a zero-length declared array type", Span::default());
             return LoweredExpr { operand: IrOperand::Const(IrConst::U64(0)), current: Some(current) };

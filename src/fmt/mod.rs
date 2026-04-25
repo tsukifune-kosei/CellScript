@@ -4,6 +4,7 @@
 
 use crate::ast::*;
 use crate::error::Result;
+use std::fmt::Write;
 
 /// Formatter configuration.
 #[derive(Debug, Clone)]
@@ -303,7 +304,10 @@ impl Formatter {
             Expr::Bool(value) => value.to_string(),
             Expr::String(value) => format!("{:?}", value),
             Expr::ByteString(bytes) => {
-                let body = bytes.iter().map(|byte| format!("\\x{:02x}", byte)).collect::<String>();
+                let mut body = String::with_capacity(bytes.len() * 4);
+                for byte in bytes {
+                    write!(&mut body, "\\x{:02x}", byte).expect("writing to a String cannot fail");
+                }
                 format!("b\"{}\"", body)
             }
             Expr::Identifier(name) => name.clone(),

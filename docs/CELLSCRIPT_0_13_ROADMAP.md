@@ -45,7 +45,7 @@ From "can run" to "runs well", from "feature-complete" to "excellent UX".
 
 **Philosophy**: **Generic patterns, not unconstrained generics.**
 
-> "泛型如果服务 design patterns，是加分；泛型如果隐藏 cell ownership，是灾难。"
+> "Generics that serve design patterns are valuable; generics that hide cell ownership are disastrous."
 
 **Problem**: 0.12 supports several schema/ABI dynamic vector paths, but runtime
 collection helpers and cell-backed collection ownership remain intentionally
@@ -108,6 +108,145 @@ CKB/Spora's core is **NOT** account storage or native object packages. It's:
 - ✅ **Spora**: AMM/Registry/OrderBook need generic collections
 - ⚠️ **CKB raw scripts**: Don't use generics (Rust -> RISC-V handles it)
 
+**v0.13 Goal**: **Bounded generics / reusable pattern layer**, NOT full Rust/Sway-style generics.
+
+> "0.13 引入受限泛型，用来复用 CKB 设计模式，但不把 cell-backed / linear ownership 问题偷偷藏进泛型里。"
+
+**What v0.13 WILL do** (bounded generics):
+
+**1. Value-level generics only** (no linear ownership)
+```cellscript
+fn require_eq<T: FixedWidth>(a: T, b: T)
+fn contains<T: FixedWidth>(xs: Vec<T>, x: T) -> bool
+```
+Supported types:
+- `u8`, `u64`
+- `Hash`
+- `Address`
+- fixed bytes
+- simple ABI/schema-backed values
+
+**DOES NOT support**: `T: CellBacked` or `T: Linear`
+
+---
+
+**2. Phantom-style asset tags** (Move-inspired, CKB-native)
+```cellscript
+resource Token<phantom Asset>
+```
+Use cases:
+```cellscript
+Token<USDI>
+Token<MyDAO>
+Token<LPToken>
+```
+Benefits:
+- Helps UDT / xUDT / custom asset patterns
+- Does NOT require generic runtime collections fully working
+
+---
+
+**3. Generic interfaces / templates** (most valuable for 0.13)
+```cellscript
+interface FungibleToken<Asset>
+interface Pool<TokenA, TokenB>
+interface Timelock<Asset>
+```
+Benefits:
+- Directly serves cookbooks / AI-assisted workflows / reusable CKB patterns
+- More valuable than generic functions
+
+---
+
+**4. Minimal trait constraints**
+
+**Allowed in 0.13** (with explicit definitions):
+
+```text
+FixedWidth:     value has statically known ABI width.
+Hashable:       value has a canonical hash representation.
+MoleculeSchema: value has a schema-backed serialization layout.
+NonLinear:      value does not carry consume/transfer/destroy obligations.
+```
+
+**Why NonLinear is critical**: It is the safety valve that separates generics from ownership semantics. Without it, `Vec<T>` could accidentally become `Vec<LinearResource<T>>`, blurring consumption/transfer boundaries.
+
+**NOT allowed in 0.13** (too risky, drags into ownership/builder verification):
+```
+Consumable
+CellBacked
+Store
+ResourceCollection
+```
+
+---
+
+**5. Bounded generic collections**
+Allowed in 0.13:
+```cellscript
+Vec<T: FixedWidth>
+Option<T: FixedWidth>
+```
+
+**NOT supported in 0.13** (continue fail-closed or experimental):
+```cellscript
+Vec<Cell<T>>
+HashMap<Hash, Token<T>>
+Vec<Linear<T>>
+HashMap<K, V>  // full generic
+```
+
+---
+
+**What v0.13 WILL NOT do**:
+
+- ❌ arbitrary generic collections
+- ❌ generic linear resources  
+- ❌ generic cell-backed maps
+- ❌ higher-order trait jungle
+- ❌ fancy type inference
+- ❌ `T: CellBacked` / `T: Linear` constraints
+- ❌ full generic `HashMap<K, V>`
+- ❌ `Vec<Cell<T>>` / `HashMap<Hash, Resource<T>>`
+
+---
+
+**6. Inspectable monomorphization** (MANDATORY - Release Gate)
+
+**Release gate requirement**:
+> 0.13 must expose every generic instantiation in ABI/metadata/constraints output.
+> No generic instantiation may silently change witness layout, schema commitment, or lock/type lowering.
+
+**Core principle**: 
+> **We support generics without hiding what they become on-chain.**
+
+**Mandatory tooling**:
+```bash
+cellc explain-generics    # Show what T instantiates to
+cellc abi                 # Show witness ABI changes
+cellc constraints         # Show code size impact
+```
+
+**Must expose**:
+- What `T` was instantiated to
+- Which specialized functions were generated
+- How witness ABI changed
+- How schema hash / ABI hash changed
+- How much code size increased
+- Which generic instantiations were rejected
+
+**Otherwise generics will break inspectability** (a core CellScript principle).
+
+**v0.13 Character**:
+> reusable patterns, visible lowering, bounded ownership semantics.
+
+**Translation**: 
+> Not "adding generics to show off", but "adding reusable templates for CKB design patterns".
+
+This aligns with AI-assisted workflows / cookbooks: AI needs **bounded cookbook primitives**, not unrestricted generics.
+
+---
+
 **v0.12 Boundary** (from `CELLSCRIPT_0_12_COMPREHENSIVE_PLAN.md`):
 > "0.12 does not claim full generic `HashMap<K, V>` runtime support."
 > "Kept generic runtime collection support bounded and explicit."
@@ -119,62 +258,110 @@ CKB/Spora's core is **NOT** account storage or native object packages. It's:
 - ❌ Cannot return or mutate `Vec<Resource>` without a linear collection ownership model
 - ❌ Cannot claim production support for unsupported generic helpers without fail-closed metadata
 
-**Effort**: 5-7 days  
-**Risk**: **HIGH** (see Risk 4 below)
+**Effort**: 7-10 days  
+**Risk**: **HIGH** (but bounded - see strategy below)
 
 **Risk Assessment**:
 
-**Risk 4: Generics Monomorphization May Cause Code Bloat** 🔴
+**Risk 4: Generics May Break Cell/Resource Semantics** 🔴
 
-**Scenario**: Each type instantiation generates separate code:
+**Scenario**: Generic collections blur ownership boundaries:
 ```cellscript
-Vec<Address>    → generates vec_address_push/pop/len
-Vec<Token>      → generates vec_token_push/pop/len
-Vec<Signature>  → generates vec_signature_push/pop/len
+// Dangerous: Who owns these cells?
+Vec<Cell<T>>    → Each cell must be consumed/transferred
+HashMap<Hash, Token<T>>  → What happens on hash collision?
+Option<LinearAsset<T>>  → Is the asset consumed when None?
 ```
 
-**Potential Impact**:
+**Mitigation**: **Strictly bounded to value-level generics in 0.13**
+- ✅ `Vec<T: FixedWidth>` - Safe (no ownership)
+- ✅ `Vec<Address>`, `Vec<Hash>` - Safe (value types)
+- ❌ `Vec<Cell<T>>` - NOT allowed in 0.13
+- ❌ `T: Linear` constraints - NOT allowed in 0.13
+
+---
+
+**Risk 5: Generic Lowering Becomes Opaque** 🔴
+
+**Scenario**: `transfer<T>()` hides too much magic:
+- Some `T` lowers to lock script
+- Some `T` lowers to type script  
+- Some `T` depends on builder
+- Some `T` depends on witness ABI
+
+**Per discussion with Matt**: "language should not hide too much magic"
+
+**Mitigation**: **Mandatory inspectable lowering**
+```bash
+cellc explain-generics  # Show exactly what T lowers to
+cellc abi               # Show witness ABI changes
+```
+
+---
+
+**Risk 6: Codegen/ABI Explosion** 🔴
+
+**Scenario**: Monomorphization creates too many specialized versions:
+```cellscript
+Vec<Address>    → vec_address_push/pop/len
+Vec<Token>      → vec_token_push/pop/len
+Vec<Signature>  → vec_signature_push/pop/len
+Vec<Pool>       → vec_pool_push/pop/len
+...
+```
+
+**Impact**:
 - ELF size increase: 2-3x per type instantiation
 - Compile time increase: 1.5-2x
 - Audit difficulty: Each monomorphized instance needs verification
+- **Recent branch relaxation/codegen bloat issue (Jan's review) shows this risk is real**
 
-**Mitigation Strategy**:
-1. **Monomorphize only actually used types** (not all possible types)
-2. **Use DCE to eliminate unused instances** (v0.13 P1 feature #6)
-3. **Set monomorphization count limit** (warn at 5, fail at 10)
-4. **Consider runtime type erasure** for simple operations (push/pop/len)
-   - Store as `Vec<u8>` + type metadata
-   - Only specialize on access (get/set)
+**Mitigation**:
+1. **Minimal trait constraints** (only 4 in 0.13: FixedWidth, Hashable, MoleculeSchema, NonLinear)
+2. **Monomorphize only actually used types** (not all possible types)
+3. **Use DCE to eliminate unused instances** (v0.13 P1 feature #6)
+4. **Set monomorphization count limit** (warn at 5, fail at 10)
+5. **Consider type-erased collections** for simple operations (push/pop/len)
 
-**Alternative Approach** (Lower Risk):
-- Implement **type-erased collections** first (lower performance, smaller code)
-- Add monomorphization later as optimization (if needed)
+---
 
-**Type-Erased Approach Example**:
-```cellscript
-// Store all as Vec<u8> with type metadata
-struct VecAny {
-    type_tag: u8,        // 0=Address, 1=Token, 2=Signature...
-    element_size: u16,   // Size of each element
-    data: Vec<u8>,       // Raw bytes
-}
+**Risk 7: Ecosystem Standardizes Too Early** 🟡
 
-// Operations work on raw bytes
-fn vec_any_push(vec: &mut VecAny, element: &[u8]);
-fn vec_any_get(vec: &VecAny, index: usize) -> &[u8];
-```
+**Scenario**: If 0.13 claims "generic collections supported", it becomes a promise that's hard to change.
 
-**Pros**:
-- ✅ Single implementation for all types
-- ✅ Small code size (no monomorphization)
-- ✅ Fast compilation
+**Mitigation**: **Clear boundary documentation**
+- ✅ Document what's supported: `Vec<T: FixedWidth>`, `Option<T: FixedWidth>`
+- ✅ Document what's NOT supported: `Vec<Cell<T>>`, `HashMap<K, V>`
+- ✅ Continue fail-closed for unsupported generic patterns
+- ✅ Explicit metadata for bounded generic support
 
-**Cons**:
-- ⚠️ Runtime type checking overhead
-- ⚠️ No compile-time type safety
-- ⚠️ 10-20% slower than monomorphized
+---
 
-**Recommendation**: **Start with type-erased approach for v0.13, measure performance, then decide if monomorphization is needed for v0.14**
+**Phased Approach** (Recommended):
+
+**Phase 1 (v0.13)**: Value-level generics only
+- `Vec<T: FixedWidth>`, `Option<T: FixedWidth>`
+- Phantom-style asset tags (`Token<phantom Asset>`)
+- Generic interfaces/templates (`interface FungibleToken<Asset>`)
+- Minimal trait constraints (FixedWidth, Hashable, MoleculeSchema, NonLinear)
+
+**Phase 2 (v0.14)**: Interface/package-level generics
+- Generic interfaces with more constraints
+- Schema-level type parameters
+- Move-style phantom types for CKB-native asset patterns
+
+**Phase 3 (v0.15+)**: Constrained generics with capabilities
+- `T: CellBacked` (only after ownership model is mature)
+- `T: Consumable` (only after builder verification is stable)
+- `T: Store` (only after linear ownership is proven)
+
+**Phase 4 (Future)**: Linear/cell-backed collection generics
+- `Vec<Cell<T>>` / `HashMap<Hash, Resource<T>>`
+- Must wait for: ownership model, consume_each, membership proof, builder verification, witness proof
+
+**v0.13 One-Sentence Goal**:
+
+> CellScript 0.13 introduces bounded generics for reusable CKB design patterns, while keeping linear/cell-backed ownership explicit and fail-closed.
 
 ---
 

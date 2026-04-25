@@ -5569,10 +5569,8 @@ fn operation_input_feature(feature: &str) -> Option<(&'static str, &str)> {
         Some(("destroy", binding))
     } else if let Some(binding) = feature.strip_prefix("claim-input:") {
         Some(("claim", binding))
-    } else if let Some(binding) = feature.strip_prefix("settle-input:") {
-        Some(("settle", binding))
     } else {
-        None
+        feature.strip_prefix("settle-input:").map(|binding| ("settle", binding))
     }
 }
 

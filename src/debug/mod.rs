@@ -148,7 +148,7 @@ impl DebugInfoGenerator {
     fn convert_type(&self, id: u64, name: &str, ty: &Type) -> DebugType {
         match ty {
             Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 => {
-                DebugType::Base { id, name: name.to_string(), encoding: TypeEncoding::Unsigned, size: self.type_size(ty) }
+                DebugType::Base { id, name: name.to_string(), encoding: TypeEncoding::Unsigned, size: Self::type_size(ty) }
             }
             Type::Bool => DebugType::Base { id, name: name.to_string(), encoding: TypeEncoding::Boolean, size: 1 },
             Type::Address | Type::Hash => DebugType::Base { id, name: name.to_string(), encoding: TypeEncoding::Address, size: 32 },
@@ -160,7 +160,7 @@ impl DebugInfoGenerator {
         }
     }
 
-    fn type_size(&self, ty: &Type) -> u64 {
+    fn type_size(ty: &Type) -> u64 {
         match ty {
             Type::U8 => 1,
             Type::U16 => 2,
@@ -169,7 +169,7 @@ impl DebugInfoGenerator {
             Type::U128 => 16,
             Type::Bool => 1,
             Type::Address | Type::Hash => 32,
-            Type::Array(elem, count) => self.type_size(elem) * (*count as u64),
+            Type::Array(elem, count) => Self::type_size(elem) * (*count as u64),
             _ => 8,
         }
     }

@@ -186,7 +186,8 @@ Boundary:
 
 - In-script dynamic `ckb::blake2b256(data)` is not claimed in 0.12. The accepted
   surface is builder/release/helper hashing. A future in-script version requires
-  linking a real RISC-V Blake2b implementation into generated artifacts.
+  linking a real RISC-V Blake2b implementation into generated artifacts and
+  covering that path in production gates.
 
 ## Track C: Collections and Dynamic Data
 

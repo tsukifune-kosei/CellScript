@@ -335,7 +335,7 @@ fn register_type_id(seen: &mut HashMap<String, Span>, type_name: &str, type_id: 
     register_type_id_value(seen, type_name, &type_id.value, type_id.span)
 }
 
-impl<'a> Default for TypeChecker<'a> {
+impl Default for TypeChecker<'_> {
     fn default() -> Self {
         Self::new()
     }
@@ -739,11 +739,11 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn type_contains_mutable_reference(&self, ty: &Type) -> bool {
+    fn type_contains_mutable_reference(ty: &Type) -> bool {
         match ty {
             Type::MutRef(_) => true,
-            Type::Array(inner, _) => self.type_contains_mutable_reference(inner),
-            Type::Tuple(items) => items.iter().any(|item| self.type_contains_mutable_reference(item)),
+            Type::Array(inner, _) => Self::type_contains_mutable_reference(inner),
+            Type::Tuple(items) => items.iter().any(Self::type_contains_mutable_reference),
             Type::Named(name) => name.contains("&mut "),
             _ => false,
         }
@@ -910,7 +910,7 @@ impl<'a> TypeChecker<'a> {
                 param.span,
             ));
         }
-        if self.base_type_name(&param.ty).and_then(|name| self.resolve_cell_type_kind(name)).is_some() {
+        if Self::base_type_name(&param.ty).and_then(|name| self.resolve_cell_type_kind(name)).is_some() {
             return Err(CompileError::new(
                 format!(
                     "cell-backed parameter '{}' cannot use leading 'mut'; use '&mut {}' for mutable cell state or consume/create for ownership transitions",
@@ -1213,7 +1213,7 @@ impl<'a> TypeChecker<'a> {
             Expr::Transfer(transfer) => {
                 let (expr_ty, name) = self.require_named_linear_cell_operand(env, &transfer.expr, "transfer", transfer.span)?;
                 let to_ty = self.infer_expr(env, &transfer.to)?;
-                if !self.is_address_like_type(&to_ty) {
+                if !Self::is_address_like_type(&to_ty) {
                     return Err(CompileError::new("transfer destination must be address-like", transfer.span));
                 }
                 self.require_capability(&expr_ty, Capability::Transfer, "transfer", transfer.span)?;
@@ -1911,7 +1911,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn reject_local_mutable_reference_alias(&self, ty: &Type, span: Span) -> Result<()> {
-        if self.type_contains_mutable_reference(ty) {
+        if Self::type_contains_mutable_reference(ty) {
             return Err(CompileError::new(
                 format!(
                     "local binding cannot store mutable reference type {}; pass the '&mut' parameter directly to a helper call or mutate its fields in place",
@@ -2003,7 +2003,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn reject_assignment_mutable_reference_alias(&self, ty: &Type, span: Span) -> Result<()> {
-        if self.type_contains_mutable_reference(ty) {
+        if Self::type_contains_mutable_reference(ty) {
             return Err(CompileError::new(
                 format!(
                     "assignment cannot store mutable reference type {}; pass the '&mut' parameter directly to a helper call or mutate its fields in place",
@@ -2454,10 +2454,10 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn base_type_name<'b>(&self, ty: &'b Type) -> Option<&'b str> {
+    fn base_type_name(ty: &Type) -> Option<&str> {
         match ty {
             Type::Named(name) => Some(name.split('<').next().unwrap_or(name.as_str())),
-            Type::Ref(inner) | Type::MutRef(inner) => self.base_type_name(inner),
+            Type::Ref(inner) | Type::MutRef(inner) => Self::base_type_name(inner),
             _ => None,
         }
     }
@@ -2476,7 +2476,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn resolve_receipt_claim_output(&self, ty: &Type) -> Option<Type> {
-        let type_name = self.base_type_name(ty)?;
+        let type_name = Self::base_type_name(ty)?;
         if let Some(output) = self.receipt_claim_outputs.get(type_name) {
             return output.clone();
         }
@@ -2488,7 +2488,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn validate_receipt_claim_output(&self, output: &Type, span: Span) -> Result<()> {
-        let Some(type_name) = self.base_type_name(output) else {
+        let Some(type_name) = Self::base_type_name(output) else {
             return Err(CompileError::new("receipt claim output must be a cell-backed resource or shared type", span));
         };
         match self.resolve_cell_type_kind(type_name) {
@@ -2532,7 +2532,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn require_capability(&self, ty: &Type, capability: Capability, operation: &str, span: Span) -> Result<()> {
-        let Some(type_name) = self.base_type_name(ty) else {
+        let Some(type_name) = Self::base_type_name(ty) else {
             return Err(CompileError::new(format!("{} requires a cell-backed value", operation), span));
         };
         let Some(capabilities) = self.resolve_capabilities(type_name) else {
@@ -2554,7 +2554,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn is_receipt_type(&self, ty: &Type) -> bool {
-        self.base_type_name(ty).and_then(|name| self.resolve_cell_type_kind(name)).is_some_and(|kind| kind == CellTypeKind::Receipt)
+        Self::base_type_name(ty).and_then(|name| self.resolve_cell_type_kind(name)).is_some_and(|kind| kind == CellTypeKind::Receipt)
     }
 
     fn is_linear_type(&self, ty: &Type) -> bool {
@@ -2582,10 +2582,10 @@ impl<'a> TypeChecker<'a> {
         matches!(ty, Type::Bool)
     }
 
-    fn is_address_like_type(&self, ty: &Type) -> bool {
+    fn is_address_like_type(ty: &Type) -> bool {
         match ty {
             Type::Address => true,
-            Type::Ref(inner) | Type::MutRef(inner) => self.is_address_like_type(inner),
+            Type::Ref(inner) | Type::MutRef(inner) => Self::is_address_like_type(inner),
             _ => false,
         }
     }
