@@ -4,7 +4,7 @@ The repository includes seven bundled examples. Treat them as guided reading, no
 
 - which example to read first;
 - how the token example maps resources to actions;
-- what the bundled suite currently proves for Spora and CKB;
+- what the bundled suite currently proves for the CKB profile;
 - what extra evidence your own contract still needs.
 
 | Example | Purpose |
@@ -95,11 +95,9 @@ Read the examples in this order if you are learning the language:
 - Read `amm_pool.cell` after you understand `shared`, because pools introduce contention-sensitive state.
 - Read `launch.cell` last; it composes multiple protocol patterns.
 
-## Spora vs CKB Expectations
+## CKB Production Expectations
 
-Spora profile should compile and deploy the bundled examples as Spora artifacts under the current local production suite.
-
-CKB profile is stricter than Spora, but the current bundled-example suite is closed for the 0.12 production boundary:
+The CKB profile is strict, and the current bundled-example suite is closed for the 0.12 production boundary:
 
 - all seven bundled examples strict-admit under the CKB profile;
 - all 43 bundled business actions have scoped CKB production harnesses;
@@ -118,26 +116,16 @@ Before treating an example-derived contract as deployable, run the compiler-side
 
 ```bash
 cellc fmt --check
-cellc check --all-targets --production
-cellc build --target riscv64-elf --target-profile spora --production
-cellc verify-artifact build/main.elf --verify-sources --expect-target-profile spora --production
-```
-
-For CKB compiler-side review:
-
-```bash
 cellc check --target-profile ckb --production
 cellc build --target riscv64-elf --target-profile ckb --production
 cellc verify-artifact build/main.elf --verify-sources --expect-target-profile ckb --production
 cellc examples/nft.cell --entry-action transfer --target riscv64-elf --target-profile ckb --production
 ```
 
-For release-facing evidence, run the parent Spora repository acceptance gates:
+For release-facing CKB evidence, run the CellScript acceptance gate:
 
 ```bash
-./scripts/spora_cellscript_acceptance.sh --profile production
 ./scripts/ckb_cellscript_acceptance.sh --production
-python3 scripts/validate_spora_production_evidence.py target/devnet-acceptance/<run>/production-evidence.json
 python3 scripts/validate_ckb_cellscript_production_evidence.py target/ckb-cellscript-acceptance/<run>/ckb-cellscript-acceptance-report.json
 ```
 

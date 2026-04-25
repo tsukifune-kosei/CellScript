@@ -48,13 +48,11 @@ CellScript 0.12 is also the first release aimed at an initial stable foundation.
 For a real release, keep two levels of evidence separate:
 
 - compiler evidence: the source, artifact, metadata, and policy flags agree;
-- chain evidence: the artifact has been built into transactions, dry-run or deployed, measured, and checked by the Spora or CKB acceptance reports.
+- CKB chain evidence: the artifact has been built into CKB transactions, dry-run or deployed, measured, and checked by the CKB acceptance report.
 
-Release-facing production evidence comes from the Spora and CKB acceptance scripts in the parent Spora repository:
+Release-facing CKB production evidence comes from the CellScript repository root:
 
-- `scripts/spora_cellscript_acceptance.sh --profile production`
 - `scripts/ckb_cellscript_acceptance.sh --production`
-- `scripts/validate_spora_production_evidence.py`
 - `scripts/validate_ckb_cellscript_production_evidence.py`
 
 The current bundled example suite is seven contracts: `amm_pool.cell`, `launch.cell`, `multisig.cell`, `nft.cell`, `timelock.cell`, `token.cell`, and `vesting.cell`.

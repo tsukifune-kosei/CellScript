@@ -128,21 +128,11 @@ cellc verify-artifact build/main.elf --expect-target-profile ckb --verify-source
 
 These gates are suitable for a compiler/package CI loop. They are not enough for a release claim that says a contract is production-ready on a chain.
 
-## Release Evidence Gates
+## CKB Release Evidence Gate
 
-When you are ready to make a production claim, move from compiler evidence to chain evidence.
-
-For Spora release evidence, run from the parent Spora repository root:
-
-```bash
-./scripts/spora_cellscript_acceptance.sh --profile production
-python3 scripts/validate_spora_production_evidence.py \
-  target/devnet-acceptance/<run>/production-evidence.json
-```
-
-The Spora production report should show the production gate passed, `production_ready=true`, scoped bundled action coverage, malformed rejection coverage, standard mass policy, and all seven bundled examples deployed as code cells under the current suite.
-
-For CKB release evidence, run:
+When you are ready to make a CKB production claim, move from compiler evidence
+to chain evidence. Run the CKB acceptance gate from the CellScript repository
+root:
 
 ```bash
 ./scripts/ckb_cellscript_acceptance.sh --production

@@ -2,8 +2,8 @@
 
 **Status**: release evidence checklist for CellScript 0.12.
 
-This document records the evidence expected before cutting a 0.12 release. It
-does not replace Spora or CKB acceptance reports; it defines what must be
+This document records the CKB profile evidence expected before cutting a 0.12
+release. It does not replace CKB acceptance reports; it defines what must be
 archived from them.
 
 ## Compiler Evidence
@@ -38,8 +38,6 @@ Expected coverage:
 
 - runtime error registry consistency
 - CKB Blake2b default-hash vector
-- Spora stdlib BLAKE3 helper emits syscall `3001`, matching the Spora VM
-  `BLAKE3_HASH` syscall table
 - invalid CKB `hash_type` fail-closed
 - invalid CKB `dep_type` fail-closed
 - entry witness ABI encoding
@@ -66,11 +64,10 @@ cargo run --manifest-path tools/ckb-tx-measure/Cargo.toml --locked < tx.json
 cargo test --manifest-path tools/ckb-tx-measure/Cargo.toml --locked
 ```
 
-For the nested `Spora/cellscript` checkout, use
-`scripts/ckb_cellscript_acceptance.sh` from the Spora repository root. The
-acceptance script builds the same helper source through a temporary manifest
-that points at the configured `CKB_REPO`, so release evidence is not tied to a
-hard-coded relative checkout shape.
+For full CKB acceptance, use `scripts/ckb_cellscript_acceptance.sh` from the
+CellScript repository root. The acceptance script builds the same helper source
+through a temporary manifest that points at the configured `CKB_REPO`, so
+release evidence is not tied to a hard-coded relative checkout shape.
 
 Archive the helper output:
 
@@ -83,18 +80,6 @@ Archive the helper output:
 
 The helper uses CKB packed transaction serialization and CKB occupied-capacity
 logic. Any `capacity_is_sufficient=false` result is a release blocker.
-
-## Spora Acceptance Evidence
-
-Archive the Spora devnet acceptance report tree, including:
-
-- production gate status
-- bundled example deployment status
-- standard relay compatibility
-- malformed rejection matrix
-- mass policy values and measured mass evidence
-
-Do not use relaxed or bounded diagnostic runs as production release evidence.
 
 ## CKB Acceptance Evidence
 
@@ -116,7 +101,8 @@ any generated output is under-capacity.
 Validate the CKB release evidence with:
 
 ```bash
-python3 ../scripts/validate_ckb_cellscript_production_evidence.py \
+scripts/ckb_cellscript_acceptance.sh --production
+python3 scripts/validate_ckb_cellscript_production_evidence.py \
   target/ckb-cellscript-acceptance/<run>/ckb-cellscript-acceptance-report.json
 ```
 

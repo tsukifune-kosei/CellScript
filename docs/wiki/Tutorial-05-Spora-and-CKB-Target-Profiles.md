@@ -97,7 +97,7 @@ CKB work is usually easiest when the schema and transaction entry points are exp
 - avoid Spora-only signature/hash helper syscalls;
 - use metadata and `verify-artifact` to confirm target profile and packaging.
 
-For release-facing CKB evidence, also run the parent Spora repository's CKB acceptance/final-hardening gate. Compiler metadata is necessary, but it is not a substitute for builder-backed transaction evidence, dry-run cycles, serialized tx-size evidence, and occupied-capacity checks.
+For release-facing CKB evidence, also run the CellScript repository's CKB acceptance/final-hardening gate. Compiler metadata is necessary, but it is not a substitute for builder-backed transaction evidence, dry-run cycles, serialized tx-size evidence, and occupied-capacity checks.
 
 ## Next
 
