@@ -4015,6 +4015,9 @@ fn collect_instruction_scope(instruction: &ir::IrInstruction, used_types: &mut B
             collect_operand_named_types(collection, used_types);
             collect_operand_named_types(value, used_types);
         }
+        ir::IrInstruction::CollectionClear { collection } => {
+            collect_operand_named_types(collection, used_types);
+        }
         ir::IrInstruction::Call { dest, func, args } => {
             if let Some(dest) = dest {
                 collect_ir_type_named_types(&dest.ty, used_types);
@@ -8969,6 +8972,14 @@ fn body_fail_closed_runtime_features(
                         features.insert("cell-backed-collection-extend".to_string());
                     }
                 }
+                ir::IrInstruction::CollectionClear { collection } => {
+                    if !metadata_stack_collection_clear_is_runtime_supported(collection, &prelude_availability) {
+                        features.insert("collection-clear".to_string());
+                    }
+                    if ir_operand_is_cell_backed_collection(collection, cell_type_kinds) {
+                        features.insert("cell-backed-collection-clear".to_string());
+                    }
+                }
                 ir::IrInstruction::Consume { operand } if consumed_schema_var_id(instruction).is_none() => {
                     features.insert("consume-expression".to_string());
                     if matches!(operand, ir::IrOperand::Const(_)) {
@@ -9486,6 +9497,15 @@ fn metadata_prelude_availability(
                         }
                     }
                 }
+                ir::IrInstruction::CollectionClear { collection: ir::IrOperand::Var(collection) } => {
+                    if let Some(byte_count) = availability.constructed_byte_vector_vars.get_mut(&collection.id) {
+                        *byte_count = 0;
+                        availability.empty_molecule_vector_vars.insert(collection.id);
+                        if let Some(name) = loaded_constructed_vector_names.get(&collection.id).cloned() {
+                            named_constructed_vectors.insert(name, collection.id);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -9735,6 +9755,16 @@ fn metadata_stack_collection_extend_is_runtime_supported(
     };
     let element_width = metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts).unwrap_or(1);
     element_width != 0 && width % element_width == 0 && availability.stack_collection_vars.contains(&collection.id)
+}
+
+fn metadata_stack_collection_clear_is_runtime_supported(
+    collection: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+) -> bool {
+    let ir::IrOperand::Var(collection) = collection else {
+        return false;
+    };
+    availability.stack_collection_vars.contains(&collection.id)
 }
 
 fn metadata_stack_collection_index_is_runtime_supported(
@@ -14586,6 +14616,20 @@ action stack_vec_extend_len(seed: [u8; 3]) -> u64 {
 }
 "#;
 
+    const STACK_VEC_CLEAR_IS_EMPTY_PROGRAM: &str = r#"
+module test
+
+action stack_vec_clear_len() -> u64 {
+    let mut values = Vec::new()
+    values.push(7)
+    values.clear()
+    if values.is_empty() {
+        return values.len()
+    }
+    return 99
+}
+"#;
+
     const CELL_BACKED_VEC_PROGRAM: &str = r#"
 module test
 
@@ -17195,6 +17239,39 @@ action grant(config: read_ref Config, token: Token) -> Grant {
                 && !action.fail_closed_runtime_features.contains(&"collection-extend".to_string())
                 && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string()),
             "stack-backed Vec<u8> extend_from_slice should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_clear_and_is_empty() {
+        let result = compile(STACK_VEC_CLEAR_IS_EMPTY_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection clear"),
+            "Vec.clear should reset the stack collection length word:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection length"),
+            "Vec.is_empty should read stack collection length through the builtin length path:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection clear is not needed for verifier execution")
+                && !asm.contains("# cellscript abi: fail closed because dynamic length is not available"),
+            "stack-backed Vec.clear/is_empty should not hit fail-closed collection paths:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_clear_len").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-clear".to_string())
+                && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string()),
+            "stack-backed Vec.clear/is_empty should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
     }

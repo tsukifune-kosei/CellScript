@@ -2171,6 +2171,10 @@ impl<'a> TypeChecker<'a> {
                         self.validate_builtin_arity(&field.field, 0, arg_types, call.span)?;
                         Ok(Type::U64)
                     }
+                    "is_empty" => {
+                        self.validate_builtin_arity(&field.field, 0, arg_types, call.span)?;
+                        Ok(Type::Bool)
+                    }
                     "push" => {
                         self.validate_builtin_arity("Vec.push", 1, arg_types, call.span)?;
                         let arg_ty = &arg_types[0];
@@ -2201,6 +2205,15 @@ impl<'a> TypeChecker<'a> {
                             }
                         }
                         Err(CompileError::new("push is only supported on Vec values", call.span))
+                    }
+                    "clear" => {
+                        self.validate_builtin_arity("Vec.clear", 0, arg_types, call.span)?;
+                        match &receiver_ty {
+                            Type::Named(name) if name == "Vec" || self.parse_named_collection_item_type(name).is_some() => {
+                                Ok(Type::Unit)
+                            }
+                            _ => Err(CompileError::new("clear is only supported on Vec values", call.span)),
+                        }
                     }
                     "extend_from_slice" => {
                         self.validate_builtin_arity("Vec.extend_from_slice", 1, arg_types, call.span)?;

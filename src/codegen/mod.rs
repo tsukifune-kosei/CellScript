@@ -1722,6 +1722,14 @@ impl CodeGenerator {
                             }
                         }
                     }
+                    IrInstruction::CollectionClear { collection: IrOperand::Var(collection) } => {
+                        if let Some(bytes) = self.constructed_byte_vectors.get_mut(&collection.id) {
+                            bytes.clear();
+                            if let Some(name) = loaded_vector_names.get(&collection.id).cloned() {
+                                named_vectors.insert(name, collection.id);
+                            }
+                        }
+                    }
                     IrInstruction::Move { dest, src: IrOperand::Var(src) }
                     | IrInstruction::Unary { dest, op: UnaryOp::Ref | UnaryOp::Deref, operand: IrOperand::Var(src) } => {
                         if self.stack_collection_vars.contains(&src.id) {
@@ -2132,6 +2140,9 @@ impl CodeGenerator {
             }
             IrInstruction::CollectionExtend { collection, slice } => {
                 self.emit_collection_extend(collection, slice)?;
+            }
+            IrInstruction::CollectionClear { collection } => {
+                self.emit_collection_clear(collection)?;
             }
             IrInstruction::Call { dest, func, args } => {
                 self.emit_call(dest.as_ref(), func, args)?;
@@ -5581,6 +5592,9 @@ impl CodeGenerator {
                 self.record_operand(collection, max_var_id);
                 self.record_operand(slice, max_var_id);
             }
+            IrInstruction::CollectionClear { collection } => {
+                self.record_operand(collection, max_var_id);
+            }
         }
     }
 
@@ -6517,6 +6531,35 @@ impl CodeGenerator {
         self.emit("ld t0, -8(t4)");
         self.emit(format!("addi t0, t0, {}", element_count));
         self.emit("sd t0, -8(t4)");
+        true
+    }
+
+    fn emit_collection_clear(&mut self, collection: &IrOperand) -> Result<()> {
+        self.emit("# collection clear");
+        self.emit_symbolic_operand_comment("collection", collection);
+        if matches!(collection, IrOperand::Var(var) if self.verified_collection_construction_vectors.contains(&var.id)) {
+            self.emit("# cellscript abi: collection clear is covered by create-output vector verifier");
+            return Ok(());
+        }
+        if self.emit_stack_collection_clear(collection) {
+            return Ok(());
+        }
+        self.emit("# cellscript abi: collection clear is not needed for verifier execution");
+        self.emit("# cellscript abi: if this path is reached, the source program uses dynamic collections");
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        Ok(())
+    }
+
+    fn emit_stack_collection_clear(&mut self, collection: &IrOperand) -> bool {
+        let IrOperand::Var(collection) = collection else {
+            return false;
+        };
+        if !self.stack_collection_vars.contains(&collection.id) {
+            return false;
+        }
+        self.emit("# cellscript abi: stack collection clear");
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("sd zero, -8(t4)");
         true
     }
 

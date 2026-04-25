@@ -215,6 +215,7 @@ pub enum IrInstruction {
     CollectionNew { dest: IrVar, ty: String },
     CollectionPush { collection: IrOperand, value: IrOperand },
     CollectionExtend { collection: IrOperand, slice: IrOperand },
+    CollectionClear { collection: IrOperand },
     Call { dest: Option<IrVar>, func: String, args: Vec<IrOperand> },
     ReadRef { dest: IrVar, ty: String },
     Move { dest: IrVar, src: IrOperand },
@@ -2940,6 +2941,29 @@ impl IrGenerator {
                         .push(IrInstruction::Length { dest: dest.clone(), operand: lowered.operand });
                     Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
                 }
+                "is_empty" if call.args.is_empty() => {
+                    let lowered = self.lower_expr(&field.expr, current, blocks, vars);
+                    let active = lowered.current?;
+                    if let IrOperand::Var(var) = &lowered.operand {
+                        if let Some(elements) = self.aggregate_elements.get(&var.id) {
+                            return Some(LoweredExpr {
+                                operand: IrOperand::Const(IrConst::Bool(elements.is_empty())),
+                                current: Some(active),
+                            });
+                        }
+                    }
+                    let len_dest = self.new_var("is_empty_len_tmp", IrType::U64);
+                    let dest = self.new_var("is_empty_tmp", IrType::Bool);
+                    let block = self.block_mut(blocks, active);
+                    block.instructions.push(IrInstruction::Length { dest: len_dest.clone(), operand: lowered.operand });
+                    block.instructions.push(IrInstruction::Binary {
+                        dest: dest.clone(),
+                        op: BinaryOp::Eq,
+                        left: IrOperand::Var(len_dest),
+                        right: IrOperand::Const(IrConst::U64(0)),
+                    });
+                    Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
+                }
                 "type_hash" if call.args.is_empty() => {
                     let lowered = self.lower_expr(&field.expr, current, blocks, vars);
                     let active = lowered.current?;
@@ -2986,6 +3010,14 @@ impl IrGenerator {
                             );
                         }
                     }
+                    Some(LoweredExpr { operand: IrOperand::Const(IrConst::Bool(true)), current: Some(active) })
+                }
+                "clear" if call.args.is_empty() => {
+                    let lowered_collection = self.lower_expr(&field.expr, current, blocks, vars);
+                    let active = lowered_collection.current?;
+                    self.block_mut(blocks, active)
+                        .instructions
+                        .push(IrInstruction::CollectionClear { collection: lowered_collection.operand });
                     Some(LoweredExpr { operand: IrOperand::Const(IrConst::Bool(true)), current: Some(active) })
                 }
                 "extend_from_slice" if call.args.len() == 1 => {
