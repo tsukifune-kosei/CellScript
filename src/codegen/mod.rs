@@ -2144,6 +2144,9 @@ impl CodeGenerator {
             IrInstruction::CollectionClear { collection } => {
                 self.emit_collection_clear(collection)?;
             }
+            IrInstruction::CollectionContains { dest, collection, value } => {
+                self.emit_collection_contains(dest, collection, value)?;
+            }
             IrInstruction::Call { dest, func, args } => {
                 self.emit_call(dest.as_ref(), func, args)?;
             }
@@ -5595,6 +5598,11 @@ impl CodeGenerator {
             IrInstruction::CollectionClear { collection } => {
                 self.record_operand(collection, max_var_id);
             }
+            IrInstruction::CollectionContains { dest, collection, value } => {
+                self.record_var(dest, max_var_id);
+                self.record_operand(collection, max_var_id);
+                self.record_operand(value, max_var_id);
+            }
         }
     }
 
@@ -6560,6 +6568,92 @@ impl CodeGenerator {
         self.emit("# cellscript abi: stack collection clear");
         self.emit(format!("ld t4, {}(sp)", collection.id * 8));
         self.emit("sd zero, -8(t4)");
+        true
+    }
+
+    fn emit_collection_contains(&mut self, dest: &IrVar, collection: &IrOperand, value: &IrOperand) -> Result<()> {
+        self.emit("# collection contains");
+        self.emit_symbolic_operand_comment("collection", collection);
+        self.emit_symbolic_operand_comment("value", value);
+        if self.emit_stack_collection_contains(dest, collection, value) {
+            return Ok(());
+        }
+        self.emit("# cellscript abi: collection contains is not available for this collection");
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        Ok(())
+    }
+
+    fn emit_stack_collection_contains(&mut self, dest: &IrVar, collection: &IrOperand, value: &IrOperand) -> bool {
+        let IrOperand::Var(collection) = collection else {
+            return false;
+        };
+        if !self.stack_collection_vars.contains(&collection.id) {
+            return false;
+        }
+        let Some(value_width) = constructed_byte_vector_part_width(value) else {
+            return false;
+        };
+        let element_width =
+            molecule_vector_element_fixed_width(&collection.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes).unwrap_or(value_width);
+        if element_width == 0 || element_width != value_width {
+            return false;
+        }
+
+        self.emit(format!("# cellscript abi: stack collection contains element_size={}", element_width));
+        let index_offset = self.runtime_expr_temp_offset(0).expect("runtime temp slot 0");
+        self.emit_stack_sd("zero", index_offset);
+        self.emit(format!("sd zero, {}(sp)", dest.id * 8));
+        let loop_label = self.fresh_label("stack_collection_contains_loop");
+        let next_label = self.fresh_label("stack_collection_contains_next");
+        let found_label = self.fresh_label("stack_collection_contains_found");
+        let done_label = self.fresh_label("stack_collection_contains_done");
+        self.emit_label(&loop_label);
+        self.emit_stack_ld("t1", index_offset);
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("ld t2, -8(t4)");
+        self.emit(format!("beq t1, t2, {}", done_label));
+
+        if element_width <= 8 && fixed_scalar_operand_width(value).is_some() {
+            self.emit(format!("li t2, {}", element_width));
+            self.emit("mul t3, t1, t2");
+            self.emit("add t4, t4, t3");
+            self.emit_unaligned_scalar_load("t4", "t0", "t2", 0, element_width);
+            self.emit_operand_to_register("t5", value);
+            self.emit("sub t6, t0, t5");
+            self.emit(format!("beqz t6, {}", found_label));
+        } else {
+            let Some(source) = self.expected_fixed_byte_source(value, element_width) else {
+                return false;
+            };
+            self.emit_prepare_fixed_byte_source(&source, element_width, "stack collection contains");
+            for byte_index in 0..element_width {
+                self.emit_stack_ld("t1", index_offset);
+                self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+                self.emit(format!("li t2, {}", element_width));
+                self.emit("mul t3, t1, t2");
+                self.emit("add t4, t4, t3");
+                if byte_index <= 2047 {
+                    self.emit(format!("lbu t0, {}(t4)", byte_index));
+                } else {
+                    self.emit_large_addi("t2", "t4", byte_index as i64);
+                    self.emit("lbu t0, 0(t2)");
+                }
+                self.emit_fixed_byte_source_byte_to("t5", "t6", &source, byte_index);
+                self.emit("sub t0, t0, t5");
+                self.emit(format!("bnez t0, {}", next_label));
+            }
+            self.emit(format!("j {}", found_label));
+        }
+
+        self.emit_label(&next_label);
+        self.emit_stack_ld("t1", index_offset);
+        self.emit("addi t1, t1, 1");
+        self.emit_stack_sd("t1", index_offset);
+        self.emit(format!("j {}", loop_label));
+        self.emit_label(&found_label);
+        self.emit("li t0, 1");
+        self.emit(format!("sd t0, {}(sp)", dest.id * 8));
+        self.emit_label(&done_label);
         true
     }
 

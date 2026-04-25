@@ -216,6 +216,7 @@ pub enum IrInstruction {
     CollectionPush { collection: IrOperand, value: IrOperand },
     CollectionExtend { collection: IrOperand, slice: IrOperand },
     CollectionClear { collection: IrOperand },
+    CollectionContains { dest: IrVar, collection: IrOperand, value: IrOperand },
     Call { dest: Option<IrVar>, func: String, args: Vec<IrOperand> },
     ReadRef { dest: IrVar, ty: String },
     Move { dest: IrVar, src: IrOperand },
@@ -3019,6 +3020,33 @@ impl IrGenerator {
                         .instructions
                         .push(IrInstruction::CollectionClear { collection: lowered_collection.operand });
                     Some(LoweredExpr { operand: IrOperand::Const(IrConst::Bool(true)), current: Some(active) })
+                }
+                "contains" if call.args.len() == 1 => {
+                    let lowered_collection = self.lower_expr(&field.expr, current, blocks, vars);
+                    let active = lowered_collection.current?;
+                    let lowered_value = self.lower_expr(&call.args[0], active, blocks, vars);
+                    let active = lowered_value.current?;
+                    let collection_operand = lowered_collection.operand;
+                    if let (Expr::Identifier(receiver_name), IrOperand::Var(collection_var)) =
+                        (field.expr.as_ref(), &collection_operand)
+                    {
+                        if matches!(&collection_var.ty, IrType::Named(name) if name == "Vec") {
+                            if let (Some(item_ty), Some(receiver_var)) =
+                                (inline_ir_type_repr(&self.operand_type(&lowered_value.operand)), vars.get_mut(receiver_name))
+                            {
+                                if receiver_var.id == collection_var.id {
+                                    receiver_var.ty = IrType::Named(format!("Vec<{}>", item_ty));
+                                }
+                            }
+                        }
+                    }
+                    let dest = self.new_var("contains_tmp", IrType::Bool);
+                    self.block_mut(blocks, active).instructions.push(IrInstruction::CollectionContains {
+                        dest: dest.clone(),
+                        collection: collection_operand,
+                        value: lowered_value.operand,
+                    });
+                    Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
                 }
                 "extend_from_slice" if call.args.len() == 1 => {
                     let lowered_collection = self.lower_expr(&field.expr, current, blocks, vars);
