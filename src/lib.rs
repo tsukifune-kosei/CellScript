@@ -8957,6 +8957,11 @@ fn body_fail_closed_runtime_features(
                         body,
                         type_layouts,
                         &prelude_availability,
+                    ) && !metadata_stack_collection_extend_is_runtime_supported(
+                        collection,
+                        slice,
+                        &prelude_availability,
+                        type_layouts,
                     ) {
                         features.insert("collection-extend".to_string());
                     }
@@ -9714,6 +9719,22 @@ fn metadata_stack_collection_push_is_runtime_supported(
     };
     availability.stack_collection_vars.contains(&collection.id)
         && metadata_runtime_collection_part_width(value, availability).is_some()
+}
+
+fn metadata_stack_collection_extend_is_runtime_supported(
+    collection: &ir::IrOperand,
+    slice: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
+    let ir::IrOperand::Var(collection) = collection else {
+        return false;
+    };
+    let Some(width) = operand_fixed_byte_width(slice) else {
+        return false;
+    };
+    let element_width = metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts).unwrap_or(1);
+    element_width != 0 && width % element_width == 0 && availability.stack_collection_vars.contains(&collection.id)
 }
 
 fn metadata_stack_collection_index_is_runtime_supported(
@@ -14555,6 +14576,16 @@ action stack_vec_address_roundtrip(owner: Address) -> bool {
 }
 "#;
 
+    const STACK_VEC_EXTEND_RUNTIME_PROGRAM: &str = r#"
+module test
+
+action stack_vec_extend_len(seed: [u8; 3]) -> u64 {
+    let mut bytes = Vec::new()
+    bytes.extend_from_slice(seed)
+    return bytes.len()
+}
+"#;
+
     const CELL_BACKED_VEC_PROGRAM: &str = r#"
 module test
 
@@ -17127,6 +17158,43 @@ action grant(config: read_ref Config, token: Token) -> Grant {
                 && !action.fail_closed_runtime_features.contains(&"index-access".to_string())
                 && !action.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
             "stack-backed Vec<Address> runtime should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_extend_from_fixed_bytes() {
+        let result = compile(STACK_VEC_EXTEND_RUNTIME_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection extend bytes=3 elements=3 element_size=1"),
+            "Vec<u8> extend_from_slice should execute against the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection extend copy fixed bytes size=3"),
+            "Vec<u8> extend_from_slice should copy fixed bytes into the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection length"),
+            "Vec<u8> len after extend_from_slice should read the stack collection length word:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection extend is not needed for verifier execution")
+                && !asm.contains("# cellscript abi: fail closed because dynamic length is not available"),
+            "stack-backed Vec<u8> extend_from_slice should not hit the old fail-closed collection paths:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_extend_len").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-extend".to_string())
+                && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string()),
+            "stack-backed Vec<u8> extend_from_slice should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
     }

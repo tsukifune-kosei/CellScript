@@ -2993,11 +2993,26 @@ impl IrGenerator {
                     let active = lowered_collection.current?;
                     let lowered_slice = self.lower_expr(&call.args[0], active, blocks, vars);
                     let active = lowered_slice.current?;
+                    let collection_operand = lowered_collection.operand;
+                    if let (Expr::Identifier(receiver_name), IrOperand::Var(collection_var)) =
+                        (field.expr.as_ref(), &collection_operand)
+                    {
+                        if matches!(&collection_var.ty, IrType::Named(name) if name == "Vec") {
+                            if let (IrType::Array(inner, _), Some(receiver_var)) =
+                                (self.operand_type(&lowered_slice.operand), vars.get_mut(receiver_name))
+                            {
+                                if receiver_var.id == collection_var.id {
+                                    if let Some(item_ty) = inline_ir_type_repr(inner.as_ref()) {
+                                        receiver_var.ty = IrType::Named(format!("Vec<{}>", item_ty));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let block = self.block_mut(blocks, active);
-                    block.instructions.push(IrInstruction::CollectionExtend {
-                        collection: lowered_collection.operand,
-                        slice: lowered_slice.operand,
-                    });
+                    block
+                        .instructions
+                        .push(IrInstruction::CollectionExtend { collection: collection_operand, slice: lowered_slice.operand });
                     Some(LoweredExpr { operand: IrOperand::Const(IrConst::Bool(true)), current: Some(active) })
                 }
                 _ => None,

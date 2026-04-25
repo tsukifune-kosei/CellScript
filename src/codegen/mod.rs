@@ -6448,10 +6448,76 @@ impl CodeGenerator {
             self.emit("# cellscript abi: collection extend is covered by create-output vector verifier");
             return Ok(());
         }
+        if self.emit_stack_collection_extend(collection, slice) {
+            return Ok(());
+        }
         self.emit("# cellscript abi: collection extend is not needed for verifier execution");
         self.emit("# cellscript abi: if this path is reached, the source program uses dynamic collections");
         self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
         Ok(())
+    }
+
+    fn emit_stack_collection_extend(&mut self, collection: &IrOperand, slice: &IrOperand) -> bool {
+        let IrOperand::Var(collection) = collection else {
+            return false;
+        };
+        if !self.stack_collection_vars.contains(&collection.id) {
+            return false;
+        }
+        let Some(width) = operand_fixed_byte_width(slice) else {
+            return false;
+        };
+        let element_width =
+            molecule_vector_element_fixed_width(&collection.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes).unwrap_or(1);
+        if element_width == 0 || width % element_width != 0 {
+            return false;
+        }
+        let element_count = width / element_width;
+        if width > RUNTIME_COLLECTION_BUFFER_SIZE {
+            return false;
+        }
+        let Some(source) = self.expected_fixed_byte_source(slice, width) else {
+            return false;
+        };
+
+        self.emit(format!(
+            "# cellscript abi: stack collection extend bytes={} elements={} element_size={}",
+            width, element_count, element_width
+        ));
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("ld t0, -8(t4)");
+        self.emit(format!("li t1, {}", element_width));
+        self.emit("mul t2, t0, t1");
+        self.emit(format!("li t3, {}", RUNTIME_COLLECTION_BUFFER_SIZE));
+        self.emit("sub t5, t3, t2");
+        self.emit(format!("li t1, {}", width));
+        self.emit("sltu t5, t5, t1");
+        let capacity_ok = self.fresh_label("stack_collection_extend_capacity_ok");
+        self.emit(format!("beqz t5, {}", capacity_ok));
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        self.emit_label(&capacity_ok);
+
+        self.emit_prepare_fixed_byte_source(&source, width, "stack collection extend");
+        self.emit(format!("# cellscript abi: stack collection extend copy fixed bytes size={}", width));
+        for byte_index in 0..width {
+            self.emit_fixed_byte_source_byte_to("t1", "t6", &source, byte_index);
+            self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+            self.emit("ld t0, -8(t4)");
+            self.emit(format!("li t2, {}", element_width));
+            self.emit("mul t2, t0, t2");
+            self.emit("add t4, t4, t2");
+            if byte_index <= 2047 {
+                self.emit(format!("sb t1, {}(t4)", byte_index));
+            } else {
+                self.emit_large_addi("t0", "t4", byte_index as i64);
+                self.emit("sb t1, 0(t0)");
+            }
+        }
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("ld t0, -8(t4)");
+        self.emit(format!("addi t0, t0, {}", element_count));
+        self.emit("sd t0, -8(t4)");
+        true
     }
 
     fn emit_call(&mut self, dest: Option<&IrVar>, func: &str, args: &[IrOperand]) -> Result<()> {
