@@ -212,7 +212,7 @@ pub enum IrInstruction {
     Index { dest: IrVar, arr: IrOperand, idx: IrOperand },
     Length { dest: IrVar, operand: IrOperand },
     TypeHash { dest: IrVar, operand: IrOperand },
-    CollectionNew { dest: IrVar, ty: String },
+    CollectionNew { dest: IrVar, ty: String, capacity: Option<IrOperand> },
     CollectionPush { collection: IrOperand, value: IrOperand },
     CollectionExtend { collection: IrOperand, slice: IrOperand },
     CollectionClear { collection: IrOperand },
@@ -2917,10 +2917,23 @@ impl IrGenerator {
                 }
                 "Vec::new" if call.args.is_empty() => {
                     let dest = self.new_var("vec_new_tmp", IrType::Named("Vec".to_string()));
-                    self.block_mut(blocks, current)
-                        .instructions
-                        .push(IrInstruction::CollectionNew { dest: dest.clone(), ty: "Vec".to_string() });
+                    self.block_mut(blocks, current).instructions.push(IrInstruction::CollectionNew {
+                        dest: dest.clone(),
+                        ty: "Vec".to_string(),
+                        capacity: None,
+                    });
                     Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(current) })
+                }
+                "Vec::with_capacity" if call.args.len() == 1 => {
+                    let lowered_capacity = self.lower_expr(&call.args[0], current, blocks, vars);
+                    let active = lowered_capacity.current?;
+                    let dest = self.new_var("vec_with_capacity_tmp", IrType::Named("Vec".to_string()));
+                    self.block_mut(blocks, active).instructions.push(IrInstruction::CollectionNew {
+                        dest: dest.clone(),
+                        ty: "Vec".to_string(),
+                        capacity: Some(lowered_capacity.operand),
+                    });
+                    Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
                 }
                 _ => None,
             },

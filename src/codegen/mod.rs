@@ -2132,8 +2132,8 @@ impl CodeGenerator {
             IrInstruction::TypeHash { dest, operand } => {
                 self.emit_type_hash(dest, operand)?;
             }
-            IrInstruction::CollectionNew { dest, ty } => {
-                self.emit_collection_new(dest, ty)?;
+            IrInstruction::CollectionNew { dest, ty, capacity } => {
+                self.emit_collection_new(dest, ty, capacity.as_ref())?;
             }
             IrInstruction::CollectionPush { collection, value } => {
                 self.emit_collection_push(collection, value)?;
@@ -5549,10 +5549,15 @@ impl CodeGenerator {
             | IrInstruction::Index { dest, .. }
             | IrInstruction::Length { dest, .. }
             | IrInstruction::TypeHash { dest, .. }
-            | IrInstruction::CollectionNew { dest, .. }
             | IrInstruction::Create { dest, .. }
             | IrInstruction::Claim { dest, .. }
             | IrInstruction::ReadRef { dest, .. } => self.record_var(dest, max_var_id),
+            IrInstruction::CollectionNew { dest, capacity, .. } => {
+                self.record_var(dest, max_var_id);
+                if let Some(capacity) = capacity {
+                    self.record_operand(capacity, max_var_id);
+                }
+            }
             IrInstruction::Move { dest, src } => {
                 self.record_var(dest, max_var_id);
                 self.record_operand(src, max_var_id);
@@ -6345,7 +6350,7 @@ impl CodeGenerator {
         true
     }
 
-    fn emit_collection_new(&mut self, dest: &IrVar, ty: &str) -> Result<()> {
+    fn emit_collection_new(&mut self, dest: &IrVar, ty: &str, capacity: Option<&IrOperand>) -> Result<()> {
         // Stack-allocated collection: the stack slot stores a pointer to the
         // collection buffer area, with the length word immediately before the buffer.
         // Layout: [length: u64][buffer: RUNTIME_COLLECTION_BUFFER_SIZE bytes]
@@ -6359,6 +6364,10 @@ impl CodeGenerator {
             "# cellscript abi: stack collection buffer_offset={} max_size={}",
             buffer_offset, RUNTIME_COLLECTION_BUFFER_SIZE
         ));
+        if let Some(capacity) = capacity {
+            self.emit("# cellscript abi: stack collection with_capacity uses fixed backing buffer");
+            self.emit_symbolic_operand_comment("capacity", capacity);
+        }
 
         // Initialize length to 0
         self.emit_stack_sd("zero", length_offset);

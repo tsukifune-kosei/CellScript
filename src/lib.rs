@@ -4007,9 +4007,12 @@ fn collect_instruction_scope(instruction: &ir::IrInstruction, used_types: &mut B
             collect_ir_type_named_types(&dest.ty, used_types);
             collect_operand_named_types(operand, used_types);
         }
-        ir::IrInstruction::CollectionNew { dest, ty } => {
+        ir::IrInstruction::CollectionNew { dest, ty, capacity } => {
             collect_ir_type_named_types(&dest.ty, used_types);
             used_types.insert(ty.clone());
+            if let Some(capacity) = capacity {
+                collect_operand_named_types(capacity, used_types);
+            }
         }
         ir::IrInstruction::CollectionPush { collection, value } | ir::IrInstruction::CollectionExtend { collection, slice: value } => {
             collect_operand_named_types(collection, used_types);
@@ -14637,6 +14640,17 @@ action stack_vec_sum() -> u64 {
 }
 "#;
 
+    const STACK_VEC_WITH_CAPACITY_PROGRAM: &str = r#"
+module test
+
+action stack_vec_with_capacity_sum() -> u64 {
+    let mut values = Vec::with_capacity(2)
+    values.push(7)
+    values.push(9)
+    return values.len() + values[1]
+}
+"#;
+
     const FIXED_BYTE_STACK_VEC_RUNTIME_PROGRAM: &str = r#"
 module test
 
@@ -17229,6 +17243,34 @@ action grant(config: read_ref Config, token: Token) -> Grant {
                 && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
                 && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
             "stack-backed scalar Vec runtime should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_vec_with_capacity_to_stack_collection_new() {
+        let result = compile(STACK_VEC_WITH_CAPACITY_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection with_capacity uses fixed backing buffer"),
+            "Vec::with_capacity should lower to stack collection construction with capacity metadata:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection push element_size=8"),
+            "Vec::with_capacity result should use normal stack collection push:\n{}",
+            asm
+        );
+        assert!(!asm.contains("# call Vec::with_capacity"), "Vec::with_capacity leaked through generic call path:\n{}", asm);
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_with_capacity_sum").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
+            "Vec::with_capacity stack runtime should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
     }

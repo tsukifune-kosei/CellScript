@@ -2141,6 +2141,13 @@ impl<'a> TypeChecker<'a> {
                             self.validate_builtin_arity(name, 0, arg_types, call.span)?;
                             Type::Hash
                         }
+                        ("Vec", "with_capacity") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if arg_types[0] != Type::U64 {
+                                return Err(CompileError::new("Vec::with_capacity expects a u64 capacity", call.span));
+                            }
+                            Type::Named("Vec".to_string())
+                        }
                         (_, "new") => {
                             self.validate_builtin_arity(name, 0, arg_types, call.span)?;
                             self.validate_namespaced_type_constructor(prefix, suffix, call.span)?;
