@@ -220,6 +220,7 @@ pub enum IrInstruction {
     CollectionRemove { dest: IrVar, collection: IrOperand, index: IrOperand },
     CollectionInsert { collection: IrOperand, index: IrOperand, value: IrOperand },
     CollectionPop { dest: IrVar, collection: IrOperand },
+    CollectionReverse { collection: IrOperand },
     Call { dest: Option<IrVar>, func: String, args: Vec<IrOperand> },
     ReadRef { dest: IrVar, ty: String },
     Move { dest: IrVar, src: IrOperand },
@@ -3035,6 +3036,14 @@ impl IrGenerator {
                     self.block_mut(blocks, active)
                         .instructions
                         .push(IrInstruction::CollectionClear { collection: lowered_collection.operand });
+                    Some(LoweredExpr { operand: IrOperand::Const(IrConst::Bool(true)), current: Some(active) })
+                }
+                "reverse" if call.args.is_empty() => {
+                    let lowered_collection = self.lower_expr(&field.expr, current, blocks, vars);
+                    let active = lowered_collection.current?;
+                    self.block_mut(blocks, active)
+                        .instructions
+                        .push(IrInstruction::CollectionReverse { collection: lowered_collection.operand });
                     Some(LoweredExpr { operand: IrOperand::Const(IrConst::Bool(true)), current: Some(active) })
                 }
                 "contains" if call.args.len() == 1 => {

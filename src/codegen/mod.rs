@@ -1730,6 +1730,9 @@ impl CodeGenerator {
                             }
                         }
                     }
+                    IrInstruction::CollectionReverse { collection: IrOperand::Var(collection) } => {
+                        self.constructed_byte_vectors.remove(&collection.id);
+                    }
                     IrInstruction::CollectionInsert { collection: IrOperand::Var(collection), .. } => {
                         self.constructed_byte_vectors.remove(&collection.id);
                     }
@@ -2149,6 +2152,9 @@ impl CodeGenerator {
             }
             IrInstruction::CollectionClear { collection } => {
                 self.emit_collection_clear(collection)?;
+            }
+            IrInstruction::CollectionReverse { collection } => {
+                self.emit_collection_reverse(collection)?;
             }
             IrInstruction::CollectionContains { dest, collection, value } => {
                 self.emit_collection_contains(dest, collection, value)?;
@@ -5618,6 +5624,9 @@ impl CodeGenerator {
             IrInstruction::CollectionClear { collection } => {
                 self.record_operand(collection, max_var_id);
             }
+            IrInstruction::CollectionReverse { collection } => {
+                self.record_operand(collection, max_var_id);
+            }
             IrInstruction::CollectionContains { dest, collection, value } => {
                 self.record_var(dest, max_var_id);
                 self.record_operand(collection, max_var_id);
@@ -6606,6 +6615,86 @@ impl CodeGenerator {
         self.emit("# cellscript abi: stack collection clear");
         self.emit(format!("ld t4, {}(sp)", collection.id * 8));
         self.emit("sd zero, -8(t4)");
+        true
+    }
+
+    fn emit_collection_reverse(&mut self, collection: &IrOperand) -> Result<()> {
+        self.emit("# collection reverse");
+        self.emit_symbolic_operand_comment("collection", collection);
+        if self.emit_stack_collection_reverse(collection) {
+            return Ok(());
+        }
+        self.emit("# cellscript abi: collection reverse is not available for this collection");
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        Ok(())
+    }
+
+    fn emit_stack_collection_reverse(&mut self, collection: &IrOperand) -> bool {
+        let IrOperand::Var(collection) = collection else {
+            return false;
+        };
+        if !self.stack_collection_vars.contains(&collection.id) {
+            return false;
+        }
+        let Some(element_width) = molecule_vector_element_fixed_width(&collection.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
+        else {
+            return false;
+        };
+        if element_width == 0 || element_width > RUNTIME_COLLECTION_BUFFER_SIZE {
+            return false;
+        }
+
+        self.emit(format!("# cellscript abi: stack collection reverse element_size={}", element_width));
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("ld t0, -8(t4)");
+        let done_label = self.fresh_label("stack_collection_reverse_done");
+        self.emit("li t1, 2");
+        self.emit("sltu t2, t0, t1");
+        self.emit(format!("bnez t2, {}", done_label));
+
+        let left_offset = self.runtime_expr_temp_offset(0).expect("runtime temp slot 0");
+        let right_offset = self.runtime_expr_temp_offset(1).expect("runtime temp slot 1");
+        self.emit_stack_sd("zero", left_offset);
+        self.emit("addi t0, t0, -1");
+        self.emit_stack_sd("t0", right_offset);
+
+        let loop_label = self.fresh_label("stack_collection_reverse_loop");
+        self.emit_label(&loop_label);
+        self.emit_stack_ld("t0", left_offset);
+        self.emit_stack_ld("t1", right_offset);
+        self.emit("sltu t2, t0, t1");
+        self.emit(format!("beqz t2, {}", done_label));
+
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit(format!("li t3, {}", element_width));
+        self.emit("mul t5, t0, t3");
+        self.emit("add t5, t4, t5");
+        self.emit("mul t6, t1, t3");
+        self.emit("add t6, t4, t6");
+        self.emit(format!("# cellscript abi: stack collection reverse swap element_size={}", element_width));
+        for byte_index in 0..element_width {
+            if byte_index <= 2047 {
+                self.emit(format!("lbu t0, {}(t5)", byte_index));
+                self.emit(format!("lbu t1, {}(t6)", byte_index));
+                self.emit(format!("sb t1, {}(t5)", byte_index));
+                self.emit(format!("sb t0, {}(t6)", byte_index));
+            } else {
+                self.emit_large_addi("t2", "t5", byte_index as i64);
+                self.emit_large_addi("t3", "t6", byte_index as i64);
+                self.emit("lbu t0, 0(t2)");
+                self.emit("lbu t1, 0(t3)");
+                self.emit("sb t1, 0(t2)");
+                self.emit("sb t0, 0(t3)");
+            }
+        }
+        self.emit_stack_ld("t0", left_offset);
+        self.emit("addi t0, t0, 1");
+        self.emit_stack_sd("t0", left_offset);
+        self.emit_stack_ld("t1", right_offset);
+        self.emit("addi t1, t1, -1");
+        self.emit_stack_sd("t1", right_offset);
+        self.emit(format!("j {}", loop_label));
+        self.emit_label(&done_label);
         true
     }
 
