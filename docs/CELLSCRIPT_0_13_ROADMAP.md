@@ -111,7 +111,7 @@ CKB/Spora's core is **NOT** account storage or native object packages. It's:
 
 **v0.13 Goal**: **Bounded collection runtime / reusable value-vector layer**, NOT full Rust/Sway-style generics.
 
-> "0.13 引入受限泛型，用来复用 CKB 设计模式，但不把 cell-backed / linear ownership 问题偷偷藏进泛型里。"
+> "0.13 introduces bounded generics to reuse CKB design patterns without hiding cell-backed or linear-ownership constraints inside generic syntax."
 
 **What the current 0.13 branch DOES** (implemented bounded collections):
 
