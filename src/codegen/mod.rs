@@ -1556,6 +1556,14 @@ impl CodeGenerator {
                     {
                         self.prelude_u64_value_sources.insert(dest.id, PreludeU64ValueSource::StackVar(dest.id));
                     }
+                    IrInstruction::CollectionCapacity { dest, collection: IrOperand::Var(collection) }
+                        if dest.ty == IrType::U64
+                            && self.stack_collection_vars.contains(&collection.id)
+                            && molecule_vector_element_fixed_width(&collection.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
+                                .is_some_and(|width| width != 0) =>
+                    {
+                        self.prelude_u64_value_sources.insert(dest.id, PreludeU64ValueSource::StackVar(dest.id));
+                    }
                     IrInstruction::Move { dest, src } if dest.ty == IrType::U64 => {
                         if self.prelude_u64_value_source(src).is_some() {
                             self.prelude_u64_value_sources.insert(dest.id, PreludeU64ValueSource::StackVar(dest.id));
@@ -2149,6 +2157,9 @@ impl CodeGenerator {
             }
             IrInstruction::CollectionNew { dest, ty, capacity } => {
                 self.emit_collection_new(dest, ty, capacity.as_ref())?;
+            }
+            IrInstruction::CollectionCapacity { dest, collection } => {
+                self.emit_collection_capacity(dest, collection)?;
             }
             IrInstruction::CollectionPush { collection, value } => {
                 self.emit_collection_push(collection, value)?;
@@ -5629,6 +5640,10 @@ impl CodeGenerator {
                 self.record_operand(collection, max_var_id);
                 self.record_operand(value, max_var_id);
             }
+            IrInstruction::CollectionCapacity { dest, collection } => {
+                self.record_var(dest, max_var_id);
+                self.record_operand(collection, max_var_id);
+            }
             IrInstruction::CollectionExtend { collection, slice } => {
                 self.record_operand(collection, max_var_id);
                 self.record_operand(slice, max_var_id);
@@ -6436,6 +6451,41 @@ impl CodeGenerator {
         self.stack_collection_vars.insert(dest.id);
         self.next_collection_slot += 1;
         Ok(())
+    }
+
+    fn emit_collection_capacity(&mut self, dest: &IrVar, collection: &IrOperand) -> Result<()> {
+        self.emit("# collection capacity");
+        self.emit_symbolic_operand_comment("collection", collection);
+        if self.emit_stack_collection_capacity(dest, collection) {
+            return Ok(());
+        }
+        self.emit("# cellscript abi: collection capacity is not available for this collection");
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        Ok(())
+    }
+
+    fn emit_stack_collection_capacity(&mut self, dest: &IrVar, collection: &IrOperand) -> bool {
+        if dest.ty != IrType::U64 {
+            return false;
+        }
+        let IrOperand::Var(collection) = collection else {
+            return false;
+        };
+        if !self.stack_collection_vars.contains(&collection.id) {
+            return false;
+        }
+        let Some(element_width) = molecule_vector_element_fixed_width(&collection.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
+        else {
+            return false;
+        };
+        if element_width == 0 {
+            return false;
+        }
+
+        self.emit(format!("# cellscript abi: stack collection capacity element_size={}", element_width));
+        self.emit(format!("li t0, {}", RUNTIME_COLLECTION_BUFFER_SIZE / element_width));
+        self.emit(format!("sd t0, {}(sp)", dest.id * 8));
+        true
     }
 
     fn emit_collection_push(&mut self, collection: &IrOperand, value: &IrOperand) -> Result<()> {

@@ -2182,6 +2182,17 @@ impl<'a> TypeChecker<'a> {
                         self.validate_builtin_arity(&field.field, 0, arg_types, call.span)?;
                         Ok(Type::Bool)
                     }
+                    "capacity" => {
+                        self.validate_builtin_arity("Vec.capacity", 0, arg_types, call.span)?;
+                        match &receiver_ty {
+                            Type::Named(name) if self.parse_named_collection_item_type(name).is_some() => Ok(Type::U64),
+                            Type::Named(name) if name == "Vec" => Err(CompileError::new(
+                                "Vec.capacity requires a typed Vec<T>; push or annotate the Vec before reading capacity",
+                                call.span,
+                            )),
+                            _ => Err(CompileError::new("capacity is only supported on Vec values", call.span)),
+                        }
+                    }
                     "first" | "last" => {
                         self.validate_builtin_arity(&format!("Vec.{}", field.field), 0, arg_types, call.span)?;
                         match &receiver_ty {

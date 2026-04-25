@@ -183,7 +183,7 @@ ResourceCollection
 
 **5. Bounded generic collections**
 Current branch status after the first 0.13 collection-runtime patches:
-- `Vec::new`, `with_capacity`, `push`, `extend_from_slice`, `len`, `first`, `last`, indexing, `remove`, `pop`, `insert`, `reverse`, `truncate`, `swap`, `clear`,
+- `Vec::new`, `with_capacity`, `capacity`, `push`, `extend_from_slice`, `len`, `first`, `last`, indexing, `remove`, `pop`, `insert`, `reverse`, `truncate`, `swap`, `clear`,
   `is_empty`, and `contains` execute for stack-backed value vectors where the
   element width is known (`u64`, fixed bytes, `Address`, `Hash`, and fixed-width
   schema values covered by existing fixed-width machinery).

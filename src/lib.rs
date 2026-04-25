@@ -4014,6 +4014,10 @@ fn collect_instruction_scope(instruction: &ir::IrInstruction, used_types: &mut B
                 collect_operand_named_types(capacity, used_types);
             }
         }
+        ir::IrInstruction::CollectionCapacity { dest, collection } => {
+            collect_ir_type_named_types(&dest.ty, used_types);
+            collect_operand_named_types(collection, used_types);
+        }
         ir::IrInstruction::CollectionPush { collection, value } | ir::IrInstruction::CollectionExtend { collection, slice: value } => {
             collect_operand_named_types(collection, used_types);
             collect_operand_named_types(value, used_types);
@@ -8975,6 +8979,14 @@ fn body_fail_closed_runtime_features(
                         features.insert("collection-new".to_string());
                     }
                 }
+                ir::IrInstruction::CollectionCapacity { collection, .. } => {
+                    if !metadata_stack_collection_capacity_is_runtime_supported(collection, &prelude_availability, type_layouts) {
+                        features.insert("collection-capacity".to_string());
+                    }
+                    if ir_operand_is_cell_backed_collection(collection, cell_type_kinds) {
+                        features.insert("cell-backed-collection-capacity".to_string());
+                    }
+                }
                 ir::IrInstruction::CollectionPush { collection, value } => {
                     if !metadata_collection_push_is_verified_append(collection, value, body, type_layouts)
                         && !metadata_collection_mutation_is_verified_create_vector(
@@ -9488,6 +9500,14 @@ fn metadata_prelude_availability(
                         availability.u64_operand_vars.insert(dest.id);
                     }
                 }
+                ir::IrInstruction::CollectionCapacity { dest, collection } if dest.ty == ir::IrType::U64 => {
+                    if metadata_stack_collection_capacity_is_runtime_supported(collection, &availability, type_layouts) {
+                        availability.scalar_vars.insert(dest.id);
+                        availability.fixed_value_vars.insert(dest.id);
+                        availability.u64_value_vars.insert(dest.id);
+                        availability.u64_operand_vars.insert(dest.id);
+                    }
+                }
                 ir::IrInstruction::CollectionContains { dest, collection, value } if dest.ty == ir::IrType::Bool => {
                     if metadata_stack_collection_contains_is_runtime_supported(collection, value, &availability, type_layouts) {
                         availability.scalar_vars.insert(dest.id);
@@ -9929,6 +9949,18 @@ fn metadata_stack_collection_clear_is_runtime_supported(
         return false;
     };
     availability.stack_collection_vars.contains(&collection.id)
+}
+
+fn metadata_stack_collection_capacity_is_runtime_supported(
+    collection: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
+    let ir::IrOperand::Var(collection) = collection else {
+        return false;
+    };
+    availability.stack_collection_vars.contains(&collection.id)
+        && metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts).is_some_and(|width| width != 0)
 }
 
 fn metadata_stack_collection_reverse_is_runtime_supported(
@@ -14887,6 +14919,26 @@ action stack_vec_with_capacity_sum() -> u64 {
 }
 "#;
 
+    const STACK_VEC_CAPACITY_RUNTIME_PROGRAM: &str = r#"
+module test
+
+action stack_vec_capacity_value() -> u64 {
+    let mut values = Vec::with_capacity(2)
+    values.push(7)
+    return values.capacity()
+}
+"#;
+
+    const FIXED_BYTE_STACK_VEC_CAPACITY_PROGRAM: &str = r#"
+module test
+
+action stack_vec_address_capacity(owner: Address) -> u64 {
+    let mut owners = Vec::with_capacity(2)
+    owners.push(owner)
+    return owners.capacity()
+}
+"#;
+
     const STACK_VEC_REMOVE_RUNTIME_PROGRAM: &str = r#"
 module test
 
@@ -17679,6 +17731,60 @@ action grant(config: read_ref Config, token: Token) -> Grant {
                 && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
                 && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
             "Vec::with_capacity stack runtime should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_scalar_capacity() {
+        let result = compile(STACK_VEC_CAPACITY_RUNTIME_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection capacity element_size=8"),
+            "Vec<u64>.capacity should use the fixed stack collection backing size:\n{}",
+            asm
+        );
+        assert!(asm.contains("li t0, 32"), "Vec<u64>.capacity should report 256 bytes / 8-byte elements:\n{}", asm);
+        assert!(
+            !asm.contains("# cellscript abi: collection capacity is not available for this collection"),
+            "stack-backed Vec<u64>.capacity should not hit fail-closed collection path:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_capacity_value").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-capacity".to_string()),
+            "stack-backed Vec<u64>.capacity should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_fixed_byte_capacity() {
+        let result = compile(FIXED_BYTE_STACK_VEC_CAPACITY_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection capacity element_size=32"),
+            "Vec<Address>.capacity should use the fixed stack collection backing size:\n{}",
+            asm
+        );
+        assert!(asm.contains("li t0, 8"), "Vec<Address>.capacity should report 256 bytes / 32-byte elements:\n{}", asm);
+        assert!(
+            !asm.contains("# cellscript abi: collection capacity is not available for this collection"),
+            "stack-backed Vec<Address>.capacity should not hit fail-closed collection path:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_address_capacity").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-capacity".to_string()),
+            "stack-backed Vec<Address>.capacity should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
     }

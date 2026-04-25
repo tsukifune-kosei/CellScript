@@ -213,6 +213,7 @@ pub enum IrInstruction {
     Length { dest: IrVar, operand: IrOperand },
     TypeHash { dest: IrVar, operand: IrOperand },
     CollectionNew { dest: IrVar, ty: String, capacity: Option<IrOperand> },
+    CollectionCapacity { dest: IrVar, collection: IrOperand },
     CollectionPush { collection: IrOperand, value: IrOperand },
     CollectionExtend { collection: IrOperand, slice: IrOperand },
     CollectionClear { collection: IrOperand },
@@ -2982,6 +2983,15 @@ impl IrGenerator {
                         left: IrOperand::Var(len_dest),
                         right: IrOperand::Const(IrConst::U64(0)),
                     });
+                    Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
+                }
+                "capacity" if call.args.is_empty() => {
+                    let lowered_collection = self.lower_expr(&field.expr, current, blocks, vars);
+                    let active = lowered_collection.current?;
+                    let dest = self.new_var("capacity_tmp", IrType::U64);
+                    self.block_mut(blocks, active)
+                        .instructions
+                        .push(IrInstruction::CollectionCapacity { dest: dest.clone(), collection: lowered_collection.operand });
                     Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
                 }
                 "first" if call.args.is_empty() => {
