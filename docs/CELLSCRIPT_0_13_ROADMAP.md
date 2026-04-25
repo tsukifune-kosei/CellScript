@@ -2,7 +2,7 @@
 
 **Date**: 2026-04-24  
 **Status**: Draft (Pending Team Review)  
-**Scope**: Zero-cost Abstractions, Collections Generics, CLI Ergonomics, CKB Blake2b Boundary Clarification  
+**Scope**: Zero-cost Abstractions, Bounded Collection Runtime Gaps, CLI Ergonomics
 **Dependencies**: v0.12 released (dual-chain production closure)
 
 ---
@@ -33,7 +33,7 @@ From "can run" to "runs well", from "feature-complete" to "excellent UX".
 
 1. **Zero-Cost Abstractions** - Eliminate known runtime overhead (30-40% perf improvement)
 2. **Collections Generics** - Unlock complex protocol development (AMM/Registry/OrderBook)
-3. **Developer Experience** - CLI ergonomics, diagnostic presentation, DSL features, and CKB Blake2b boundary clarity
+3. **Developer Experience** - CLI ergonomics, diagnostic presentation, and DSL features
 
 ---
 
@@ -182,7 +182,16 @@ ResourceCollection
 ---
 
 **5. Bounded generic collections**
-Allowed in 0.13:
+Current branch status after the first 0.13 collection-runtime patches:
+- `Vec::new`, `push`, `extend_from_slice`, `len`, indexing, `clear`,
+  `is_empty`, and `contains` execute for stack-backed value vectors where the
+  element width is known (`u64`, fixed bytes, `Address`, `Hash`, and fixed-width
+  schema values covered by existing fixed-width machinery).
+- `Vec<Address>` / `Vec<Hash>` Molecule dynamic fields and entry-witness payloads
+  are v0.12 foundations, not new v0.13 scope.
+- Cell-backed / linear collection ownership remains explicit and fail-closed.
+
+Allowed as v0.13 bounded follow-up work:
 ```cellscript
 Vec<T: FixedWidth>
 Option<T: FixedWidth>
@@ -608,7 +617,7 @@ with_default_hash_type(Data1)
 
 | Feature | v0.12 | v0.13 |
 |---------|-------|-------|
-| Collections Generics | 🟡 Schema/ABI vectors supported; runtime helpers bounded | ✅ Generic runtime helpers plus explicit ownership model |
+| Collections Runtime / Bounded Generics | 🟡 Schema/ABI vectors supported; runtime helpers bounded | 🟡 Stack-backed value Vec helpers are being implemented; broader bounded generics remain explicit, metadata-visible follow-up work |
 | Error Code Docs | ✅ Registry only | ✅ CLI + docs |
 | Hash Type Visibility | 🟡 Manifest only | ✅ DSL declarative |
 | Deserialization Overhead | ❌ Runtime compute | ✅ Compile-time specialize |
@@ -718,7 +727,7 @@ cargo run -p cellscript -- build examples/*.cell --target-profile ckb
 # Check ELF sizes
 ls -lh examples/*.elf
 
-# Test BLAKE2b
+# Verify existing CKB hash helper (not mandatory v0.13 on-chain scope)
 cargo run -p cellscript -- ckb-hash --hex 00
 ```
 
