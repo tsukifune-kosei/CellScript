@@ -1,7 +1,6 @@
 # CellScript Roadmap: v0.12 → v0.16
 > From Production Foundation to Formal Assurance
 
-**Date**: 2026-04-25
 **Status**: Living Document
 **Audience**: CKB Smart Contract Developers
 
@@ -82,14 +81,15 @@ mutate pool { reserve_a: pool.reserve_a + delta }   // atomic in-place update
 
 **Theme**: Write less code, generate faster contracts.
 
-### 3.1 Bounded Generics for Collections (P0, 7-10 days)
+### 3.1 Bounded Value-Vector Helpers (P0)
 
-- `Vec<Address>`, `Vec<Hash>`, `Vec<u64>` and other fixed-width element vectors
-- Unlocks complex protocol development: registries, order books, whitelists
+- Stack-backed `Vec<Address>`, `Vec<Hash>`, `Vec<u64>` and other fixed-width value-vector helpers
+- Helps simple registries, whitelists, fixed membership sets, and AMM helper patterns
+- Proof-backed maps, order books, and cell-backed collection ownership remain explicit future work
 - Compile-time monomorphization with zero runtime overhead
 - Value-level generics only — linear/cell-backed ownership remains explicit and fail-closed
 
-### 3.2 Zero-Cost Abstractions (P0, 8-12 days)
+### 3.2 Zero-Cost Abstractions (P0)
 
 | Optimization | Expected Improvement |
 |-------------|---------------------|
@@ -100,7 +100,7 @@ mutate pool { reserve_a: pool.reserve_a + delta }   // atomic in-place update
 
 Target: `token.elf` 15 KB → 12 KB; AMM `swap` cycles −30%.
 
-### 3.3 CLI Ergonomics (P0, 5-7 days)
+### 3.3 CLI Ergonomics (P0)
 
 - `cellc new` — project scaffolding (Cargo-compatible workflow)
 - `cellc build` — default O1 optimization
@@ -113,7 +113,7 @@ Target: `token.elf` 15 KB → 12 KB; AMM `swap` cycles −30%.
 
 **Theme**: Expose CKB's full execution surface before redesigning higher-level primitives.
 
-### 4.1 Spawn/IPC Script Composition (P0, 7-10 days)
+### 4.1 Spawn/IPC Script Composition (P0)
 
 ```cellscript
 // Delegate verification: Lock Script spawns a child verifier
@@ -136,7 +136,7 @@ action multi_step_verify(data: VerifyData) {
 - Type-safe inter-process communication
 - Compile-time cycle budget static analysis
 
-### 4.2 Structured WitnessArgs & Source Views (P0, 7-8 days)
+### 4.2 Structured WitnessArgs & Source Views (P0)
 
 ```cellscript
 lock standard_lock {
@@ -155,7 +155,7 @@ lock standard_lock {
 - Dual source views: full Transaction view vs ScriptGroup view
 - `SOURCE_GROUP_INPUT` / `SOURCE_GROUP_OUTPUT` compile-time switching
 
-### 4.3 CKB Transaction Shape & ScriptGroup Consistency (P0, 6-8 days)
+### 4.3 CKB Transaction Shape & ScriptGroup Consistency (P0)
 
 - ScriptGroup metadata for lock/type entries
 - `outputs[i]` ↔ `outputs_data[i]` binding obligations
@@ -163,14 +163,14 @@ lock standard_lock {
 - TYPE_ID metadata validation MVP: output index, first-input args source, group cardinality, duplicate/missing-plan rejection
 - Explicit boundary: no v0.15 identity lifecycle redesign in v0.14
 
-### 4.4 Script Reference & HashType Strictness (P1, 3-4 days)
+### 4.4 Script Reference & HashType Strictness (P1)
 
 - CKB script reference metadata: `code_hash`, `hash_type`, `args`, dep source, resolved profile
 - CKB profile rejects unsupported or profile-incompatible hash types
 - Every script reference used by spawn, lock/type metadata, or `read_ref` must link to a CellDep/DepGroup path
 - Audit output includes a script reference table
 
-### 4.5 Declarative Capacity Syntax (P1, 3-4 days)
+### 4.5 Declarative Capacity Syntax (P1)
 
 ```cellscript
 @capacity_floor(61_00000000)  // minimum 61 CKB (in Shannons)
@@ -186,7 +186,7 @@ action transfer_with_fee(token: Token, fee: u64) {
 }
 ```
 
-### 4.6 Declarative Time Constraints (P1, 4-5 days)
+### 4.6 Declarative Time Constraints (P1)
 
 ```cellscript
 action claim_after_timeout(htlc: HtlcReceipt) {
@@ -196,7 +196,7 @@ action claim_after_timeout(htlc: HtlcReceipt) {
 }
 ```
 
-### 4.7 Conditional hash_blake2b() Support (P1, 1-5 days)
+### 4.7 Conditional hash_blake2b() Support (P1)
 
 > **Note:** `hash_blake2b()` will be provided conditionally — only when a concrete v0.14 contract requires CKB-native BLAKE2B hashing and passes the production gate. Otherwise, the compiler will emit a profile-level diagnostic and reject on-chain usage.
 
@@ -439,19 +439,11 @@ v0.16 can ship stable stdlib modules only when they are backed by compatibility 
 
 ---
 
-## 7. Timeline Summary
+## 7. Delivery Cadence
 
-| Milestone | Target | Key Deliverable |
-|-----------|--------|-----------------|
-| v0.12.0 (Released) | 2026 Q1 | Production-ready compiler, 7 example contracts |
-| v0.13.0-alpha | 2026 Q2 | Bounded generics, deserialization specialization |
-| v0.13.0 | 2026 Q3 | Full zero-cost abstractions, CLI ergonomics |
-| v0.14.0-alpha | 2026 Q3 | Spawn/IPC, WitnessArgs, ScriptGroup, transaction-shape conformance |
-| v0.14.0 | 2026 Q4 | Capacity syntax, time constraints, script references, TYPE_ID metadata validation MVP |
-| v0.15.0-alpha | 2027 Q1 | First-class script semantics, scoped invariants, Covenant ProofPlan |
-| v0.15.0 | 2027 Q2 | Protocol macro lowering, identity lifecycle, destroy policies, covenant diagnostics |
-| v0.16.0-alpha | 2027 Q3 | Formal semantics, ProofPlan soundness checker, compatibility fixtures |
-| v0.16.0 | 2027 Q4 | Transaction solver, deployment governance, audit bundle, stable stdlib release track |
+The grant proposal is the authoritative schedule. This roadmap overview defines
+scope, dependencies, and release gates only; it intentionally avoids separate
+dates, quarters, week counts, and effort estimates.
 
 ---
 
@@ -459,7 +451,7 @@ v0.16 can ship stable stdlib modules only when they are backed by compatibility 
 
 **Today (v0.12)**: You can write safe CKB contracts in CellScript right now. The compiler prevents double-spend at compile time, records capacity evidence, and generates optimized RISC-V ELF binaries. Seven example contracts cover token, AMM, vesting, timelock, multisig, NFT, and launch patterns.
 
-**Soon (v0.13)**: Your contracts will be smaller and faster. Generic collection types unlock complex protocols like registries and order books. CLI improvements make daily development smoother.
+**Soon (v0.13)**: Your contracts will be smaller and faster. Bounded value-vector helpers make whitelists, fixed membership sets, simple registries, and AMM helper code easier to write. Proof-backed maps and order books stay explicit future work instead of being hidden inside generic collection syntax.
 
 **Next (v0.14)**: CellScript will cover CKB's complete execution surface. Spawn/IPC lets you compose multiple verification scripts. WitnessArgs, Source views, ScriptGroup, outputs_data binding, TYPE_ID metadata validation, script references, Capacity, and time constraints become explicit and testable.
 
@@ -506,5 +498,4 @@ v0.16 can ship stable stdlib modules only when they are backed by compatibility 
 ---
 
 *Document End.*
-*Date: 2026-04-25*
 *Status: Living Document*

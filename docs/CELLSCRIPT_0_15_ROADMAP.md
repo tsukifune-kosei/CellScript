@@ -1,6 +1,5 @@
 # CellScript v0.15 Roadmap
 
-**Date**: 2026-04-25
 **Status**: Draft
 **Scope**: Scoped Invariants and Covenant ProofPlan
 **Dependencies**: v0.13 and v0.14 complete

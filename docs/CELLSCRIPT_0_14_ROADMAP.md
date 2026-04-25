@@ -1,9 +1,8 @@
 # CellScript v0.14 Roadmap
 
-**Date**: 2026-04-25
 **Status**: Draft (Pending Team Review)
 **Scope**: CKB Semantic Completeness, Source/Witness Ergonomics, and Script Composability
-**Dependencies**: v0.13 released (bounded generics, zero-cost abstractions, CLI ergonomics)
+**Dependencies**: v0.13 released (bounded value-vector helpers, zero-cost abstractions, CLI ergonomics)
 
 ---
 
@@ -14,7 +13,7 @@
 CellScript's evolution follows a deliberate maturity curve:
 
 - **v0.12** — Production closure: proved CellScript can run on both Spora and CKB chains (43/43 actions, 7/7 examples, entry witness ABI, mutate replacement outputs, low-level time helpers, dep cell reads).
-- **v0.13** — Performance and expressiveness: bounded generics, zero-cost abstractions (deserialization specialization, inlining, DCE, const propagation), CLI ergonomics.
+- **v0.13** — Performance and expressiveness: bounded value-vector helpers, zero-cost abstractions (deserialization specialization, inlining, DCE, const propagation), CLI ergonomics.
 - **v0.14** — CKB semantic completeness and composability: structured `WitnessArgs`, profile-aware `since`/epoch time constraints, explicit Source views, ScriptGroup/transaction-shape conformance, script-to-script composition via Spawn/IPC, formalized cross-chain profiles, declarative capacity syntax, and WASM simulation backend.
 
 v0.14 closes the remaining DSL-level semantic gaps between CKB/Spora VM reality and CellScript source code: CKB witness structure, CKB epoch-based `since`, Source transaction/group views, ScriptGroup/outputs_data conformance, TYPE_ID metadata validation MVP, and Spawn/IPC. It should not re-plan v0.13 bounded generics, repeat v0.12 production evidence, or start the v0.15 primitive-kernel reset.
@@ -42,15 +41,14 @@ The following capabilities are already delivered and will not be re-planned:
 
 ### v0.13 Deliverables (Performance + Expressiveness)
 
-- ✅ Bounded generics: `Vec<T: FixedWidth>`, `Option<T: FixedWidth>`, phantom asset tags
-- ✅ Generic interfaces/templates: `interface FungibleToken<Asset>`
-- ✅ Trait constraints: FixedWidth, Hashable, MoleculeSchema, NonLinear
-- ✅ Inspectable monomorphization (`cellc explain-generics`)
-- ✅ Deserialization code specialization (20-30% instruction reduction)
-- ✅ Function inlining (core library math_*)
+- ✅ Stack-backed fixed-width value-vector helpers for checked `Vec<T>` paths
+- ✅ Metadata and `cellc explain-generics` for concrete checked vector instantiations
+- ✅ Deserialization code specialization
+- ✅ Function inlining for safe pure helpers
 - ✅ Dead code elimination + constant propagation
 - ✅ CLI: `cellc new`, `build` default O1, error codes with `cellc explain`
 - ✅ Hash type DSL exposure (`with_default_hash_type`)
+- ✅ Clear fail-closed boundary for `Option<T>`, phantom asset tags, generic interfaces/templates, full maps, and cell-backed collection ownership
 
 ---
 
@@ -107,9 +105,8 @@ action multi_step_verify(data: VerifyData) {
 - File descriptor lifetime tracking: compiler warns on leaked fds
 - Spawn target resolution: must reference a known script (dep cell or inline)
 
-**Effort**: 7-10 days
 **Risk**: **MEDIUM** — Syscalls are stable; complexity is in DSL ergonomics and fd tracking
-**Depends on**: v0.13 generics (for typed spawn arguments)
+**Depends on**: v0.13 fixed-width value metadata for typed spawn arguments
 
 ---
 
@@ -140,15 +137,14 @@ action prove_type_transition(state: &mut State) {
 
 **Implementation Items**:
 
-| Item | Details | Days |
-|------|---------|-----:|
-| `source::*` DSL | `input(n)`, `output(n)`, `cell_dep(n)`, `header_dep(n)`, `group_input(n)`, `group_output(n)` with profile-correct encoding | 1 |
-| `witness::*` DSL | `raw<T>`, `lock<T>`, `input_type<T>`, `output_type<T>` with CKB Molecule `WitnessArgs` decoding | 3 |
-| Metadata exposure | Emit runtime access records with witness field, source view, index, ABI, and expected byte bounds | 1 |
-| Profile gates | CKB profile requires `WitnessArgs` decoding for structured fields; Spora profile keeps raw/entry witness ABI unless an explicit compatibility mode is selected | 1 |
-| Tests | Secp256k1-style lock fixture, type-script input/output witness fixture, source view mismatch tests | 2 |
+| Item | Details |
+|------|---------|
+| `source::*` DSL | `input(n)`, `output(n)`, `cell_dep(n)`, `header_dep(n)`, `group_input(n)`, `group_output(n)` with profile-correct encoding |
+| `witness::*` DSL | `raw<T>`, `lock<T>`, `input_type<T>`, `output_type<T>` with CKB Molecule `WitnessArgs` decoding |
+| Metadata exposure | Emit runtime access records with witness field, source view, index, ABI, and expected byte bounds |
+| Profile gates | CKB profile requires `WitnessArgs` decoding for structured fields; Spora profile keeps raw/entry witness ABI unless an explicit compatibility mode is selected |
+| Tests | Secp256k1-style lock fixture, type-script input/output witness fixture, source view mismatch tests |
 
-**Effort**: 7-8 days
 **Risk**: **HIGH** — This changes author-facing authentication/proof semantics and must fail closed
 **Depends on**: Cross-chain Profile Formalization (#3)
 
@@ -175,27 +171,26 @@ action prove_type_transition(state: &mut State) {
 
 **Implementation Items**:
 
-**3a. TargetProfile Enum Specification** (1 day)
+**3a. TargetProfile Enum Specification**
 - Formalize `TargetProfile::Spora`, `TargetProfile::Ckb`, `TargetProfile::PortableCell` with complete semantic contracts
 - Document which builtins, syscalls, and constraints each profile enables
 - Publish as `docs/wiki/CELLSCRIPT_TARGET_PROFILES.md`
 
-**3b. Profile-gated hash policy** (1 day)
+**3b. Profile-gated hash policy**
 - Keep existing hash-domain metadata explicit; do not silently make portable code depend on different hash algorithms.
 - Add `hash_chain(data)` only for code that intentionally wants the active profile's canonical data hash.
 - Keep explicit variants (`hash_blake3`, `hash_blake2b`) profile-gated by linked implementation availability.
 
-**3c. Dynamic CKB BLAKE2b implementation decision** (1 day design gate)
+**3c. Dynamic CKB BLAKE2b implementation decision**
 - v0.13 scoped BLAKE2b to builder/release tooling, not a guaranteed in-script stdlib.
 - v0.14 must decide whether any bundled v0.14 example truly needs dynamic in-script BLAKE2b.
 - If yes, promote the real RISC-V implementation to P1 with test vectors and cycle limits; if no, defer it and reject `hash_blake2b()` in on-chain code with a precise diagnostic.
 
-**3d. Cross-chain Script Mapping Registry Design** (1-2 days)
+**3d. Cross-chain Script Mapping Registry Design**
 - Standard scripts (secp256k1, multisig, etc.) have different `code_hash` values on Spora vs CKB
 - Design a registry format: `scripts.toml` mapping `(script_name, profile) → code_hash`
 - Compiler resolves spawn targets and dep cell references through this registry
 
-**Effort**: 4-6 days
 **Risk**: **LOW** — Formalizing existing implicit behavior
 **Depends on**: None
 
@@ -213,17 +208,16 @@ action prove_type_transition(state: &mut State) {
 
 **Implementation Items**:
 
-| Item | Details | Days |
-|------|---------|-----:|
-| ScriptGroup metadata | Emit `entry_group_kind`, input/output group index sets, selected Source view, and source-to-group mapping for every CKB entry | 1 |
-| Source conformance tests | Cover `Input`, `Output`, `CellDep`, `HeaderDep`, `GroupInput`, `GroupOutput`, out-of-bounds access, and wrong-profile access | 2 |
-| Output data binding | Emit output-data index obligations for every create/mutate output; reject metadata where output data is detached from the output cell index | 1 |
-| TYPE_ID metadata validation MVP | For `#[type_id]` under CKB profile, validate output index, first-input args source, one-input/one-output group rule, duplicate output rejection, and missing-plan rejection | 2 |
-| Acceptance fixtures | Add positive/negative fixture transactions for ScriptGroup views, outputs_data mismatch, and TYPE_ID create/continue failure cases | 2 |
+| Item | Details |
+|------|---------|
+| ScriptGroup metadata | Emit `entry_group_kind`, input/output group index sets, selected Source view, and source-to-group mapping for every CKB entry |
+| Source conformance tests | Cover `Input`, `Output`, `CellDep`, `HeaderDep`, `GroupInput`, `GroupOutput`, out-of-bounds access, and wrong-profile access |
+| Output data binding | Emit output-data index obligations for every create/mutate output; reject metadata where output data is detached from the output cell index |
+| TYPE_ID metadata validation MVP | For `#[type_id]` under CKB profile, validate output index, first-input args source, one-input/one-output group rule, duplicate output rejection, and missing-plan rejection |
+| Acceptance fixtures | Add positive/negative fixture transactions for ScriptGroup views, outputs_data mismatch, and TYPE_ID create/continue failure cases |
 
 **Boundary**: This is not the v0.15 identity lifecycle redesign. v0.14 validates CKB transaction-shape facts and existing TYPE_ID metadata plans. It does not add new identity primitives, destruction policies, or protocol macro lowering.
 
-**Effort**: 6-8 days
 **Risk**: **HIGH** — Mis-modeling ScriptGroup or TYPE_ID behavior creates false confidence in CKB strict mode
 **Depends on**: Structured CKB WitnessArgs and Source Views (#2), Cross-chain Profile Formalization (#3)
 
@@ -258,14 +252,13 @@ action transfer_with_fee(token: Token, fee: u64) {
 
 **Implementation Items**:
 
-| Item | Details | Days |
-|------|---------|------|
-| `@capacity_floor(...)` annotation | Parser + AST attribute node + validation; support explicit shannons and compiler-computed floors | 1 |
-| `occupied_capacity(T)` const fn | Compile-time constant: field sizes + overhead | 0.5 |
-| Capacity floor check insertion | Compiler auto-inserts `assert(capacity >= floor)` on every `create` | 1 |
-| Builder integration | Auto change-output generation when excess capacity exists | 1 |
+| Item | Details |
+|------|---------|
+| `@capacity_floor(...)` annotation | Parser + AST attribute node + validation; support explicit shannons and compiler-computed floors |
+| `occupied_capacity(T)` const fn | Compile-time constant: field sizes + overhead |
+| Capacity floor check insertion | Compiler auto-inserts `assert(capacity >= floor)` on every `create` |
+| Builder integration | Auto change-output generation when excess capacity exists |
 
-**Effort**: 3-4 days
 **Risk**: **LOW** — Additive syntax, no breaking changes
 **Depends on**: Transaction Builder Integration (#10) for full change-output automation; standalone static checks can land earlier
 
@@ -303,7 +296,6 @@ action claim_after_timeout(htlc: HtlcReceipt) {
 - Compiler static check: `require_time` / `require_maturity` / `require_epoch` must appear at action entry (before state mutations)
 - Coexistence: `ckb::input_since()` low-level API remains available (not removed)
 
-**Effort**: 4-5 days
 **Risk**: **MEDIUM** — CKB epoch since semantics must match consensus exactly
 **Depends on**: Cross-chain Profile Formalization (#3)
 
@@ -311,13 +303,12 @@ action claim_after_timeout(htlc: HtlcReceipt) {
 
 #### 7. Conditional `hash_blake2b()` Stdlib 🟡
 
-> Tracked as part of Cross-chain Profile Formalization (#3c) but listed separately for effort accounting if promoted.
+> Tracked as part of Cross-chain Profile Formalization (#3c) and promoted only when a concrete compatibility target requires it.
 
 - Add `hash_blake2b()` to stdlib only if a v0.14 bundled example or CKB compatibility target requires dynamic in-script BLAKE2b.
 - Must link a real RISC-V BLAKE2b implementation; stubs are forbidden.
 - Must pass production gates: known test vectors, cycle reporting, and CKB profile fail-closed behavior when unavailable.
 
-**Effort**: 3-5 days if promoted; 1 day for diagnostic/profile-gate only
 **Risk**: **MEDIUM**
 **Depends on**: Cross-chain Profile Formalization (#3)
 
@@ -329,16 +320,15 @@ action claim_after_timeout(htlc: HtlcReceipt) {
 
 **Implementation Items**:
 
-| Item | Details | Days |
-|------|---------|-----:|
-| Script reference metadata | Emit `code_hash`, `hash_type`, `args`, dep source, and resolved profile for lock/type/spawn targets | 1 |
-| HashType validation | Accept only CKB-supported hash types under CKB profile; reject unknown or profile-incompatible values | 1 |
-| Dep-cell linkage checks | Verify every script reference used by `spawn`, lock/type metadata, or `read_ref` has a resolvable CellDep/DepGroup path | 1 |
-| Audit output | Include script reference table in generated audit docs and metadata validation errors | 1 |
+| Item | Details |
+|------|---------|
+| Script reference metadata | Emit `code_hash`, `hash_type`, `args`, dep source, and resolved profile for lock/type/spawn targets |
+| HashType validation | Accept only CKB-supported hash types under CKB profile; reject unknown or profile-incompatible values |
+| Dep-cell linkage checks | Verify every script reference used by `spawn`, lock/type metadata, or `read_ref` has a resolvable CellDep/DepGroup path |
+| Audit output | Include script reference table in generated audit docs and metadata validation errors |
 
 **Boundary**: This does not split `Address`, `LockScript`, and `LockHash` in the type system. That is v0.15. v0.14 only makes CKB artifact references precise and auditable.
 
-**Effort**: 3-4 days
 **Risk**: **MEDIUM** — Incorrect hash_type or dep linkage can produce artifacts that look valid but cannot execute on CKB
 **Depends on**: Cross-chain Profile Formalization (#3), Advanced CellDep Patterns (#11) for full DepGroup coverage
 
@@ -359,7 +349,6 @@ action claim_after_timeout(htlc: HtlcReceipt) {
 - Browser test harness: load compiled WASM, inject mock cells/witnesses, run actions
 - Integration with existing `wasm/` SDK package
 
-**Effort**: 5-8 days
 **Risk**: **MEDIUM** — Syscall shimming complexity
 **Depends on**: Spawn/IPC DSL (#1)
 
@@ -376,7 +365,6 @@ action claim_after_timeout(htlc: HtlcReceipt) {
 - Builder auto-capacity planning: compute minimum capacity per output from type layout
 - CellDep auto-resolution: resolve script references to dep cells from registry
 
-**Effort**: 5-8 days
 **Risk**: **HIGH** — Transaction builder correctness is critical
 **Depends on**: Declarative Capacity Syntax (#5)
 
@@ -391,7 +379,6 @@ action claim_after_timeout(htlc: HtlcReceipt) {
 - Multi-module CellDep dependency graph: compiler resolves transitive deps
 - Shared code cell version locking: pin dep cell `out_point` in manifest
 
-**Effort**: 2-3 days
 **Risk**: **LOW**
 **Depends on**: None
 
@@ -409,67 +396,6 @@ v0.14 introduces Spawn/IPC and profile formalization at the DSL layer. Periphera
 | **Standard Scripts** | `exec/src/scripts/` | Add spawn composition example scripts: delegate verifier, multi-step pipeline |
 | **CLI** | `cli/` | v0.13 covered CLI enhancements. v0.14 adds `cellc spawn-test` for local spawn simulation |
 | **CI** | `.github/workflows/` | Mandatory dual-profile testing for all new features |
-
----
-
-## 📊 Timeline and Effort Estimates
-
-### Summary Table
-
-| Priority | Feature | Days | Dependencies |
-|----------|---------|-----:|--------------|
-| P0 | Spawn/IPC DSL | 7-10 | v0.13 generics (for typed spawn args) |
-| P0 | Structured CKB WitnessArgs + Source Views | 7-8 | Cross-chain Profile (#3) |
-| P0 | Cross-chain Profile Formalization | 4-6 | None |
-| P0 | CKB Transaction Shape + ScriptGroup Conformance | 6-8 | WitnessArgs/Source (#2), Cross-chain Profile (#3) |
-| P1 | Declarative Capacity Syntax | 3-4 | Tx Builder Integration (#10) for full automation |
-| P1 | Declarative Time/Since Constraints | 4-5 | Cross-chain Profile (#3) |
-| P1 | Conditional `hash_blake2b()` stdlib | 1-5 | Cross-chain Profile (#3) |
-| P1 | Script Reference + HashType Strictness | 3-4 | Cross-chain Profile (#3), Advanced CellDep (#11) |
-| P2 | WASM Script Backend | 5-8 | Spawn/IPC DSL (#1) |
-| P2 | Tx Builder Integration | 5-8 | Capacity Syntax (#5) |
-| P2 | Advanced CellDep | 2-3 | None |
-| **Total P0** | | **24-32** | |
-| **Total P0+P1** | | **35-50** | |
-| **Total All** | | **47-69** | |
-
-### Phased Timeline
-
-#### Phase 1: P0 Core (5-6 weeks)
-
-| Week | Task | Deliverable |
-|------|------|-------------|
-| W1-2 | Spawn/IPC DSL: lexer + AST + type checker | `spawn`, `pipe`, `wait`, fd lifecycle parse and type-check |
-| W2-3 | Spawn/IPC DSL: IR + codegen + safety constraints | End-to-end spawn compilation to syscalls 2601-2608 |
-| W3 | Cross-chain Profile baseline | TargetProfile semantics, Source encoding contract, time/hash policy baseline |
-| W3-4 | WitnessArgs + Source DSL | `witness::lock/input_type/output_type`, `source::group_input` etc. compile and fail closed |
-| W4-5 | CKB transaction shape conformance | ScriptGroup metadata, outputs_data binding, TYPE_ID metadata validation fixtures |
-| W5-6 | Cross-chain Profile registry + gates | Script registry, BLAKE2b decision gate, and profile docs published |
-
-**Milestone**: v0.14.0-alpha1 (Spawn/IPC, WitnessArgs, transaction-shape conformance, and profiles usable)
-
-#### Phase 2: P1 Enhancement (4-5 weeks)
-
-| Week | Task | Deliverable |
-|------|------|-------------|
-| W7 | Declarative Capacity Syntax | `@capacity_floor`, `occupied_capacity(T)`, static floor checks |
-| W7-8 | Declarative Time/Since Constraints | `require_maturity`, `require_time`, `require_epoch`, profile-gated lowering |
-| W8 | BLAKE2b decision gate | Either real `hash_blake2b()` with vectors/cycles or precise fail-closed diagnostic |
-| W8-9 | Script Reference + HashType Strictness | CKB script reference table, hash_type validation, dep linkage checks |
-| W9 | Spawn/Witness/Time/Shape examples + dual-profile CI | 5+ semantic-completeness examples, dual-profile green |
-
-**Milestone**: v0.14.0-beta1 (All P0+P1 features complete)
-
-#### Phase 3: P2 + Stabilization (3-4 weeks)
-
-| Week | Task | Deliverable |
-|------|------|-------------|
-| W10-11 | WASM Script Backend | Browser-side simulation working |
-| W11-12 | Tx Builder Integration | `cellc build --emit-builder-template` with capacity planning |
-| W12-13 | Advanced CellDep + peripheral sync | DepGroup, version locking, SDK/wallet updates |
-| W13-14 | Regression + documentation + release | All examples updated, CHANGELOG, release |
-
-**Milestone**: v0.14.0-rc1 → **v0.14.0 Release**
 
 ---
 
@@ -498,8 +424,10 @@ v0.14 introduces Spawn/IPC and profile formalization at the DSL layer. Periphera
 
 All features introduced in v0.14 must pass CI under both profiles:
 ```bash
-cellc build examples/*.cell --target-profile spora   # All pass
-cellc build examples/*.cell --target-profile ckb      # All pass
+for file in examples/*.cell; do
+    cellc "$file" --target-profile spora
+    cellc "$file" --target-profile ckb
+done
 ```
 
 ---
@@ -642,11 +570,11 @@ v0.14 **extends** the dual-chain production plan:
 # Run all CellScript tests
 cargo test -p cellscript -- --test-threads=1
 
-# Compile all examples (Spora profile)
-cargo run -p cellscript -- build examples/*.cell --target-profile spora
-
-# Compile all examples (CKB profile)
-cargo run -p cellscript -- build examples/*.cell --target-profile ckb
+# Compile all examples through the top-level file workflow
+for file in examples/*.cell; do
+    cargo run -p cellscript -- "$file" --target-profile spora
+    cargo run -p cellscript -- "$file" --target-profile ckb
+done
 
 # Test spawn simulation locally
 cargo run -p cellscript -- spawn-test examples/delegate_verify.cell
@@ -668,22 +596,6 @@ cargo run -p cellscript -- explain-profile ckb
 | `capacity_aware_token.cell` | Token with capacity floor annotation | `@capacity_floor`, `occupied_capacity(T)` |
 | `cross_chain_htlc.cell` | HTLC with profile-gated time constraints | `require_maturity`, `require_time`, `require_epoch`, dual-profile |
 | `script_reference_manifest.cell` | Script reference table and dep linkage | `code_hash`, `hash_type`, `args`, CellDep/DepGroup linkage |
-
----
-
-## 📅 Key Dates
-
-| Date | Event |
-|------|-------|
-| 2026-04-25 | v0.14 roadmap draft |
-| 2026-05-01 | Team review + priority adjustment |
-| 2026-06-28 | v0.13.0 released (prerequisite) |
-| 2026-08-07 | v0.14.0-alpha1 (Spawn/IPC + WitnessArgs + transaction shape + profiles) |
-| 2026-09-04 | v0.14.0-beta1 (All P0+P1 complete) |
-| 2026-10-02 | v0.14.0-rc1 (Feature freeze) |
-| **2026-10-09** | **v0.14.0 Official Release** |
-
-**Note**: Dates assume v0.13.0 ships on schedule (~2026-06-28). Slip in v0.13 delays v0.14 proportionally.
 
 ---
 
@@ -713,6 +625,5 @@ v0.14 delivers:
 ---
 
 *Document End.*
-*Date: 2026-04-25*
 *Status: Draft (Pending Team Review)*
 *Prerequisites*: CELLSCRIPT_0_13_ROADMAP.md, CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md

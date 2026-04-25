@@ -1,6 +1,5 @@
 # CellScript v0.13 Roadmap
 
-**Date**: 2026-04-24  
 **Status**: Release-gate draft (review findings integrated)
 **Scope**: Zero-cost Abstractions, Bounded Collection Runtime Gaps, CLI Ergonomics
 **Dependencies**: v0.12 released (dual-chain production closure)
@@ -137,35 +136,7 @@ instantiations with element width, backing capacity, helper set, and status.
 
 ---
 
-**2. Phantom-style asset tags** (Move-inspired, CKB-native)
-```cellscript
-resource Token<phantom Asset>
-```
-Use cases:
-```cellscript
-Token<USDI>
-Token<MyDAO>
-Token<LPToken>
-```
-Benefits:
-- Helps UDT / xUDT / custom asset patterns
-- Does NOT require generic runtime collections fully working
-
----
-
-**3. Generic interfaces / templates** (most valuable for 0.13)
-```cellscript
-interface FungibleToken<Asset>
-interface Pool<TokenA, TokenB>
-interface Timelock<Asset>
-```
-Benefits:
-- Directly serves cookbooks / AI-assisted workflows / reusable CKB patterns
-- More valuable than generic functions
-
----
-
-**4. Minimal trait constraint vocabulary**
+**2. Minimal constraint vocabulary for metadata and future syntax**
 
 **Design vocabulary used to bound future generic syntax** (not a general
 source-level trait system in this branch):
@@ -189,7 +160,7 @@ ResourceCollection
 
 ---
 
-**5. Bounded generic collections**
+**3. Bounded value-vector helpers**
 Current branch status after the first 0.13 collection-runtime patches:
 - `Vec::new`, `with_capacity`, `capacity`, `push`, `extend_from_slice`, `len`, `first`, `last`, indexing, `set`, `remove`, `pop`, `insert`, `reverse`, `truncate`, `swap`, `clear`,
   `is_empty`, and `contains` execute for stack-backed value vectors where the
@@ -299,7 +270,6 @@ This aligns with AI-assisted workflows / cookbooks: AI needs **bounded cookbook 
 - ❌ Cannot return or mutate `Vec<Resource>` without a linear collection ownership model
 - ❌ Cannot claim production support for unsupported generic helpers without fail-closed metadata
 
-**Effort**: 7-10 days  
 **Risk**: **HIGH** (but bounded - see strategy below)
 
 **Risk Assessment**:
@@ -380,13 +350,11 @@ Vec<Pool>       → vec_pool_push/pop/len
 
 **Phased Approach** (Recommended):
 
-**Phase 1 (v0.13)**: Value-level generics only
+**Phase 1 (v0.13)**: Value-vector helpers only
 - current stack-backed fixed-width `Vec<T>` helper paths
 - `Vec<T: FixedWidth>` monomorphization metadata for checked stack-backed helper paths with explicit constraints output
-- Phantom-style asset tags (`Token<phantom Asset>`)
-- Generic interfaces/templates (`interface FungibleToken<Asset>`)
-- Minimal trait constraints (FixedWidth, Hashable, MoleculeSchema, NonLinear)
-- `Option<T: FixedWidth>` remains an investigation item unless implemented and tested before release
+- Minimal metadata vocabulary for FixedWidth-style constraints
+- `Option<T: FixedWidth>`, phantom-style asset tags, and generic interfaces/templates remain future design items unless implemented and tested before release
 
 **Phase 2 (v0.14)**: Interface/package-level generics
 - Generic interfaces with more constraints
@@ -425,7 +393,6 @@ deserializer helper calls remain absent from the supported path.
 - 10-15% ELF size reduction
 - 15-25% cycle reduction
 
-**Effort**: 3-4 days  
 **Risk**: Low (compile-time optimization only)
 
 ---
@@ -495,7 +462,6 @@ error[E0018]: fixed-byte comparison unresolved
 
 ---
 
-**Total CLI Effort**: 5-7 days  
 **Risk**: Low
 
 ---
@@ -518,7 +484,6 @@ linear/resource effects are not inlined.
 **Expected Benefits**: lower instruction count for small arithmetic/predicate
 helpers; exact percentage remains benchmark-dependent.
 
-**Effort**: 2-3 days  
 **Risk**: Low
 
 ---
@@ -545,7 +510,6 @@ is parsed, lowered, validated, and surfaced as `types[].default_hash_type` plus
 `hash_type(...)` remains future builder syntax because it needs output-index
 binding semantics.
 
-**Effort**: 2-3 days  
 **Risk**: Low
 
 ---
@@ -563,7 +527,6 @@ functions and unused immutable local bindings whose initializer is pure.
 **Expected Benefits**: smaller generated assembly/ELF where helper-heavy DSL
 code leaves dead pure scaffolding.
 
-**Effort**: 3-5 days  
 **Risk**: Medium
 
 ---
@@ -582,7 +545,6 @@ comparisons, and branch pruning.
 **Expected Benefits**: instruction reduction where constants previously stayed
 as local loads/arithmetic.
 
-**Effort**: 2-3 days  
 **Risk**: Low
 
 ---
@@ -596,7 +558,6 @@ as local loads/arithmetic.
 **Current branch status**: implemented for fixed-size array foreach paths where
 the compiler has a static aggregate length. Dynamic loops are not unrolled.
 
-**Effort**: 2-3 days  
 **Risk**: Low
 
 ---
@@ -613,7 +574,6 @@ created/mutated output requirements, read refs, verifier obligations, runtime
 input requirements, CKB hash_type/capacity/timelock policy, and constraints
 status. It intentionally does not sign or submit transactions.
 
-**Effort**: 5-8 days  
 **Risk**: High
 
 ---
@@ -631,50 +591,7 @@ invalid hash_type DSL. The acceptance scripts still provide the bundled
 dual-chain production matrix; property fuzzing remains a future scale-up beyond
 the 0.13 release gate.
 
-**Effort**: 5-7 days  
 **Risk**: Medium
-
----
-
-## 📊 Timeline Estimates
-
-### Phase 1: P0 Core (4-5 weeks)
-
-| Week | Task | Deliverable |
-|------|------|-------------|
-| W1-2 | Bounded Collections | Fixed-width `Vec<T>` helper runtime + metadata/explain coverage + tests |
-| W2 | CLI: `build` default O1 + `cellc new` | Immediate UX improvement |
-| W3 | Deserialization Specialization | Type layout cache + codegen specialization |
-| W3-4 | CLI: Error Codes + `explain` | `codespan-reporting` integration |
-
-**Milestone**: v0.13.0-alpha1 (bounded collections usable)
-
----
-
-### Phase 2: P1 Enhancement (2-3 weeks)
-
-| Week | Task | Deliverable |
-|------|------|-------------|
-| W6 | Function Inlining | math_* inlining + AMM perf test |
-| W6-7 | Hash Type DSL | AST/IR/codegen full chain + CKB test |
-| W7-8 | Dead Code Elimination | DCE pass + ELF size benchmark |
-| W8 | Constant Propagation | Cross-statement constant folding |
-
-**Milestone**: v0.13.0-beta1 (Performance optimizations complete)
-
----
-
-### Phase 3: P2 + Stabilization (3-4 weeks)
-
-| Week | Task | Deliverable |
-|------|------|-------------|
-| W9-10 | Loop Unrolling | Small loop unrolling + tests |
-| W10 | Transaction Builder MVP | `cellc action build` plan/explain |
-| W11 | Fuzz/Adversarial Testing | Broader malformed matrix |
-| W11-12 | Regression Tests | All bundled examples updated |
-| W12-13 | Documentation + Release | CHANGELOG + release announcement |
-
-**Milestone**: v0.13.0-rc1 → **v0.13.0 Release**
 
 ---
 
@@ -802,8 +719,10 @@ cargo test -p cellscript -- --test-threads=1
 # Run performance benchmarks
 cargo bench -p cellscript
 
-# Compile all examples
-cargo run -p cellscript -- build examples/*.cell --target-profile ckb
+# Compile all examples through the top-level file workflow
+for file in examples/*.cell; do
+    cargo run -p cellscript -- "$file" --target-profile ckb
+done
 
 # Check ELF sizes
 ls -lh examples/*.elf
@@ -814,48 +733,19 @@ cargo run -p cellscript -- ckb-hash --hex 00
 
 ---
 
-## 📅 Key Dates
-
-| Date | Event |
-|------|-------|
-| 2026-04-24 | v0.13 roadmap draft + audit findings |
-| 2026-05-01 | Team review + priority adjustment |
-| 2026-05-15 | v0.13.0-alpha1 (Collections generics) |
-| 2026-06-01 | v0.13.0-beta1 (Performance optimizations) |
-| 2026-06-22 | v0.13.0-rc1 (Feature freeze) |
-| **2026-06-28** | **v0.13.0 Official Release** |
-
-**Note**: Release date delayed by ~1 week vs original plan due to CLI improvements.
-
----
-
-## 📊 Updated Effort Summary
-
-**Original Plan**:
-- Total effort: ~60 days
-- Release date: 2026-06-22
-
-**Updated Plan**:
-- CLI improvements: +5-7 days (new + explain + error messages)
-- BLAKE2b: no mandatory v0.13 on-chain stdlib work; generic in-script CKB Blake2b remains P3 conditional
-- **New total: ~66 days**
-- **New release date: 2026-06-28** (delayed by ~1 week)
-
----
-
 ## 🎉 Summary
 
 v0.13 goal: Evolve CellScript from "**can run in production**" to "**excellent in production**":
 
 - **Faster**: 30-40% performance improvement (zero-cost abstractions)
-- **Stronger**: Collections generics unlock complex protocols
+- **Stronger**: bounded value-vector helpers make simple registries, whitelists, and fixed membership sets easier to write without hiding ownership semantics
 - **More Usable**: CLI ergonomics + error codes + declarative syntax
 
 **Expected Outcomes**:
 - Developer experience improved 50% (debug time 1 hour → 5 minutes)
 - Execution cost reduced 30% (cycle consumption)
 - Deployment cost reduced 20% (ELF size)
-- Support complex protocols (AMM/Registry/OrderBook)
+- Improve simple registry, whitelist, AMM helper, and fixed membership patterns; proof-backed maps and order books remain explicit future work
 
 **v0.12 proved CellScript can run on both chains.**  
 **v0.13 will prove CellScript is the best production-grade smart contract language.**
@@ -864,7 +754,6 @@ v0.13 goal: Evolve CellScript from "**can run in production**" to "**excellent i
 
 ## 🔍 v0.12/v0.13 Overlap Audit
 
-**Audit Date**: 2026-04-24  
 **Audit Scope**: Strict comparison of v0.13 features vs v0.12 accepted deliverables  
 **Source Documents**:
 - `CELLSCRIPT_0_12_COMPREHENSIVE_PLAN.md` (v0.12 acceptance record)
@@ -921,6 +810,5 @@ From `CELLSCRIPT_0_12_COMPREHENSIVE_PLAN.md` Section 6:
 
 *Document End.*  
 *Author: AI Code Audit Assistant*  
-*Date: 2026-04-24*  
 *Status: Draft (Pending Team Review)*  
 *Audit Sources*: CLI_ERGONOMICS_AND_BLAKE2B_AUDIT.md, CELLSCRIPT_0_12_COMPREHENSIVE_PLAN.md

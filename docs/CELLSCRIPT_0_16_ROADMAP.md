@@ -1,6 +1,5 @@
 # CellScript v0.16 Roadmap
 
-**Date**: 2026-04-25
 **Status**: Draft
 **Scope**: Formal Semantics, Standard Compatibility, and Production Tooling
 **Dependencies**: v0.13, v0.14, and v0.15 complete
@@ -23,7 +22,7 @@ v0.15 makes CKB invariants visible:
 v0.16 answers the next questions:
 
 - Can we prove the invariant model is sound?
-- Can CellScript match standard CKB contracts byte-for-byte where needed?
+- Can CellScript match standard CKB contract behavior, ABI/layout, error behavior, and cycle envelopes where needed?
 - Can wallets/builders/indexers honor the assumptions emitted by the compiler?
 - Can developers debug, audit, deploy, and upgrade contracts without relying on ad hoc tooling?
 
