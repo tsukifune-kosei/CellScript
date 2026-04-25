@@ -2,7 +2,7 @@
 
 **Date**: 2026-04-25  
 **Branch**: `codex/cellscript-0.13`  
-**Status**: Live implementation tracker, not a design promise
+**Status**: Release-gate tracker for `codex/cellscript-0.13`
 
 This file tracks the actual 0.13 branch progress. Use it as the working TODO
 list for implementation status. The roadmap remains the broader design context.
@@ -65,7 +65,7 @@ by existing fixed-width machinery):
 
 ---
 
-## 🟡 In Progress / Needs Release-Gate Hardening
+## ✅ Release-Gate Status
 
 - [x] Add a compact support matrix for each `Vec<T>` helper.
 
@@ -110,7 +110,7 @@ Notes:
 
 ---
 
-## ⏭️ Next Candidate Work
+## ✅ Closed / Deferred Scope
 
 - [x] Improve docs for bounded collection runtime behavior.
   - `docs/examples/collections_matrix.md` now separates stack-backed
@@ -129,8 +129,13 @@ Notes:
     `Vec::with_capacity`.
   - `cellc explain-generics` exposes the same checked instantiation set in text
     and JSON form for local audit.
-- [ ] Investigate a bounded `Option<T: FixedWidth>` representation.
-- [ ] Continue CLI 0.13 work:
+- [x] Investigate a bounded `Option<T: FixedWidth>` representation.
+  - Deferred out of this 0.13 branch. There is no source-level `Option<T>`
+    constructor/lowering surface in the current parser/type/IR pipeline, and
+    adding it would introduce a new optional-value ABI rather than merely
+    hardening collections. Release notes keep `Option<T>` reserved for a future
+    explicit error/optional-value model.
+- [x] Complete CLI 0.13 work:
   - `cellc new`
     - [x] Cargo-style package creation path exists.
     - [x] `--vcs none` and default `--vcs git` are tested.
@@ -149,11 +154,11 @@ Notes:
 
 ## ❌ Explicit Non-Goals For v0.13
 
-- [ ] Full generic `HashMap<K, V>` runtime support.
-- [ ] `Vec<Cell<T>>` ownership semantics.
-- [ ] `HashMap<Hash, Resource<T>>` / cell-backed generic maps.
-- [ ] Hidden generic lowering that changes witness layout or schema
+- Full generic `HashMap<K, V>` runtime support.
+- `Vec<Cell<T>>` ownership semantics.
+- `HashMap<Hash, Resource<T>>` / cell-backed generic maps.
+- Hidden generic lowering that changes witness layout or schema
   commitments without metadata.
-- [ ] Treating 0.12 `Vec<Address>` / `Vec<Hash>` schema/ABI support as new 0.13
+- Treating 0.12 `Vec<Address>` / `Vec<Hash>` schema/ABI support as new 0.13
   work.
-- [ ] Mandatory on-chain generic CKB BLAKE2b stdlib implementation.
+- Mandatory on-chain generic CKB BLAKE2b stdlib implementation.

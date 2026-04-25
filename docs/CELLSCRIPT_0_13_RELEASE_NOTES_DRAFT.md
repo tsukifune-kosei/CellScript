@@ -1,6 +1,6 @@
 # CellScript 0.13 Release Notes Draft
 
-**Status**: Draft for the `codex/cellscript-0.13` implementation branch.
+**Status**: Release-gate draft for the `codex/cellscript-0.13` implementation branch.
 
 ## Collections Scope
 

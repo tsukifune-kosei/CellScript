@@ -650,7 +650,7 @@ with_default_hash_type(Data1)
 
 | Feature | v0.12 | v0.13 |
 |---------|-------|-------|
-| Collections Runtime / Bounded Generics | 🟡 Schema/ABI vectors supported; runtime helpers bounded | 🟡 Stack-backed value Vec helpers are being implemented; broader bounded generics remain explicit, metadata-visible follow-up work |
+| Collections Runtime / Bounded Generics | 🟡 Schema/ABI vectors supported; runtime helpers bounded | ✅ Stack-backed fixed-width value `Vec<T>` helpers implemented and metadata-visible; broader/cell-backed generics remain explicit non-goals |
 | Error Code Docs | ✅ Registry only | ✅ CLI + docs |
 | Hash Type Visibility | 🟡 Manifest only | ✅ DSL declarative |
 | Deserialization Overhead | ❌ Runtime compute | ✅ Compile-time specialize |
@@ -659,7 +659,7 @@ with_default_hash_type(Data1)
 | CKB Blake2b Compiler/CLI | ✅ Builder/release helper complete | ✅ Keep complete; document boundary |
 | Generic in-script CKB Blake2b | ❌ Not claimed | ⏸️ P3 conditional |
 | CLI `cellc new` | 🟡 `cellc init` foundation existed | ✅ Cargo-compatible workflow implemented and tested |
-| CLI Error Messages | 🟡 Runtime-registry E-codes for mapped failures | 🟡 Rustc-style source spans remain future polish |
+| CLI Error Messages | 🟡 Runtime-registry E-codes for mapped failures | ✅ CLI `error[E####]` + `cellc explain E####`; rustc-style source spans remain future polish |
 
 ---
 
