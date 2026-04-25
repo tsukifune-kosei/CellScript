@@ -649,10 +649,10 @@ impl CommandExecutor {
         }
 
         let pm = PackageManager::new(&path);
-        pm.init(&name)?;
-
         if args.lib {
-            std::fs::write(path.join("src/lib.cell"), format!("module {};\n", name))?;
+            pm.init_library(&name)?;
+        } else {
+            pm.init(&name)?;
         }
 
         if args.json {
@@ -743,8 +743,8 @@ impl CommandExecutor {
         }
 
         pm.write_manifest(&manifest)?;
-        if !args.dev && !args.build {
-            prune_locked_dependencies(&removed)?;
+        if !args.dev && !args.build && !removed.is_empty() {
+            refresh_lockfile_from_manifest(Path::new("."))?;
         }
 
         if args.json {
@@ -1672,17 +1672,13 @@ impl CommandExecutor {
                 default_features: true,
             };
 
-            let resolved = pm.resolve_from_git(&crate_name, git_url, &dep)?;
+            pm.resolve_from_git(&crate_name, git_url, &dep)?;
 
             let mut manifest = pm.read_manifest()?;
             manifest.dependencies.insert(crate_name.clone(), Dependency::Detailed(dep));
             pm.write_manifest(&manifest)?;
 
-            let mut lockfile = Lockfile::read_from_root(std::path::Path::new(".")).unwrap_or_default();
-            let mut resolved_map = HashMap::new();
-            resolved_map.insert(crate_name.clone(), resolved);
-            lockfile.update_from_resolved(&resolved_map);
-            lockfile.write_to_root(std::path::Path::new("."))?;
+            refresh_lockfile_from_manifest(std::path::Path::new("."))?;
 
             println!("{}", format!("Installed {} from git {}", crate_name, git_url).green());
             Ok(())
@@ -1702,17 +1698,13 @@ impl CommandExecutor {
                 default_features: true,
             };
 
-            let resolved = pm.resolve_from_path(&crate_name, &path.to_string_lossy())?;
+            pm.resolve_from_path(&crate_name, &path.to_string_lossy())?;
 
             let mut manifest = pm.read_manifest()?;
             manifest.dependencies.insert(crate_name.clone(), Dependency::Detailed(dep));
             pm.write_manifest(&manifest)?;
 
-            let mut lockfile = Lockfile::read_from_root(std::path::Path::new(".")).unwrap_or_default();
-            let mut resolved_map = HashMap::new();
-            resolved_map.insert(crate_name.clone(), resolved);
-            lockfile.update_from_resolved(&resolved_map);
-            lockfile.write_to_root(std::path::Path::new("."))?;
+            refresh_lockfile_from_manifest(std::path::Path::new("."))?;
 
             println!("{}", format!("Installed {} from path {}", crate_name, path.display()).green());
             Ok(())
@@ -1728,7 +1720,7 @@ impl CommandExecutor {
             let mut pm = PackageManager::new(".");
             pm.resolve_dependencies()?;
 
-            let mut lockfile = Lockfile::read_from_root(std::path::Path::new(".")).unwrap_or_default();
+            let mut lockfile = Lockfile::read_from_root(std::path::Path::new("."))?.unwrap_or_default();
             lockfile.replace_with_resolved(pm.get_resolved());
             lockfile.write_to_root(std::path::Path::new("."))?;
 
@@ -1743,7 +1735,7 @@ impl CommandExecutor {
 
         pm.resolve_dependencies()?;
 
-        let mut lockfile = Lockfile::read_from_root(std::path::Path::new(".")).unwrap_or_default();
+        let mut lockfile = Lockfile::read_from_root(std::path::Path::new("."))?.unwrap_or_default();
 
         lockfile.replace_with_resolved(pm.get_resolved());
         lockfile.write_to_root(std::path::Path::new("."))?;
@@ -1983,21 +1975,13 @@ fn dependency_from_add_args(args: &AddArgs) -> Dependency {
     }
 }
 
-fn prune_locked_dependencies(removed: &[String]) -> Result<()> {
-    if removed.is_empty() {
-        return Ok(());
-    }
-    let root = Path::new(".");
-    let Some(mut lockfile) = Lockfile::read_from_root(root) else {
-        return Ok(());
-    };
-    let mut changed = false;
-    for name in removed {
-        changed |= lockfile.dependencies.remove(name).is_some();
-    }
-    if changed {
-        lockfile.write_to_root(root)?;
-    }
+fn refresh_lockfile_from_manifest(root: &Path) -> Result<()> {
+    let mut manager = PackageManager::new(root);
+    manager.resolve_dependencies()?;
+
+    let mut lockfile = Lockfile::read_from_root(root)?.unwrap_or_default();
+    lockfile.replace_with_resolved(manager.get_resolved());
+    lockfile.write_to_root(root)?;
     Ok(())
 }
 
