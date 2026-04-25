@@ -1755,7 +1755,7 @@ impl CommandExecutor {
             }
         }
 
-        let lockfile_issues = lockfile.consistency_issues(&manifest);
+        let lockfile_issues = lockfile.consistency_issues_with_resolved(&manifest, resolved);
         if !lockfile_issues.is_empty() {
             println!("{}", "Warning: lockfile is not consistent with Cell.toml".yellow());
             for issue in lockfile_issues {

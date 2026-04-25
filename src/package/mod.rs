@@ -698,6 +698,22 @@ impl Lockfile {
     }
 
     pub fn consistency_issues(&self, manifest: &PackageManifest) -> Vec<String> {
+        self.consistency_issues_with_expected(manifest, None)
+    }
+
+    pub fn consistency_issues_with_resolved(
+        &self,
+        manifest: &PackageManifest,
+        resolved: &HashMap<String, ResolvedPackage>,
+    ) -> Vec<String> {
+        self.consistency_issues_with_expected(manifest, Some(resolved))
+    }
+
+    fn consistency_issues_with_expected(
+        &self,
+        manifest: &PackageManifest,
+        resolved: Option<&HashMap<String, ResolvedPackage>>,
+    ) -> Vec<String> {
         let mut issues = Vec::new();
         if self.version != Self::CURRENT_VERSION {
             issues.push(format!("Cell.lock version {} is not supported; expected {}", self.version, Self::CURRENT_VERSION));
@@ -713,14 +729,55 @@ impl Lockfile {
             }
         }
 
+        if let Some(resolved) = resolved {
+            for (name, package) in resolved {
+                let Some(locked) = self.dependencies.get(name) else {
+                    issues.push(format!("resolved dependency '{}' is missing from Cell.lock", name));
+                    continue;
+                };
+                issues.extend(resolved_dependency_consistency_issues(name, package, locked));
+            }
+        }
+
         for name in self.dependencies.keys() {
-            if !manifest.dependencies.contains_key(name) {
+            let expected_by_manifest = manifest.dependencies.contains_key(name);
+            let expected_by_resolved = resolved.is_some_and(|resolved| resolved.contains_key(name));
+            if !expected_by_manifest && !expected_by_resolved {
                 issues.push(format!("Cell.lock contains stale dependency '{}' not present in Cell.toml", name));
             }
         }
 
         issues
     }
+}
+
+fn resolved_dependency_consistency_issues(name: &str, package: &ResolvedPackage, locked: &LockedDependency) -> Vec<String> {
+    let mut issues = Vec::new();
+
+    if locked.version != package.version {
+        issues.push(format!(
+            "resolved dependency '{}' has package version '{}' but Cell.lock records '{}'",
+            name, package.version, locked.version
+        ));
+    }
+
+    match (&package.source, &locked.source) {
+        (PackageSource::Local(path), LockedSource::Path { path: locked_path }) if locked_path == path.to_string_lossy().as_ref() => {}
+        (PackageSource::Git { url, revision }, LockedSource::Git { url: locked_url, revision: locked_revision })
+            if locked_url == url && locked_revision == revision => {}
+        (
+            PackageSource::Registry { name: package_name, version: package_version },
+            LockedSource::Registry { name: locked_name, version: locked_version },
+        ) if locked_name == package_name && locked_version == package_version => {}
+        (_, source) => issues.push(format!(
+            "resolved dependency '{}' expects {} but Cell.lock records {}",
+            name,
+            package_source_display(&package.source),
+            locked_source_display(source)
+        )),
+    }
+
+    issues
 }
 
 fn lock_dependency_consistency_issues(name: &str, dep: &Dependency, locked: &LockedDependency) -> Vec<String> {
@@ -801,6 +858,14 @@ fn locked_source_display(source: &LockedSource) -> String {
         LockedSource::Path { path } => format!("path '{}'", path),
         LockedSource::Git { url, revision } => format!("git '{}#{}'", url, revision),
         LockedSource::Registry { name, version } => format!("registry {}@{}", name, version),
+    }
+}
+
+fn package_source_display(source: &PackageSource) -> String {
+    match source {
+        PackageSource::Local(path) => format!("path '{}'", path.display()),
+        PackageSource::Git { url, revision } => format!("git '{}#{}'", url, revision),
+        PackageSource::Registry { name, version } => format!("registry {}@{}", name, version),
     }
 }
 
@@ -1208,6 +1273,56 @@ path = "deps/math"
         assert!(issues.iter().any(|issue| issue.contains("expects package version '0.1.0'")), "{issues:?}");
         assert!(issues.iter().any(|issue| issue.contains("stale dependency 'stale'")), "{issues:?}");
         assert!(!lockfile.is_consistent(&manifest));
+    }
+
+    #[test]
+    fn lockfile_consistency_allows_resolved_transitive_path_dependencies() {
+        let manifest: PackageManifest = toml::from_str(
+            r#"
+[package]
+name = "app"
+version = "0.1.0"
+
+[dependencies.math]
+version = "0.1.0"
+path = "deps/math"
+"#,
+        )
+        .unwrap();
+        let mut lockfile = Lockfile::new();
+        lockfile.dependencies.insert(
+            "math".to_string(),
+            LockedDependency { version: "0.1.0".to_string(), source: LockedSource::Path { path: "deps/math".to_string() } },
+        );
+        lockfile.dependencies.insert(
+            "util".to_string(),
+            LockedDependency { version: "0.1.0".to_string(), source: LockedSource::Path { path: "deps/math/../util".to_string() } },
+        );
+        let mut resolved = HashMap::new();
+        resolved.insert(
+            "math".to_string(),
+            ResolvedPackage {
+                name: "math".to_string(),
+                version: "0.1.0".to_string(),
+                path: PathBuf::from("deps/math"),
+                source: PackageSource::Local(PathBuf::from("deps/math")),
+                dependencies: vec!["util".to_string()],
+            },
+        );
+        resolved.insert(
+            "util".to_string(),
+            ResolvedPackage {
+                name: "util".to_string(),
+                version: "0.1.0".to_string(),
+                path: PathBuf::from("deps/util"),
+                source: PackageSource::Local(PathBuf::from("deps/math/../util")),
+                dependencies: Vec::new(),
+            },
+        );
+
+        let issues = lockfile.consistency_issues_with_resolved(&manifest, &resolved);
+
+        assert!(issues.is_empty(), "{issues:?}");
     }
 
     #[test]

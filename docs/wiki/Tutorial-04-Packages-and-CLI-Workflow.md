@@ -1,6 +1,6 @@
 Small experiments can be compiled as single `.cell` files. Once a contract has more than one source file, dependency, or release target, use a package.
 
-CellScript packages are described by `Cell.toml`. The 0.12 workflow is production-style for local source roots, path dependencies, build/check/doc/fmt flows, lockfile validation, and release policy checks. Registry publishing and remote package workflows are intentionally experimental/fail-closed until a trusted registry path is ready.
+CellScript packages are described by `Cell.toml`. The 0.12 workflow is production-style for local source roots, path dependencies, package build/check/doc/fmt flows, lockfile validation, and release policy checks. Registry publishing and registry dependency resolution are intentionally experimental/fail-closed until a trusted registry path is ready.
 
 ## What You Will Learn
 
@@ -68,7 +68,11 @@ cellc build --production
 cellc build --json
 ```
 
-`build` reads `Cell.toml`, compiles the package entry, and writes the artifact plus metadata sidecar under the configured output directory.
+`build` reads `Cell.toml`, compiles the current package entry, and writes the artifact plus metadata sidecar under the configured output directory. For a one-off source file, use the top-level compiler form instead:
+
+```bash
+cellc path/to/file.cell
+```
 
 ## Check Without Writing Artifacts
 
@@ -132,13 +136,25 @@ Add a local dependency:
 cellc add my_lib --path ../my_lib
 ```
 
+`add --path` records the dependency in `Cell.toml`. To resolve the dependency graph and write `Cell.lock`, run:
+
+```bash
+cellc install
+```
+
+You can also add and lock a local dependency in one command:
+
+```bash
+cellc install my_lib --path ../my_lib
+```
+
 Remove it:
 
 ```bash
 cellc remove my_lib
 ```
 
-The lockfile is updated so stale path dependencies can be detected.
+`install`, `update`, and normal dependency removal refresh the lockfile so direct and transitive local path dependencies stay consistent.
 
 ## Package Information
 
@@ -149,7 +165,7 @@ cellc info --json
 
 ## Experimental Commands
 
-The CLI contains command entries for future package workflows such as publish, update, login, install, run, and repl. Treat these as future-facing commands until they report a completed, supported path in your current build.
+Registry publishing, registry package installation, `login`, `run`, and `repl` remain experimental/future-facing. Local `install --path` and `update` are supported as lockfile helpers for local path dependency workflows.
 
 ## Next
 

@@ -3329,6 +3329,12 @@ version = "0.1.0"
     let util = lockfile.dependencies.get("util").expect("transitive util should be locked");
     assert_eq!(util.version, "0.1.0");
 
+    let update = Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("update").output().unwrap();
+    assert!(update.status.success(), "stderr: {}", String::from_utf8_lossy(&update.stderr));
+    let update_stdout = String::from_utf8_lossy(&update.stdout);
+    assert!(update_stdout.contains("Updated 2 dependencies"), "{update_stdout}");
+    assert!(!update_stdout.contains("Warning: lockfile is not consistent"), "{update_stdout}");
+
     let remove = Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("remove").arg("math").output().unwrap();
     assert!(remove.status.success(), "stderr: {}", String::from_utf8_lossy(&remove.stderr));
 
