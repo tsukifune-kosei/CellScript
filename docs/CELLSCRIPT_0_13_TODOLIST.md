@@ -116,7 +116,12 @@ Notes:
 - [ ] Investigate a bounded `Option<T: FixedWidth>` representation.
 - [ ] Continue CLI 0.13 work:
   - `cellc new`
-  - build default/profile polish
+    - [x] Cargo-style package creation path exists.
+    - [x] `--vcs none` and default `--vcs git` are tested.
+    - [x] `--lib` now updates `Cell.toml` to `src/lib.cell` and does not
+      leave a stale binary entry file.
+  - [x] build default/profile polish: non-release `cellc build` uses O1 and
+    release builds use O3.
   - diagnostic presentation improvements
 
 ---

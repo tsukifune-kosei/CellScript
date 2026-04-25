@@ -54,6 +54,19 @@ cargo test --locked -p cellscript -- --test-threads=1
 git diff --check
 ```
 
+## CLI Ergonomics
+
+New in 0.13 branch work:
+
+- `cellc build` uses O1 for non-release builds and still uses O3 for
+  `--release`.
+- `cellc new` provides a Cargo-style package creation workflow with `--path`,
+  `--lib`, `--vcs git`, `--vcs none`, and JSON summaries.
+- `cellc new --lib` and `cellc init --lib` now keep generated package layout and
+  `Cell.toml` aligned: the entry is `src/lib.cell`, and no stale
+  `src/main.cell` entry file is left behind.
+- `cellc explain <error-code>` reports runtime error registry entries.
+
 ## Backend Shape Baseline
 
 The current branch still passes the bundled example backend-shape budget test.

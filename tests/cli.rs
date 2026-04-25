@@ -3135,6 +3135,10 @@ fn cellc_init_subcommand_supports_json_summary() {
     assert_eq!(summary["entry"], "src/lib.cell");
     assert!(root.join("Cell.toml").exists());
     assert!(root.join("src").join("lib.cell").exists());
+    assert!(!root.join("src").join("main.cell").exists());
+
+    let manifest: toml::Value = std::fs::read_to_string(root.join("Cell.toml")).unwrap().parse().unwrap();
+    assert_eq!(manifest["package"]["entry"].as_str(), Some("src/lib.cell"));
 }
 
 #[test]
@@ -3166,7 +3170,36 @@ fn cellc_new_subcommand_supports_json_summary_and_vcs_none() {
     assert_eq!(summary["entry"], "src/lib.cell");
     assert!(root.join("Cell.toml").exists());
     assert!(root.join("src").join("lib.cell").exists());
+    assert!(!root.join("src").join("main.cell").exists());
     assert!(!root.join(".git").exists());
+
+    let manifest: toml::Value = std::fs::read_to_string(root.join("Cell.toml")).unwrap().parse().unwrap();
+    assert_eq!(manifest["package"]["entry"].as_str(), Some("src/lib.cell"));
+}
+
+#[test]
+fn cellc_new_subcommand_initializes_git_by_default() {
+    if Command::new("git").arg("--version").output().is_err() {
+        return;
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("git_pkg");
+
+    let output =
+        Command::new(env!("CARGO_BIN_EXE_cellc")).arg("new").arg("git_demo").arg("--path").arg(&root).arg("--json").output().unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["status"], "ok");
+    assert_eq!(summary["command"], "new");
+    assert_eq!(summary["kind"], "binary");
+    assert_eq!(summary["package"], "git_demo");
+    assert_eq!(summary["vcs"], "git");
+    assert_eq!(summary["git_initialized"], true);
+    assert_eq!(summary["entry"], "src/main.cell");
+    assert!(root.join(".git").exists());
+    assert!(root.join("src").join("main.cell").exists());
 }
 
 #[test]

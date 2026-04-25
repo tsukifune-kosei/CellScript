@@ -408,17 +408,20 @@ Vec<Pool>       → vec_pool_push/pop/len
 
 ---
 
-#### 3. CLI Ergonomics Improvements 🔴
+#### 3. CLI Ergonomics Improvements 🟡
 
 **Problem**: Multiple CLI UX gaps affecting developer experience.
 
-**v0.12 Status**: `cellc init` already exists. The remaining CLI work is
-changing `build` defaults, adding a Cargo-style `cellc new` alias/workflow, and
-improving diagnostic presentation on top of the existing runtime error registry.
+**Current branch status**: `cellc init` already exists from 0.12. The 0.13
+branch now has O1 dev-build defaults and a Cargo-style `cellc new` workflow
+with `--vcs git|none`; `--lib` package creation now writes `src/lib.cell` into
+`Cell.toml` and does not leave a stale `src/main.cell` entry file. Remaining
+work is diagnostic presentation polish on top of the existing runtime error
+registry.
 
 **Sub-tasks**:
 
-**3a. Change `build` Default to O1** (0.5 days)
+**3a. Change `build` Default to O1** ✅
 ```rust
 // Current
 let opt_level = if args.release { 3 } else { 0 };  // O0 default
@@ -431,14 +434,16 @@ let opt_level = if args.release { 3 } else { 1 };  // O1 default
 
 ---
 
-**3b. Add `cellc new` Subcommand / Cargo-Compatible Init Workflow** (0.5 days)
+**3b. Add `cellc new` Subcommand / Cargo-Compatible Init Workflow** ✅
 ```bash
 cellc new my_project      # Create a new project, including git initialization when requested
 cellc init my_project     # Already exists in 0.12; preserve and document compatibility
 ```
 
-**Impact**: Lower migration friction for Rust developers without double-counting
-the existing `cellc init` implementation.
+**Implemented behavior**: `cellc new` creates a package directory, supports
+`--path`, `--lib`, `--vcs git`, `--vcs none`, and JSON summaries. `cellc init`
+compatibility is preserved without double-counting the original 0.12
+scaffolding implementation.
 
 ---
 
@@ -641,7 +646,7 @@ with_default_hash_type(Data1)
 | Dead Code Elimination | ❌ None | ✅ Functions + vars |
 | CKB Blake2b Compiler/CLI | ✅ Builder/release helper complete | ✅ Keep complete; document boundary |
 | Generic in-script CKB Blake2b | ❌ Not claimed | ⏸️ P3 conditional |
-| CLI `cellc new` | ❌ Missing | ✅ Cargo-compatible |
+| CLI `cellc new` | 🟡 `cellc init` foundation existed | ✅ Cargo-compatible workflow implemented and tested |
 | CLI Error Messages | 🔴 Unfriendly | ✅ Rustc-style |
 
 ---
@@ -819,8 +824,8 @@ ownership gaps.
 |---------------|--------------|----------|-------|
 | Collections Generics | 🟡 Partial | ⚠️ Partial | `Vec<Address>`/`Vec<Hash>` schema and ABI paths are 0.12; runtime generic `HashMap<K,V>`, `HashSet<T>`, broader local `Vec<T>`, and cell-backed ownership are v0.13 candidates |
 | Deserialization Specialization | ❌ Not mentioned | ✅ No | Genuine new optimization |
-| CLI: `build` default O1 | ❌ Not implemented | ✅ No | Genuine UX fix |
-| CLI: `cellc new` | 🟡 `cellc init` exists | ⚠️ Partial | New work is a Cargo-style `new` alias/workflow and optional git behavior, not initial project scaffolding from scratch |
+| CLI: `build` default O1 | ✅ Implemented in branch | ✅ No | Genuine UX fix; `cellc build` JSON exposes `opt_level = 1` for dev builds |
+| CLI: `cellc new` | ✅ Implemented in branch on top of `cellc init` foundation | ⚠️ Partial | New work is the Cargo-style `new` workflow, optional git behavior, and `--lib` manifest/file-layout correctness, not initial project scaffolding from scratch |
 | CLI: Error codes + explain | 🟡 Runtime registry exists | ⚠️ Partial | New work is source diagnostic presentation and `cellc explain`; runtime error codes/docs are 0.12 |
 | Generic in-script CKB Blake2b | ⏸️ P3 conditional | ✅ No | v0.12 completed builder/release helper; on-chain dynamic hashing requires a real linked RISC-V implementation and production gates |
 | Function Inlining | ❌ Explicit non-goal | ✅ No | v0.12: "a large optimizer pass suite" is non-goal |

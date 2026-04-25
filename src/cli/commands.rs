@@ -673,7 +673,7 @@ impl CommandExecutor {
         pm.init(&name)?;
 
         if args.lib {
-            std::fs::write(path.join("src/lib.cell"), format!("module {};\n", name))?;
+            convert_initialized_package_to_library(&pm, &path, &name)?;
         }
 
         if args.json {
@@ -717,7 +717,7 @@ impl CommandExecutor {
         pm.init(&args.name)?;
 
         if args.lib {
-            std::fs::write(path.join("src/lib.cell"), format!("module {};\n", args.name))?;
+            convert_initialized_package_to_library(&pm, &path, &args.name)?;
         }
 
         let git_initialized = match args.vcs.as_str() {
@@ -2045,6 +2045,26 @@ fn ensure_new_package_destination(path: &Path) -> Result<()> {
     }
 
     Err(crate::error::CompileError::without_span(format!("destination '{}' already exists and is not empty", path.display())))
+}
+
+fn convert_initialized_package_to_library(pm: &PackageManager, path: &Path, name: &str) -> Result<()> {
+    let main_path = path.join("src/main.cell");
+    if main_path.exists() {
+        std::fs::remove_file(&main_path).map_err(|error| {
+            crate::error::CompileError::without_span(format!(
+                "failed to remove default binary entry '{}': {}",
+                main_path.display(),
+                error
+            ))
+        })?;
+    }
+
+    std::fs::write(path.join("src/lib.cell"), format!("module {};\n", name))?;
+
+    let mut manifest = pm.read_manifest()?;
+    manifest.package.entry = "src/lib.cell".to_string();
+    pm.write_manifest(&manifest)?;
+    Ok(())
 }
 
 fn init_git_repo(path: &Path) -> Result<bool> {
