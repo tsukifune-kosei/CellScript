@@ -1,4 +1,4 @@
-The repository includes bundled examples that exercise the v1 language surface and compiler gates.
+The repository includes seven bundled examples that exercise the CellScript 0.12 language surface and production gates.
 
 | Example | Purpose |
 |---|---|
@@ -86,9 +86,20 @@ action burn(token: Token) {
 
 ## Spora vs CKB Expectations
 
-Spora profile should compile the bundled examples as Spora artifacts.
+Spora profile should compile and deploy the bundled examples as Spora artifacts under the current local production suite.
 
-CKB profile is stricter. Pure or admitted subsets should compile to CKB ELF without a Spora ABI trailer. Complex examples may be rejected by policy if they require unsupported runtime or Spora-only behavior. A policy rejection is preferable to producing an artifact with incorrect CKB assumptions.
+CKB profile is stricter than Spora, but the current bundled-example suite is closed for the 0.12 production boundary:
+
+- all seven bundled examples strict-admit under the CKB profile;
+- all 43 bundled business actions have scoped CKB production harnesses;
+- all 15 bundled locks strict-compile;
+- valid CKB transactions are builder-generated and dry-run;
+- malformed transactions are rejected for non-policy/non-capacity reasons;
+- tx-size, cycle, and occupied-capacity evidence is retained;
+- all seven bundled examples are deployed in the CKB production acceptance report;
+- the final production hardening gate must pass.
+
+This does not mean arbitrary new contracts are automatically production-ready. New contracts still need their own constraints review, entry ABI review, builder evidence, and chain acceptance evidence.
 
 ## Production Checklist
 
@@ -101,10 +112,7 @@ cellc build --target riscv64-elf --target-profile spora --production
 cellc verify-artifact build/main.elf --verify-sources --expect-target-profile spora --production
 ```
 
-For CKB, run the same production gate only for whole examples or scoped entries
-that are admitted by the CKB profile. If a bundled example contains a
-CKB-incompatible action, compile the admitted action explicitly and keep the
-whole-file rejection as a policy signal:
+For CKB compiler-side review:
 
 ```bash
 cellc check --target-profile ckb --production
@@ -112,3 +120,14 @@ cellc build --target riscv64-elf --target-profile ckb --production
 cellc verify-artifact build/main.elf --verify-sources --expect-target-profile ckb --production
 cellc examples/nft.cell --entry-action transfer --target riscv64-elf --target-profile ckb --production
 ```
+
+For release-facing evidence, run the parent Spora repository acceptance gates:
+
+```bash
+./scripts/spora_cellscript_acceptance.sh --profile production
+./scripts/ckb_cellscript_acceptance.sh --production
+python3 scripts/validate_spora_production_evidence.py target/devnet-acceptance/<run>/production-evidence.json
+python3 scripts/validate_ckb_cellscript_production_evidence.py target/ckb-cellscript-acceptance/<run>/ckb-cellscript-acceptance-report.json
+```
+
+Do not use compile-only or bounded diagnostic runs as production release evidence.

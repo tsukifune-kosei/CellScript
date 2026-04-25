@@ -48,6 +48,8 @@ cellc verify-artifact build/main.elf --deny-fail-closed
 cellc verify-artifact build/main.elf --deny-runtime-obligations
 ```
 
+Artifact verification is a compiler artifact gate. It verifies the artifact, metadata, source hash expectations, and selected policy flags. It does not prove that a concrete Spora or CKB transaction has been built, deployed, dry-run, indexed, or measured.
+
 ## Check Before Build
 
 Use check mode for CI:
@@ -85,9 +87,16 @@ Useful fields include:
 - `schema`
 - `runtime`
 - `verifier_obligations`
+- `constraints`
+- `runtime_error_registry`
+- `constraints.artifact`
+- `constraints.entry_abi`
+- `constraints.ckb.capacity_evidence_contract`
+- `constraints.ckb.hash_type_policy`
+- `constraints.ckb.dep_group_manifest`
 - scheduler witness metadata for Spora profile builds
 
-## Suggested CI Gate
+## Suggested Compiler CI Gate
 
 For a package that must remain portable:
 
@@ -106,7 +115,32 @@ cellc build --target riscv64-elf --target-profile ckb --production
 cellc verify-artifact build/main.elf --expect-target-profile ckb --verify-sources --production
 ```
 
+These gates are suitable for a compiler/package CI loop. They are not enough for a release claim that says a contract is production-ready on a chain.
+
+## Release Evidence Gates
+
+For Spora release evidence, run from the parent Spora repository root:
+
+```bash
+./scripts/spora_cellscript_acceptance.sh --profile production
+python3 scripts/validate_spora_production_evidence.py \
+  target/devnet-acceptance/<run>/production-evidence.json
+```
+
+The Spora production report should show the production gate passed, `production_ready=true`, scoped bundled action coverage, malformed rejection coverage, standard mass policy, and all seven bundled examples deployed as code cells under the current suite.
+
+For CKB release evidence, run:
+
+```bash
+./scripts/ckb_cellscript_acceptance.sh --production
+python3 scripts/validate_ckb_cellscript_production_evidence.py \
+  target/ckb-cellscript-acceptance/<run>/ckb-cellscript-acceptance-report.json
+```
+
+The CKB validator requires strict original bundled-example coverage, scoped action and lock compile coverage, builder-backed action runs, valid transaction dry-runs, committed valid transactions, malformed rejection, measured cycles, consensus-serialized tx size, occupied-capacity evidence, no under-capacity outputs, all seven bundled examples deployed, and a passed final production hardening gate.
+
+`--compile-only` and bounded diagnostic runs can help development, but they are not external production release evidence.
+
 ## Next
 
 Continue with [LSP and Tooling](Tutorial-07-LSP-and-Tooling).
-

@@ -32,11 +32,21 @@ u128
 bool
 Address
 Hash
-Signature
 [u8; 8]
 ```
 
 Use fixed-size byte arrays when a value must be part of a persistent Molecule-compatible schema or a predictable CKB data layout.
+
+`Signature` is not a built-in scalar. Model signatures as a `struct` or byte field when a contract needs to carry them:
+
+```cellscript
+struct Signature {
+    signer: Address
+    signature: [u8; 64]
+}
+```
+
+For dynamic payloads that cross ABI or persistent schema boundaries, the documented 0.12 production surface includes targeted `Vec<u8>`, `Vec<Address>`, `Vec<Hash>`, and concrete fixed-width struct-vector paths. Generic collection ownership is intentionally narrower than "all collections are supported"; use the collections support matrix before advertising a collection shape as production-ready.
 
 ## Structs
 
@@ -111,12 +121,17 @@ action transfer_token(token: Token, to: Address) -> Token {
 Use `lock` for authorization logic:
 
 ```cellscript
-lock owner_only(owner: Address, signature: Signature) {
-    assert_invariant(verify_signature(owner, signature), "invalid signature")
+shared Wallet has store {
+    owner: Address
+    nonce: u64
+}
+
+lock owner_only(wallet: &Wallet, signer: Address) -> bool {
+    wallet.owner == signer
 }
 ```
 
-Target-profile policy determines which verification helpers are allowed. For example, Spora-only helper syscalls are rejected under the CKB profile.
+Locks must return `bool`. Target-profile policy determines which runtime helpers are allowed. For example, Spora-only helper syscalls are rejected under the CKB profile, and CKB signature/witness verification must be represented through the supported claim/metadata/runtime evidence path instead of a generic `verify_signature` helper.
 
 ## Assertions
 
@@ -131,4 +146,3 @@ Assertions lower into script checks and appear in metadata as part of verifier a
 ## Next
 
 Continue with [Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects).
-

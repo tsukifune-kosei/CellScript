@@ -1,4 +1,4 @@
-CellScript includes a beta package manager. It is stable enough for local package workflows, local path dependencies, build/check/doc/fmt flows, and lockfile validation. Registry publishing and remote package workflows should still be treated as experimental.
+CellScript includes a local package workflow based on `Cell.toml`. It is production-style for local source roots, path dependencies, build/check/doc/fmt flows, lockfile validation, and release policy checks. Registry publishing and remote package workflows are intentionally experimental/fail-closed until a trusted registry path is ready.
 
 ## Create a Package
 
@@ -90,6 +90,30 @@ cellc doc --json
 
 Generated docs summarize modules, actions, resources, receipts, locks, lifecycle rules, and lowering metadata.
 
+## Audit and Evidence Reports
+
+Use these commands when reviewing a package boundary or preparing release evidence:
+
+```bash
+cellc metadata . --target riscv64-elf --target-profile spora -o build/main.metadata.json
+cellc constraints . --target riscv64-elf --target-profile spora -o build/main.constraints.json
+cellc abi . --target-profile spora
+cellc scheduler-plan . --target-profile spora --json
+cellc opt-report . --target riscv64-elf --target-profile spora --json
+```
+
+For CKB-specific builder and deployment review:
+
+```bash
+cellc constraints . --target riscv64-elf --target-profile ckb --json
+cellc abi . --target-profile ckb --action transfer
+cellc entry-witness . --target-profile ckb --action transfer --json
+cellc ckb-hash --file build/main.elf
+cellc verify-artifact build/main.elf --expect-target-profile ckb --verify-sources --production
+```
+
+`metadata` and `constraints` expose the compiler-side production contract. They do not replace chain acceptance reports, builder-generated transactions, occupied-capacity evidence, or Spora/CKB production gates.
+
 ## Local Dependencies
 
 Add a local dependency:
@@ -120,4 +144,3 @@ The CLI contains command entries for future package workflows such as publish, u
 ## Next
 
 Continue with [Spora and CKB Target Profiles](Tutorial-05-Spora-and-CKB-Target-Profiles).
-
