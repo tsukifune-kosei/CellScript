@@ -67,13 +67,24 @@ by existing fixed-width machinery):
 
 ## 🟡 In Progress / Needs Release-Gate Hardening
 
-- [ ] Add a compact support matrix for each `Vec<T>` helper:
-  - scalar value elements
-  - fixed-byte elements
-  - `Address` / `Hash`
-  - fixed-width schema values
-  - dynamic Molecule fields
-  - cell-backed / linear values
+- [x] Add a compact support matrix for each `Vec<T>` helper.
+
+### Current `Vec<T>` Support Matrix
+
+| Source / element category | `new` / `with_capacity` / `capacity` | `push` / `extend_from_slice` / `set` / `clear` | `len` / `is_empty` / index / `first` / `last` | `contains` | `remove` / `pop` / `insert` | `reverse` / `truncate` / `swap` | Status |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Stack-backed `Vec<u64>` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | implemented and tested |
+| Stack-backed fixed bytes / `Address` / `Hash` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | implemented and tested |
+| Stack-backed fixed-width schema values | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | supported where fixed-width layout is known; release-gate coverage still needed |
+| Molecule dynamic fields / entry-witness vectors | ❌ local construction | ❌ local mutation | ✅ read-oriented paths | 🟡 read/compare paths only | ❌ local mutation | ❌ local mutation | 0.12 foundation, not new 0.13 generic runtime |
+| Cell-backed / linear vectors | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | fail-closed until ownership proof exists |
+
+Notes:
+
+- `Vec<Address>` / `Vec<Hash>` schema and entry-witness use is 0.12 foundation.
+- 0.13 work is executable stack-backed value-vector helper support.
+- Full generic `HashMap<K, V>` remains out of scope for 0.13.
+
 - [ ] Add explicit negative tests for unsupported helper/type combinations.
 - [ ] Audit all `collection-*` fail-closed feature names for stable metadata
   naming before 0.13 release.
@@ -110,4 +121,3 @@ by existing fixed-width machinery):
 - [ ] Treating 0.12 `Vec<Address>` / `Vec<Hash>` schema/ABI support as new 0.13
   work.
 - [ ] Mandatory on-chain generic CKB BLAKE2b stdlib implementation.
-

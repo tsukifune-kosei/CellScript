@@ -105,9 +105,9 @@ CKB/Spora's core is **NOT** account storage or native object packages. It's:
      runtime collection helpers NOT fully generic; cell-backed collection ownership must fail-closed
 
 **CKB/Spora Need**:
-- ✅ **CKB**: Multisig/timelock need `Vec<Address>` (common pattern)
-- ✅ **Spora**: AMM/Registry/OrderBook need generic collections
-- ⚠️ **CKB raw scripts**: Don't use generics (Rust -> RISC-V handles it)
+- ✅ **CKB**: Multisig/timelock need `Vec<Address>` schema/ABI support and local helper parity for common value-vector patterns
+- ✅ **Spora**: AMM/Registry/OrderBook need bounded executable collection patterns (`Vec<Hash>`, `Vec<Address>`, fixed-width values, and explicit map-like representations), not full generic `HashMap<K, V>`
+- ⚠️ **CKB raw scripts**: Usually rely on Rust -> RISC-V generics; CellScript must expose bounded patterns explicitly instead of inheriting unconstrained Rust generics
 
 **v0.13 Goal**: **Bounded generics / reusable pattern layer**, NOT full Rust/Sway-style generics.
 
@@ -191,6 +191,16 @@ Current branch status after the first 0.13 collection-runtime patches:
 - `Vec<Address>` / `Vec<Hash>` Molecule dynamic fields and entry-witness payloads
   are v0.12 foundations, not new v0.13 scope.
 - Cell-backed / linear collection ownership remains explicit and fail-closed.
+
+Compact support matrix:
+
+| Source / element category | `len` / `is_empty` / index / `first` / `last` | local stack mutation helpers | removal / reordering helpers | Status |
+|---|---:|---:|---:|---|
+| Stack-backed `Vec<u64>` | ✅ | ✅ | ✅ | 0.13 implemented and tested |
+| Stack-backed fixed bytes / `Address` / `Hash` | ✅ | ✅ | ✅ | 0.13 implemented and tested, including fixed-byte `remove` |
+| Stack-backed fixed-width schema values | 🟡 | 🟡 | 🟡 | supported where fixed-width layout is known; release-gate coverage still needed |
+| Molecule dynamic fields / entry-witness vectors | ✅ read-oriented paths | ❌ local mutation helpers | ❌ local mutation helpers | 0.12 foundation; not counted as new 0.13 generic runtime |
+| Cell-backed / linear vectors | ❌ | ❌ | ❌ | fail-closed until ownership proof exists |
 
 Allowed as v0.13 bounded follow-up work:
 ```cellscript
@@ -711,7 +721,7 @@ All audit findings integrated into v0.13 roadmap:
 1. **Collections Generics** - Review `stdlib/collections.rs`, contribute runtime helper monomorphization and ownership logic
 2. **CLI Improvements** - Add `cellc new`, integrate `codespan-reporting`
 3. **Performance Benchmarks** - Run `scripts/benchmark_cellscript.sh` (TBD)
-4. **New Examples** - Write `examples/registry.cell` to test generic collections
+4. **New Examples** - Write `examples/registry.cell` to test bounded executable collection patterns (`Vec<Address>`/`Vec<Hash>` helpers and explicit map-like representations)
 
 ### Test Commands
 
