@@ -202,11 +202,14 @@ Compact support matrix:
 | Molecule dynamic fields / entry-witness vectors | ✅ read-oriented paths | ❌ local mutation helpers | ❌ local mutation helpers | 0.12 foundation; not counted as new 0.13 generic runtime |
 | Cell-backed / linear vectors | ❌ | ❌ | ❌ | fail-closed until ownership proof exists |
 
-Allowed as v0.13 bounded follow-up work:
+Allowed as v0.13 bounded follow-up work only after explicit implementation,
+metadata, and tests:
 ```cellscript
 Vec<T: FixedWidth>
-Option<T: FixedWidth>
 ```
+
+`Option<T: FixedWidth>` remains an investigation item, not a current 0.13
+release claim.
 
 **NOT supported in 0.13** (continue fail-closed or experimental):
 ```cellscript
@@ -294,10 +297,10 @@ Option<LinearAsset<T>>  → Is the asset consumed when None?
 ```
 
 **Mitigation**: **Strictly bounded to value-level generics in 0.13**
-- ✅ `Vec<T: FixedWidth>` - Safe (no ownership)
+- ✅ stack-backed fixed-width `Vec<T>` helper patterns - Safe when `T` has no ownership obligations
 - ✅ `Vec<Address>`, `Vec<Hash>` - Safe (value types)
-- ❌ `Vec<Cell<T>>` - NOT allowed in 0.13
-- ❌ `T: Linear` constraints - NOT allowed in 0.13
+- ❌ executable `Vec<Cell<T>>` / `Vec<Resource<T>>` ownership semantics - NOT supported in 0.13; must remain fail-closed
+- ❌ `T: Linear` constraints - NOT supported in 0.13 source semantics
 
 ---
 
@@ -350,7 +353,7 @@ Vec<Pool>       → vec_pool_push/pop/len
 **Scenario**: If 0.13 claims "generic collections supported", it becomes a promise that's hard to change.
 
 **Mitigation**: **Clear boundary documentation**
-- ✅ Document what's supported: `Vec<T: FixedWidth>`, `Option<T: FixedWidth>`
+- ✅ Document what's supported: current stack-backed fixed-width `Vec<T>` helper paths and any later explicitly implemented `Vec<T: FixedWidth>` metadata
 - ✅ Document what's NOT supported: `Vec<Cell<T>>`, `HashMap<K, V>`
 - ✅ Continue fail-closed for unsupported generic patterns
 - ✅ Explicit metadata for bounded generic support
@@ -360,10 +363,12 @@ Vec<Pool>       → vec_pool_push/pop/len
 **Phased Approach** (Recommended):
 
 **Phase 1 (v0.13)**: Value-level generics only
-- `Vec<T: FixedWidth>`, `Option<T: FixedWidth>`
+- current stack-backed fixed-width `Vec<T>` helper paths
+- `Vec<T: FixedWidth>` monomorphization metadata only if it lands with explicit constraints output
 - Phantom-style asset tags (`Token<phantom Asset>`)
 - Generic interfaces/templates (`interface FungibleToken<Asset>`)
 - Minimal trait constraints (FixedWidth, Hashable, MoleculeSchema, NonLinear)
+- `Option<T: FixedWidth>` remains an investigation item unless implemented and tested before release
 
 **Phase 2 (v0.14)**: Interface/package-level generics
 - Generic interfaces with more constraints

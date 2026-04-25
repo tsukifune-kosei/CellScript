@@ -36,6 +36,8 @@ Important boundaries:
   this 0.13 branch.
 - `Vec<Cell<T>>`, `Vec<Resource<T>>`, and other cell-backed / linear ownership
   collections remain fail-closed until an executable ownership model exists.
+- `Option<T>` is still reserved for a future explicit error/optional-value
+  model and is not implemented in this 0.13 branch.
 - 0.13 must not re-count 0.12 `Vec<Address>` / `Vec<Hash>` schema and ABI
   support as new work.
 
