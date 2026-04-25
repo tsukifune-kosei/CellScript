@@ -219,6 +219,7 @@ pub enum IrInstruction {
     CollectionContains { dest: IrVar, collection: IrOperand, value: IrOperand },
     CollectionRemove { dest: IrVar, collection: IrOperand, index: IrOperand },
     CollectionInsert { collection: IrOperand, index: IrOperand, value: IrOperand },
+    CollectionPop { dest: IrVar, collection: IrOperand },
     Call { dest: Option<IrVar>, func: String, args: Vec<IrOperand> },
     ReadRef { dest: IrVar, ty: String },
     Move { dest: IrVar, src: IrOperand },
@@ -3075,6 +3076,16 @@ impl IrGenerator {
                         collection: lowered_collection.operand,
                         index: lowered_index.operand,
                     });
+                    Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
+                }
+                "pop" if call.args.is_empty() => {
+                    let lowered_collection = self.lower_expr(&field.expr, current, blocks, vars);
+                    let active = lowered_collection.current?;
+                    let item_ty = collection_item_ir_type(&self.operand_type(&lowered_collection.operand)).unwrap_or(IrType::U64);
+                    let dest = self.new_var("pop_tmp", item_ty);
+                    self.block_mut(blocks, active)
+                        .instructions
+                        .push(IrInstruction::CollectionPop { dest: dest.clone(), collection: lowered_collection.operand });
                     Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
                 }
                 "insert" if call.args.len() == 2 => {

@@ -1733,6 +1733,9 @@ impl CodeGenerator {
                     IrInstruction::CollectionInsert { collection: IrOperand::Var(collection), .. } => {
                         self.constructed_byte_vectors.remove(&collection.id);
                     }
+                    IrInstruction::CollectionPop { collection: IrOperand::Var(collection), .. } => {
+                        self.constructed_byte_vectors.remove(&collection.id);
+                    }
                     IrInstruction::Move { dest, src: IrOperand::Var(src) }
                     | IrInstruction::Unary { dest, op: UnaryOp::Ref | UnaryOp::Deref, operand: IrOperand::Var(src) } => {
                         if self.stack_collection_vars.contains(&src.id) {
@@ -2155,6 +2158,9 @@ impl CodeGenerator {
             }
             IrInstruction::CollectionInsert { collection, index, value } => {
                 self.emit_collection_insert(collection, index, value)?;
+            }
+            IrInstruction::CollectionPop { dest, collection } => {
+                self.emit_collection_pop(dest, collection)?;
             }
             IrInstruction::Call { dest, func, args } => {
                 self.emit_call(dest.as_ref(), func, args)?;
@@ -5627,6 +5633,10 @@ impl CodeGenerator {
                 self.record_operand(index, max_var_id);
                 self.record_operand(value, max_var_id);
             }
+            IrInstruction::CollectionPop { dest, collection } => {
+                self.record_var(dest, max_var_id);
+                self.record_operand(collection, max_var_id);
+            }
         }
     }
 
@@ -6766,6 +6776,50 @@ impl CodeGenerator {
         self.emit("ld t0, -8(t4)");
         self.emit("addi t0, t0, -1");
         self.emit("sd t0, -8(t4)");
+        true
+    }
+
+    fn emit_collection_pop(&mut self, dest: &IrVar, collection: &IrOperand) -> Result<()> {
+        self.emit("# collection pop");
+        self.emit_symbolic_operand_comment("collection", collection);
+        if self.emit_stack_collection_pop(dest, collection) {
+            return Ok(());
+        }
+        self.emit("# cellscript abi: collection pop is not available for this collection");
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        Ok(())
+    }
+
+    fn emit_stack_collection_pop(&mut self, dest: &IrVar, collection: &IrOperand) -> bool {
+        let IrOperand::Var(collection) = collection else {
+            return false;
+        };
+        if !self.stack_collection_vars.contains(&collection.id) {
+            return false;
+        }
+        let Some(element_width) = molecule_vector_element_fixed_width(&collection.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
+        else {
+            return false;
+        };
+        if fixed_scalar_width(&dest.ty, Some(element_width)).is_none() {
+            return false;
+        }
+
+        self.emit(format!("# cellscript abi: stack collection pop element_size={}", element_width));
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("ld t0, -8(t4)");
+        let bounds_ok = self.fresh_label("stack_collection_pop_bounds_ok");
+        self.emit(format!("bnez t0, {}", bounds_ok));
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        self.emit_label(&bounds_ok);
+
+        self.emit("addi t1, t0, -1");
+        self.emit(format!("li t2, {}", element_width));
+        self.emit("mul t3, t1, t2");
+        self.emit("add t5, t4, t3");
+        self.emit_unaligned_scalar_load("t5", "t6", "t2", 0, element_width);
+        self.emit(format!("sd t6, {}(sp)", dest.id * 8));
+        self.emit("sd t1, -8(t4)");
         true
     }
 

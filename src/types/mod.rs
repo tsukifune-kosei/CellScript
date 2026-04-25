@@ -2265,6 +2265,21 @@ impl<'a> TypeChecker<'a> {
                             _ => Err(CompileError::new("remove is only supported on Vec values", call.span)),
                         }
                     }
+                    "pop" => {
+                        self.validate_builtin_arity("Vec.pop", 0, arg_types, call.span)?;
+                        match &receiver_ty {
+                            Type::Named(name) => {
+                                let Some(item_ty) = self.parse_named_collection_item_type(name) else {
+                                    return Err(CompileError::new(
+                                        "Vec.pop requires a typed Vec<T>; push or annotate the Vec before popping",
+                                        call.span,
+                                    ));
+                                };
+                                Ok(item_ty)
+                            }
+                            _ => Err(CompileError::new("pop is only supported on Vec values", call.span)),
+                        }
+                    }
                     "insert" => {
                         self.validate_builtin_arity("Vec.insert", 2, arg_types, call.span)?;
                         if arg_types[0] != Type::U64 {

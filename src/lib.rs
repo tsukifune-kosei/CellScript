@@ -4036,6 +4036,10 @@ fn collect_instruction_scope(instruction: &ir::IrInstruction, used_types: &mut B
             collect_operand_named_types(index, used_types);
             collect_operand_named_types(value, used_types);
         }
+        ir::IrInstruction::CollectionPop { dest, collection } => {
+            collect_ir_type_named_types(&dest.ty, used_types);
+            collect_operand_named_types(collection, used_types);
+        }
         ir::IrInstruction::Call { dest, func, args } => {
             if let Some(dest) = dest {
                 collect_ir_type_named_types(&dest.ty, used_types);
@@ -9044,6 +9048,14 @@ fn body_fail_closed_runtime_features(
                         features.insert("cell-backed-collection-insert".to_string());
                     }
                 }
+                ir::IrInstruction::CollectionPop { dest, collection } => {
+                    if !metadata_stack_collection_pop_is_runtime_supported(dest, collection, &prelude_availability, type_layouts) {
+                        features.insert("collection-pop".to_string());
+                    }
+                    if ir_operand_is_cell_backed_collection(collection, cell_type_kinds) {
+                        features.insert("cell-backed-collection-pop".to_string());
+                    }
+                }
                 ir::IrInstruction::Consume { operand } if consumed_schema_var_id(instruction).is_none() => {
                     features.insert("consume-expression".to_string());
                     if matches!(operand, ir::IrOperand::Const(_)) {
@@ -9448,6 +9460,20 @@ fn metadata_prelude_availability(
                             availability.u64_value_vars.insert(dest.id);
                             availability.u64_operand_vars.insert(dest.id);
                         }
+                    }
+                }
+                ir::IrInstruction::CollectionPop { dest, collection } => {
+                    if metadata_stack_collection_pop_is_runtime_supported(dest, collection, &availability, type_layouts) {
+                        availability.scalar_vars.insert(dest.id);
+                        availability.fixed_value_vars.insert(dest.id);
+                        if dest.ty == ir::IrType::U64 {
+                            availability.u64_value_vars.insert(dest.id);
+                            availability.u64_operand_vars.insert(dest.id);
+                        }
+                    }
+                    if let ir::IrOperand::Var(collection) = collection {
+                        availability.constructed_byte_vector_vars.remove(&collection.id);
+                        availability.empty_molecule_vector_vars.remove(&collection.id);
                     }
                 }
                 ir::IrInstruction::Binary { dest, op, left, right }
@@ -9884,6 +9910,20 @@ fn metadata_stack_collection_remove_is_runtime_supported(
         && metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts)
             .is_some_and(|width| metadata_fixed_scalar_width(&dest.ty, Some(width)).is_some())
         && (const_usize_operand(index).is_some() || metadata_u64_operand_available(index, availability))
+}
+
+fn metadata_stack_collection_pop_is_runtime_supported(
+    dest: &ir::IrVar,
+    collection: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
+    let ir::IrOperand::Var(collection) = collection else {
+        return false;
+    };
+    availability.stack_collection_vars.contains(&collection.id)
+        && metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts)
+            .is_some_and(|width| metadata_fixed_scalar_width(&dest.ty, Some(width)).is_some())
 }
 
 fn metadata_stack_collection_insert_is_runtime_supported(
@@ -14765,6 +14805,18 @@ action stack_vec_remove_middle() -> u64 {
 }
 "#;
 
+    const STACK_VEC_POP_RUNTIME_PROGRAM: &str = r#"
+module test
+
+action stack_vec_pop_last() -> u64 {
+    let mut values = Vec::new()
+    values.push(7)
+    values.push(11)
+    let popped = values.pop()
+    return popped + values.len() + values[0]
+}
+"#;
+
     const STACK_VEC_INSERT_RUNTIME_PROGRAM: &str = r#"
 module test
 
@@ -17430,6 +17482,34 @@ action grant(config: read_ref Config, token: Token) -> Grant {
                 && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
                 && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
             "stack-backed Vec<u64>.remove should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_scalar_pop() {
+        let result = compile(STACK_VEC_POP_RUNTIME_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection pop element_size=8"),
+            "Vec<u64>.pop should pop from the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection pop is not available for this collection"),
+            "stack-backed Vec<u64>.pop should not hit fail-closed collection path:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_pop_last").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-pop".to_string())
+                && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
+            "stack-backed Vec<u64>.pop should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
     }
