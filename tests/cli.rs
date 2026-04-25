@@ -1432,6 +1432,44 @@ action move_token(token: Token, to: Address) -> Token {
 }
 
 #[test]
+fn cellc_errors_include_runtime_ecode_when_policy_failure_maps_to_runtime_registry() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+name = "demo"
+version = "0.1.0"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src").join("main.cell"),
+        r#"
+module demo::main
+
+action append_schema_vec(items: Vec<Address>, owner: Address) -> u64 {
+    let mut values = items
+    values.push(owner)
+    return values.len()
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("check").arg("--production").output().unwrap();
+    assert!(!output.status.success(), "unexpected success: {}", String::from_utf8_lossy(&output.stdout));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error[E0024]"), "unexpected stderr: {}", stderr);
+    assert!(stderr.contains("cellc explain E0024"), "unexpected stderr: {}", stderr);
+    assert!(stderr.contains("collection-runtime-unsupported"), "unexpected stderr: {}", stderr);
+}
+
+#[test]
 fn cellc_check_production_rejects_incomplete_output_verification() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

@@ -16,6 +16,8 @@ wallet, explorer, and acceptance-script compatibility.
 The same table is emitted in metadata schema 30 under
 `constraints.runtime_errors`, so `cellc constraints`, `cellc check --json`, and
 sidecar metadata all expose the same machine-readable registry.
+When a CLI failure can be tied to this registry, stderr uses the same
+`error[E####]` code and points to `cellc explain E####`.
 
 | Code | Name | Meaning | Debugging hint |
 |---:|---|---|---|

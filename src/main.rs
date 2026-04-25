@@ -1,4 +1,5 @@
 use camino::Utf8Path;
+use cellscript::error::CompileError;
 use clap::Parser;
 use colored::Colorize;
 use std::process;
@@ -97,7 +98,7 @@ fn main() {
         .unwrap_or(false)
     {
         if let Err(e) = cellscript::cli::run() {
-            eprintln!("{}: {}", "error".red(), e);
+            print_cli_error(&e);
             process::exit(1);
         }
         return;
@@ -122,7 +123,7 @@ fn main() {
             .map(cellscript::TargetProfile::from_name)
             .transpose()
             .unwrap_or_else(|e| {
-                eprintln!("{}: {}", "error".red(), e);
+                print_cli_error(&e);
                 process::exit(1);
             })
             .unwrap_or(cellscript::TargetProfile::Spora);
@@ -140,7 +141,7 @@ fn main() {
     let resolved_input = match resolve_input_path(Utf8Path::new(&input_file)) {
         Ok(path) => path,
         Err(e) => {
-            eprintln!("{}: {}", "error".red(), e);
+            print_cli_error(&e);
             process::exit(1);
         }
     };
@@ -162,7 +163,7 @@ fn main() {
                 }
             }
             Err(e) => {
-                eprintln!("{}: {}", "error".red(), e);
+                print_cli_error(&e);
                 process::exit(1);
             }
         }
@@ -173,7 +174,7 @@ fn main() {
         let tokens = match cellscript::lexer::lex(&source) {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("{}: {}", "error".red(), e);
+                print_cli_error(&e);
                 process::exit(1);
             }
         };
@@ -184,7 +185,7 @@ fn main() {
                 println!("{:#?}", ast);
             }
             Err(e) => {
-                eprintln!("{}: {}", "error".red(), e);
+                print_cli_error(&e);
                 process::exit(1);
             }
         }
@@ -221,17 +222,17 @@ fn main() {
                 .map(Ok)
                 .unwrap_or_else(|| default_output_path_for_input(Utf8Path::new(&input_file), &resolved_input, result.artifact_format))
                 .unwrap_or_else(|e| {
-                    eprintln!("{}: {}", "error".red(), e);
+                    print_cli_error(&e);
                     process::exit(1);
                 });
 
             if let Err(e) = result.write_to_path(&output_path) {
-                eprintln!("{}: {}", "error".red(), e);
+                print_cli_error(&e);
                 process::exit(1);
             }
             let metadata_path = default_metadata_path_for_artifact(&output_path);
             if let Err(e) = result.write_metadata_to_path(&metadata_path) {
-                eprintln!("{}: {}", "error".red(), e);
+                print_cli_error(&e);
                 process::exit(1);
             }
 
@@ -243,8 +244,17 @@ fn main() {
             println!("  Metadata: {}", metadata_path);
         }
         Err(e) => {
-            eprintln!("{}: {}", "error".red(), e);
+            print_cli_error(&e);
             process::exit(1);
         }
+    }
+}
+
+fn print_cli_error(error: &CompileError) {
+    if let Some(info) = cellscript::runtime_errors::runtime_error_info_for_diagnostic_message(&error.message) {
+        eprintln!("{}: {}", format!("error[E{:04}]", info.code).red(), error);
+        eprintln!("  {}: run `cellc explain E{:04}` for {}", "help".cyan(), info.code, info.name);
+    } else {
+        eprintln!("{}: {}", "error".red(), error);
     }
 }

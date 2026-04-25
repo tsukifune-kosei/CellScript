@@ -450,7 +450,7 @@ scaffolding implementation.
 
 ---
 
-**3c. Improve Error Messages with Codes** (3-5 days)
+**3c. Improve Error Messages with Codes** 🟡
 ```bash
 # Current
 error: fixed-byte comparison unresolved
@@ -468,8 +468,9 @@ error[E0018]: fixed-byte comparison unresolved
 
 **Implementation**:
 - Use `codespan-reporting` crate
-- Add CLI diagnostic codes (E0001, E0002, ...) that map to the existing runtime error registry where applicable
-- Add `cellc explain <error-code>` subcommand
+- ✅ Add CLI diagnostic codes that map to the existing runtime error registry where applicable
+- ✅ Add `cellc explain <error-code>` subcommand
+- ⏭️ Full source-span rendering remains future polish
 
 **Impact**: 5x debug experience improvement
 
@@ -650,7 +651,7 @@ with_default_hash_type(Data1)
 | CKB Blake2b Compiler/CLI | ✅ Builder/release helper complete | ✅ Keep complete; document boundary |
 | Generic in-script CKB Blake2b | ❌ Not claimed | ⏸️ P3 conditional |
 | CLI `cellc new` | 🟡 `cellc init` foundation existed | ✅ Cargo-compatible workflow implemented and tested |
-| CLI Error Messages | 🔴 Unfriendly | ✅ Rustc-style |
+| CLI Error Messages | 🟡 Runtime-registry E-codes for mapped failures | 🟡 Rustc-style source spans remain future polish |
 
 ---
 
@@ -829,7 +830,7 @@ ownership gaps.
 | Deserialization Specialization | ❌ Not mentioned | ✅ No | Genuine new optimization |
 | CLI: `build` default O1 | ✅ Implemented in branch | ✅ No | Genuine UX fix; `cellc build` JSON exposes `opt_level = 1` for dev builds |
 | CLI: `cellc new` | ✅ Implemented in branch on top of `cellc init` foundation | ⚠️ Partial | New work is the Cargo-style `new` workflow, optional git behavior, and `--lib` manifest/file-layout correctness, not initial project scaffolding from scratch |
-| CLI: Error codes + explain | 🟡 Runtime registry exists | ⚠️ Partial | New work is source diagnostic presentation and `cellc explain`; runtime error codes/docs are 0.12 |
+| CLI: Error codes + explain | 🟡 Runtime registry existed | ⚠️ Partial | `cellc explain` and stderr `error[E####]` hints now exist for runtime-registry-backed failures; full source-span rendering remains future polish |
 | Generic in-script CKB Blake2b | ⏸️ P3 conditional | ✅ No | v0.12 completed builder/release helper; on-chain dynamic hashing requires a real linked RISC-V implementation and production gates |
 | Function Inlining | ❌ Explicit non-goal | ✅ No | v0.12: "a large optimizer pass suite" is non-goal |
 | Hash Type DSL | 🟡 Partial | ✅ No | v0.12: manifest only, not DSL declaration |

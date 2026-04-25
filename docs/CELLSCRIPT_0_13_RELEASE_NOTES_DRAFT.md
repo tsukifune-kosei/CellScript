@@ -70,6 +70,8 @@ New in 0.13 branch work:
   `Cell.toml` aligned: the entry is `src/lib.cell`, and no stale
   `src/main.cell` entry file is left behind.
 - `cellc explain <error-code>` reports runtime error registry entries.
+- CLI stderr uses `error[E####]` plus a `cellc explain E####` hint when a
+  policy or compile error maps to the runtime error registry.
 
 ## Backend Shape Baseline
 

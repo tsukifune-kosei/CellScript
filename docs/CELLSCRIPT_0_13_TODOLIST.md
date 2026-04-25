@@ -125,7 +125,9 @@ Notes:
       leave a stale binary entry file.
   - [x] build default/profile polish: non-release `cellc build` uses O1 and
     release builds use O3.
-  - diagnostic presentation improvements
+  - [x] diagnostic presentation improvements for runtime-registry-backed
+    failures: CLI stderr now prints `error[E####]` plus `cellc explain E####`
+    help when a policy/compile error maps to a registered runtime error.
 
 ---
 

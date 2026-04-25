@@ -218,6 +218,31 @@ pub fn runtime_error_info_by_code(code: u64) -> Option<CellScriptRuntimeErrorInf
     CellScriptRuntimeError::from_code(code).map(runtime_error_info)
 }
 
+pub fn runtime_error_info_by_name(name: &str) -> Option<CellScriptRuntimeErrorInfo> {
+    ALL_RUNTIME_ERRORS.iter().copied().find(|error| error.name() == name).map(runtime_error_info)
+}
+
+pub fn runtime_error_info_for_diagnostic_message(message: &str) -> Option<CellScriptRuntimeErrorInfo> {
+    if let Some(info) = ALL_RUNTIME_ERRORS.iter().copied().map(runtime_error_info).find(|info| message.contains(info.name)) {
+        return Some(info);
+    }
+
+    if message.contains("fixed-byte-comparison") {
+        return Some(runtime_error_info(CellScriptRuntimeError::FixedByteComparisonUnresolved));
+    }
+    if message.contains("collection-") || message.contains("cell-backed collection") {
+        return Some(runtime_error_info(CellScriptRuntimeError::CollectionRuntimeUnsupported));
+    }
+    if message.contains("entry witness") || message.contains("entry-witness") {
+        return Some(runtime_error_info(CellScriptRuntimeError::EntryWitnessAbiInvalid));
+    }
+    if message.contains("mutate-field-transition") {
+        return Some(runtime_error_info(CellScriptRuntimeError::MutateTransitionMismatch));
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,12 +256,23 @@ mod tests {
             let info = runtime_error_info(*error);
             assert_eq!(CellScriptRuntimeError::from_code(info.code), Some(*error));
             assert_eq!(runtime_error_info_by_code(info.code), Some(info));
+            assert_eq!(runtime_error_info_by_name(info.name), Some(info));
             assert!(!info.name.is_empty());
             assert!(!info.description.is_empty());
             assert!(!info.hint.is_empty());
             assert!(codes.insert(info.code), "duplicate runtime error code {}", info.code);
             assert!(names.insert(info.name), "duplicate runtime error name {}", info.name);
         }
+    }
+
+    #[test]
+    fn diagnostic_messages_map_to_runtime_error_codes_where_possible() {
+        assert_eq!(
+            runtime_error_info_for_diagnostic_message("fail-closed runtime features: collection-push").map(|info| info.code),
+            Some(24)
+        );
+        assert_eq!(runtime_error_info_for_diagnostic_message("fixed-byte-comparison unresolved").map(|info| info.code), Some(18));
+        assert_eq!(runtime_error_info_for_diagnostic_message("ordinary type mismatch").map(|info| info.code), None);
     }
 
     #[test]
