@@ -248,18 +248,25 @@ HashMap<K, V>  // full generic
 
 **Mandatory tooling**:
 ```bash
-cellc explain-generics    # Show what T instantiates to
+cellc explain-generics    # Implemented: show checked stack-backed Vec<T> instantiations
 cellc abi                 # Show witness ABI changes
 cellc constraints         # Show code size impact
 ```
 
-**Must expose**:
-- What `T` was instantiated to
-- Which specialized functions were generated
-- How witness ABI changed
-- How schema hash / ABI hash changed
-- How much code size increased
-- Which generic instantiations were rejected
+**Current branch status**:
+- `cellc explain-generics` reports checked stack-backed
+  `Vec<T: FixedWidth>` instantiations, including scope, concrete collection
+  type, element type/width, fixed backing capacity, backing model, status, and
+  helper set.
+- Runtime and constraints metadata expose the same instantiation records.
+
+**Still required for any future generic expansion**:
+- What each new `T` was instantiated to.
+- Which specialized functions were generated.
+- How witness ABI changed.
+- How schema hash / ABI hash changed.
+- How much code size increased.
+- Which generic instantiations were rejected.
 
 **Otherwise generics will break inspectability** (a core CellScript principle).
 
@@ -319,7 +326,7 @@ Option<LinearAsset<T>>  → Is the asset consumed when None?
 
 **Mitigation**: **Mandatory inspectable lowering**
 ```bash
-cellc explain-generics  # Show exactly what T lowers to
+cellc explain-generics  # Implemented for checked stack-backed Vec<T> lowering
 cellc abi               # Show witness ABI changes
 ```
 

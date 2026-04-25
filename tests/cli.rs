@@ -3476,6 +3476,113 @@ action update(amount: u64) -> u64 {
 }
 
 #[test]
+fn cellc_explain_generics_reports_checked_vec_instantiations() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+name = "demo"
+version = "0.1.0"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src").join("main.cell"),
+        r#"
+module demo::main
+
+action address_helpers(owner: Address, candidate: Address) -> bool {
+    let mut owners = Vec::with_capacity(2)
+    owners.push(owner)
+    owners.insert(0, candidate)
+    owners.swap(0, 1)
+    let removed = owners.remove(1)
+    owners.push(removed)
+    owners.truncate(1)
+    owners.set(0, owner)
+
+    if owners.contains(owner) {
+        return owners.first() == owner
+    }
+
+    false
+}
+
+action hash_helpers(first: Hash, second: Hash) -> bool {
+    let mut keys = Vec::new()
+    keys.push(first)
+    keys.push(second)
+    let popped = keys.pop()
+    keys.push(popped)
+    keys.swap(0, 1)
+    keys.reverse()
+
+    if keys.first() == first {
+        return keys.last() == second
+    }
+
+    false
+}
+"#,
+    )
+    .unwrap();
+
+    let json_output =
+        Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("explain-generics").arg("--json").output().unwrap();
+    assert!(json_output.status.success(), "stderr: {}", String::from_utf8_lossy(&json_output.stderr));
+    let summary: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    assert_eq!(summary["status"], "ok");
+    assert!(summary["count"].as_u64().unwrap() >= 2);
+    let instantiations = summary["collection_instantiations"].as_array().unwrap();
+
+    let address = instantiations
+        .iter()
+        .find(|instantiation| instantiation["collection_ty"] == "Vec<Address>")
+        .expect("Vec<Address> instantiation should be explained");
+    assert_eq!(address["scope_kind"], "action");
+    assert_eq!(address["scope_name"], "address_helpers");
+    assert_eq!(address["element_ty"], "Address");
+    assert_eq!(address["element_width_bytes"], 32);
+    assert_eq!(address["max_elements"], 8);
+    assert_eq!(address["backing"], "stack-fixed-buffer:256");
+    assert_eq!(address["status"], "checked-runtime");
+    let address_helpers = address["helpers"].as_array().unwrap();
+    for helper in ["contains", "index", "insert", "new", "push", "remove", "set", "swap", "truncate"] {
+        assert!(
+            address_helpers.iter().any(|value| value.as_str() == Some(helper)),
+            "missing Address helper {helper}: {address_helpers:?}"
+        );
+    }
+
+    let hash = instantiations
+        .iter()
+        .find(|instantiation| instantiation["collection_ty"] == "Vec<Hash>")
+        .expect("Vec<Hash> instantiation should be explained");
+    assert_eq!(hash["scope_kind"], "action");
+    assert_eq!(hash["scope_name"], "hash_helpers");
+    assert_eq!(hash["element_ty"], "Hash");
+    assert_eq!(hash["element_width_bytes"], 32);
+    assert_eq!(hash["max_elements"], 8);
+    assert_eq!(hash["backing"], "stack-fixed-buffer:256");
+    assert_eq!(hash["status"], "checked-runtime");
+    let hash_helpers = hash["helpers"].as_array().unwrap();
+    for helper in ["index", "new", "pop", "push", "reverse", "swap"] {
+        assert!(hash_helpers.iter().any(|value| value.as_str() == Some(helper)), "missing Hash helper {helper}: {hash_helpers:?}");
+    }
+
+    let text_output = Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("explain-generics").output().unwrap();
+    assert!(text_output.status.success(), "stderr: {}", String::from_utf8_lossy(&text_output.stderr));
+    let stdout = String::from_utf8_lossy(&text_output.stdout);
+    assert!(stdout.contains("Checked bounded generic collection instantiations"), "{}", stdout);
+    assert!(stdout.contains("Vec<Address> -> Address"), "{}", stdout);
+    assert!(stdout.contains("Vec<Hash> -> Hash"), "{}", stdout);
+}
+
+#[test]
 fn cellc_entry_witness_subcommand_emits_parameterized_witness_json() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

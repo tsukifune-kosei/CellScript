@@ -38,6 +38,7 @@ pub enum Command {
     SchedulerPlan(SchedulerPlanArgs),
     CkbHash(CkbHashArgs),
     Explain(ExplainArgs),
+    ExplainGenerics(ExplainGenericsArgs),
     OptReport(OptReportArgs),
     /// Encode generated entry wrapper witness bytes
     EntryWitness(EntryWitnessArgs),
@@ -207,6 +208,14 @@ pub struct ExplainArgs {
 }
 
 #[derive(Debug, Default)]
+pub struct ExplainGenericsArgs {
+    pub input: Option<PathBuf>,
+    pub target: Option<String>,
+    pub target_profile: Option<String>,
+    pub json: bool,
+}
+
+#[derive(Debug, Default)]
 pub struct OptReportArgs {
     pub input: Option<PathBuf>,
     pub output: Option<PathBuf>,
@@ -296,6 +305,7 @@ impl CommandExecutor {
             Command::SchedulerPlan(args) => Self::scheduler_plan(args),
             Command::CkbHash(args) => Self::ckb_hash(args),
             Command::Explain(args) => Self::explain(args),
+            Command::ExplainGenerics(args) => Self::explain_generics(args),
             Command::OptReport(args) => Self::opt_report(args),
             Command::EntryWitness(args) => Self::entry_witness(args),
             Command::VerifyArtifact(args) => Self::verify_artifact(args),
@@ -1281,6 +1291,52 @@ impl CommandExecutor {
         println!("CellScript runtime error E{:04} ({}): {}", info.code, info.code, info.name);
         println!("  Description: {}", info.description);
         println!("  Hint: {}", info.hint);
+        Ok(())
+    }
+
+    fn explain_generics(args: ExplainGenericsArgs) -> Result<()> {
+        let input_path = args.input.unwrap_or_else(|| PathBuf::from("."));
+        let input = Utf8Path::from_path(&input_path)
+            .ok_or_else(|| crate::error::CompileError::without_span(format!("path '{}' is not valid UTF-8", input_path.display())))?;
+        let result = compile_path(
+            input,
+            CompileOptions { opt_level: 0, output: None, debug: false, target: args.target, target_profile: args.target_profile },
+        )?;
+        let instantiations = result.metadata.runtime.collection_instantiations;
+
+        if args.json {
+            let summary = serde_json::json!({
+                "status": "ok",
+                "count": instantiations.len(),
+                "collection_instantiations": instantiations,
+            });
+            let json = serde_json::to_string_pretty(&summary).map_err(|error| {
+                crate::error::CompileError::without_span(format!("failed to serialize generic explanation: {}", error))
+            })?;
+            println!("{}", json);
+            return Ok(());
+        }
+
+        if instantiations.is_empty() {
+            println!("No checked bounded generic collection instantiations found.");
+            return Ok(());
+        }
+
+        println!("Checked bounded generic collection instantiations:");
+        for instantiation in instantiations {
+            println!(
+                "  {} {}: {} -> {} ({} byte element, max {}, {})",
+                instantiation.scope_kind,
+                instantiation.scope_name,
+                instantiation.collection_ty,
+                instantiation.element_ty,
+                instantiation.element_width_bytes,
+                instantiation.max_elements,
+                instantiation.status
+            );
+            println!("    backing: {}", instantiation.backing);
+            println!("    helpers: {}", instantiation.helpers.join(", "));
+        }
         Ok(())
     }
 
@@ -3646,6 +3702,19 @@ impl CliParser {
                     .arg(Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON explanation")),
             )
             .subcommand(
+                ClapCommand::new("explain-generics")
+                    .about("Explain checked bounded generic collection instantiations")
+                    .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
+                    .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
+                    .arg(
+                        Arg::new("target-profile")
+                            .long("target-profile")
+                            .value_name("PROFILE")
+                            .help("Target profile: spora, ckb, or portable-cell"),
+                    )
+                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON explanation")),
+            )
+            .subcommand(
                 ClapCommand::new("opt-report")
                     .about("Compile O0..O3 and emit artifact-size/constraints comparison evidence")
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
@@ -3922,6 +3991,12 @@ impl CliParser {
             }),
             Some(("explain", m)) => Command::Explain(ExplainArgs {
                 code: m.get_one::<String>("code").cloned().expect("required runtime error code"),
+                json: m.get_flag("json"),
+            }),
+            Some(("explain-generics", m)) => Command::ExplainGenerics(ExplainGenericsArgs {
+                input: m.get_one::<String>("input").map(PathBuf::from),
+                target: m.get_one::<String>("target").cloned(),
+                target_profile: m.get_one::<String>("target-profile").cloned(),
                 json: m.get_flag("json"),
             }),
             Some(("opt-report", m)) => Command::OptReport(OptReportArgs {

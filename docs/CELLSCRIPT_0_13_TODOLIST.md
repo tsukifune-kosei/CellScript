@@ -116,6 +116,8 @@ Notes:
   metadata.
   - Metadata records scope, concrete `Vec<T>` type, element type/width, fixed
     backing capacity, status, and used helper set.
+  - `cellc explain-generics` exposes the same checked instantiation set in text
+    and JSON form for local audit.
 - [ ] Investigate a bounded `Option<T: FixedWidth>` representation.
 - [ ] Continue CLI 0.13 work:
   - `cellc new`
@@ -128,6 +130,9 @@ Notes:
   - [x] diagnostic presentation improvements for runtime-registry-backed
     failures: CLI stderr now prints `error[E####]` plus `cellc explain E####`
     help when a policy/compile error maps to a registered runtime error.
+  - [x] inspectable generic lowering: `cellc explain-generics` reports checked
+    stack-backed `Vec<T: FixedWidth>` instantiations, element width/capacity,
+    backing model, and helper set.
 
 ---
 
