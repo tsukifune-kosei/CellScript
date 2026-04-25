@@ -29,6 +29,10 @@ New in 0.13 branch work:
 - Stable fail-closed metadata names for unsupported collection paths.
 - `examples/registry.cell` documents supported local `Vec<Address>` /
   `Vec<Hash>` helper usage without implying full `HashMap<K, V>` support.
+- Runtime and constraints metadata expose each checked stack-backed
+  fixed-width `Vec<T>` instantiation, including scope, element type/width,
+  backing capacity, status, and helper set.
+- Metadata schema version is now 30.
 
 Important boundaries:
 

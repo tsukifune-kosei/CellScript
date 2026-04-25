@@ -111,8 +111,11 @@ Notes:
   usage without implying full generic collection support.
   - Added `examples/registry.cell` plus an integration test for stack-backed
     fixed-byte helper lowering and empty collection fail-closed debt.
-- [ ] Consider `Vec<T: FixedWidth>` monomorphization metadata output, with every
-  instantiation visible in ABI/constraints metadata.
+- [x] Add `Vec<T: FixedWidth>` monomorphization metadata output, with every
+  checked stack-backed instantiation visible in runtime and constraints
+  metadata.
+  - Metadata records scope, concrete `Vec<T>` type, element type/width, fixed
+    backing capacity, status, and used helper set.
 - [ ] Investigate a bounded `Option<T: FixedWidth>` representation.
 - [ ] Continue CLI 0.13 work:
   - `cellc new`

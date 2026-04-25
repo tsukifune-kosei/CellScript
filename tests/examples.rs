@@ -434,6 +434,50 @@ fn registry_example_uses_bounded_local_vec_helpers_without_collection_debt() {
             action.fail_closed_runtime_features
         );
     }
+
+    let membership_vec = result
+        .metadata
+        .runtime
+        .collection_instantiations
+        .iter()
+        .find(|instantiation| {
+            instantiation.scope_kind == "action"
+                && instantiation.scope_name == "local_registry_membership"
+                && instantiation.collection_ty == "Vec<Address>"
+        })
+        .expect("registry membership should expose Vec<Address> monomorphization metadata");
+    assert_eq!(membership_vec.element_ty, "Address");
+    assert_eq!(membership_vec.element_width_bytes, 32);
+    assert_eq!(membership_vec.max_elements, 8);
+    for helper in ["new", "push", "insert", "swap", "remove", "truncate", "set", "contains", "index"] {
+        assert!(
+            membership_vec.helpers.contains(&helper.to_string()),
+            "Vec<Address> metadata should expose helper {helper}: {:?}",
+            membership_vec.helpers
+        );
+    }
+
+    let hash_vec = result
+        .metadata
+        .constraints
+        .collection_instantiations
+        .iter()
+        .find(|instantiation| {
+            instantiation.scope_kind == "action"
+                && instantiation.scope_name == "local_registry_key_roundtrip"
+                && instantiation.collection_ty == "Vec<Hash>"
+        })
+        .expect("registry key roundtrip should expose Vec<Hash> constraints metadata");
+    assert_eq!(hash_vec.element_ty, "Hash");
+    assert_eq!(hash_vec.element_width_bytes, 32);
+    assert_eq!(hash_vec.backing, "stack-fixed-buffer:256");
+    for helper in ["new", "push", "pop", "swap", "reverse", "index", "len"] {
+        assert!(
+            hash_vec.helpers.contains(&helper.to_string()),
+            "Vec<Hash> constraints metadata should expose helper {helper}: {:?}",
+            hash_vec.helpers
+        );
+    }
 }
 
 fn assert_create(action: &cellscript::ActionMetadata, ty: &str, context: &str) {

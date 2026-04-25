@@ -56,7 +56,8 @@ fn validate_compile_options(options: &CompileOptions) -> Result<()> {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "spora";
-pub const METADATA_SCHEMA_VERSION: u32 = 29;
+pub const METADATA_SCHEMA_VERSION: u32 = 30;
+const STACK_COLLECTION_BACKING_BYTES: usize = 256;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
 pub const CKB_DEFAULT_HASH_PERSONALIZATION: &[u8; 16] = b"ckb-default-hash";
@@ -322,6 +323,8 @@ pub struct ConstraintsMetadata {
     pub entry_abi: Vec<EntryAbiConstraintsMetadata>,
     pub artifact: ArtifactConstraintsMetadata,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub collection_instantiations: Vec<CollectionInstantiationMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtime_errors: Vec<RuntimeErrorConstraintsMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ckb: Option<CkbConstraintsMetadata>,
@@ -554,9 +557,25 @@ pub struct RuntimeMetadata {
     pub ckb_runtime_accesses: Vec<CkbRuntimeAccessMetadata>,
     pub verifier_obligations: Vec<VerifierObligationMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub collection_instantiations: Vec<CollectionInstantiationMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transaction_runtime_input_requirements: Vec<TransactionRuntimeInputRequirementMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pool_primitives: Vec<PoolPrimitiveMetadata>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CollectionInstantiationMetadata {
+    pub scope_kind: String,
+    pub scope_name: String,
+    pub collection_ty: String,
+    pub element_ty: String,
+    pub element_width_bytes: usize,
+    pub backing: String,
+    pub max_elements: usize,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub helpers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1035,6 +1054,7 @@ fn constraints_metadata(
         status,
         entry_abi,
         artifact,
+        collection_instantiations: metadata.runtime.collection_instantiations.clone(),
         runtime_errors,
         ckb,
         spora,
@@ -3473,6 +3493,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
     let ckb_runtime_accesses = module_ckb_runtime_accesses(ir, &cell_type_kinds, &type_layouts);
     let verifier_obligations =
         module_verifier_obligations(ir, &type_layouts, &lifecycle_states, &cell_type_kinds, &pure_const_returns);
+    let collection_instantiations = module_collection_instantiation_metadata(ir, &type_layouts, &pure_const_returns);
     let transaction_runtime_input_requirements = transaction_runtime_input_requirements_from_obligations(&verifier_obligations);
     let pool_primitives = module_pool_primitive_metadata(ir, &type_layouts, &cell_type_kinds, &pure_const_returns);
     let has_entry_params = module_has_entry_params(ir);
@@ -3536,6 +3557,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
             fail_closed_runtime_features,
             ckb_runtime_accesses,
             verifier_obligations,
+            collection_instantiations,
             transaction_runtime_input_requirements,
             pool_primitives,
         },
@@ -4456,6 +4478,221 @@ fn module_pool_primitive_metadata(
         }
     }
     pool_primitives
+}
+
+#[derive(Debug, Default)]
+struct CollectionInstantiationBuilder {
+    scope_kind: String,
+    scope_name: String,
+    collection_ty: String,
+    element_ty: String,
+    element_width_bytes: usize,
+    helpers: BTreeSet<String>,
+}
+
+impl CollectionInstantiationBuilder {
+    fn into_metadata(self) -> CollectionInstantiationMetadata {
+        let max_elements = if self.element_width_bytes == 0 { 0 } else { STACK_COLLECTION_BACKING_BYTES / self.element_width_bytes };
+        CollectionInstantiationMetadata {
+            scope_kind: self.scope_kind,
+            scope_name: self.scope_name,
+            collection_ty: self.collection_ty,
+            element_ty: self.element_ty,
+            element_width_bytes: self.element_width_bytes,
+            backing: format!("stack-fixed-buffer:{STACK_COLLECTION_BACKING_BYTES}"),
+            max_elements,
+            status: "checked-runtime".to_string(),
+            helpers: self.helpers.into_iter().collect(),
+        }
+    }
+}
+
+fn module_collection_instantiation_metadata(
+    ir: &ir::IrModule,
+    type_layouts: &MetadataTypeLayouts,
+    pure_const_returns: &HashMap<String, ir::IrConst>,
+) -> Vec<CollectionInstantiationMetadata> {
+    let mut instantiations = Vec::new();
+    for item in &ir.items {
+        match item {
+            ir::IrItem::Action(action) => instantiations.extend(body_collection_instantiation_metadata(
+                "action",
+                &action.name,
+                &action.body,
+                &action.params,
+                type_layouts,
+                pure_const_returns,
+            )),
+            ir::IrItem::PureFn(function) => instantiations.extend(body_collection_instantiation_metadata(
+                "function",
+                &function.name,
+                &function.body,
+                &function.params,
+                type_layouts,
+                pure_const_returns,
+            )),
+            ir::IrItem::Lock(lock) => instantiations.extend(body_collection_instantiation_metadata(
+                "lock",
+                &lock.name,
+                &lock.body,
+                &lock.params,
+                type_layouts,
+                pure_const_returns,
+            )),
+            ir::IrItem::TypeDef(_) => {}
+        }
+    }
+    instantiations
+}
+
+fn body_collection_instantiation_metadata(
+    scope_kind: &str,
+    scope_name: &str,
+    body: &ir::IrBody,
+    params: &[ir::IrParam],
+    type_layouts: &MetadataTypeLayouts,
+    pure_const_returns: &HashMap<String, ir::IrConst>,
+) -> Vec<CollectionInstantiationMetadata> {
+    let param_schema_vars =
+        params.iter().filter(|param| named_type_name(&param.ty).is_some()).map(|param| param.binding.id).collect::<BTreeSet<_>>();
+    let availability = metadata_prelude_availability(body, &param_schema_vars, type_layouts, params, pure_const_returns);
+    let mut builders = BTreeMap::<String, CollectionInstantiationBuilder>::new();
+
+    for block in &body.blocks {
+        for instruction in &block.instructions {
+            match instruction {
+                ir::IrInstruction::Index { dest, arr, idx }
+                    if metadata_stack_collection_index_is_runtime_supported(dest, arr, idx, &availability, type_layouts) =>
+                {
+                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, arr, type_layouts, "index");
+                }
+                ir::IrInstruction::Length { operand, .. } if metadata_operand_is_stack_collection(operand, &availability) => {
+                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, operand, type_layouts, "len");
+                }
+                ir::IrInstruction::CollectionCapacity { collection, .. }
+                    if metadata_stack_collection_capacity_is_runtime_supported(collection, &availability, type_layouts) =>
+                {
+                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "capacity");
+                }
+                ir::IrInstruction::CollectionPush { collection, value }
+                    if metadata_stack_collection_push_is_runtime_supported(collection, value, &availability) =>
+                {
+                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "push");
+                }
+                ir::IrInstruction::CollectionExtend { collection, slice }
+                    if metadata_stack_collection_extend_is_runtime_supported(collection, slice, &availability, type_layouts) =>
+                {
+                    record_stack_collection_helper(
+                        &mut builders,
+                        scope_kind,
+                        scope_name,
+                        collection,
+                        type_layouts,
+                        "extend_from_slice",
+                    );
+                }
+                ir::IrInstruction::CollectionClear { collection }
+                    if metadata_stack_collection_clear_is_runtime_supported(collection, &availability) =>
+                {
+                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "clear");
+                }
+                ir::IrInstruction::CollectionReverse { collection }
+                    if metadata_stack_collection_reverse_is_runtime_supported(collection, &availability, type_layouts) =>
+                {
+                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "reverse");
+                }
+                ir::IrInstruction::CollectionTruncate { collection, len }
+                    if metadata_stack_collection_truncate_is_runtime_supported(collection, len, &availability) =>
+                {
+                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "truncate");
+                }
+                ir::IrInstruction::CollectionSwap { collection, left, right }
+                    if metadata_stack_collection_swap_is_runtime_supported(collection, left, right, &availability, type_layouts) =>
+                {
+                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "swap");
+                }
+                ir::IrInstruction::CollectionContains { collection, value, .. }
+                    if metadata_stack_collection_contains_is_runtime_supported(collection, value, &availability, type_layouts) =>
+                {
+                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "contains");
+                }
+                ir::IrInstruction::CollectionRemove { dest, collection, index }
+                    if metadata_stack_collection_remove_is_runtime_supported(dest, collection, index, &availability, type_layouts) =>
+                {
+                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "remove");
+                }
+                ir::IrInstruction::CollectionPop { dest, collection }
+                    if metadata_stack_collection_pop_is_runtime_supported(dest, collection, &availability, type_layouts) =>
+                {
+                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "pop");
+                }
+                ir::IrInstruction::CollectionInsert { collection, index, value }
+                    if metadata_stack_collection_insert_is_runtime_supported(
+                        collection,
+                        index,
+                        value,
+                        &availability,
+                        type_layouts,
+                    ) =>
+                {
+                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "insert");
+                }
+                ir::IrInstruction::CollectionSet { collection, index, value }
+                    if metadata_stack_collection_set_is_runtime_supported(collection, index, value, &availability, type_layouts) =>
+                {
+                    record_stack_collection_helper(&mut builders, scope_kind, scope_name, collection, type_layouts, "set");
+                }
+                _ => {}
+            }
+        }
+    }
+
+    builders.into_values().map(CollectionInstantiationBuilder::into_metadata).collect()
+}
+
+fn metadata_operand_is_stack_collection(operand: &ir::IrOperand, availability: &MetadataPreludeAvailability) -> bool {
+    matches!(operand, ir::IrOperand::Var(var) if availability.stack_collection_vars.contains(&var.id))
+}
+
+fn record_stack_collection_helper(
+    builders: &mut BTreeMap<String, CollectionInstantiationBuilder>,
+    scope_kind: &str,
+    scope_name: &str,
+    collection: &ir::IrOperand,
+    type_layouts: &MetadataTypeLayouts,
+    helper: &str,
+) {
+    let ir::IrOperand::Var(collection) = collection else {
+        return;
+    };
+    let collection_ty = ir_type_to_string(&collection.ty);
+    let Some(element_ty) = metadata_vec_element_type_name(&collection.ty) else {
+        return;
+    };
+    let Some(element_width_bytes) = metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts) else {
+        return;
+    };
+    let key = format!("{scope_kind}:{scope_name}:{collection_ty}");
+    let builder = builders.entry(key).or_insert_with(|| {
+        let mut helpers = BTreeSet::new();
+        helpers.insert("new".to_string());
+        CollectionInstantiationBuilder {
+            scope_kind: scope_kind.to_string(),
+            scope_name: scope_name.to_string(),
+            collection_ty: collection_ty.clone(),
+            element_ty: element_ty.to_string(),
+            element_width_bytes,
+            helpers,
+        }
+    });
+    builder.helpers.insert(helper.to_string());
+}
+
+fn metadata_vec_element_type_name(ty: &ir::IrType) -> Option<&str> {
+    let ir::IrType::Named(name) = ty else {
+        return None;
+    };
+    name.strip_prefix("Vec<")?.strip_suffix('>')
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -202,11 +202,14 @@ Compact support matrix:
 | Molecule dynamic fields / entry-witness vectors | ✅ read-oriented paths | ❌ local mutation helpers | ❌ local mutation helpers | 0.12 foundation; not counted as new 0.13 generic runtime |
 | Cell-backed / linear vectors | ❌ | ❌ | ❌ | fail-closed until ownership proof exists |
 
-Allowed as v0.13 bounded follow-up work only after explicit implementation,
-metadata, and tests:
+Implemented in the current branch for checked stack-backed fixed-width
+collection helper paths:
 ```cellscript
 Vec<T: FixedWidth>
 ```
+
+Runtime and constraints metadata expose each concrete `Vec<T>` instance with
+scope, element type/width, fixed backing capacity, status, and helper set.
 
 `Option<T: FixedWidth>` remains an investigation item, not a current 0.13
 release claim.
@@ -364,7 +367,7 @@ Vec<Pool>       → vec_pool_push/pop/len
 
 **Phase 1 (v0.13)**: Value-level generics only
 - current stack-backed fixed-width `Vec<T>` helper paths
-- `Vec<T: FixedWidth>` monomorphization metadata only if it lands with explicit constraints output
+- `Vec<T: FixedWidth>` monomorphization metadata for checked stack-backed helper paths with explicit constraints output
 - Phantom-style asset tags (`Token<phantom Asset>`)
 - Generic interfaces/templates (`interface FungibleToken<Asset>`)
 - Minimal trait constraints (FixedWidth, Hashable, MoleculeSchema, NonLinear)
