@@ -218,6 +218,7 @@ pub enum IrInstruction {
     CollectionClear { collection: IrOperand },
     CollectionContains { dest: IrVar, collection: IrOperand, value: IrOperand },
     CollectionRemove { dest: IrVar, collection: IrOperand, index: IrOperand },
+    CollectionInsert { collection: IrOperand, index: IrOperand, value: IrOperand },
     Call { dest: Option<IrVar>, func: String, args: Vec<IrOperand> },
     ReadRef { dest: IrVar, ty: String },
     Move { dest: IrVar, src: IrOperand },
@@ -3075,6 +3076,34 @@ impl IrGenerator {
                         index: lowered_index.operand,
                     });
                     Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
+                }
+                "insert" if call.args.len() == 2 => {
+                    let lowered_collection = self.lower_expr(&field.expr, current, blocks, vars);
+                    let active = lowered_collection.current?;
+                    let lowered_index = self.lower_expr(&call.args[0], active, blocks, vars);
+                    let active = lowered_index.current?;
+                    let lowered_value = self.lower_expr(&call.args[1], active, blocks, vars);
+                    let active = lowered_value.current?;
+                    let collection_operand = lowered_collection.operand;
+                    if let (Expr::Identifier(receiver_name), IrOperand::Var(collection_var)) =
+                        (field.expr.as_ref(), &collection_operand)
+                    {
+                        if matches!(&collection_var.ty, IrType::Named(name) if name == "Vec") {
+                            if let (Some(item_ty), Some(receiver_var)) =
+                                (inline_ir_type_repr(&self.operand_type(&lowered_value.operand)), vars.get_mut(receiver_name))
+                            {
+                                if receiver_var.id == collection_var.id {
+                                    receiver_var.ty = IrType::Named(format!("Vec<{}>", item_ty));
+                                }
+                            }
+                        }
+                    }
+                    self.block_mut(blocks, active).instructions.push(IrInstruction::CollectionInsert {
+                        collection: collection_operand,
+                        index: lowered_index.operand,
+                        value: lowered_value.operand,
+                    });
+                    Some(LoweredExpr { operand: IrOperand::Const(IrConst::Bool(true)), current: Some(active) })
                 }
                 "extend_from_slice" if call.args.len() == 1 => {
                     let lowered_collection = self.lower_expr(&field.expr, current, blocks, vars);

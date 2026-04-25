@@ -2265,6 +2265,43 @@ impl<'a> TypeChecker<'a> {
                             _ => Err(CompileError::new("remove is only supported on Vec values", call.span)),
                         }
                     }
+                    "insert" => {
+                        self.validate_builtin_arity("Vec.insert", 2, arg_types, call.span)?;
+                        if arg_types[0] != Type::U64 {
+                            return Err(CompileError::new("Vec.insert expects a u64 index", call.span));
+                        }
+                        let arg_ty = &arg_types[1];
+                        if self.type_contains_reference(arg_ty) {
+                            return Err(CompileError::new(
+                                format!(
+                                    "Vec.insert cannot store reference type {}; Vec<T> values must use owned non-reference items",
+                                    type_repr(arg_ty)
+                                ),
+                                call.span,
+                            ));
+                        }
+                        match &receiver_ty {
+                            Type::Named(name) if name == "Vec" => {
+                                if let Expr::Identifier(receiver_name) = field.expr.as_ref() {
+                                    env.update_type(receiver_name, Type::Named(format!("Vec<{}>", type_repr(arg_ty))));
+                                }
+                                Ok(Type::Unit)
+                            }
+                            Type::Named(name) => {
+                                let Some(item_ty) = self.parse_named_collection_item_type(name) else {
+                                    return Err(CompileError::new("insert is only supported on Vec values", call.span));
+                                };
+                                if !self.types_equal(&item_ty, arg_ty) {
+                                    return Err(CompileError::new(
+                                        format!("Vec.insert type mismatch: expected {:?}, found {:?}", item_ty, arg_ty),
+                                        call.span,
+                                    ));
+                                }
+                                Ok(Type::Unit)
+                            }
+                            _ => Err(CompileError::new("insert is only supported on Vec values", call.span)),
+                        }
+                    }
                     "extend_from_slice" => {
                         self.validate_builtin_arity("Vec.extend_from_slice", 1, arg_types, call.span)?;
                         Ok(Type::Unit)

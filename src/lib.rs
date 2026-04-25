@@ -4031,6 +4031,11 @@ fn collect_instruction_scope(instruction: &ir::IrInstruction, used_types: &mut B
             collect_operand_named_types(collection, used_types);
             collect_operand_named_types(index, used_types);
         }
+        ir::IrInstruction::CollectionInsert { collection, index, value } => {
+            collect_operand_named_types(collection, used_types);
+            collect_operand_named_types(index, used_types);
+            collect_operand_named_types(value, used_types);
+        }
         ir::IrInstruction::Call { dest, func, args } => {
             if let Some(dest) = dest {
                 collect_ir_type_named_types(&dest.ty, used_types);
@@ -4904,6 +4909,11 @@ fn body_linear_collection_obligations(
                 ir::IrInstruction::CollectionExtend { slice, .. } => {
                     for type_name in ir_operand_cell_backed_collection_type_names(slice, cell_type_kinds) {
                         operations_by_type.entry(type_name).or_default().insert("extend");
+                    }
+                }
+                ir::IrInstruction::CollectionInsert { value, .. } => {
+                    for type_name in ir_operand_cell_backed_type_names(value, cell_type_kinds) {
+                        operations_by_type.entry(type_name).or_default().insert("insert");
                     }
                 }
                 _ => {}
@@ -9018,6 +9028,22 @@ fn body_fail_closed_runtime_features(
                         features.insert("cell-backed-collection-remove".to_string());
                     }
                 }
+                ir::IrInstruction::CollectionInsert { collection, index, value } => {
+                    if !metadata_stack_collection_insert_is_runtime_supported(
+                        collection,
+                        index,
+                        value,
+                        &prelude_availability,
+                        type_layouts,
+                    ) {
+                        features.insert("collection-insert".to_string());
+                    }
+                    if ir_operand_is_cell_backed_collection(collection, cell_type_kinds)
+                        || ir_operand_contains_cell_backed_value(value, cell_type_kinds)
+                    {
+                        features.insert("cell-backed-collection-insert".to_string());
+                    }
+                }
                 ir::IrInstruction::Consume { operand } if consumed_schema_var_id(instruction).is_none() => {
                     features.insert("consume-expression".to_string());
                     if matches!(operand, ir::IrOperand::Const(_)) {
@@ -9560,6 +9586,10 @@ fn metadata_prelude_availability(
                         }
                     }
                 }
+                ir::IrInstruction::CollectionInsert { collection: ir::IrOperand::Var(collection), .. } => {
+                    availability.constructed_byte_vector_vars.remove(&collection.id);
+                    availability.empty_molecule_vector_vars.remove(&collection.id);
+                }
                 _ => {}
             }
         }
@@ -9853,6 +9883,32 @@ fn metadata_stack_collection_remove_is_runtime_supported(
     availability.stack_collection_vars.contains(&collection.id)
         && metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts)
             .is_some_and(|width| metadata_fixed_scalar_width(&dest.ty, Some(width)).is_some())
+        && (const_usize_operand(index).is_some() || metadata_u64_operand_available(index, availability))
+}
+
+fn metadata_stack_collection_insert_is_runtime_supported(
+    collection: &ir::IrOperand,
+    index: &ir::IrOperand,
+    value: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
+    let ir::IrOperand::Var(collection) = collection else {
+        return false;
+    };
+    if !availability.stack_collection_vars.contains(&collection.id) {
+        return false;
+    }
+    let Some(value_width) = metadata_runtime_collection_part_width(value, availability) else {
+        return false;
+    };
+    let Some(element_width) = metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts) else {
+        return false;
+    };
+    element_width != 0
+        && element_width == value_width
+        && value_width <= 8
+        && metadata_fixed_value_available_with_width(value, availability, value_width)
         && (const_usize_operand(index).is_some() || metadata_u64_operand_available(index, availability))
 }
 
@@ -14709,6 +14765,18 @@ action stack_vec_remove_middle() -> u64 {
 }
 "#;
 
+    const STACK_VEC_INSERT_RUNTIME_PROGRAM: &str = r#"
+module test
+
+action stack_vec_insert_middle() -> u64 {
+    let mut values = Vec::new()
+    values.push(7)
+    values.push(11)
+    values.insert(1, 9)
+    return values.len() + values[1] + values[2]
+}
+"#;
+
     const FIXED_BYTE_STACK_VEC_RUNTIME_PROGRAM: &str = r#"
 module test
 
@@ -17362,6 +17430,39 @@ action grant(config: read_ref Config, token: Token) -> Grant {
                 && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
                 && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
             "stack-backed Vec<u64>.remove should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_scalar_insert() {
+        let result = compile(STACK_VEC_INSERT_RUNTIME_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection insert element_size=8"),
+            "Vec<u64>.insert should insert into the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection insert shift element_size=8"),
+            "Vec<u64>.insert should shift existing stack collection elements right:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection insert is not available for this collection"),
+            "stack-backed Vec<u64>.insert should not hit fail-closed collection path:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_insert_middle").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-insert".to_string())
+                && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
+            "stack-backed Vec<u64>.insert should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
     }

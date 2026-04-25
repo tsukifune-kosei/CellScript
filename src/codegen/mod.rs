@@ -1730,6 +1730,9 @@ impl CodeGenerator {
                             }
                         }
                     }
+                    IrInstruction::CollectionInsert { collection: IrOperand::Var(collection), .. } => {
+                        self.constructed_byte_vectors.remove(&collection.id);
+                    }
                     IrInstruction::Move { dest, src: IrOperand::Var(src) }
                     | IrInstruction::Unary { dest, op: UnaryOp::Ref | UnaryOp::Deref, operand: IrOperand::Var(src) } => {
                         if self.stack_collection_vars.contains(&src.id) {
@@ -2149,6 +2152,9 @@ impl CodeGenerator {
             }
             IrInstruction::CollectionRemove { dest, collection, index } => {
                 self.emit_collection_remove(dest, collection, index)?;
+            }
+            IrInstruction::CollectionInsert { collection, index, value } => {
+                self.emit_collection_insert(collection, index, value)?;
             }
             IrInstruction::Call { dest, func, args } => {
                 self.emit_call(dest.as_ref(), func, args)?;
@@ -5616,6 +5622,11 @@ impl CodeGenerator {
                 self.record_operand(collection, max_var_id);
                 self.record_operand(index, max_var_id);
             }
+            IrInstruction::CollectionInsert { collection, index, value } => {
+                self.record_operand(collection, max_var_id);
+                self.record_operand(index, max_var_id);
+                self.record_operand(value, max_var_id);
+            }
         }
     }
 
@@ -6754,6 +6765,110 @@ impl CodeGenerator {
         self.emit(format!("ld t4, {}(sp)", collection.id * 8));
         self.emit("ld t0, -8(t4)");
         self.emit("addi t0, t0, -1");
+        self.emit("sd t0, -8(t4)");
+        true
+    }
+
+    fn emit_collection_insert(&mut self, collection: &IrOperand, index: &IrOperand, value: &IrOperand) -> Result<()> {
+        self.emit("# collection insert");
+        self.emit_symbolic_operand_comment("collection", collection);
+        self.emit_symbolic_operand_comment("index", index);
+        self.emit_symbolic_operand_comment("value", value);
+        if self.emit_stack_collection_insert(collection, index, value) {
+            return Ok(());
+        }
+        self.emit("# cellscript abi: collection insert is not available for this collection");
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        Ok(())
+    }
+
+    fn emit_stack_collection_insert(&mut self, collection: &IrOperand, index: &IrOperand, value: &IrOperand) -> bool {
+        let IrOperand::Var(collection) = collection else {
+            return false;
+        };
+        if !self.stack_collection_vars.contains(&collection.id) {
+            return false;
+        }
+        let Some(value_width) = constructed_byte_vector_part_width(value) else {
+            return false;
+        };
+        let Some(element_width) = molecule_vector_element_fixed_width(&collection.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
+        else {
+            return false;
+        };
+        if element_width != value_width || fixed_scalar_operand_width(value).is_none() {
+            return false;
+        }
+
+        self.emit(format!("# cellscript abi: stack collection insert element_size={}", element_width));
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("ld t0, -8(t4)");
+        self.emit_operand_to_register("t1", index);
+
+        let bounds_ok = self.fresh_label("stack_collection_insert_bounds_ok");
+        self.emit("sltu t2, t0, t1");
+        self.emit(format!("beqz t2, {}", bounds_ok));
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        self.emit_label(&bounds_ok);
+
+        self.emit(format!("li t2, {}", element_width));
+        self.emit("mul t3, t0, t2");
+        self.emit(format!("li t5, {}", RUNTIME_COLLECTION_BUFFER_SIZE));
+        self.emit("sub t6, t5, t3");
+        self.emit("sltu t6, t6, t2");
+        let capacity_ok = self.fresh_label("stack_collection_insert_capacity_ok");
+        self.emit(format!("beqz t6, {}", capacity_ok));
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        self.emit_label(&capacity_ok);
+
+        let index_offset = self.runtime_expr_temp_offset(0).expect("runtime temp slot 0");
+        let current_offset = self.runtime_expr_temp_offset(1).expect("runtime temp slot 1");
+        self.emit_stack_sd("t1", index_offset);
+        self.emit_stack_sd("t0", current_offset);
+        let shift_loop = self.fresh_label("stack_collection_insert_shift_loop");
+        let shift_done = self.fresh_label("stack_collection_insert_shift_done");
+        self.emit(format!("# cellscript abi: stack collection insert shift element_size={}", element_width));
+        self.emit_label(&shift_loop);
+        self.emit_stack_ld("t0", current_offset);
+        self.emit_stack_ld("t1", index_offset);
+        self.emit(format!("beq t0, t1, {}", shift_done));
+        self.emit("addi t2, t0, -1");
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit(format!("li t3, {}", element_width));
+        self.emit("mul t5, t0, t3");
+        self.emit("add t5, t4, t5");
+        self.emit("mul t6, t2, t3");
+        self.emit("add t6, t4, t6");
+        self.emit_unaligned_scalar_load("t6", "t0", "t2", 0, element_width);
+        match element_width {
+            1 => self.emit("sb t0, 0(t5)"),
+            2 => self.emit("sh t0, 0(t5)"),
+            4 => self.emit("sw t0, 0(t5)"),
+            8 => self.emit("sd t0, 0(t5)"),
+            _ => return false,
+        }
+        self.emit_stack_ld("t0", current_offset);
+        self.emit("addi t0, t0, -1");
+        self.emit_stack_sd("t0", current_offset);
+        self.emit(format!("j {}", shift_loop));
+        self.emit_label(&shift_done);
+
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit_stack_ld("t0", index_offset);
+        self.emit(format!("li t2, {}", element_width));
+        self.emit("mul t3, t0, t2");
+        self.emit("add t5, t4, t3");
+        self.emit_operand_to_register("t1", value);
+        match element_width {
+            1 => self.emit("sb t1, 0(t5)"),
+            2 => self.emit("sh t1, 0(t5)"),
+            4 => self.emit("sw t1, 0(t5)"),
+            8 => self.emit("sd t1, 0(t5)"),
+            _ => return false,
+        }
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("ld t0, -8(t4)");
+        self.emit("addi t0, t0, 1");
         self.emit("sd t0, -8(t4)");
         true
     }
