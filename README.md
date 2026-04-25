@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
 [![Targets: Spora and CKB](https://img.shields.io/badge/targets-Spora%20%7C%20CKB-2f6f4e.svg)](#target-profiles)
-[![Package Manager: Beta](https://img.shields.io/badge/package%20manager-beta-f0ad4e.svg)](#package-manager-beta)
+[![Package Workflow: Local First](https://img.shields.io/badge/package%20workflow-local%20first-2f6f4e.svg)](#package-workflow)
 [![LSP: Production Tooling](https://img.shields.io/badge/LSP-production%20tooling-2f6f4e.svg)](#editor-support)
 [![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](https://github.com/tsukifune-kosei/CellScript/wiki)
 
@@ -189,8 +189,12 @@ receipt VestingGrant has store, claim {
     unlock_epoch: u64
 }
 
-lock owner_only(owner: Address, signature: Signature) {
-    assert_invariant(verify_signature(owner, signature), "invalid signature")
+struct Wallet {
+    owner: Address
+}
+
+lock owner_only(wallet: &Wallet, signer: Address) -> bool {
+    wallet.owner == signer
 }
 ```
 
@@ -426,7 +430,7 @@ CKB cycle/capacity estimates, and Spora v0 mass estimates.
 
 | Module | What it does |
 |---|---|
-| **Package manager** (`package/`) | `Cell.toml` parsing, dependency resolution (`--path`/`--git`), `Cell.lock` reproducibility, `cellc init`/`add`/`remove`/`info`. Registry commands are shaped but fail-closed. |
+| **Package workflow** (`package/`) | `Cell.toml` parsing, local path dependency resolution, transitive `Cell.lock` reproducibility, `cellc init`/`add`/`remove`/`install --path`/`update`/`info`. Registry publishing and registry dependency resolution are shaped but fail-closed. |
 | **Incremental compiler** (`incremental/`) | Dependency-graph-aware build cache — skips recompilation when inputs are unchanged. |
 | **Build integration** (`lib.rs`) | Resolves `Cell.toml` → `CellBuildConfig`, merges CLI + manifest options, selects entry scope, runs policy gates, writes artifacts + metadata. |
 
@@ -497,28 +501,35 @@ deny_runtime_obligations = false
 
 Command-line flags can tighten policy checks for a build or CI job.
 
-### Package Manager Beta
+### Package Workflow
 
-CellScript ships a beta package manager in `cellc`. It is intentionally local
-and fail-closed while remote registry resolution remains future protocol work.
+CellScript ships a local-first package workflow in `cellc`. Local packages,
+source roots, path dependencies, lockfile refresh, and package
+build/check/doc/fmt flows are production-style. Registry publishing and
+registry dependency resolution remain experimental and fail-closed.
 
 **Supported today:**
 
 - `cellc init` — create an application or library package with `Cell.toml`
-- `cellc build` / `check` / `metadata` / `test` — accept a package directory
-  or manifest as input
-- `cellc add --path` / `--git` — record dependencies in `Cell.toml`
-- Local path dependencies resolved recursively and included in module loading,
-  source hashing, and metadata
-- `Cell.lock` — captures resolved dependency identity for reproducible checks
+- `cellc build` / `check` / `doc` / `fmt` — operate on the current package
+- top-level `cellc <input>` and report commands accept `.cell` files, package
+  directories, or `Cell.toml` manifests where the command supports an input
+- `cellc add --path` — records local path dependencies in `Cell.toml`
+- `cellc install --path` and `cellc update` — resolve local path dependency
+  graphs and refresh `Cell.lock`
+- Local path dependencies are resolved recursively and included in module
+  loading, source hashing, and metadata
+- `Cell.lock` — captures direct and transitive resolved dependency identity
+  for reproducible checks
 - `cellc info --json` — exposes package metadata for CI and tooling
 
-**Still beta:**
+**Experimental / fail-closed:**
 
-- Registry `publish`, `install`, `update`, and `login` are command-shaped but
-  fail-closed until the registry backend and trust model are finalized
-- Package names, lockfile fields, and registry authentication are not stable
-  production interfaces yet
+- Registry `publish`, registry package installation/resolution, and `login`
+  are command-shaped but fail-closed until the registry backend and trust model
+  are finalized
+- Git dependencies are explicit remote source fetches; treat them as
+  review-required inputs, not the registry production path
 
 ### CLI Commands
 
@@ -540,10 +551,11 @@ and fail-closed while remote registry resolution remains future protocol work.
 | `cellc fmt` | Format `.cell` sources or check formatting |
 | `cellc init` | Create a package skeleton |
 | `cellc add` / `remove` | Mutate local package dependencies |
+| `cellc install --path` / `update` | Resolve local path dependencies and refresh `Cell.lock` |
 | `cellc info` | Print manifest and package information |
 | `cellc repl` | Start the interactive REPL |
 | `cellc run` | Run ELF entrypoints via VM runner or simulator |
-| `cellc publish` / `install` / `update` / `login` | Beta — registry-shaped, fail-closed |
+| `cellc publish` / registry `install` / registry-backed `update` / `login` | Experimental registry flows, fail-closed |
 
 ### CLI Options
 
