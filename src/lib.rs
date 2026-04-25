@@ -9922,8 +9922,10 @@ fn metadata_stack_collection_pop_is_runtime_supported(
         return false;
     };
     availability.stack_collection_vars.contains(&collection.id)
-        && metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts)
-            .is_some_and(|width| metadata_fixed_scalar_width(&dest.ty, Some(width)).is_some())
+        && metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts).is_some_and(|width| {
+            metadata_fixed_scalar_width(&dest.ty, Some(width)).is_some()
+                || metadata_fixed_byte_width(&dest.ty, type_static_length(&dest.ty)).is_some_and(|dest_width| dest_width == width)
+        })
 }
 
 fn metadata_stack_collection_insert_is_runtime_supported(
@@ -14817,6 +14819,17 @@ action stack_vec_pop_last() -> u64 {
 }
 "#;
 
+    const FIXED_BYTE_STACK_VEC_POP_PROGRAM: &str = r#"
+module test
+
+action stack_vec_address_pop(owner: Address) -> bool {
+    let mut owners = Vec::new()
+    owners.push(owner)
+    let popped = owners.pop()
+    return popped == owner
+}
+"#;
+
     const STACK_VEC_INSERT_RUNTIME_PROGRAM: &str = r#"
 module test
 
@@ -17510,6 +17523,38 @@ action grant(config: read_ref Config, token: Token) -> Grant {
                 && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
                 && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
             "stack-backed Vec<u64>.pop should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_fixed_byte_pop() {
+        let result = compile(FIXED_BYTE_STACK_VEC_POP_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection pop element_size=32"),
+            "Vec<Address>.pop should pop from the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection pop fixed bytes"),
+            "Vec<Address>.pop should return a fixed-byte pointer into the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection pop is not available for this collection"),
+            "stack-backed Vec<Address>.pop should not hit fail-closed collection path:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_address_pop").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-pop".to_string())
+                && !action.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
+            "stack-backed Vec<Address>.pop should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
     }

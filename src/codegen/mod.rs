@@ -6801,7 +6801,9 @@ impl CodeGenerator {
         else {
             return false;
         };
-        if fixed_scalar_width(&dest.ty, Some(element_width)).is_none() {
+        let dest_scalar = fixed_scalar_width(&dest.ty, Some(element_width)).is_some();
+        let dest_fixed_bytes = fixed_byte_width(&dest.ty, type_static_length(&dest.ty)).is_some_and(|width| width == element_width);
+        if !dest_scalar && !dest_fixed_bytes {
             return false;
         }
 
@@ -6817,8 +6819,13 @@ impl CodeGenerator {
         self.emit(format!("li t2, {}", element_width));
         self.emit("mul t3, t1, t2");
         self.emit("add t5, t4, t3");
-        self.emit_unaligned_scalar_load("t5", "t6", "t2", 0, element_width);
-        self.emit(format!("sd t6, {}(sp)", dest.id * 8));
+        if dest_scalar {
+            self.emit_unaligned_scalar_load("t5", "t6", "t2", 0, element_width);
+            self.emit(format!("sd t6, {}(sp)", dest.id * 8));
+        } else {
+            self.emit("# cellscript abi: stack collection pop fixed bytes");
+            self.emit(format!("sd t5, {}(sp)", dest.id * 8));
+        }
         self.emit("sd t1, -8(t4)");
         true
     }
