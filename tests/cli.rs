@@ -3588,6 +3588,60 @@ action hash_helpers(first: Hash, second: Hash) -> bool {
 }
 
 #[test]
+fn cellc_action_build_emits_builder_plan_json() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+name = "demo"
+version = "0.1.0"
+
+[build]
+target_profile = "ckb"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src").join("main.cell"),
+        r#"
+module demo::main
+
+resource Token has store, transfer {
+    amount: u64,
+}
+
+action mint(amount: u64) -> Token {
+    create Token { amount: amount }
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("action")
+        .arg("build")
+        .arg("--action")
+        .arg("mint")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(plan["status"], "ok");
+    assert_eq!(plan["policy"], "cellscript-action-builder-plan-v1");
+    assert_eq!(plan["action"], "mint");
+    assert_eq!(plan["target_profile"], "ckb");
+    assert!(plan["entry_witness_abi"]["required"].as_bool().unwrap());
+    assert_eq!(plan["builder_requirements"]["created_outputs"].as_array().unwrap().len(), 1);
+    assert!(plan["ckb"]["capacity_evidence_contract"]["required"].as_bool().unwrap());
+}
+
+#[test]
 fn cellc_entry_witness_subcommand_emits_parameterized_witness_json() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

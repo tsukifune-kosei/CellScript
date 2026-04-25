@@ -149,6 +149,25 @@ Notes:
   - [x] inspectable generic lowering: `cellc explain-generics` reports checked
     stack-backed `Vec<T: FixedWidth>` instantiations, element width/capacity,
     backing model, and helper set.
+- [x] Complete 0.13 optimizer/DSL/builder roadmap gaps:
+  - [x] cross-statement constant propagation for top-level and immutable local
+    constants in the AST optimizer.
+  - [x] simple pure function inlining for expression-bodied or single-return
+    helpers.
+  - [x] conservative DCE for unused pure helper functions and unused immutable
+    local bindings with pure values.
+  - [x] type-level CKB hash-type DSL:
+    `with_default_hash_type(Data|Data1|Data2|Type)` is parsed, lowered, and
+    surfaced in type metadata as `default_hash_type`.
+  - [x] `cellc action build` emits a JSON/text action builder plan with entry
+    witness ABI, created/mutated output requirements, verifier obligations,
+    CKB hash_type/capacity/timelock policy, and constraints status.
+  - [x] deserialization specialization remains compile-time type-layout based:
+    codegen uses schema/type layout offsets instead of generic runtime
+    deserializers, and the 0.13 gate keeps that path test-covered.
+  - [x] broader malformed/adversarial coverage:
+    `tests/adversarial_0_13.rs` locks rejection of unsupported full maps,
+    cell-backed vectors, untyped vector mutation, and invalid hash_type DSL.
 
 ---
 

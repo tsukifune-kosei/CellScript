@@ -2176,6 +2176,10 @@ pub struct TypeMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub type_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_hash_type: Option<String>,
+    #[serde(default)]
+    pub hash_type_source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub type_id_hash_blake3: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ckb_type_id: Option<CkbTypeIdMetadata>,
@@ -11324,6 +11328,12 @@ fn type_metadata(
     TypeMetadata {
         name: type_def.name.clone(),
         type_id,
+        default_hash_type: type_def.default_hash_type.clone(),
+        hash_type_source: if type_def.default_hash_type.is_some() {
+            "dsl-with_default_hash_type".to_string()
+        } else {
+            "target-default".to_string()
+        },
         type_id_hash_blake3,
         ckb_type_id,
         kind: format!("{:?}", type_def.kind),
@@ -20043,6 +20053,31 @@ action add(a: u64, b: u64) -> u64 {
                 && dep.hash_type.as_deref() == Some("type")
         }));
         assert_eq!(ckb.dep_group_manifest.status, "manifest-declares-dep-group-builder-must-expand-or-reference");
+    }
+
+    #[test]
+    fn compile_surfaces_type_level_hash_type_dsl_metadata() {
+        let result = compile(
+            r#"
+module hash_type_dsl
+
+resource Token has store, transfer
+with_default_hash_type(Data1)
+{
+    amount: u64,
+}
+
+action mint(amount: u64) -> Token {
+    create Token { amount: amount }
+}
+"#,
+            CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
+        )
+        .unwrap();
+
+        let token = result.metadata.types.iter().find(|ty| ty.name == "Token").expect("Token metadata");
+        assert_eq!(token.default_hash_type.as_deref(), Some("data1"));
+        assert_eq!(token.hash_type_source, "dsl-with_default_hash_type");
     }
 
     #[test]

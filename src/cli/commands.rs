@@ -40,6 +40,7 @@ pub enum Command {
     Explain(ExplainArgs),
     ExplainGenerics(ExplainGenericsArgs),
     OptReport(OptReportArgs),
+    ActionBuild(ActionBuildArgs),
     /// Encode generated entry wrapper witness bytes
     EntryWitness(EntryWitnessArgs),
     VerifyArtifact(VerifyArtifactArgs),
@@ -223,6 +224,16 @@ pub struct OptReportArgs {
     pub target_profile: Option<String>,
 }
 
+#[derive(Debug, Default)]
+pub struct ActionBuildArgs {
+    pub input: Option<PathBuf>,
+    pub action: Option<String>,
+    pub output: Option<PathBuf>,
+    pub target: Option<String>,
+    pub target_profile: Option<String>,
+    pub json: bool,
+}
+
 /// Entry witness encoding arguments
 #[derive(Debug, Default)]
 pub struct EntryWitnessArgs {
@@ -307,6 +318,7 @@ impl CommandExecutor {
             Command::Explain(args) => Self::explain(args),
             Command::ExplainGenerics(args) => Self::explain_generics(args),
             Command::OptReport(args) => Self::opt_report(args),
+            Command::ActionBuild(args) => Self::action_build(args),
             Command::EntryWitness(args) => Self::entry_witness(args),
             Command::VerifyArtifact(args) => Self::verify_artifact(args),
             Command::Run(args) => Self::run(args),
@@ -1395,6 +1407,94 @@ impl CommandExecutor {
             println!("  Output: {}", output_path.display());
         } else {
             println!("{}", json);
+        }
+        Ok(())
+    }
+
+    fn action_build(args: ActionBuildArgs) -> Result<()> {
+        let input_path = args.input.unwrap_or_else(|| PathBuf::from("."));
+        let input = Utf8Path::from_path(&input_path)
+            .ok_or_else(|| crate::error::CompileError::without_span(format!("path '{}' is not valid UTF-8", input_path.display())))?;
+        let result = compile_path(
+            input,
+            CompileOptions {
+                opt_level: 1,
+                output: None,
+                debug: false,
+                target: args.target,
+                target_profile: args.target_profile.or_else(|| Some("ckb".to_string())),
+            },
+        )?;
+
+        let action = if let Some(name) = args.action.as_deref() {
+            result
+                .metadata
+                .actions
+                .iter()
+                .find(|action| action.name == name)
+                .ok_or_else(|| crate::error::CompileError::without_span(format!("action '{}' was not found in metadata", name)))?
+        } else {
+            result
+                .metadata
+                .actions
+                .first()
+                .ok_or_else(|| crate::error::CompileError::without_span("no actions found in compiled metadata"))?
+        };
+        let entry_constraints =
+            result.metadata.constraints.entry_abi.iter().find(|entry| entry.entry_kind == "action" && entry.entry_name == action.name);
+
+        let ckb = result.metadata.constraints.ckb.as_ref();
+        let plan = serde_json::json!({
+            "status": "ok",
+            "policy": "cellscript-action-builder-plan-v1",
+            "input": input_path.display().to_string(),
+            "action": action.name,
+            "target_profile": result.metadata.target_profile.name,
+            "artifact_hash_blake3": result.metadata.artifact_hash_blake3,
+            "entry_witness_abi": {
+                "required": !action.params.is_empty(),
+                "params": action.params,
+                "constraints": entry_constraints,
+            },
+            "builder_requirements": {
+                "created_outputs": action.create_set,
+                "mutated_outputs": action.mutate_set,
+                "read_refs": action.read_refs,
+                "verifier_obligations": action.verifier_obligations,
+                "runtime_input_requirements": action.transaction_runtime_input_requirements,
+                "fail_closed_runtime_features": action.fail_closed_runtime_features,
+            },
+            "ckb": ckb.map(|ckb| serde_json::json!({
+                "hash_type_policy": ckb.hash_type_policy,
+                "capacity_evidence_contract": ckb.capacity_evidence_contract,
+                "timelock_policy": ckb.timelock_policy,
+                "tx_size_measurement_required": ckb.tx_size_measurement_required,
+                "occupied_capacity_measurement_required": ckb.occupied_capacity_measurement_required,
+                "dry_run_required_for_production": ckb.dry_run_required_for_production,
+            })),
+            "constraints_status": result.metadata.constraints.status,
+            "constraints_failures": result.metadata.constraints.failures,
+            "constraints_warnings": result.metadata.constraints.warnings,
+        });
+        let json = serde_json::to_string_pretty(&plan)
+            .map_err(|error| crate::error::CompileError::without_span(format!("failed to serialize action build plan: {}", error)))?;
+
+        if let Some(output_path) = args.output {
+            if let Some(parent) = output_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&output_path, json)?;
+            println!("{}", "Action build plan generated".green());
+            println!("  Output: {}", output_path.display());
+        } else if args.json {
+            println!("{}", json);
+        } else {
+            println!("Action build plan: {}", action.name);
+            println!("  Target profile: {}", result.metadata.target_profile.name);
+            println!("  Constraints: {}", result.metadata.constraints.status);
+            println!("  Created outputs: {}", action.create_set.len());
+            println!("  Mutated outputs: {}", action.mutate_set.len());
+            println!("  Runtime input requirements: {}", action.transaction_runtime_input_requirements.len());
         }
         Ok(())
     }
@@ -3734,6 +3834,25 @@ impl CliParser {
                     ),
             )
             .subcommand(
+                ClapCommand::new("action").about("Plan and explain action-level transaction builder inputs").subcommand(
+                    ClapCommand::new("build")
+                        .about("Emit a builder plan for a CellScript action without signing or submitting a transaction")
+                        .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
+                        .arg(Arg::new("action").long("action").value_name("NAME").help("Action to plan; defaults to the first action"))
+                        .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON builder plan to a file"))
+                        .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
+                        .arg(
+                            Arg::new("target-profile")
+                                .long("target-profile")
+                                .value_name("PROFILE")
+                                .help("Target profile: spora, ckb, or portable-cell"),
+                        )
+                        .arg(
+                            Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON builder plan"),
+                        ),
+                ),
+            )
+            .subcommand(
                 ClapCommand::new("entry-witness")
                     .about("Encode witness bytes for the generated _cellscript_entry wrapper")
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
@@ -4005,6 +4124,17 @@ impl CliParser {
                 target: m.get_one::<String>("target").cloned(),
                 target_profile: m.get_one::<String>("target-profile").cloned(),
             }),
+            Some(("action", m)) => match m.subcommand() {
+                Some(("build", build)) => Command::ActionBuild(ActionBuildArgs {
+                    input: build.get_one::<String>("input").map(PathBuf::from),
+                    action: build.get_one::<String>("action").cloned(),
+                    output: build.get_one::<String>("output").map(PathBuf::from),
+                    target: build.get_one::<String>("target").cloned(),
+                    target_profile: build.get_one::<String>("target-profile").cloned(),
+                    json: build.get_flag("json"),
+                }),
+                _ => Command::ActionBuild(ActionBuildArgs::default()),
+            },
             Some(("entry-witness", m)) => Command::EntryWitness(EntryWitnessArgs {
                 input: m.get_one::<String>("input").map(PathBuf::from),
                 action: m.get_one::<String>("action").cloned(),

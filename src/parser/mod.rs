@@ -479,6 +479,9 @@ impl<'a> Parser<'a> {
         self.reject_generic_type_params(&name)?;
 
         let capabilities = merge_capabilities(attr_capabilities, self.parse_capabilities()?);
+        self.skip_newlines();
+        let default_hash_type = self.parse_default_hash_type_decl()?;
+        self.skip_newlines();
 
         let fields = self.parse_fields()?;
 
@@ -486,6 +489,7 @@ impl<'a> Parser<'a> {
         Ok(ResourceDef {
             name,
             type_id,
+            default_hash_type,
             capabilities,
             fields,
             span: Span::new(start_span.start, end_span.end, start_span.line, start_span.column),
@@ -500,12 +504,16 @@ impl<'a> Parser<'a> {
         self.reject_generic_type_params(&name)?;
 
         let capabilities = merge_capabilities(attr_capabilities, self.parse_capabilities()?);
+        self.skip_newlines();
+        let default_hash_type = self.parse_default_hash_type_decl()?;
+        self.skip_newlines();
         let fields = self.parse_fields()?;
 
         let end_span = self.current().span;
         Ok(SharedDef {
             name,
             type_id,
+            default_hash_type,
             capabilities,
             fields,
             span: Span::new(start_span.start, end_span.end, start_span.line, start_span.column),
@@ -539,12 +547,16 @@ impl<'a> Parser<'a> {
         };
 
         let capabilities = merge_capabilities(attr_capabilities, self.parse_capabilities()?);
+        self.skip_newlines();
+        let default_hash_type = self.parse_default_hash_type_decl()?;
+        self.skip_newlines();
         let fields = self.parse_fields()?;
 
         let end_span = self.current().span;
         Ok(ReceiptDef {
             name,
             type_id,
+            default_hash_type,
             claim_output,
             lifecycle,
             capabilities,
@@ -584,10 +596,37 @@ impl<'a> Parser<'a> {
         let name = self.parse_name()?;
         self.reject_generic_type_params(&name)?;
 
+        self.skip_newlines();
+        let default_hash_type = self.parse_default_hash_type_decl()?;
+        self.skip_newlines();
         let fields = self.parse_fields()?;
 
         let end_span = self.current().span;
-        Ok(StructDef { name, type_id, fields, span: Span::new(start_span.start, end_span.end, start_span.line, start_span.column) })
+        Ok(StructDef {
+            name,
+            type_id,
+            default_hash_type,
+            fields,
+            span: Span::new(start_span.start, end_span.end, start_span.line, start_span.column),
+        })
+    }
+
+    fn parse_default_hash_type_decl(&mut self) -> Result<Option<HashTypeDecl>> {
+        if !matches!(&self.current().kind, TokenKind::Identifier(name) if name == "with_default_hash_type") {
+            return Ok(None);
+        }
+        let start_span = self.current().span;
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        let value = self.parse_name()?;
+        self.expect(TokenKind::RParen)?;
+        let normalized = normalize_hash_type_decl(&value).ok_or_else(|| {
+            crate::error::CompileError::new(
+                format!("unsupported CKB hash_type '{}'; expected Data, Data1, Data2, or Type", value),
+                start_span,
+            )
+        })?;
+        Ok(Some(HashTypeDecl { value: normalized, span: start_span }))
     }
 
     fn parse_const(&mut self) -> Result<ConstDef> {
@@ -1766,6 +1805,16 @@ fn merge_capabilities(attr_capabilities: Option<Vec<Capability>>, inline_capabil
         }
     }
     merged
+}
+
+fn normalize_hash_type_decl(value: &str) -> Option<String> {
+    match value {
+        "Data" | "data" => Some("data".to_string()),
+        "Data1" | "data1" => Some("data1".to_string()),
+        "Data2" | "data2" => Some("data2".to_string()),
+        "Type" | "type" => Some("type".to_string()),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

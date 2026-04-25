@@ -86,6 +86,7 @@ fn main() {
                     | "explain"
                     | "explain-generics"
                     | "opt-report"
+                    | "action"
                     | "entry-witness"
                     | "verify-artifact"
                     | "run"

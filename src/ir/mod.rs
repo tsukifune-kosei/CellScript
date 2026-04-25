@@ -31,6 +31,7 @@ pub enum IrItem {
 pub struct IrTypeDef {
     pub name: String,
     pub type_id: Option<String>,
+    pub default_hash_type: Option<String>,
     pub kind: IrTypeKind,
     pub fields: Vec<IrField>,
     pub capabilities: Vec<Capability>,
@@ -495,6 +496,7 @@ impl IrGenerator {
         IrTypeDef {
             name: resource.name.clone(),
             type_id: resource.type_id.as_ref().map(|type_id| type_id.value.clone()),
+            default_hash_type: resource.default_hash_type.as_ref().map(|hash_type| hash_type.value.clone()),
             kind: IrTypeKind::Resource,
             fields: self.layout_fields(&resource.fields),
             capabilities: resource.capabilities.clone(),
@@ -508,6 +510,7 @@ impl IrGenerator {
         IrTypeDef {
             name: shared.name.clone(),
             type_id: shared.type_id.as_ref().map(|type_id| type_id.value.clone()),
+            default_hash_type: shared.default_hash_type.as_ref().map(|hash_type| hash_type.value.clone()),
             kind: IrTypeKind::Shared,
             fields: self.layout_fields(&shared.fields),
             capabilities: shared.capabilities.clone(),
@@ -521,6 +524,7 @@ impl IrGenerator {
         IrTypeDef {
             name: receipt.name.clone(),
             type_id: receipt.type_id.as_ref().map(|type_id| type_id.value.clone()),
+            default_hash_type: receipt.default_hash_type.as_ref().map(|hash_type| hash_type.value.clone()),
             kind: IrTypeKind::Receipt,
             fields: self.layout_fields(&receipt.fields),
             capabilities: receipt.capabilities.clone(),
@@ -538,6 +542,7 @@ impl IrGenerator {
         IrTypeDef {
             name: struct_def.name.clone(),
             type_id: struct_def.type_id.as_ref().map(|type_id| type_id.value.clone()),
+            default_hash_type: struct_def.default_hash_type.as_ref().map(|hash_type| hash_type.value.clone()),
             kind: IrTypeKind::Struct,
             fields: self.layout_fields(&struct_def.fields),
             capabilities: Vec::new(),
@@ -4018,6 +4023,7 @@ fn resolver_type_def_to_ir(local_name: &str, type_def: &TypeDef) -> Option<IrTyp
         TypeDef::Resource(resource) => Some(IrTypeDef {
             name: local_name.to_string(),
             type_id: resource.type_id.as_ref().map(|type_id| type_id.value.clone()),
+            default_hash_type: resource.default_hash_type.as_ref().map(|hash_type| hash_type.value.clone()),
             kind: IrTypeKind::Resource,
             fields: layout_resolver_fields(&resource.fields),
             capabilities: resource.capabilities.clone(),
@@ -4028,6 +4034,7 @@ fn resolver_type_def_to_ir(local_name: &str, type_def: &TypeDef) -> Option<IrTyp
         TypeDef::Shared(shared) => Some(IrTypeDef {
             name: local_name.to_string(),
             type_id: shared.type_id.as_ref().map(|type_id| type_id.value.clone()),
+            default_hash_type: shared.default_hash_type.as_ref().map(|hash_type| hash_type.value.clone()),
             kind: IrTypeKind::Shared,
             fields: layout_resolver_fields(&shared.fields),
             capabilities: shared.capabilities.clone(),
@@ -4038,6 +4045,7 @@ fn resolver_type_def_to_ir(local_name: &str, type_def: &TypeDef) -> Option<IrTyp
         TypeDef::Receipt(receipt) => Some(IrTypeDef {
             name: local_name.to_string(),
             type_id: receipt.type_id.as_ref().map(|type_id| type_id.value.clone()),
+            default_hash_type: receipt.default_hash_type.as_ref().map(|hash_type| hash_type.value.clone()),
             kind: IrTypeKind::Receipt,
             fields: layout_resolver_fields(&receipt.fields),
             capabilities: receipt.capabilities.clone(),
@@ -4052,6 +4060,7 @@ fn resolver_type_def_to_ir(local_name: &str, type_def: &TypeDef) -> Option<IrTyp
         TypeDef::Struct(struct_def) => Some(IrTypeDef {
             name: local_name.to_string(),
             type_id: struct_def.type_id.as_ref().map(|type_id| type_id.value.clone()),
+            default_hash_type: struct_def.default_hash_type.as_ref().map(|hash_type| hash_type.value.clone()),
             kind: IrTypeKind::Struct,
             fields: layout_resolver_fields(&struct_def.fields),
             capabilities: Vec::new(),

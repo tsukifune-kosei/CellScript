@@ -375,6 +375,7 @@ mod tests {
             items: vec![Item::Resource(ResourceDef {
                 name: "Token".to_string(),
                 type_id: None,
+                default_hash_type: None,
                 capabilities: vec![Capability::Store],
                 fields: vec![Field { name: "amount".to_string(), ty: Type::U64, span: Span::default() }],
                 span: Span::default(),
@@ -399,6 +400,7 @@ mod tests {
                     Item::Resource(ResourceDef {
                         name: "Token".to_string(),
                         type_id: None,
+                        default_hash_type: None,
                         capabilities: vec![Capability::Store],
                         fields: vec![Field { name: "amount".to_string(), ty: Type::U64, span: Span::default() }],
                         span: Span::default(),
@@ -406,6 +408,7 @@ mod tests {
                     Item::Resource(ResourceDef {
                         name: "MintAuthority".to_string(),
                         type_id: None,
+                        default_hash_type: None,
                         capabilities: vec![Capability::Store],
                         fields: vec![Field { name: "max_supply".to_string(), ty: Type::U64, span: Span::default() }],
                         span: Span::default(),
@@ -444,6 +447,7 @@ mod tests {
                     Item::Resource(ResourceDef {
                         name: "Token".to_string(),
                         type_id: None,
+                        default_hash_type: None,
                         capabilities: vec![Capability::Store],
                         fields: vec![Field { name: "amount".to_string(), ty: Type::U64, span: Span::default() }],
                         span: Span::default(),
@@ -476,6 +480,7 @@ mod tests {
                 items: vec![Item::Resource(ResourceDef {
                     name: "Token".to_string(),
                     type_id: None,
+                    default_hash_type: None,
                     capabilities: vec![Capability::Store],
                     fields: vec![Field { name: "amount".to_string(), ty: Type::U64, span: Span::default() }],
                     span: Span::default(),
@@ -496,6 +501,7 @@ mod tests {
                     Item::Struct(StructDef {
                         name: "Token".to_string(),
                         type_id: None,
+                        default_hash_type: None,
                         fields: vec![Field { name: "amount".to_string(), ty: Type::U64, span: Span::default() }],
                         span: Span::default(),
                     }),

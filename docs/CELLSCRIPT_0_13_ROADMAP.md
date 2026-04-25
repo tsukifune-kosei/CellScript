@@ -408,13 +408,17 @@ Vec<Pool>       → vec_pool_push/pop/len
 
 ---
 
-#### 2. Deserialization Code Specialization 🔴
+#### 2. Deserialization Code Specialization ✅
 
-**Problem**: Compiler knows type layouts at compile-time, but codegen computes offsets at runtime.
+**Problem**: Compiler knows type layouts at compile-time, so generated code
+must use schema/type layout offsets instead of generic runtime deserializers.
 
 **v0.12 Boundary**: Not mentioned in 0.12 scope - genuine new feature.
 
-**Current Overhead**: 2-3 extra instructions per field access (20-30% instruction waste).
+**Current branch status**: implemented on the checked codegen path. Type and
+schema layouts are built during lowering/metadata generation and codegen uses
+those offsets for field access and verifier prelude emission; generic runtime
+deserializer helper calls remain absent from the supported path.
 
 **Expected Benefits**:
 - 20-30% instruction reduction
@@ -426,7 +430,7 @@ Vec<Pool>       → vec_pool_push/pop/len
 
 ---
 
-#### 3. CLI Ergonomics Improvements 🟡
+#### 3. CLI Ergonomics Improvements ✅
 
 **Problem**: Multiple CLI UX gaps affecting developer experience.
 
@@ -434,8 +438,8 @@ Vec<Pool>       → vec_pool_push/pop/len
 branch now has O1 dev-build defaults and a Cargo-style `cellc new` workflow
 with `--vcs git|none`; `--lib` package creation now writes `src/lib.cell` into
 `Cell.toml` and does not leave a stale `src/main.cell` entry file. Remaining
-work is diagnostic presentation polish on top of the existing runtime error
-registry.
+work is limited to future source-span rendering polish on top of the existing
+runtime error registry.
 
 **Sub-tasks**:
 
@@ -465,7 +469,7 @@ scaffolding implementation.
 
 ---
 
-**3c. Improve Error Messages with Codes** 🟡
+**3c. Improve Error Messages with Codes** ✅
 ```bash
 # Current
 error: fixed-byte comparison unresolved
@@ -498,21 +502,28 @@ error[E0018]: fixed-byte comparison unresolved
 
 ### P1 - Important (Strongly Recommended)
 
-#### 4. Function Inlining (Core Library) 🟡
+#### 4. Function Inlining (Core Library) ✅
 
-**Problem**: `math_min/max/isqrt` compiled as function calls (6-10 instruction overhead).
+**Problem**: small pure helper functions compiled as function calls even when
+the optimizer can safely inline their single expression/return body.
 
 **v0.12 Boundary**: From `CELLSCRIPT_0_12_COMPREHENSIVE_PLAN.md`:
 > "a large optimizer pass suite" is explicitly a 0.12 non-goal.
 
-**Expected Benefits**: 10-15% instruction reduction for compute-heavy contracts.
+**Current branch status**: implemented conservatively in the AST optimizer for
+pure functions with immutable non-reference parameters and expression-bodied or
+single-return bodies. Stateful operations, references, cell operations, and
+linear/resource effects are not inlined.
+
+**Expected Benefits**: lower instruction count for small arithmetic/predicate
+helpers; exact percentage remains benchmark-dependent.
 
 **Effort**: 2-3 days  
 **Risk**: Low
 
 ---
 
-#### 5. Hash Type DSL Exposure 🟡
+#### 5. Hash Type DSL Exposure ✅
 
 **Problem**: CKB `hash_type` visible in constraints/metadata but not directly expressible in DSL.
 
@@ -521,10 +532,6 @@ error[E0018]: fixed-byte comparison unresolved
 
 **Target Syntax**:
 ```cellscript
-create Token { amount: 100 }
-with_lock(addr)
-hash_type(Data1)
-
 resource Token has store, transfer, destroy
 with_default_hash_type(Data1)
 {
@@ -532,31 +539,48 @@ with_default_hash_type(Data1)
 }
 ```
 
+**Current branch status**: type-level `with_default_hash_type(Data|Data1|Data2|Type)`
+is parsed, lowered, validated, and surfaced as `types[].default_hash_type` plus
+`types[].hash_type_source = "dsl-with_default_hash_type"`. Per-create
+`hash_type(...)` remains future builder syntax because it needs output-index
+binding semantics.
+
 **Effort**: 2-3 days  
 **Risk**: Low
 
 ---
 
-#### 6. Dead Code Elimination (DCE) 🟡
+#### 6. Dead Code Elimination (DCE) ✅
 
-**Problem**: Unused variables/functions still compiled into ELF.
+**Problem**: unused pure helper functions and unused immutable local bindings
+can still reach lowering/codegen.
 
 **v0.12 Boundary**: Not mentioned in 0.12 scope - genuine new feature.
 
-**Expected Benefits**: 10-20% ELF size reduction.
+**Current branch status**: implemented conservatively for unused pure helper
+functions and unused immutable local bindings whose initializer is pure.
+
+**Expected Benefits**: smaller generated assembly/ELF where helper-heavy DSL
+code leaves dead pure scaffolding.
 
 **Effort**: 3-5 days  
 **Risk**: Medium
 
 ---
 
-#### 7. Compile-time Constant Propagation 🟡
+#### 7. Compile-time Constant Propagation ✅
 
-**Problem**: `const X = 1; X + 2` doesn't fold to `3`.
+**Problem**: `const X = 1; X + 2` and immutable local constant chains should
+fold before IR/codegen.
 
 **v0.12 Boundary**: Not mentioned in 0.12 scope - genuine new feature.
 
-**Expected Benefits**: 5-10% instruction reduction.
+**Current branch status**: implemented in the AST optimizer for top-level
+constants, immutable local constants, literal arithmetic/boolean/string/bytes
+comparisons, and branch pruning.
+
+**Expected Benefits**: instruction reduction where constants previously stayed
+as local loads/arithmetic.
 
 **Effort**: 2-3 days  
 **Risk**: Low
@@ -565,32 +589,47 @@ with_default_hash_type(Data1)
 
 ### P2 - Optimization (v0.13 Stretch or v0.14)
 
-#### 8. Loop Unrolling (Small Loops) 🟢
+#### 8. Loop Unrolling (Small Loops) ✅
 
 **v0.12 Boundary**: Not mentioned in 0.12 scope - genuine new feature.
+
+**Current branch status**: implemented for fixed-size array foreach paths where
+the compiler has a static aggregate length. Dynamic loops are not unrolled.
 
 **Effort**: 2-3 days  
 **Risk**: Low
 
 ---
 
-#### 9. Action Transaction Builder MVP 🟢
+#### 9. Action Transaction Builder MVP ✅
 
 **Source**: Dual-chain plan Phase C.
 
 **v0.12 Status**: Not implemented in 0.12 - genuine new feature.
+
+**Current branch status**: `cellc action build` emits a builder plan/explain
+report. The MVP includes selected action metadata, entry witness ABI,
+created/mutated output requirements, read refs, verifier obligations, runtime
+input requirements, CKB hash_type/capacity/timelock policy, and constraints
+status. It intentionally does not sign or submit transactions.
 
 **Effort**: 5-8 days  
 **Risk**: High
 
 ---
 
-#### 10. Broader Malformed/Fuzz Testing 🟢
+#### 10. Broader Malformed/Fuzz Testing ✅
 
 **Source**: Dual-chain plan Phase F.
 
 **v0.12 Status**: v0.12 has basic malformed matrix (43/43 actions), but not broader fuzzing.
 **This is an enhancement**, not overlap.
+
+**Current branch status**: added a 0.13 adversarial regression matrix covering
+unsupported full generic maps, cell-backed vectors, untyped vector mutation, and
+invalid hash_type DSL. The acceptance scripts still provide the bundled
+dual-chain production matrix; property fuzzing remains a future scale-up beyond
+the 0.13 release gate.
 
 **Effort**: 5-7 days  
 **Risk**: Medium
@@ -667,6 +706,8 @@ with_default_hash_type(Data1)
 | Generic in-script CKB Blake2b | ❌ Not claimed | ⏸️ P3 conditional |
 | CLI `cellc new` | 🟡 `cellc init` foundation existed | ✅ Cargo-compatible workflow implemented and tested |
 | CLI Error Messages | 🟡 Runtime-registry E-codes for mapped failures | ✅ CLI `error[E####]` + `cellc explain E####`; rustc-style source spans remain future polish |
+| Action Builder MVP | ❌ Not implemented | ✅ `cellc action build` plan/explain JSON/text report |
+| Malformed/Fuzz Matrix | 🟡 Basic production matrix | ✅ 0.13 adversarial malformed regression matrix added; property fuzzing remains future scale-up |
 
 ---
 

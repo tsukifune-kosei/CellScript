@@ -25,6 +25,7 @@ pub enum Item {
 pub struct ResourceDef {
     pub name: String,
     pub type_id: Option<TypeIdentity>,
+    pub default_hash_type: Option<HashTypeDecl>,
     pub capabilities: Vec<Capability>,
     pub fields: Vec<Field>,
     pub span: Span,
@@ -34,6 +35,7 @@ pub struct ResourceDef {
 pub struct SharedDef {
     pub name: String,
     pub type_id: Option<TypeIdentity>,
+    pub default_hash_type: Option<HashTypeDecl>,
     pub capabilities: Vec<Capability>,
     pub fields: Vec<Field>,
     pub span: Span,
@@ -43,6 +45,7 @@ pub struct SharedDef {
 pub struct ReceiptDef {
     pub name: String,
     pub type_id: Option<TypeIdentity>,
+    pub default_hash_type: Option<HashTypeDecl>,
     pub claim_output: Option<Type>,
     pub lifecycle: Option<Lifecycle>,
     pub capabilities: Vec<Capability>,
@@ -54,12 +57,19 @@ pub struct ReceiptDef {
 pub struct StructDef {
     pub name: String,
     pub type_id: Option<TypeIdentity>,
+    pub default_hash_type: Option<HashTypeDecl>,
     pub fields: Vec<Field>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeIdentity {
+    pub value: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HashTypeDecl {
     pub value: String,
     pub span: Span,
 }
