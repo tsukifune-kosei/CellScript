@@ -30,13 +30,13 @@ pub enum DiagnosticSeverity {
     Hint = 4,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Range {
     pub start: Position,
     pub end: Position,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Position {
     pub line: u32,
     pub character: u32,
@@ -190,7 +190,7 @@ impl LspServer {
         let tokens = match crate::lexer::lex(content) {
             Ok(tokens) => tokens,
             Err(error) => {
-                self.diagnostics.insert(uri.to_string(), vec![diagnostic_from_error(&error)]);
+                self.diagnostics.insert(uri.to_string(), vec![diagnostic_from_error(content, &error)]);
                 return;
             }
         };
@@ -198,7 +198,7 @@ impl LspServer {
         let ast = match crate::parser::parse(&tokens) {
             Ok(ast) => ast,
             Err(error) => {
-                self.diagnostics.insert(uri.to_string(), vec![diagnostic_from_error(&error)]);
+                self.diagnostics.insert(uri.to_string(), vec![diagnostic_from_error(content, &error)]);
                 return;
             }
         };
@@ -208,11 +208,11 @@ impl LspServer {
             Ok(()) => {
                 let mut diagnostics = Vec::new();
                 if let Ok(metadata) = crate::compile_metadata(content, None) {
-                    diagnostics.extend(lowering_diagnostics(&ast, &metadata));
+                    diagnostics.extend(lowering_diagnostics(content, &ast, &metadata));
                 }
                 diagnostics
             }
-            Err(error) => vec![diagnostic_from_error(&error)],
+            Err(error) => vec![diagnostic_from_error(content, &error)],
         };
         self.diagnostics.insert(uri.to_string(), diagnostics);
     }
@@ -243,9 +243,9 @@ impl LspServer {
             CompletionContext::Expression => {
                 items.extend(self.keyword_completions());
                 items.extend(self.type_completions());
-                if let Some(ast) = self.ast_cache.get(uri) {
+                if let (Some(ast), Some(content)) = (self.ast_cache.get(uri), self.documents.get(uri)) {
                     items.extend(self.symbol_completions(ast));
-                    items.extend(self.local_completions(ast, position));
+                    items.extend(self.local_completions(content, ast, position));
                 }
             }
         }
@@ -415,7 +415,7 @@ impl LspServer {
     }
 
     /// Completions for local variables visible at `position`.
-    fn local_completions(&self, module: &Module, position: Position) -> Vec<CompletionItem> {
+    fn local_completions(&self, source: &str, module: &Module, position: Position) -> Vec<CompletionItem> {
         let mut items = Vec::new();
 
         for item in &module.items {
@@ -427,7 +427,7 @@ impl LspServer {
             };
 
             // Check if position is inside this function's span.
-            let func_range = span_to_range(item_span(item));
+            let func_range = span_to_range(source, item_span(item));
             if !position_in_range(position, func_range) {
                 continue;
             }
@@ -445,7 +445,7 @@ impl LspServer {
 
             // Add local `let` bindings that are in scope (before position).
             for stmt in body {
-                let stmt_range = span_to_range(stmt_span(stmt));
+                let stmt_range = span_to_range(source, stmt_span(stmt));
                 if position_in_range(position, stmt_range) || position_le(stmt_range.start, position) {
                     // We are past the position, stop.
                     if position_le(position, stmt_range.start) && !position_in_range(position, stmt_range) {
@@ -614,7 +614,7 @@ impl LspServer {
             if let Some(loc) = module.ast.items.iter().find_map(|item| {
                 let name = item_name(item)?;
                 if name == symbol {
-                    Some(Location { uri: module_uri.clone(), range: span_to_range(item_span(item)) })
+                    Some(Location { uri: module_uri.clone(), range: span_to_range(&module.source, item_span(item)) })
                 } else {
                     None
                 }
@@ -649,7 +649,7 @@ impl LspServer {
             let _ = name; // used in pattern guard
             for field in fields {
                 if field.name == symbol {
-                    return Some(Location { uri: uri.to_string(), range: span_to_range(field.span) });
+                    return Some(Location { uri: uri.to_string(), range: span_to_range(content, field.span) });
                 }
             }
             let _ = span;
@@ -659,6 +659,7 @@ impl LspServer {
 
     /// Find a local variable or parameter definition for `symbol`.
     fn find_local_definition(&self, uri: &str, position: Position, symbol: &str) -> Option<Location> {
+        let content = self.documents.get(uri)?;
         let ast = self.ast_cache.get(uri)?;
 
         for item in &ast.items {
@@ -669,7 +670,7 @@ impl LspServer {
                 _ => continue,
             };
 
-            let func_range = span_to_range(item_span_val);
+            let func_range = span_to_range(content, item_span_val);
             if !position_in_range(position, func_range) {
                 continue;
             }
@@ -677,7 +678,7 @@ impl LspServer {
             // Check parameters.
             for param in params {
                 if param.name == symbol {
-                    return Some(Location { uri: uri.to_string(), range: span_to_range(param.span) });
+                    return Some(Location { uri: uri.to_string(), range: span_to_range(content, param.span) });
                 }
             }
 
@@ -686,7 +687,7 @@ impl LspServer {
                 if let Stmt::Let(let_stmt) = stmt {
                     if let BindingPattern::Name(name) = &let_stmt.pattern {
                         if name == symbol {
-                            return Some(Location { uri: uri.to_string(), range: span_to_range(let_stmt.span) });
+                            return Some(Location { uri: uri.to_string(), range: span_to_range(content, let_stmt.span) });
                         }
                     }
                 }
@@ -733,11 +734,11 @@ impl LspServer {
         let symbol = self.symbol_at_position(uri, position)?;
 
         // 1. Try top-level item hover (existing logic).
-        if let Some(ast) = self.ast_cache.get(uri) {
-            let metadata = self.documents.get(uri).and_then(|source| crate::compile_metadata(source, None).ok());
+        if let (Some(ast), Some(source)) = (self.ast_cache.get(uri), self.documents.get(uri)) {
+            let metadata = crate::compile_metadata(source, None).ok();
             if let Some(hover) = ast.items.iter().find_map(|item| {
                 if item_name(item) == Some(symbol.as_str()) {
-                    self.item_hover(item, metadata.as_ref())
+                    self.item_hover(source, item, metadata.as_ref())
                 } else {
                     None
                 }
@@ -761,7 +762,7 @@ impl LspServer {
             let metadata = crate::compile_metadata(&module.source, None).ok();
             if let Some(hover) = module.ast.items.iter().find_map(|item| {
                 if item_name(item) == Some(symbol.as_str()) {
-                    self.item_hover(item, metadata.as_ref())
+                    self.item_hover(&module.source, item, metadata.as_ref())
                 } else {
                     None
                 }
@@ -800,7 +801,7 @@ impl LspServer {
                             type_to_string(&field.ty),
                             type_name
                         ),
-                        range: Some(span_to_range(field.span)),
+                        range: Some(span_to_range(content, field.span)),
                     });
                 }
             }
@@ -810,6 +811,7 @@ impl LspServer {
 
     /// Hover information for a local variable or parameter.
     fn local_hover(&self, uri: &str, position: Position, symbol: &str) -> Option<Hover> {
+        let content = self.documents.get(uri)?;
         let ast = self.ast_cache.get(uri)?;
 
         for item in &ast.items {
@@ -820,7 +822,7 @@ impl LspServer {
                 _ => continue,
             };
 
-            let func_range = span_to_range(item_span_val);
+            let func_range = span_to_range(content, item_span_val);
             if !position_in_range(position, func_range) {
                 continue;
             }
@@ -830,7 +832,7 @@ impl LspServer {
                 if param.name == symbol {
                     return Some(Hover {
                         contents: format!("```cellscript\n{}: {}\n```\n\nParameter", param.name, type_to_string(&param.ty)),
-                        range: Some(span_to_range(param.span)),
+                        range: Some(span_to_range(content, param.span)),
                     });
                 }
             }
@@ -848,7 +850,7 @@ impl LspServer {
                                     name,
                                     ty_str
                                 ),
-                                range: Some(span_to_range(let_stmt.span)),
+                                range: Some(span_to_range(content, let_stmt.span)),
                             });
                         }
                     }
@@ -858,8 +860,8 @@ impl LspServer {
         None
     }
 
-    fn item_hover(&self, item: &Item, metadata: Option<&crate::CompileMetadata>) -> Option<Hover> {
-        let range = span_to_range(item_span(item));
+    fn item_hover(&self, source: &str, item: &Item, metadata: Option<&crate::CompileMetadata>) -> Option<Hover> {
+        let range = span_to_range(source, item_span(item));
         match item {
             Item::Resource(r) => Some(Hover {
                 contents: format!("```cellscript\nresource {}\n```\n\nCapabilities: {:?}", r.name, r.capabilities),
@@ -892,9 +894,9 @@ impl LspServer {
     pub fn document_symbols(&self, uri: &str) -> Vec<SymbolInformation> {
         let mut symbols = Vec::new();
 
-        if let Some(ast) = self.ast_cache.get(uri) {
+        if let (Some(ast), Some(source)) = (self.ast_cache.get(uri), self.documents.get(uri)) {
             for item in &ast.items {
-                if let Some(symbol) = self.item_symbol(item, uri) {
+                if let Some(symbol) = self.item_symbol(source, item, uri) {
                     symbols.push(symbol);
                 }
             }
@@ -903,60 +905,60 @@ impl LspServer {
         symbols
     }
 
-    fn item_symbol(&self, item: &Item, uri: &str) -> Option<SymbolInformation> {
+    fn item_symbol(&self, source: &str, item: &Item, uri: &str) -> Option<SymbolInformation> {
         match item {
             Item::Resource(r) => Some(SymbolInformation {
                 name: r.name.clone(),
                 kind: SymbolKind::Struct,
-                location: Location { uri: uri.to_string(), range: span_to_range(r.span) },
+                location: Location { uri: uri.to_string(), range: span_to_range(source, r.span) },
                 container_name: None,
             }),
             Item::Shared(s) => Some(SymbolInformation {
                 name: s.name.clone(),
                 kind: SymbolKind::Struct,
-                location: Location { uri: uri.to_string(), range: span_to_range(s.span) },
+                location: Location { uri: uri.to_string(), range: span_to_range(source, s.span) },
                 container_name: None,
             }),
             Item::Receipt(r) => Some(SymbolInformation {
                 name: r.name.clone(),
                 kind: SymbolKind::Struct,
-                location: Location { uri: uri.to_string(), range: span_to_range(r.span) },
+                location: Location { uri: uri.to_string(), range: span_to_range(source, r.span) },
                 container_name: None,
             }),
             Item::Struct(s) => Some(SymbolInformation {
                 name: s.name.clone(),
                 kind: SymbolKind::Struct,
-                location: Location { uri: uri.to_string(), range: span_to_range(s.span) },
+                location: Location { uri: uri.to_string(), range: span_to_range(source, s.span) },
                 container_name: None,
             }),
             Item::Const(c) => Some(SymbolInformation {
                 name: c.name.clone(),
                 kind: SymbolKind::Constant,
-                location: Location { uri: uri.to_string(), range: span_to_range(c.span) },
+                location: Location { uri: uri.to_string(), range: span_to_range(source, c.span) },
                 container_name: None,
             }),
             Item::Enum(e) => Some(SymbolInformation {
                 name: e.name.clone(),
                 kind: SymbolKind::Enum,
-                location: Location { uri: uri.to_string(), range: span_to_range(e.span) },
+                location: Location { uri: uri.to_string(), range: span_to_range(source, e.span) },
                 container_name: None,
             }),
             Item::Action(a) => Some(SymbolInformation {
                 name: a.name.clone(),
                 kind: SymbolKind::Function,
-                location: Location { uri: uri.to_string(), range: span_to_range(a.span) },
+                location: Location { uri: uri.to_string(), range: span_to_range(source, a.span) },
                 container_name: None,
             }),
             Item::Function(f) => Some(SymbolInformation {
                 name: f.name.clone(),
                 kind: SymbolKind::Function,
-                location: Location { uri: uri.to_string(), range: span_to_range(f.span) },
+                location: Location { uri: uri.to_string(), range: span_to_range(source, f.span) },
                 container_name: None,
             }),
             Item::Lock(l) => Some(SymbolInformation {
                 name: l.name.clone(),
                 kind: SymbolKind::Function,
-                location: Location { uri: uri.to_string(), range: span_to_range(l.span) },
+                location: Location { uri: uri.to_string(), range: span_to_range(source, l.span) },
                 container_name: None,
             }),
             _ => None,
@@ -1085,22 +1087,24 @@ impl LspServer {
                 }
                 Item::Resource(r) => {
                     if !r.fields.is_empty() {
+                        let range = span_to_range(content, r.span);
                         ranges.push(FoldingRange {
-                            start_line: span_to_range(r.span).start.line,
-                            start_character: Some(span_to_range(r.span).start.character),
-                            end_line: span_to_range(r.span).end.line,
-                            end_character: Some(span_to_range(r.span).end.character),
+                            start_line: range.start.line,
+                            start_character: Some(range.start.character),
+                            end_line: range.end.line,
+                            end_character: Some(range.end.character),
                             kind: Some(FoldingRangeKind::Region),
                         });
                     }
                 }
                 Item::Shared(s) => {
                     if !s.fields.is_empty() {
+                        let range = span_to_range(content, s.span);
                         ranges.push(FoldingRange {
-                            start_line: span_to_range(s.span).start.line,
-                            start_character: Some(span_to_range(s.span).start.character),
-                            end_line: span_to_range(s.span).end.line,
-                            end_character: Some(span_to_range(s.span).end.character),
+                            start_line: range.start.line,
+                            start_character: Some(range.start.character),
+                            end_line: range.end.line,
+                            end_character: Some(range.end.character),
                             kind: Some(FoldingRangeKind::Region),
                         });
                     }
@@ -1120,14 +1124,14 @@ impl LspServer {
         let mut ranges: Vec<Range> = Vec::new();
 
         for item in &ast.items {
-            let item_range = span_to_range(item_span(item));
+            let item_range = span_to_range(content, item_span(item));
             if position_in_range(position, item_range) {
                 ranges.push(item_range);
 
                 match item {
                     Item::Action(a) => {
                         for stmt in &a.body {
-                            let stmt_range = span_to_range(stmt_span(stmt));
+                            let stmt_range = span_to_range(content, stmt_span(stmt));
                             if position_in_range(position, stmt_range) {
                                 ranges.push(stmt_range);
                             }
@@ -1135,7 +1139,7 @@ impl LspServer {
                     }
                     Item::Function(f) => {
                         for stmt in &f.body {
-                            let stmt_range = span_to_range(stmt_span(stmt));
+                            let stmt_range = span_to_range(content, stmt_span(stmt));
                             if position_in_range(position, stmt_range) {
                                 ranges.push(stmt_range);
                             }
@@ -1280,14 +1284,14 @@ impl LspServer {
         None
     }
 
-    fn block_folding_range(&self, _content: &str, stmts: &[Stmt], _name: &str) -> Option<FoldingRange> {
+    fn block_folding_range(&self, content: &str, stmts: &[Stmt], _name: &str) -> Option<FoldingRange> {
         if stmts.is_empty() {
             return None;
         }
         let first_span = stmt_span(stmts.first()?);
         let last_span = stmt_span(stmts.last()?);
-        let start_range = span_to_range(first_span);
-        let end_range = span_to_range(last_span);
+        let start_range = span_to_range(content, first_span);
+        let end_range = span_to_range(content, last_span);
         Some(FoldingRange {
             start_line: start_range.start.line,
             start_character: Some(start_range.start.character),
@@ -1304,11 +1308,11 @@ impl LspServer {
     }
 
     fn find_top_level_symbol(&self, uri: &str, symbol: &str) -> Option<Location> {
-        if let Some(ast) = self.ast_cache.get(uri) {
+        if let (Some(ast), Some(source)) = (self.ast_cache.get(uri), self.documents.get(uri)) {
             if let Some(location) = ast.items.iter().find_map(|item| {
                 let name = item_name(item)?;
                 if name == symbol {
-                    Some(Location { uri: uri.to_string(), range: span_to_range(item_span(item)) })
+                    Some(Location { uri: uri.to_string(), range: span_to_range(source, item_span(item)) })
                 } else {
                     None
                 }
@@ -1321,7 +1325,7 @@ impl LspServer {
             if let Some(location) = module.ast.items.iter().find_map(|item| {
                 let name = item_name(item)?;
                 if name == symbol {
-                    Some(Location { uri: utf8_path_to_file_uri(&module.path), range: span_to_range(item_span(item)) })
+                    Some(Location { uri: utf8_path_to_file_uri(&module.path), range: span_to_range(&module.source, item_span(item)) })
                 } else {
                     None
                 }
@@ -1470,23 +1474,22 @@ fn apply_incremental_change(content: &str, range: Range, new_text: &str) -> Stri
     result
 }
 
-fn span_to_range(span: Span) -> Range {
-    Range {
-        start: Position { line: span.line.saturating_sub(1) as u32, character: span.column.saturating_sub(1) as u32 },
-        end: Position { line: span.line.saturating_sub(1) as u32, character: span.column.saturating_sub(1) as u32 },
-    }
+fn span_to_range(source: &str, span: Span) -> Range {
+    let start = offset_to_position(source, span.start.min(source.len()));
+    let end = offset_to_position(source, span.end.min(source.len()));
+    Range { start, end }
 }
 
-fn diagnostic_from_error(error: &CompileError) -> Diagnostic {
+fn diagnostic_from_error(source: &str, error: &CompileError) -> Diagnostic {
     Diagnostic {
-        range: span_to_range(error.span),
+        range: span_to_range(source, error.span),
         severity: DiagnosticSeverity::Error,
         message: error.message.clone(),
         source: "cellscript".to_string(),
     }
 }
 
-fn lowering_diagnostics(module: &Module, metadata: &crate::CompileMetadata) -> Vec<Diagnostic> {
+fn lowering_diagnostics(source: &str, module: &Module, metadata: &crate::CompileMetadata) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for action in &metadata.actions {
         if action.elf_compatible && action.fail_closed_runtime_features.is_empty() {
@@ -1501,7 +1504,7 @@ fn lowering_diagnostics(module: &Module, metadata: &crate::CompileMetadata) -> V
             })
             .unwrap_or_default();
         diagnostics.push(Diagnostic {
-            range: span_to_range(span),
+            range: span_to_range(source, span),
             severity: DiagnosticSeverity::Warning,
             message: format!(
                 "action '{}' {}; fail-closed runtime features: {}; CKB runtime features: {}; CKB accesses: {}",
@@ -1528,7 +1531,7 @@ fn lowering_diagnostics(module: &Module, metadata: &crate::CompileMetadata) -> V
             })
             .unwrap_or_default();
         diagnostics.push(Diagnostic {
-            range: span_to_range(span),
+            range: span_to_range(source, span),
             severity: DiagnosticSeverity::Warning,
             message: format!(
                 "lock '{}' {}; fail-closed runtime features: {}; CKB runtime features: {}; CKB accesses: {}",
@@ -1724,7 +1727,13 @@ fn position_to_offset(source: &str, position: Position) -> Option<usize> {
             line += 1;
             col = 0;
         } else {
-            col += 1;
+            col = col.checked_add(ch.len_utf16() as u32)?;
+            if line == position.line && col == position.character {
+                return Some(idx + ch.len_utf8());
+            }
+            if line == position.line && col > position.character {
+                return None;
+            }
         }
     }
 
@@ -1746,7 +1755,7 @@ fn offset_to_position(source: &str, offset: usize) -> Position {
             line += 1;
             col = 0;
         } else {
-            col += 1;
+            col += ch.len_utf16() as u32;
         }
     }
     Position { line, character: col }
@@ -1919,6 +1928,33 @@ fn hex_nibble(byte: u8) -> Option<u8> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_lsp_position_conversion_uses_utf16_columns() {
+        let source = "a😀b\nβc";
+        let b_offset = source.find('b').expect("b offset");
+        let beta_offset = source.find('β').expect("beta offset");
+
+        assert_eq!(offset_to_position(source, b_offset), Position { line: 0, character: 3 });
+        assert_eq!(position_to_offset(source, Position { line: 0, character: 3 }), Some(b_offset));
+        assert_eq!(position_to_offset(source, Position { line: 0, character: 2 }), None);
+        assert_eq!(offset_to_position(source, beta_offset), Position { line: 1, character: 0 });
+        assert_eq!(position_to_offset(source, Position { line: 1, character: 1 }), Some(beta_offset + 'β'.len_utf8()));
+    }
+
+    #[test]
+    fn test_incremental_change_applies_utf16_ranges_after_non_bmp_text() {
+        let source = "module demo\n// 😀 marker\n";
+        let start = source.find("marker").expect("marker start");
+        let end = start + "marker".len();
+        let updated = apply_incremental_change(
+            source,
+            Range { start: offset_to_position(source, start), end: offset_to_position(source, end) },
+            "done",
+        );
+
+        assert_eq!(updated, "module demo\n// 😀 done\n");
+    }
 
     #[test]
     fn test_lsp_server() {
