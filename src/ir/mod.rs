@@ -217,6 +217,7 @@ pub enum IrInstruction {
     CollectionExtend { collection: IrOperand, slice: IrOperand },
     CollectionClear { collection: IrOperand },
     CollectionContains { dest: IrVar, collection: IrOperand, value: IrOperand },
+    CollectionRemove { dest: IrVar, collection: IrOperand, index: IrOperand },
     Call { dest: Option<IrVar>, func: String, args: Vec<IrOperand> },
     ReadRef { dest: IrVar, ty: String },
     Move { dest: IrVar, src: IrOperand },
@@ -3061,6 +3062,20 @@ impl IrGenerator {
                     });
                     Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
                 }
+                "remove" if call.args.len() == 1 => {
+                    let lowered_collection = self.lower_expr(&field.expr, current, blocks, vars);
+                    let active = lowered_collection.current?;
+                    let lowered_index = self.lower_expr(&call.args[0], active, blocks, vars);
+                    let active = lowered_index.current?;
+                    let item_ty = collection_item_ir_type(&self.operand_type(&lowered_collection.operand)).unwrap_or(IrType::U64);
+                    let dest = self.new_var("remove_tmp", item_ty);
+                    self.block_mut(blocks, active).instructions.push(IrInstruction::CollectionRemove {
+                        dest: dest.clone(),
+                        collection: lowered_collection.operand,
+                        index: lowered_index.operand,
+                    });
+                    Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
+                }
                 "extend_from_slice" if call.args.len() == 1 => {
                     let lowered_collection = self.lower_expr(&field.expr, current, blocks, vars);
                     let active = lowered_collection.current?;
@@ -3261,6 +3276,28 @@ fn inline_ir_type_repr(ty: &IrType) -> Option<String> {
         IrType::Hash => Some("Hash".to_string()),
         IrType::Named(name) => Some(name.clone()),
         IrType::Unit | IrType::Array(_, _) | IrType::Tuple(_) | IrType::Ref(_) | IrType::MutRef(_) => None,
+    }
+}
+
+fn collection_item_ir_type(ty: &IrType) -> Option<IrType> {
+    let IrType::Named(name) = ty else {
+        return None;
+    };
+    let inner = name.strip_prefix("Vec<")?.strip_suffix('>')?;
+    Some(parse_inline_ir_type_repr(inner))
+}
+
+fn parse_inline_ir_type_repr(repr: &str) -> IrType {
+    match repr.trim() {
+        "u8" => IrType::U8,
+        "u16" => IrType::U16,
+        "u32" => IrType::U32,
+        "u64" => IrType::U64,
+        "u128" => IrType::U128,
+        "bool" => IrType::Bool,
+        "Address" => IrType::Address,
+        "Hash" => IrType::Hash,
+        other => IrType::Named(other.to_string()),
     }
 }
 

@@ -2247,6 +2247,24 @@ impl<'a> TypeChecker<'a> {
                             _ => Err(CompileError::new("contains is only supported on Vec values", call.span)),
                         }
                     }
+                    "remove" => {
+                        self.validate_builtin_arity("Vec.remove", 1, arg_types, call.span)?;
+                        if arg_types[0] != Type::U64 {
+                            return Err(CompileError::new("Vec.remove expects a u64 index", call.span));
+                        }
+                        match &receiver_ty {
+                            Type::Named(name) => {
+                                let Some(item_ty) = self.parse_named_collection_item_type(name) else {
+                                    return Err(CompileError::new(
+                                        "Vec.remove requires a typed Vec<T>; push or annotate the Vec before removing",
+                                        call.span,
+                                    ));
+                                };
+                                Ok(item_ty)
+                            }
+                            _ => Err(CompileError::new("remove is only supported on Vec values", call.span)),
+                        }
+                    }
                     "extend_from_slice" => {
                         self.validate_builtin_arity("Vec.extend_from_slice", 1, arg_types, call.span)?;
                         Ok(Type::Unit)

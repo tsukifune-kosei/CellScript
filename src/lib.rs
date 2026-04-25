@@ -4026,6 +4026,11 @@ fn collect_instruction_scope(instruction: &ir::IrInstruction, used_types: &mut B
             collect_operand_named_types(collection, used_types);
             collect_operand_named_types(value, used_types);
         }
+        ir::IrInstruction::CollectionRemove { dest, collection, index } => {
+            collect_ir_type_named_types(&dest.ty, used_types);
+            collect_operand_named_types(collection, used_types);
+            collect_operand_named_types(index, used_types);
+        }
         ir::IrInstruction::Call { dest, func, args } => {
             if let Some(dest) = dest {
                 collect_ir_type_named_types(&dest.ty, used_types);
@@ -8999,6 +9004,20 @@ fn body_fail_closed_runtime_features(
                         features.insert("cell-backed-collection-contains".to_string());
                     }
                 }
+                ir::IrInstruction::CollectionRemove { dest, collection, index } => {
+                    if !metadata_stack_collection_remove_is_runtime_supported(
+                        dest,
+                        collection,
+                        index,
+                        &prelude_availability,
+                        type_layouts,
+                    ) {
+                        features.insert("collection-remove".to_string());
+                    }
+                    if ir_operand_is_cell_backed_collection(collection, cell_type_kinds) {
+                        features.insert("cell-backed-collection-remove".to_string());
+                    }
+                }
                 ir::IrInstruction::Consume { operand } if consumed_schema_var_id(instruction).is_none() => {
                     features.insert("consume-expression".to_string());
                     if matches!(operand, ir::IrOperand::Const(_)) {
@@ -9393,6 +9412,16 @@ fn metadata_prelude_availability(
                     if metadata_stack_collection_contains_is_runtime_supported(collection, value, &availability, type_layouts) {
                         availability.scalar_vars.insert(dest.id);
                         availability.fixed_value_vars.insert(dest.id);
+                    }
+                }
+                ir::IrInstruction::CollectionRemove { dest, collection, index } => {
+                    if metadata_stack_collection_remove_is_runtime_supported(dest, collection, index, &availability, type_layouts) {
+                        availability.scalar_vars.insert(dest.id);
+                        availability.fixed_value_vars.insert(dest.id);
+                        if dest.ty == ir::IrType::U64 {
+                            availability.u64_value_vars.insert(dest.id);
+                            availability.u64_operand_vars.insert(dest.id);
+                        }
                     }
                 }
                 ir::IrInstruction::Binary { dest, op, left, right }
@@ -9809,6 +9838,22 @@ fn metadata_stack_collection_contains_is_runtime_supported(
     };
     let element_width = metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts).unwrap_or(value_width);
     element_width != 0 && element_width == value_width
+}
+
+fn metadata_stack_collection_remove_is_runtime_supported(
+    dest: &ir::IrVar,
+    collection: &ir::IrOperand,
+    index: &ir::IrOperand,
+    availability: &MetadataPreludeAvailability,
+    type_layouts: &MetadataTypeLayouts,
+) -> bool {
+    let ir::IrOperand::Var(collection) = collection else {
+        return false;
+    };
+    availability.stack_collection_vars.contains(&collection.id)
+        && metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts)
+            .is_some_and(|width| metadata_fixed_scalar_width(&dest.ty, Some(width)).is_some())
+        && (const_usize_operand(index).is_some() || metadata_u64_operand_available(index, availability))
 }
 
 fn metadata_stack_collection_index_is_runtime_supported(
@@ -14651,6 +14696,19 @@ action stack_vec_with_capacity_sum() -> u64 {
 }
 "#;
 
+    const STACK_VEC_REMOVE_RUNTIME_PROGRAM: &str = r#"
+module test
+
+action stack_vec_remove_middle() -> u64 {
+    let mut values = Vec::new()
+    values.push(7)
+    values.push(9)
+    values.push(11)
+    let removed = values.remove(1)
+    return removed + values.len() + values[1]
+}
+"#;
+
     const FIXED_BYTE_STACK_VEC_RUNTIME_PROGRAM: &str = r#"
 module test
 
@@ -17271,6 +17329,39 @@ action grant(config: read_ref Config, token: Token) -> Grant {
                 && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
                 && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
             "Vec::with_capacity stack runtime should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_scalar_remove() {
+        let result = compile(STACK_VEC_REMOVE_RUNTIME_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection remove element_size=8"),
+            "Vec<u64>.remove should remove from the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection remove shift element_size=8"),
+            "Vec<u64>.remove should shift following stack collection elements left:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection remove is not available for this collection"),
+            "stack-backed Vec<u64>.remove should not hit fail-closed collection path:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_remove_middle").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-remove".to_string())
+                && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
+            "stack-backed Vec<u64>.remove should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
     }

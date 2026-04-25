@@ -2147,6 +2147,9 @@ impl CodeGenerator {
             IrInstruction::CollectionContains { dest, collection, value } => {
                 self.emit_collection_contains(dest, collection, value)?;
             }
+            IrInstruction::CollectionRemove { dest, collection, index } => {
+                self.emit_collection_remove(dest, collection, index)?;
+            }
             IrInstruction::Call { dest, func, args } => {
                 self.emit_call(dest.as_ref(), func, args)?;
             }
@@ -5608,6 +5611,11 @@ impl CodeGenerator {
                 self.record_operand(collection, max_var_id);
                 self.record_operand(value, max_var_id);
             }
+            IrInstruction::CollectionRemove { dest, collection, index } => {
+                self.record_var(dest, max_var_id);
+                self.record_operand(collection, max_var_id);
+                self.record_operand(index, max_var_id);
+            }
         }
     }
 
@@ -6663,6 +6671,90 @@ impl CodeGenerator {
         self.emit("li t0, 1");
         self.emit(format!("sd t0, {}(sp)", dest.id * 8));
         self.emit_label(&done_label);
+        true
+    }
+
+    fn emit_collection_remove(&mut self, dest: &IrVar, collection: &IrOperand, index: &IrOperand) -> Result<()> {
+        self.emit("# collection remove");
+        self.emit_symbolic_operand_comment("collection", collection);
+        self.emit_symbolic_operand_comment("index", index);
+        if self.emit_stack_collection_remove(dest, collection, index) {
+            return Ok(());
+        }
+        self.emit("# cellscript abi: collection remove is not available for this collection");
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        Ok(())
+    }
+
+    fn emit_stack_collection_remove(&mut self, dest: &IrVar, collection: &IrOperand, index: &IrOperand) -> bool {
+        let IrOperand::Var(collection) = collection else {
+            return false;
+        };
+        if !self.stack_collection_vars.contains(&collection.id) {
+            return false;
+        }
+        let Some(element_width) = molecule_vector_element_fixed_width(&collection.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
+        else {
+            return false;
+        };
+        if fixed_scalar_width(&dest.ty, Some(element_width)).is_none() {
+            return false;
+        }
+
+        self.emit(format!("# cellscript abi: stack collection remove element_size={}", element_width));
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("ld t0, -8(t4)");
+        self.emit_operand_to_register("t1", index);
+
+        let bounds_ok = self.fresh_label("stack_collection_remove_bounds_ok");
+        self.emit("sltu t2, t1, t0");
+        self.emit(format!("bnez t2, {}", bounds_ok));
+        self.emit_fail(CellScriptRuntimeError::CollectionBoundsInvalid);
+        self.emit_label(&bounds_ok);
+
+        self.emit(format!("li t2, {}", element_width));
+        self.emit("mul t3, t1, t2");
+        self.emit("add t5, t4, t3");
+        self.emit_unaligned_scalar_load("t5", "t6", "t2", 0, element_width);
+        self.emit(format!("sd t6, {}(sp)", dest.id * 8));
+
+        let index_offset = self.runtime_expr_temp_offset(0).expect("runtime temp slot 0");
+        self.emit_stack_sd("t1", index_offset);
+        let shift_loop = self.fresh_label("stack_collection_remove_shift_loop");
+        let shift_done = self.fresh_label("stack_collection_remove_shift_done");
+        self.emit(format!("# cellscript abi: stack collection remove shift element_size={}", element_width));
+        self.emit_label(&shift_loop);
+        self.emit_stack_ld("t1", index_offset);
+        self.emit("addi t2, t1, 1");
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("ld t0, -8(t4)");
+        self.emit("sltu t3, t2, t0");
+        self.emit(format!("beqz t3, {}", shift_done));
+        self.emit(format!("li t3, {}", element_width));
+        self.emit("mul t5, t1, t3");
+        self.emit("add t5, t4, t5");
+        self.emit("mul t6, t2, t3");
+        self.emit("add t6, t4, t6");
+        for byte_index in 0..element_width {
+            if byte_index <= 2047 {
+                self.emit(format!("lbu t0, {}(t6)", byte_index));
+                self.emit(format!("sb t0, {}(t5)", byte_index));
+            } else {
+                self.emit_large_addi("t0", "t6", byte_index as i64);
+                self.emit("lbu t0, 0(t0)");
+                self.emit_large_addi("t2", "t5", byte_index as i64);
+                self.emit("sb t0, 0(t2)");
+            }
+        }
+        self.emit_stack_ld("t1", index_offset);
+        self.emit("addi t1, t1, 1");
+        self.emit_stack_sd("t1", index_offset);
+        self.emit(format!("j {}", shift_loop));
+        self.emit_label(&shift_done);
+        self.emit(format!("ld t4, {}(sp)", collection.id * 8));
+        self.emit("ld t0, -8(t4)");
+        self.emit("addi t0, t0, -1");
+        self.emit("sd t0, -8(t4)");
         true
     }
 
