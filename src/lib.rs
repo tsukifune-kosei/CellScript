@@ -17767,6 +17767,120 @@ action grant(config: read_ref Config, token: Token) -> Grant {
     }
 
     #[test]
+    fn compile_rejects_unsupported_vec_helper_type_combinations() {
+        let cases = [
+            (
+                r#"
+module test
+
+action bad() -> u64 {
+    let values = Vec::new()
+    return values.capacity()
+}
+"#,
+                "Vec.capacity requires a typed Vec<T>",
+            ),
+            (
+                r#"
+module test
+
+action bad() -> u64 {
+    let values = Vec::new()
+    return values.remove(0)
+}
+"#,
+                "Vec.remove requires a typed Vec<T>",
+            ),
+            (
+                r#"
+module test
+
+action bad() -> u64 {
+    let values = Vec::new()
+    return values.first()
+}
+"#,
+                "Vec.first requires a typed Vec<T>",
+            ),
+            (
+                r#"
+module test
+
+action bad(owner: Address) -> bool {
+    let mut values = Vec::new()
+    values.push(1)
+    return values.contains(owner)
+}
+"#,
+                "Vec.contains type mismatch",
+            ),
+            (
+                r#"
+module test
+
+action bad(owner: Address) -> u64 {
+    let mut values = Vec::new()
+    values.push(1)
+    values.insert(0, owner)
+    return 0
+}
+"#,
+                "Vec.insert type mismatch",
+            ),
+            (
+                r#"
+module test
+
+action bad(owner: Address) -> u64 {
+    let mut values = Vec::new()
+    values.push(1)
+    values.set(0, owner)
+    return 0
+}
+"#,
+                "Vec.set type mismatch",
+            ),
+            (
+                r#"
+module test
+
+struct Point {
+    x: u64,
+}
+
+action bad(point: Point) -> u64 {
+    let mut points = Vec::new()
+    points.insert(0, &point)
+    return 0
+}
+"#,
+                "Vec.insert cannot store reference type &Point",
+            ),
+            (
+                r#"
+module test
+
+struct Point {
+    x: u64,
+}
+
+action bad(point: Point) -> u64 {
+    let mut points = Vec::new()
+    points.set(0, &point)
+    return 0
+}
+"#,
+                "Vec.set cannot store reference type &Point",
+            ),
+        ];
+
+        for (source, expected) in cases {
+            let err = compile(source, CompileOptions::default()).unwrap_err();
+            assert!(err.message.contains(expected), "expected '{expected}', got: {}", err.message);
+        }
+    }
+
+    #[test]
     fn compile_lowers_stack_vec_scalar_runtime_push_len_index() {
         let result = compile(STACK_VEC_RUNTIME_PROGRAM, CompileOptions::default()).unwrap();
         let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();

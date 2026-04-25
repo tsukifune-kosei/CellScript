@@ -85,7 +85,9 @@ Notes:
 - 0.13 work is executable stack-backed value-vector helper support.
 - Full generic `HashMap<K, V>` remains out of scope for 0.13.
 
-- [ ] Add explicit negative tests for unsupported helper/type combinations.
+- [x] Add explicit negative tests for unsupported helper/type combinations:
+  untyped `Vec` reads that require an element type, typed `Vec<T>` value
+  mismatch checks, and rejection of reference elements for mutation helpers.
 - [ ] Audit all `collection-*` fail-closed feature names for stable metadata
   naming before 0.13 release.
 - [ ] Confirm `Vec::capacity` semantics are acceptable as fixed backing buffer
