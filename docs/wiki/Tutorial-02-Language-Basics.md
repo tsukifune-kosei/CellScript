@@ -1,4 +1,14 @@
-CellScript modules describe typed Cell state and executable transition logic. A source file normally contains:
+CellScript source reads best when you think of it as a small Cell story. First you name the module. Then you describe the state that can exist on chain. Finally you write the actions and locks that say how that state may change or be authorized.
+
+## What You Will Learn
+
+- how a `.cell` file is organized;
+- when to use `struct`, `resource`, `shared`, and `receipt`;
+- what `action` entries do;
+- what `lock` entries do;
+- which type shapes are part of the documented 0.12 production surface.
+
+A source file normally contains:
 
 - one `module` declaration;
 - persistent declarations such as `resource`, `shared`, and `receipt`;
@@ -50,7 +60,7 @@ For dynamic payloads that cross ABI or persistent schema boundaries, the documen
 
 ## Structs
 
-Use `struct` for ordinary typed data that is not itself a persistent Cell:
+Use `struct` for ordinary typed data that is not itself a persistent Cell. A struct is a shape; it does not by itself create on-chain storage.
 
 ```cellscript
 struct Config {
@@ -62,7 +72,7 @@ Local struct values are transaction-local unless they are embedded in a persiste
 
 ## Resources
 
-Use `resource` for linear Cell-backed assets:
+Use `resource` for linear Cell-backed assets. If your contract should not be able to duplicate or lose a value silently, it probably belongs in a resource.
 
 ```cellscript
 resource Token has store, transfer, destroy {
@@ -75,7 +85,7 @@ Resources cannot be silently copied or dropped. The compiler tracks them as line
 
 ## Shared State
 
-Use `shared` for contention-sensitive state such as pools or registries:
+Use `shared` for contention-sensitive state such as pools or registries. Shared state tells tools and schedulers that multiple transactions may care about the same Cell-backed value.
 
 ```cellscript
 shared Pool has store {
@@ -88,7 +98,7 @@ Shared state reads and writes remain visible in metadata so schedulers and polic
 
 ## Receipts
 
-Use `receipt` for single-use proof Cells:
+Use `receipt` for single-use proof Cells. A receipt is useful when one action creates a right and another action later consumes that right.
 
 ```cellscript
 receipt VestingGrant has store, claim {
@@ -102,7 +112,7 @@ Receipts are useful for deposits, vesting grants, voting records, settlement pro
 
 ## Actions
 
-Use `action` for type-script style transition logic:
+Use `action` for type-script style transition logic. An action says what inputs are required, what checks must pass, and what new Cell state is produced.
 
 ```cellscript
 action transfer_token(token: Token, to: Address) -> Token {
@@ -118,7 +128,7 @@ action transfer_token(token: Token, to: Address) -> Token {
 
 ## Locks
 
-Use `lock` for authorization logic:
+Use `lock` for authorization logic. Keep early locks boring: pass in the state and the signer-like value you need, then return a boolean.
 
 ```cellscript
 shared Wallet has store {
@@ -135,7 +145,7 @@ Locks must return `bool`. Target-profile policy determines which runtime helpers
 
 ## Assertions
 
-Use assertions for verifier conditions:
+Use assertions for verifier conditions. They make the rule visible in source and in compiler metadata.
 
 ```cellscript
 assert_invariant(amount > 0, "amount must be positive")
@@ -145,4 +155,4 @@ Assertions lower into script checks and appear in metadata as part of verifier a
 
 ## Next
 
-Continue with [Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects).
+With the source shape in mind, continue with [Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects).

@@ -1,4 +1,14 @@
-CellScript includes a local package workflow based on `Cell.toml`. It is production-style for local source roots, path dependencies, build/check/doc/fmt flows, lockfile validation, and release policy checks. Registry publishing and remote package workflows are intentionally experimental/fail-closed until a trusted registry path is ready.
+Small experiments can be compiled as single `.cell` files. Once a contract has more than one source file, dependency, or release target, use a package.
+
+CellScript packages are described by `Cell.toml`. The 0.12 workflow is production-style for local source roots, path dependencies, build/check/doc/fmt flows, lockfile validation, and release policy checks. Registry publishing and remote package workflows are intentionally experimental/fail-closed until a trusted registry path is ready.
+
+## What You Will Learn
+
+- how to create a package;
+- what belongs in `Cell.toml`;
+- how to build, check, format, and document a package;
+- which reports help during audit and release preparation;
+- where the current package workflow intentionally stops.
 
 ## Create a Package
 
@@ -7,7 +17,7 @@ cellc init my_contract
 cd my_contract
 ```
 
-This creates a `Cell.toml` manifest and a source entry.
+This creates a `Cell.toml` manifest and a source entry. Use this when you want repeatable builds instead of one-off compiler commands.
 
 Library package:
 
@@ -58,7 +68,7 @@ cellc build --production
 cellc build --json
 ```
 
-`build` writes the artifact and metadata sidecar under the configured output directory.
+`build` reads `Cell.toml`, compiles the package entry, and writes the artifact plus metadata sidecar under the configured output directory.
 
 ## Check Without Writing Artifacts
 
@@ -71,7 +81,7 @@ cellc check --deny-runtime-obligations
 cellc check --json
 ```
 
-Use `check --all-targets` to verify both assembly and ELF-compatible paths without producing files.
+Use `check --all-targets` when you want fast feedback across assembly and ELF-compatible paths without producing files.
 
 ## Format
 
@@ -92,7 +102,7 @@ Generated docs summarize modules, actions, resources, receipts, locks, lifecycle
 
 ## Audit and Evidence Reports
 
-Use these commands when reviewing a package boundary or preparing release evidence:
+When a package is ready for review, ask the compiler for the facts it already knows. These commands are useful when reviewing a package boundary or preparing release evidence:
 
 ```bash
 cellc metadata . --target riscv64-elf --target-profile spora -o build/main.metadata.json
@@ -139,8 +149,8 @@ cellc info --json
 
 ## Experimental Commands
 
-The CLI contains command entries for future package workflows such as publish, update, login, install, run, and repl. Treat these as experimental unless the command reports a completed workflow in your current build.
+The CLI contains command entries for future package workflows such as publish, update, login, install, run, and repl. Treat these as future-facing commands until they report a completed, supported path in your current build.
 
 ## Next
 
-Continue with [Spora and CKB Target Profiles](Tutorial-05-Spora-and-CKB-Target-Profiles).
+With a repeatable package workflow in place, continue with [Spora and CKB Target Profiles](Tutorial-05-Spora-and-CKB-Target-Profiles).

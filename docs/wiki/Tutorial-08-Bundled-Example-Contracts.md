@@ -1,4 +1,11 @@
-The repository includes seven bundled examples that exercise the CellScript 0.12 language surface and production gates.
+The repository includes seven bundled examples. Treat them as guided reading, not just sample files. Each one shows a different part of the CellScript 0.12 language surface and the current production gates.
+
+## What You Will Learn
+
+- which example to read first;
+- how the token example maps resources to actions;
+- what the bundled suite currently proves for Spora and CKB;
+- what extra evidence your own contract still needs.
 
 | Example | Purpose |
 |---|---|
@@ -22,6 +29,8 @@ done
 ```
 
 ## Token Walkthrough
+
+Start with the token example. It is the smallest bundled contract that still shows the resource lifecycle clearly.
 
 The token example declares two resources:
 
@@ -76,6 +85,8 @@ action burn(token: Token) {
 
 ## What to Learn from Each Example
 
+Read the examples in this order if you are learning the language:
+
 - Start with `token.cell` to learn linear resources and creation.
 - Read `nft.cell` to learn fixed ownership and unique-asset state.
 - Read `timelock.cell` to learn time guards and state replacement.
@@ -99,11 +110,11 @@ CKB profile is stricter than Spora, but the current bundled-example suite is clo
 - all seven bundled examples are deployed in the CKB production acceptance report;
 - the final production hardening gate must pass.
 
-This does not mean arbitrary new contracts are automatically production-ready. New contracts still need their own constraints review, entry ABI review, builder evidence, and chain acceptance evidence.
+This does not mean arbitrary new contracts are automatically production-ready. Use the examples as patterns, then run your own constraints review, entry ABI review, builder evidence, and chain acceptance evidence.
 
 ## Production Checklist
 
-Before treating an example-derived contract as deployable:
+Before treating an example-derived contract as deployable, run the compiler-side checks:
 
 ```bash
 cellc fmt --check

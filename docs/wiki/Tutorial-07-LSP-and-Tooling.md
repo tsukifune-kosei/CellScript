@@ -1,4 +1,13 @@
-CellScript includes a JSON-RPC LSP server and a VS Code extension for local production-style authoring. The goal is to make `.cell` contracts inspectable before they are deployed and to keep editor feedback tied to the same parser, type checker, lifecycle checks, and lowering metadata used by `cellc`.
+You can write CellScript with any text editor and the `cellc` CLI. The LSP and VS Code extension make that loop shorter: parse errors, type errors, lifecycle mistakes, symbols, hovers, formatting, and production reports can show up while you work.
+
+The important design point is that editor feedback is tied to the same parser, type checker, lifecycle checks, and lowering metadata used by `cellc`.
+
+## What You Will Learn
+
+- what the LSP server supports;
+- how the VS Code extension starts the server;
+- which settings matter for local development;
+- where editor tooling helps and where release gates still need CLI evidence.
 
 ## LSP Capabilities
 
@@ -35,7 +44,7 @@ The extension lives in:
 editors/vscode-cellscript
 ```
 
-Local validation and packaging:
+Validate and package the extension locally with:
 
 ```bash
 cd editors/vscode-cellscript
@@ -56,7 +65,7 @@ Useful settings:
 | `cellscript.targetProfile` | Profile for command-backed reports: `spora`, `ckb`, or `portable-cell`. |
 | `cellscript.commandTimeoutMs` | Timeout for compiler-backed commands. |
 
-The extension contributes commands for compile, metadata, constraints, production report, and target-profile selection. `CellScript: Show Production Report` displays compiler version, metadata, constraints, and release-audit boundaries; it does not replace chain acceptance gates.
+The extension contributes commands for compile, metadata, constraints, production report, and target-profile selection. `CellScript: Show Production Report` is useful while editing because it displays compiler version, metadata, constraints, and release-audit boundaries. It does not replace chain acceptance gates.
 
 ## Formatting
 
@@ -106,7 +115,7 @@ Treat registry, publish, install, update, login, and run flows as experimental u
 
 ## Tooling Workflow
 
-Recommended local loop:
+A practical local loop is:
 
 ```bash
 cellc fmt --check
@@ -126,4 +135,4 @@ cellc verify-artifact build/main.elf --expect-target-profile ckb
 
 ## Next
 
-Continue with [Bundled Example Contracts](Tutorial-08-Bundled-Example-Contracts).
+With the tooling loop in place, continue with [Bundled Example Contracts](Tutorial-08-Bundled-Example-Contracts).
