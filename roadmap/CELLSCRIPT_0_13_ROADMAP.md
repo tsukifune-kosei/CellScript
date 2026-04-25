@@ -3,7 +3,7 @@
 **Status**: Release-gate draft (review findings integrated)
 **Scope**: Zero-cost Abstractions, Bounded Collection Runtime Gaps, CLI Ergonomics
 **Dependencies**: v0.12 released (dual-chain production closure)
-**Live TODO**: [CELLSCRIPT_0_13_TODOLIST.md](CELLSCRIPT_0_13_TODOLIST.md)
+**Live TODO**: [CELLSCRIPT_0_13_TODOLIST.md](../docs/CELLSCRIPT_0_13_TODOLIST.md)
 
 ---
 

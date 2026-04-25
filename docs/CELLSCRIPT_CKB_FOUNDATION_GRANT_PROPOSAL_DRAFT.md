@@ -254,7 +254,24 @@ If the Foundation prefers a 10-week scope, the final two weeks would focus on:
 
 ---
 
-## 6. Requested Support and Work Commitment
+## 6. Supporting Engineering Roadmaps
+
+I have also prepared detailed engineering roadmaps for the v0.13-v0.16 release
+train. These are separate from the main proposal so the proposal remains
+readable, but they are available for technical review:
+
+- v0.13 roadmap: https://github.com/tsukifune-kosei/CellScript/blob/cellscript-0.13/roadmap/CELLSCRIPT_0_13_ROADMAP.md
+- v0.14 roadmap: https://github.com/tsukifune-kosei/CellScript/blob/cellscript-0.13/roadmap/CELLSCRIPT_0_14_ROADMAP.md
+- v0.15 roadmap: https://github.com/tsukifune-kosei/CellScript/blob/cellscript-0.13/roadmap/CELLSCRIPT_0_15_ROADMAP.md
+- v0.16 roadmap: https://github.com/tsukifune-kosei/CellScript/blob/cellscript-0.13/roadmap/CELLSCRIPT_0_16_ROADMAP.md
+- roadmap overview: https://github.com/tsukifune-kosei/CellScript/blob/cellscript-0.13/roadmap/CELLSCRIPT_ROADMAP_OVERVIEW.md
+
+The main proposal is intended to stand on its own; these documents are optional
+supporting material for reviewers who want the detailed implementation plan.
+
+---
+
+## 7. Requested Support and Work Commitment
 
 Requested grant amount:
 
@@ -285,7 +302,7 @@ After the initial project, the collaboration shape can become more flexible:
 
 ---
 
-## 7. Suggested Payment Structure
+## 8. Suggested Payment Structure
 
 The Foundation mentioned a milestone-driven process with an initial payment. One possible structure:
 
@@ -301,7 +318,7 @@ This can be adjusted to match the Foundation's process.
 
 ---
 
-## 8. Expected Outputs
+## 9. Expected Outputs
 
 By the end of the initial grant, expected outputs include:
 
@@ -322,7 +339,7 @@ By the end of the initial grant, expected outputs include:
 
 ---
 
-## 9. Collaboration Needs
+## 10. Collaboration Needs
 
 The main support needed from the Foundation/community side:
 
@@ -336,7 +353,7 @@ I can prepare the first private draft and adapt it based on Foundation feedback 
 
 ---
 
-## 10. Closing
+## 11. Closing
 
 CellScript is trying to make CKB development safer without flattening CKB's unique model.
 
