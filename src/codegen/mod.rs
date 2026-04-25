@@ -1564,6 +1564,17 @@ impl CodeGenerator {
                     {
                         self.prelude_u64_value_sources.insert(dest.id, PreludeU64ValueSource::StackVar(dest.id));
                     }
+                    IrInstruction::CollectionRemove { dest, collection: IrOperand::Var(collection), .. }
+                    | IrInstruction::CollectionPop { dest, collection: IrOperand::Var(collection) }
+                        if self.stack_collection_vars.contains(&collection.id)
+                            && molecule_vector_element_fixed_width(&collection.ty, &self.type_fixed_sizes, &self.enum_fixed_sizes)
+                                .is_some_and(|element_width| {
+                                    fixed_byte_width(&dest.ty, type_static_length(&dest.ty))
+                                        .is_some_and(|dest_width| dest_width == element_width && dest_width > 8)
+                                }) =>
+                    {
+                        self.aggregate_pointer_sources.insert(dest.id, AggregatePointerSource { ty: dest.ty.clone() });
+                    }
                     IrInstruction::Move { dest, src } if dest.ty == IrType::U64 => {
                         if self.prelude_u64_value_source(src).is_some() {
                             self.prelude_u64_value_sources.insert(dest.id, PreludeU64ValueSource::StackVar(dest.id));
@@ -6991,7 +7002,13 @@ impl CodeGenerator {
         else {
             return false;
         };
-        if fixed_scalar_width(&dest.ty, Some(element_width)).is_none() {
+        let dest_scalar = fixed_scalar_width(&dest.ty, Some(element_width)).is_some();
+        let dest_fixed_bytes = fixed_byte_width(&dest.ty, type_static_length(&dest.ty)).is_some_and(|width| width == element_width);
+        if !dest_scalar && !dest_fixed_bytes {
+            return false;
+        }
+        let removed_value_slots = if dest_fixed_bytes { element_width.div_ceil(8) } else { 0 };
+        if dest_fixed_bytes && removed_value_slots + 1 > RUNTIME_EXPR_TEMP_SLOTS {
             return false;
         }
 
@@ -7009,10 +7026,27 @@ impl CodeGenerator {
         self.emit(format!("li t2, {}", element_width));
         self.emit("mul t3, t1, t2");
         self.emit("add t5, t4, t3");
-        self.emit_unaligned_scalar_load("t5", "t6", "t2", 0, element_width);
-        self.emit(format!("sd t6, {}(sp)", dest.id * 8));
+        if dest_scalar {
+            self.emit_unaligned_scalar_load("t5", "t6", "t2", 0, element_width);
+            self.emit(format!("sd t6, {}(sp)", dest.id * 8));
+        } else {
+            let removed_offset = self.runtime_expr_temp_offset(0).expect("runtime temp slot 0");
+            self.emit(format!("# cellscript abi: stack collection remove snapshot fixed bytes size={}", element_width));
+            for byte_index in 0..element_width {
+                if byte_index <= 2047 {
+                    self.emit(format!("lbu t6, {}(t5)", byte_index));
+                } else {
+                    self.emit_large_addi("t2", "t5", byte_index as i64);
+                    self.emit("lbu t6, 0(t2)");
+                }
+                self.emit_sp_addi("t2", removed_offset + byte_index);
+                self.emit("sb t6, 0(t2)");
+            }
+            self.emit_sp_addi("t6", removed_offset);
+            self.emit(format!("sd t6, {}(sp)", dest.id * 8));
+        }
 
-        let index_offset = self.runtime_expr_temp_offset(0).expect("runtime temp slot 0");
+        let index_offset = self.runtime_expr_temp_offset(removed_value_slots).expect("runtime temp slot");
         self.emit_stack_sd("t1", index_offset);
         let shift_loop = self.fresh_label("stack_collection_remove_shift_loop");
         let shift_done = self.fresh_label("stack_collection_remove_shift_done");

@@ -9542,21 +9542,35 @@ fn metadata_prelude_availability(
                 }
                 ir::IrInstruction::CollectionRemove { dest, collection, index } => {
                     if metadata_stack_collection_remove_is_runtime_supported(dest, collection, index, &availability, type_layouts) {
-                        availability.scalar_vars.insert(dest.id);
                         availability.fixed_value_vars.insert(dest.id);
-                        if dest.ty == ir::IrType::U64 {
-                            availability.u64_value_vars.insert(dest.id);
-                            availability.u64_operand_vars.insert(dest.id);
+                        let fixed_size = metadata_ir_type_fixed_width(&dest.ty, type_layouts);
+                        if metadata_fixed_scalar_width(&dest.ty, fixed_size).is_some() {
+                            availability.scalar_vars.insert(dest.id);
+                            if dest.ty == ir::IrType::U64 {
+                                availability.u64_value_vars.insert(dest.id);
+                                availability.u64_operand_vars.insert(dest.id);
+                            }
+                        } else if metadata_fixed_byte_width(&dest.ty, fixed_size).is_some() {
+                            availability
+                                .aggregate_pointer_vars
+                                .insert(dest.id, MetadataAggregatePointerSource { ty: dest.ty.clone() });
                         }
                     }
                 }
                 ir::IrInstruction::CollectionPop { dest, collection } => {
                     if metadata_stack_collection_pop_is_runtime_supported(dest, collection, &availability, type_layouts) {
-                        availability.scalar_vars.insert(dest.id);
                         availability.fixed_value_vars.insert(dest.id);
-                        if dest.ty == ir::IrType::U64 {
-                            availability.u64_value_vars.insert(dest.id);
-                            availability.u64_operand_vars.insert(dest.id);
+                        let fixed_size = metadata_ir_type_fixed_width(&dest.ty, type_layouts);
+                        if metadata_fixed_scalar_width(&dest.ty, fixed_size).is_some() {
+                            availability.scalar_vars.insert(dest.id);
+                            if dest.ty == ir::IrType::U64 {
+                                availability.u64_value_vars.insert(dest.id);
+                                availability.u64_operand_vars.insert(dest.id);
+                            }
+                        } else if metadata_fixed_byte_width(&dest.ty, fixed_size).is_some() {
+                            availability
+                                .aggregate_pointer_vars
+                                .insert(dest.id, MetadataAggregatePointerSource { ty: dest.ty.clone() });
                         }
                     }
                     if let ir::IrOperand::Var(collection) = collection {
@@ -10063,8 +10077,10 @@ fn metadata_stack_collection_remove_is_runtime_supported(
         return false;
     };
     availability.stack_collection_vars.contains(&collection.id)
-        && metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts)
-            .is_some_and(|width| metadata_fixed_scalar_width(&dest.ty, Some(width)).is_some())
+        && metadata_molecule_vector_element_fixed_width(&collection.ty, type_layouts).is_some_and(|width| {
+            metadata_fixed_scalar_width(&dest.ty, Some(width)).is_some()
+                || metadata_fixed_byte_width(&dest.ty, type_static_length(&dest.ty)).is_some_and(|dest_width| dest_width == width)
+        })
         && (const_usize_operand(index).is_some() || metadata_u64_operand_available(index, availability))
 }
 
@@ -14992,6 +15008,21 @@ action stack_vec_remove_middle() -> u64 {
 }
 "#;
 
+    const FIXED_BYTE_STACK_VEC_REMOVE_PROGRAM: &str = r#"
+module test
+
+action stack_vec_address_remove(first: Address, second: Address) -> bool {
+    let mut owners = Vec::new()
+    owners.push(first)
+    owners.push(second)
+    let removed = owners.remove(0)
+    if removed == first {
+        return owners[0] == second
+    }
+    return false
+}
+"#;
+
     const STACK_VEC_POP_RUNTIME_PROGRAM: &str = r#"
 module test
 
@@ -17885,6 +17916,44 @@ action grant(config: read_ref Config, token: Token) -> Grant {
                 && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
                 && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
             "stack-backed Vec<u64>.remove should not be reported as fail-closed: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_lowers_stack_vec_fixed_byte_remove() {
+        let result = compile(FIXED_BYTE_STACK_VEC_REMOVE_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection remove element_size=32"),
+            "Vec<Address>.remove should remove from the stack collection buffer:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection remove snapshot fixed bytes size=32"),
+            "Vec<Address>.remove should snapshot the removed fixed-byte element before shifting:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection remove shift element_size=32"),
+            "Vec<Address>.remove should shift following stack collection elements left:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: collection remove is not available for this collection"),
+            "stack-backed Vec<Address>.remove should not hit fail-closed collection path:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "stack_vec_address_remove").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-remove".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string())
+                && !action.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
+            "stack-backed Vec<Address>.remove should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
     }
