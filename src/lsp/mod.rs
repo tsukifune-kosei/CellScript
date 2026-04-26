@@ -308,7 +308,10 @@ impl LspServer {
             ("receipt", "receipt ${1:Name} {\n    $0\n}"),
             ("struct", "struct ${1:Name} {\n    $0\n}"),
             ("action", "action ${1:name}($2) {\n    $0\n}"),
-            ("lock", "lock ${1:name}($2) -> $3 {\n    $0\n}"),
+            (
+                "lock",
+                "lock ${1:name}(${2:cell}: protected ${3:CellType}, ${4:arg}: witness ${5:Address}) -> bool {\n    require $0\n}",
+            ),
             ("const", "const ${1:NAME}: ${2:u64} = $0;"),
             ("enum", "enum ${1:Name} {\n    $0\n}"),
             ("use", "use ${1:path};"),
@@ -482,7 +485,10 @@ impl LspServer {
             ("receipt", "receipt ${1:Name} {\n    $0\n}"),
             ("struct", "struct ${1:Name} {\n    $0\n}"),
             ("action", "action ${1:name}($2) {\n    $0\n}"),
-            ("lock", "lock ${1:name}($2) -> $3 {\n    $0\n}"),
+            (
+                "lock",
+                "lock ${1:name}(${2:cell}: protected ${3:CellType}, ${4:arg}: witness ${5:Address}) -> bool {\n    require $0\n}",
+            ),
             ("let", "let ${1:name} = $0;"),
             ("if", "if ${1:condition} {\n    $0\n}"),
             ("for", "for ${1:item} in ${2:iterable} {\n    $0\n}"),
@@ -491,7 +497,10 @@ impl LspServer {
             ("create", "create ${1:Type} { $0 }"),
             ("destroy", "destroy ${1:expr};"),
             ("transfer", "transfer ${1:expr} to ${2:addr};"),
-            ("assert", "assert!(${1:condition});"),
+            ("assert_invariant", "assert_invariant(${1:condition}, \"${2:message}\");"),
+            ("require", "require ${1:condition};"),
+            ("protected", "protected ${1:CellType}"),
+            ("witness", "witness ${1:Address}"),
         ];
 
         keywords
@@ -1981,6 +1990,9 @@ mod tests {
         assert!(keywords.iter().any(|k| k.label == "module"));
         assert!(keywords.iter().any(|k| k.label == "resource"));
         assert!(keywords.iter().any(|k| k.label == "action"));
+        assert!(keywords.iter().any(|k| k.label == "require"));
+        assert!(keywords.iter().any(|k| k.label == "protected"));
+        assert!(keywords.iter().any(|k| k.label == "witness"));
     }
 
     #[test]

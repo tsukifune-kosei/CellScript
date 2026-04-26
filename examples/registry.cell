@@ -1,4 +1,4 @@
-module registry;
+module cellscript::registry
 
 
 action local_registry_membership(owner: Address, candidate: Address) -> bool {

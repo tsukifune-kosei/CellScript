@@ -23,12 +23,17 @@ EXPECTED_ACTION_COUNT = 43
 EXPECTED_LOCK_COUNT = 16
 EXPECTED_STATUS = "passed"
 EXPECTED_MODE = "production"
-EXPECTED_PENDING_LOCK_SPEND_MATRIX = {
+EXPECTED_LOCK_SPEND_MATRIX = {
     "multisig.cell": ["is_signer_lock", "can_execute", "can_cancel", "has_enough_signatures", "not_expired"],
     "nft.cell": ["nft_ownership", "listing_seller", "offer_buyer", "valid_royalty", "collection_creator"],
     "timelock.cell": ["can_unlock_lock", "is_owner", "asset_matches", "not_expired", "emergency_approved"],
     "vesting.cell": ["vesting_admin"],
 }
+EXPECTED_LOCK_NAMES = [
+    f"{example}:{lock}"
+    for example in EXPECTED_EXAMPLES
+    for lock in EXPECTED_LOCK_SPEND_MATRIX.get(example, [])
+]
 
 ACTION_RUN_KEYS = [
     "token_action_runs",
@@ -193,17 +198,22 @@ def validate_compile_gate(report: dict[str, Any]) -> None:
 
     lock_scope = report.get("lock_acceptance_scope")
     require(isinstance(lock_scope, dict), "lock_acceptance_scope must be an object")
-    require_field(lock_scope, "strict_compile_only", True, "lock_acceptance_scope")
-    require_field(lock_scope, "onchain_lock_spend_matrix", False, "lock_acceptance_scope")
-    require_field(lock_scope, "pending_onchain_lock_spend_matrix", EXPECTED_PENDING_LOCK_SPEND_MATRIX, "lock_acceptance_scope")
-    require_field(lock_scope, "required_cases_per_lock_when_promoted", ["valid_spend", "invalid_spend"], "lock_acceptance_scope")
+    if lock_scope.get("onchain_lock_spend_matrix") is True:
+        require_field(lock_scope, "strict_compile_only", False, "lock_acceptance_scope")
+        require_field(lock_scope, "onchain_lock_spend_matrix_scope", EXPECTED_LOCK_SPEND_MATRIX, "lock_acceptance_scope")
+        require_field(lock_scope, "required_cases_per_lock", ["valid_spend", "invalid_spend"], "lock_acceptance_scope")
+    else:
+        require_field(lock_scope, "strict_compile_only", True, "lock_acceptance_scope")
+        require_field(lock_scope, "onchain_lock_spend_matrix", False, "lock_acceptance_scope")
+        require_field(lock_scope, "pending_onchain_lock_spend_matrix", EXPECTED_LOCK_SPEND_MATRIX, "lock_acceptance_scope")
+        require_field(
+            lock_scope,
+            "required_cases_per_lock_when_promoted",
+            ["valid_spend", "invalid_spend"],
+            "lock_acceptance_scope",
+        )
     lock_scope_note = lock_scope.get("scope_note")
-    require(
-        isinstance(lock_scope_note, str)
-        and "strict-compiled" in lock_scope_note
-        and "not counted as builder-backed on-chain lock" in lock_scope_note,
-        "lock_acceptance_scope.scope_note must state that lock coverage is strict-compile-only",
-    )
+    require(isinstance(lock_scope_note, str) and "strict-compiled" in lock_scope_note, "lock_acceptance_scope.scope_note must mention strict compilation")
 
 
 def validate_onchain_gate(report: dict[str, Any]) -> None:
@@ -225,6 +235,14 @@ def validate_onchain_gate(report: dict[str, Any]) -> None:
     require_field(onchain, "measured_cycles_action_count", EXPECTED_ACTION_COUNT, "onchain")
     require_field(onchain, "tx_size_measured_action_count", EXPECTED_ACTION_COUNT, "onchain")
     require_field(onchain, "occupied_capacity_measured_action_count", EXPECTED_ACTION_COUNT, "onchain")
+    require_field(onchain, "lock_spend_matrix_count", EXPECTED_LOCK_COUNT, "onchain")
+    require_field(onchain, "builder_backed_lock_spend_matrix_count", EXPECTED_LOCK_COUNT, "onchain")
+    require_field(onchain, "lock_valid_spend_count", EXPECTED_LOCK_COUNT, "onchain")
+    require_field(onchain, "lock_invalid_spend_count", EXPECTED_LOCK_COUNT, "onchain")
+    require_field(onchain, "measured_cycles_lock_count", EXPECTED_LOCK_COUNT, "onchain")
+    require_field(onchain, "tx_size_measured_lock_count", EXPECTED_LOCK_COUNT, "onchain")
+    require_field(onchain, "occupied_capacity_measured_lock_count", EXPECTED_LOCK_COUNT, "onchain")
+    require_field(onchain, "all_locks_behavior_exercised", True, "onchain")
 
     deployment_runs = onchain.get("bundled_example_deployment_runs")
     require(isinstance(deployment_runs, list), "onchain.bundled_example_deployment_runs must be a list")
@@ -329,6 +347,88 @@ def validate_onchain_gate(report: dict[str, Any]) -> None:
             cap_int = require_positive_int(cap, f"{name}.measured_constraints.measured_output_capacity_shannons[{index}]")
             occ_int = require_positive_int(occ, f"{name}.measured_constraints.output_occupied_capacity_shannons[{index}]")
             require(cap_int >= occ_int, f"{name} output {index} capacity is below occupied capacity")
+        require(measured.get("capacity_is_sufficient") is True, f"{name} has insufficient capacity")
+        require(measured.get("under_capacity_output_indexes") == [], f"{name} has under-capacity outputs")
+
+    lock_runs = onchain.get("lock_spend_matrix_runs")
+    require(isinstance(lock_runs, list), "onchain.lock_spend_matrix_runs must be a list")
+    lock_names = [run.get("name") for run in lock_runs if isinstance(run, dict)]
+    require(
+        sorted(lock_names) == sorted(EXPECTED_LOCK_NAMES) and len(lock_names) == EXPECTED_LOCK_COUNT,
+        f"lock spend matrix must cover {EXPECTED_LOCK_NAMES!r}, got {lock_names!r}",
+    )
+    require(len(set(lock_names)) == len(lock_names), f"lock spend matrix must not contain duplicates, got {lock_names!r}")
+    for run in lock_runs:
+        require(isinstance(run, dict), "lock spend matrix entries must be objects")
+        name = run.get("name")
+        require(isinstance(name, str) and name, "lock run is missing name")
+        lock = run.get("lock")
+        require(isinstance(lock, str) and lock, f"{name} is missing lock")
+        require(name.endswith(f":{lock}"), f"{name} must end with lock suffix :{lock}")
+        require_field(run, "status", EXPECTED_STATUS, name)
+        require(run.get("builder_backed") is True, f"{name} lock run is not builder-backed")
+        require(isinstance(run.get("builder_name"), str) and run["builder_name"], f"{name} missing builder_name")
+        require(isinstance(run.get("harness_origin"), str) and run["harness_origin"], f"{name} missing harness_origin")
+
+        code = run.get("code")
+        require(isinstance(code, dict), f"{name} missing code section")
+        require_bool(code.get("code_cell_live"), f"{name}.code.code_cell_live")
+        require_positive_int(code.get("artifact_size_bytes"), f"{name}.code.artifact_size_bytes")
+
+        valid_spend = run.get("valid_spend")
+        require(isinstance(valid_spend, dict), f"{name} missing valid_spend evidence")
+        require_field(valid_spend, "status", EXPECTED_STATUS, f"{name}.valid_spend")
+        require_field(valid_spend, "output_live", True, f"{name}.valid_spend")
+        valid_dry_run = valid_spend.get("dry_run")
+        require(isinstance(valid_dry_run, dict), f"{name}.valid_spend missing dry_run")
+        require(
+            isinstance(valid_dry_run.get("cycles"), str) and valid_dry_run["cycles"].startswith("0x"),
+            f"{name}.valid_spend missing hex dry-run cycles",
+        )
+        require(isinstance(valid_spend.get("commit"), dict), f"{name}.valid_spend missing commit")
+
+        invalid_spend = run.get("invalid_spend")
+        require(isinstance(invalid_spend, dict), f"{name} missing invalid_spend evidence")
+        require_field(invalid_spend, "status", "rejected", f"{name}.invalid_spend")
+        rejection = invalid_spend.get("rejection")
+        require(isinstance(rejection, dict), f"{name}.invalid_spend missing rejection")
+        require_field(rejection, "status", "rejected", f"{name}.invalid_spend.rejection")
+        require_field(rejection, "expected_reason_matched", True, f"{name}.invalid_spend.rejection")
+        require_field(rejection, "policy_or_capacity_reason", False, f"{name}.invalid_spend.rejection")
+        reason = rejection.get("reason")
+        require(isinstance(reason, str) and reason, f"{name}.invalid_spend.rejection missing reason")
+        for fragment in ("source: Inputs[0].Lock", "ValidationFailure", "error code 5"):
+            require(fragment in reason, f"{name}.invalid_spend.rejection must show lock predicate error fragment {fragment!r}")
+        live_after_rejection = invalid_spend.get("input_cells_live_after_rejection")
+        require(
+            isinstance(live_after_rejection, list) and live_after_rejection and all(value is True for value in live_after_rejection),
+            f"{name}.invalid_spend must keep rejected input cells live",
+        )
+
+        measured = run.get("measured_constraints")
+        require(isinstance(measured, dict), f"{name} missing measured_constraints")
+        require_field(measured, "cycles_status", "dry-run-measured", f"{name}.measured_constraints")
+        require_field(measured, "tx_size_status", "measured-by-cellscript-ckb-tx-measure", f"{name}.measured_constraints")
+        require_field(
+            measured,
+            "occupied_capacity_status",
+            "derived-by-cellscript-ckb-tx-measure",
+            f"{name}.measured_constraints",
+        )
+        require_positive_int(measured.get("measured_cycles"), f"{name}.measured_constraints.measured_cycles")
+        require_positive_int(
+            measured.get("consensus_serialized_tx_size_bytes"),
+            f"{name}.measured_constraints.consensus_serialized_tx_size_bytes",
+        )
+        occupied = require_positive_int(
+            measured.get("occupied_capacity_shannons"),
+            f"{name}.measured_constraints.occupied_capacity_shannons",
+        )
+        output_capacity = require_positive_int(
+            measured.get("output_capacity_shannons"),
+            f"{name}.measured_constraints.output_capacity_shannons",
+        )
+        require(output_capacity >= occupied, f"{name} output capacity is below occupied capacity")
         require(measured.get("capacity_is_sufficient") is True, f"{name} has insufficient capacity")
         require(measured.get("under_capacity_output_indexes") == [], f"{name} has under-capacity outputs")
 

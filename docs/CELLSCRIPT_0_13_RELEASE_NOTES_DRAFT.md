@@ -83,6 +83,31 @@ New in 0.13 branch work:
 - CLI stderr uses `error[E####]` plus a `cellc explain E####` hint when a
   policy or compile error maps to the runtime error registry.
 
+## Lock Boundary Surface
+
+New in 0.13 branch work:
+
+- Lock parameters can classify CKB data sources with `protected` and `witness`.
+  `protected T` is a typed view of one selected input Cell in the current script
+  group whose spend is guarded by the lock invocation. `witness T` is decoded
+  transaction witness data.
+- `require` is available as the canonical lock predicate form. A false
+  condition fails the current script validation; it does not create
+  authorization by itself.
+- `lock_args` is reserved as the spelling for typed script-args data. The parser
+  recognizes it, but type checking rejects it until explicit CKB script-args
+  binding is implemented.
+- The bundled production locks now have builder-backed local CKB valid-spend and
+  invalid-spend matrix coverage in the production acceptance report.
+
+Important boundaries:
+
+- `Address` is not a signer proof by name.
+- `witness Address` is not witness-sighash authorization.
+- Hidden sighash defaults are not part of 0.13. Future signature verification
+  syntax must expose digest mode, script group scope, witness layout, and replay
+  assumptions.
+
 ## Backend Shape Baseline
 
 The current branch still passes the bundled example backend-shape budget test.

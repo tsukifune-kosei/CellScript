@@ -138,16 +138,14 @@ python3 scripts/validate_ckb_cellscript_production_evidence.py \
 ```
 
 The CKB validator requires strict original bundled-example coverage, scoped action
-and scoped lock compile coverage, builder-backed action runs, valid transaction
-dry-runs, committed valid transactions, malformed rejection, measured cycles,
-consensus-serialized tx size, occupied-capacity evidence, no under-capacity
-outputs, all seven production bundled examples deployed, and a passed final production hardening gate.
-Lock coverage is strict-compile coverage; it is not a claim that every lock has
-a builder-backed on-chain spend/deny-spend matrix.
-The report keeps that gap machine-readable through
-`lock_acceptance_scope.pending_onchain_lock_spend_matrix`; promotion to full lock
-production evidence requires both valid-spend and invalid-spend cases for each
-listed lock.
+and scoped lock compile coverage, builder-backed action runs, builder-backed lock
+valid-spend and invalid-spend matrices, valid transaction dry-runs, committed
+valid transactions, malformed rejection, measured cycles, consensus-serialized tx
+size, occupied-capacity evidence, no under-capacity outputs, all seven production
+bundled examples deployed, and a passed final production hardening gate.
+Lock behavior coverage is machine-readable through
+`lock_acceptance_scope.onchain_lock_spend_matrix_scope`; each listed lock must
+have both valid-spend and invalid-spend evidence.
 `examples/registry.cell` is a 0.13 bounded-collection language example covered by
 compiler/tooling tests, not by the seven-example CKB production matrix.
 

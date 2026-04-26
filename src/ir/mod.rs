@@ -117,6 +117,7 @@ pub struct IrParam {
     pub is_mut: bool,
     pub is_ref: bool,
     pub is_read_ref: bool,
+    pub source: ParamSource,
     pub binding: IrVar,
 }
 
@@ -321,6 +322,7 @@ pub struct IrGenerator {
     external_function_effects: HashMap<String, EffectClass>,
     function_return_types: HashMap<String, Option<IrType>>,
     external_function_return_types: HashMap<String, Option<IrType>>,
+    lowering_lock_entry: bool,
     errors: Vec<CompileError>,
 }
 
@@ -357,6 +359,7 @@ impl IrGenerator {
             external_function_effects: HashMap::new(),
             function_return_types: HashMap::new(),
             external_function_return_types: HashMap::new(),
+            lowering_lock_entry: false,
             errors: Vec::new(),
         }
     }
@@ -738,7 +741,10 @@ impl IrGenerator {
         self.mutated_field_transitions.clear();
         self.transition_param_ids.clear();
         self.transition_coverable_value_ids.clear();
-        let (params, body) = self.lower_signature_and_body(&lock.params, &lock.body, false);
+        let previous_lock_entry = self.lowering_lock_entry;
+        self.lowering_lock_entry = true;
+        let (params, body) = self.lower_signature_and_body(&lock.params, &lock.body, true);
+        self.lowering_lock_entry = previous_lock_entry;
 
         IrLock { name: lock.name.clone(), params, body }
     }
@@ -869,6 +875,9 @@ impl IrGenerator {
             Expr::Assert(assert_expr) => {
                 self.check_expr_effects(&assert_expr.condition, footprint);
             }
+            Expr::Require(require_expr) => {
+                self.check_expr_effects(&require_expr.condition, footprint);
+            }
             Expr::Assign(assign) => {
                 self.check_expr_effects(&assign.target, footprint);
                 self.check_expr_effects(&assign.value, footprint);
@@ -972,6 +981,7 @@ impl IrGenerator {
                     is_mut: param.is_mut,
                     is_ref: param.is_ref,
                     is_read_ref: param.is_read_ref,
+                    source: param.source,
                     binding,
                 }
             })
@@ -1363,11 +1373,11 @@ impl IrGenerator {
             Stmt::Let(let_stmt) => {
                 let transition_coverable = matches!(let_stmt.pattern, BindingPattern::Name(_))
                     && self.transition_expr_is_coverable_u64(&let_stmt.value, vars);
-                let lowered = match (&let_stmt.value, &let_stmt.ty) {
-                    (Expr::Array(items), Some(declared_ty)) if items.is_empty() => {
-                        self.lower_empty_array_expr_with_type(declared_ty, current, blocks)
+                let lowered = match &let_stmt.ty {
+                    Some(declared_ty) => {
+                        self.lower_expr_with_expected_type(&let_stmt.value, &Self::convert_type(declared_ty), current, blocks, vars)
                     }
-                    _ => self.lower_expr(&let_stmt.value, current, blocks, vars),
+                    None => self.lower_expr(&let_stmt.value, current, blocks, vars),
                 };
                 let active = lowered.current?;
                 let block = self.block_mut(blocks, active);
@@ -1623,6 +1633,7 @@ impl IrGenerator {
             Expr::Claim(claim) => self.lower_claim_expr(claim, current, blocks, vars),
             Expr::Settle(settle) => self.lower_settle_expr(settle, current, blocks, vars),
             Expr::Assert(assert_expr) => self.lower_assert_expr(assert_expr, current, blocks, vars),
+            Expr::Require(require_expr) => self.lower_require_expr(require_expr, current, blocks, vars),
             Expr::StructInit(init) => self.lower_struct_init(init, current, blocks, vars),
             Expr::FieldAccess(field) => self.lower_field_access(field, current, blocks, vars),
             Expr::Index(index) => self.lower_index_expr(index, current, blocks, vars),
@@ -2077,9 +2088,38 @@ impl IrGenerator {
         let ok_block = self.push_block(blocks);
         let fail_block = self.push_block(blocks);
         self.block_mut(blocks, active).terminator = IrTerminator::Branch { cond, then_block: ok_block, else_block: fail_block };
-        self.block_mut(blocks, fail_block).terminator = IrTerminator::Return(Some(IrOperand::Const(IrConst::U64(7))));
+        self.block_mut(blocks, fail_block).terminator = IrTerminator::Return(Some(self.fail_closed_return_operand()));
 
         LoweredExpr { operand: IrOperand::Const(IrConst::Unit), current: Some(ok_block) }
+    }
+
+    fn lower_require_expr(
+        &mut self,
+        require_expr: &RequireExpr,
+        current: BlockId,
+        blocks: &mut Vec<IrBlock>,
+        vars: &mut HashMap<String, IrVar>,
+    ) -> LoweredExpr {
+        let lowered_cond = self.lower_expr(&require_expr.condition, current, blocks, vars);
+        let Some(active) = lowered_cond.current else {
+            return lowered_cond;
+        };
+        let cond = lowered_cond.operand;
+
+        let ok_block = self.push_block(blocks);
+        let fail_block = self.push_block(blocks);
+        self.block_mut(blocks, active).terminator = IrTerminator::Branch { cond, then_block: ok_block, else_block: fail_block };
+        self.block_mut(blocks, fail_block).terminator = IrTerminator::Return(Some(self.fail_closed_return_operand()));
+
+        LoweredExpr { operand: IrOperand::Const(IrConst::Bool(true)), current: Some(ok_block) }
+    }
+
+    fn fail_closed_return_operand(&self) -> IrOperand {
+        if self.lowering_lock_entry {
+            IrOperand::Const(IrConst::Bool(false))
+        } else {
+            IrOperand::Const(IrConst::U64(7))
+        }
     }
 
     fn lower_assign_expr(
@@ -2144,7 +2184,12 @@ impl IrGenerator {
         let mut field_vars = HashMap::new();
 
         for (field_name, field_expr) in &create.fields {
-            let lowered = self.lower_expr(field_expr, active, blocks, vars);
+            let expected_ty = self.type_fields.get(&create.ty).and_then(|fields| fields.get(field_name)).cloned();
+            let lowered = if let Some(expected_ty) = expected_ty {
+                self.lower_expr_with_expected_type(field_expr, &expected_ty, active, blocks, vars)
+            } else {
+                self.lower_expr(field_expr, active, blocks, vars)
+            };
             let Some(next) = lowered.current else {
                 return lowered;
             };
@@ -2389,8 +2434,70 @@ impl IrGenerator {
         LoweredExpr { operand: IrOperand::Var(aggregate), current: Some(active) }
     }
 
-    fn lower_empty_array_expr_with_type(&mut self, declared_ty: &Type, current: BlockId, blocks: &mut Vec<IrBlock>) -> LoweredExpr {
-        let ir_ty = Self::convert_type(declared_ty);
+    fn lower_expr_with_expected_type(
+        &mut self,
+        expr: &Expr,
+        expected_ty: &IrType,
+        current: BlockId,
+        blocks: &mut Vec<IrBlock>,
+        vars: &mut HashMap<String, IrVar>,
+    ) -> LoweredExpr {
+        match expr {
+            Expr::Array(items) if collection_item_ir_type(expected_ty).is_some() => {
+                self.lower_vec_literal_expr(items, expected_ty.clone(), current, blocks, vars)
+            }
+            Expr::Array(items) if items.is_empty() && matches!(expected_ty, IrType::Array(_, 0)) => {
+                self.lower_empty_array_expr_with_ir_type(expected_ty.clone(), current, blocks)
+            }
+            _ => self.lower_expr(expr, current, blocks, vars),
+        }
+    }
+
+    fn lower_vec_literal_expr(
+        &mut self,
+        items: &[Expr],
+        vec_ty: IrType,
+        current: BlockId,
+        blocks: &mut Vec<IrBlock>,
+        vars: &mut HashMap<String, IrVar>,
+    ) -> LoweredExpr {
+        let Some(item_ty) = collection_item_ir_type(&vec_ty) else {
+            self.record_error("Vec literal requires an expected Vec<T> type", Span::default());
+            return LoweredExpr { operand: IrOperand::Const(IrConst::U64(0)), current: Some(current) };
+        };
+
+        let dest = self.new_var("vec_literal_tmp", vec_ty);
+        self.block_mut(blocks, current).instructions.push(IrInstruction::CollectionNew {
+            dest: dest.clone(),
+            ty: "Vec".to_string(),
+            capacity: (!items.is_empty()).then_some(IrOperand::Const(IrConst::U64(items.len() as u64))),
+        });
+
+        let mut active = current;
+        for item in items {
+            let lowered = self.lower_expr(item, active, blocks, vars);
+            let Some(next) = lowered.current else {
+                return lowered;
+            };
+            active = next;
+
+            let actual_ty = self.operand_type(&lowered.operand);
+            if actual_ty != item_ty {
+                self.record_error(
+                    format!("Vec literal type mismatch: expected {:?}, found {:?}", item_ty, actual_ty),
+                    Span::default(),
+                );
+            }
+
+            self.block_mut(blocks, active)
+                .instructions
+                .push(IrInstruction::CollectionPush { collection: IrOperand::Var(dest.clone()), value: lowered.operand });
+        }
+
+        LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) }
+    }
+
+    fn lower_empty_array_expr_with_ir_type(&mut self, ir_ty: IrType, current: BlockId, blocks: &mut Vec<IrBlock>) -> LoweredExpr {
         if !matches!(ir_ty, IrType::Array(_, 0)) {
             self.record_error("empty array literal requires a zero-length declared array type", Span::default());
             return LoweredExpr { operand: IrOperand::Const(IrConst::U64(0)), current: Some(current) };
@@ -2458,7 +2565,12 @@ impl IrGenerator {
         let mut active = current;
 
         for (field_name, field_expr) in &init.fields {
-            let lowered = self.lower_expr(field_expr, active, blocks, vars);
+            let expected_ty = self.type_fields.get(&init.ty).and_then(|fields| fields.get(field_name)).cloned();
+            let lowered = if let Some(expected_ty) = expected_ty {
+                self.lower_expr_with_expected_type(field_expr, &expected_ty, active, blocks, vars)
+            } else {
+                self.lower_expr(field_expr, active, blocks, vars)
+            };
             let Some(next) = lowered.current else {
                 return lowered;
             };
@@ -3667,6 +3779,7 @@ fn function_def_params(function: &FunctionDef) -> Vec<IrParam> {
                 is_mut: param.is_mut,
                 is_ref: param.is_ref,
                 is_read_ref: param.is_read_ref,
+                source: param.source,
                 binding: IrVar { id: index, name: param.name.clone(), ty },
             }
         })
@@ -3759,6 +3872,9 @@ fn collect_call_names_from_expr(expr: &Expr, names: &mut HashSet<String>) {
         Expr::Settle(settle) => collect_call_names_from_expr(&settle.expr, names),
         Expr::Assert(assert_expr) => {
             collect_call_names_from_expr(&assert_expr.condition, names);
+        }
+        Expr::Require(require_expr) => {
+            collect_call_names_from_expr(&require_expr.condition, names);
         }
         Expr::Block(stmts) => collect_call_names_from_stmts(stmts, names),
         Expr::Tuple(items) | Expr::Array(items) => {
@@ -3918,6 +4034,9 @@ fn collect_ast_expr_effects(expr: &Expr, footprint: &mut EffectFootprint) {
         }
         Expr::Assert(assert_expr) => {
             collect_ast_expr_effects(&assert_expr.condition, footprint);
+        }
+        Expr::Require(require_expr) => {
+            collect_ast_expr_effects(&require_expr.condition, footprint);
         }
         Expr::Assign(assign) => {
             collect_ast_expr_effects(&assign.target, footprint);

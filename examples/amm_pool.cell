@@ -1,6 +1,6 @@
 // amm_pool.cell - Constant Product AMM Liquidity Pool
 
-module cellscript::amm
+module cellscript::amm_pool
 
 use cellscript::fungible_token::Token
 
@@ -41,13 +41,13 @@ action seed_pool(
         reserve_a: token_a.amount,
         reserve_b: token_b.amount,
         total_lp: initial_lp,
-        fee_rate_bps: fee_rate_bps
+        fee_rate_bps
     }
 
     let receipt = create LPReceipt {
         pool_id: pool.type_hash(),
         lp_amount: initial_lp,
-        provider: provider
+        provider
     } with_lock(provider)
 
     (pool, receipt)
@@ -102,8 +102,8 @@ action add_liquidity(
 
     create LPReceipt {
         pool_id: pool.type_hash(),
-        lp_amount: lp_amount,
-        provider: provider
+        lp_amount,
+        provider
     } with_lock(provider)
 }
 

@@ -20,10 +20,10 @@ run, committed, and measured with builder-generated CKB transactions. The report
 also records cycles, consensus transaction size, occupied capacity, malformed
 transaction rejection, and output-capacity sufficiency.
 
-Lock coverage is different: all 16 bundled locks strict-compile under the CKB
-profile, but they are not yet covered by builder-backed on-chain spend and deny-
-spend matrices. The production report keeps that remaining work explicit in
-`lock_acceptance_scope.pending_onchain_lock_spend_matrix`.
+Lock coverage now runs in the same production acceptance flow: all 16 bundled
+locks strict-compile under the CKB profile and are exercised with builder-backed
+local CKB valid-spend and invalid-spend transactions. The production report keeps
+the matrix explicit in `lock_acceptance_scope.onchain_lock_spend_matrix_scope`.
 
 `registry.cell` is not part of the seven-example CKB production action matrix.
 It is a 0.13 language/tooling example for bounded local `Vec<Address>` and
@@ -173,8 +173,8 @@ flowchart LR
 ```
 
 CKB acceptance status: all eight actions are builder-backed and run on-chain.
-The five locks strict-compile, but still need on-chain valid-spend and invalid-
-spend cases.
+The five locks strict-compile and have builder-backed valid-spend and
+invalid-spend cases.
 
 ## `nft.cell`
 
@@ -237,7 +237,7 @@ flowchart LR
 ```
 
 CKB acceptance status: all nine actions are builder-backed and run on-chain. The
-five locks strict-compile, but still need on-chain valid-spend and invalid-spend
+five locks strict-compile and have builder-backed valid-spend and invalid-spend
 cases.
 
 ## `timelock.cell`
@@ -306,7 +306,7 @@ flowchart LR
 ```
 
 CKB acceptance status: all ten actions are builder-backed and run on-chain. The
-five locks strict-compile, but still need on-chain valid-spend and invalid-spend
+five locks strict-compile and have builder-backed valid-spend and invalid-spend
 cases.
 
 ## `vesting.cell`
@@ -351,7 +351,7 @@ flowchart LR
 ```
 
 CKB acceptance status: all four actions are builder-backed and run on-chain. The
-`vesting_admin` lock strict-compiles, but still needs on-chain valid-spend and
+`vesting_admin` lock strict-compiles and has builder-backed valid-spend and
 invalid-spend cases. The `claimed_admin` action parameter is not, by itself, a
 signature authorization proof.
 

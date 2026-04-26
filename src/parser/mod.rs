@@ -1000,8 +1000,28 @@ impl<'a> Parser<'a> {
         let name = self.parse_name()?;
 
         self.expect(TokenKind::Colon)?;
+        let source = self.parse_param_source_marker();
         let is_read_ref = self.check(&TokenKind::ReadRef);
-        let ty = self.parse_type()?;
+        let ty = if source == ParamSource::Protected {
+            if is_read_ref {
+                return Err(CompileError::new(
+                    "protected parameters already denote the lock's protected read-only Cell view; remove 'read_ref'",
+                    self.current().span,
+                ));
+            }
+            let protected_ty = self.parse_type()?;
+            match protected_ty {
+                Type::Ref(_) | Type::MutRef(_) => {
+                    return Err(CompileError::new(
+                        "protected parameters use 'name: protected T', not 'name: protected &T'",
+                        self.current().span,
+                    ));
+                }
+                ty => Type::Ref(Box::new(ty)),
+            }
+        } else {
+            self.parse_type()?
+        };
 
         let end_span = self.current().span;
         Ok(Param {
@@ -1010,8 +1030,22 @@ impl<'a> Parser<'a> {
             is_mut,
             is_ref,
             is_read_ref,
+            source,
             span: Span::new(start_span.start, end_span.end, start_span.line, start_span.column),
         })
+    }
+
+    fn parse_param_source_marker(&mut self) -> ParamSource {
+        let source = match &self.current().kind {
+            TokenKind::Identifier(name) if name == "protected" => ParamSource::Protected,
+            TokenKind::Identifier(name) if name == "witness" => ParamSource::Witness,
+            TokenKind::Identifier(name) if name == "lock_args" => ParamSource::LockArgs,
+            _ => ParamSource::Default,
+        };
+        if source != ParamSource::Default {
+            self.advance();
+        }
+        source
     }
 
     fn parse_block(&mut self) -> Result<Vec<Stmt>> {
@@ -1467,6 +1501,7 @@ impl<'a> Parser<'a> {
             TokenKind::If => self.parse_if_expr(),
             TokenKind::Match => self.parse_match_expr(),
             TokenKind::Assert => self.parse_assert(),
+            TokenKind::Require => self.parse_require(),
             _ if self.ident_like_name().is_some() => {
                 let name = self.parse_name_path()?;
                 if self.check(&TokenKind::LBrace) && Self::looks_like_type_name(&name) {
@@ -1560,9 +1595,12 @@ impl<'a> Parser<'a> {
         let mut fields = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {
             let field_name = self.parse_name()?;
-
-            self.expect(TokenKind::Colon)?;
-            let value = self.parse_expr()?;
+            let value = if self.check(&TokenKind::Colon) {
+                self.advance();
+                self.parse_expr()?
+            } else {
+                Expr::Identifier(field_name.clone())
+            };
             fields.push((field_name, value));
 
             if self.check(&TokenKind::Comma) {
@@ -1710,6 +1748,17 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn parse_require(&mut self) -> Result<Expr> {
+        let start_span = self.current().span;
+        self.expect(TokenKind::Require)?;
+        let condition = self.parse_expr()?;
+        let end_span = self.current().span;
+        Ok(Expr::Require(RequireExpr {
+            condition: Box::new(condition),
+            span: Span::new(start_span.start, end_span.end, start_span.line, start_span.column),
+        }))
+    }
+
     fn parse_if_expr(&mut self) -> Result<Expr> {
         let start_span = self.current().span;
         self.expect(TokenKind::If)?;
@@ -1740,8 +1789,12 @@ impl<'a> Parser<'a> {
         let mut fields = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {
             let field_name = self.parse_name()?;
-            self.expect(TokenKind::Colon)?;
-            let value = self.parse_expr()?;
+            let value = if self.check(&TokenKind::Colon) {
+                self.advance();
+                self.parse_expr()?
+            } else {
+                Expr::Identifier(field_name.clone())
+            };
             fields.push((field_name, value));
 
             if self.check(&TokenKind::Comma) {
@@ -1918,6 +1971,20 @@ module test
 
 action mint(amount: u64) -> Token {
     create Token { amount: amount, symbol: b"TEST" }
+}
+"#;
+        let tokens = lex(input).unwrap();
+        let module = parse(&tokens).unwrap();
+        assert_eq!(module.items.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_create_field_shorthand() {
+        let input = r#"
+module test
+
+action mint(amount: u64, symbol: [u8; 8]) -> Token {
+    create Token { amount, symbol }
 }
 "#;
         let tokens = lex(input).unwrap();

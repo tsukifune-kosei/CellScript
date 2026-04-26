@@ -301,6 +301,21 @@ LOCK_ACCEPTANCE_SCOPE = {
         "They are not counted as builder-backed on-chain lock spend/deny-spend transactions."
     ),
 }
+LOCK_BEHAVIOR_ACCEPTANCE_SCOPE = {
+    "strict_compile_only": False,
+    "onchain_lock_spend_matrix": True,
+    "onchain_lock_spend_matrix_scope": {
+        "multisig.cell": ["is_signer_lock", "can_execute", "can_cancel", "has_enough_signatures", "not_expired"],
+        "nft.cell": ["nft_ownership", "listing_seller", "offer_buyer", "valid_royalty", "collection_creator"],
+        "timelock.cell": ["can_unlock_lock", "is_owner", "asset_matches", "not_expired", "emergency_approved"],
+        "vesting.cell": ["vesting_admin"],
+    },
+    "required_cases_per_lock": ["valid_spend", "invalid_spend"],
+    "scope_note": (
+        "Scoped lock entries are strict-compiled under the CKB profile and each lock is exercised "
+        "through builder-backed local CKB valid-spend and invalid-spend transactions."
+    ),
+}
 TRUNCATE = 12000
 UNEXPECTED_PROFILE_TRAILER = bytes.fromhex("53504f5241424900")
 
@@ -2043,6 +2058,21 @@ repo_root = pathlib.Path(repo_root)
 ALWAYS_SUCCESS_CODE_HASH = "0x28e83a1277d48add8e72fadaa9248559e1b632bab2bd60b27955ebc4c03800a5"
 ALWAYS_SUCCESS_INDEX = "0x5"
 UNEXPECTED_PROFILE_TRAILER = bytes.fromhex("53504f5241424900")
+LOCK_BEHAVIOR_ACCEPTANCE_SCOPE = {
+    "strict_compile_only": False,
+    "onchain_lock_spend_matrix": True,
+    "onchain_lock_spend_matrix_scope": {
+        "multisig.cell": ["is_signer_lock", "can_execute", "can_cancel", "has_enough_signatures", "not_expired"],
+        "nft.cell": ["nft_ownership", "listing_seller", "offer_buyer", "valid_royalty", "collection_creator"],
+        "timelock.cell": ["can_unlock_lock", "is_owner", "asset_matches", "not_expired", "emergency_approved"],
+        "vesting.cell": ["vesting_admin"],
+    },
+    "required_cases_per_lock": ["valid_spend", "invalid_spend"],
+    "scope_note": (
+        "Scoped lock entries are strict-compiled under the CKB profile and each lock is exercised "
+        "through builder-backed local CKB valid-spend and invalid-spend transactions."
+    ),
+}
 
 report = json.loads(report_path.read_text(encoding="utf-8"))
 artifacts = report.get("artifacts", [])
@@ -2061,9 +2091,11 @@ vesting_action_artifacts = [
     and record.get("action") in {"create_vesting_config", "grant_vesting", "claim_vested", "revoke_grant"}
 ]
 launch_action_artifacts = report.get("launch_action_artifacts", [])
+original_scoped_lock_artifacts = report.get("original_scoped_lock_artifacts", [])
 
 report.update({
     "status": "running-onchain",
+    "lock_acceptance_scope": LOCK_BEHAVIOR_ACCEPTANCE_SCOPE,
     "ckb_repo": str(ckb_repo),
     "ckb_bin": ckb_bin,
     "ckb_log": ckb_log,
@@ -2081,6 +2113,7 @@ report.update({
         "vesting_action_runs": [],
         "amm_action_runs": [],
         "launch_action_runs": [],
+        "lock_spend_matrix_runs": [],
     },
 })
 
@@ -2141,6 +2174,15 @@ def hex_u64(value):
 
 def out_point(tx_hash, index):
     return {"tx_hash": tx_hash, "index": hex_u64(index)}
+
+def wait_live_cell(tx_hash, index, attempts=20, delay_seconds=0.05):
+    last_result = None
+    for _ in range(attempts):
+        last_result = rpc("get_live_cell", [out_point(tx_hash, index), True])
+        if last_result and last_result.get("status") == "live":
+            return last_result
+        time.sleep(delay_seconds)
+    return last_result
 
 def always_success_lock(args="0x"):
     return {"code_hash": ALWAYS_SUCCESS_CODE_HASH, "hash_type": "data", "args": args}
@@ -2535,13 +2577,15 @@ def find_spendable_cellbase(max_blocks=64):
             for index, output in enumerate(outputs):
                 capacity = int(output["capacity"], 16)
                 if capacity > 0:
-                    return {
-                        "block_hash": block_hash,
-                        "tx_hash": cellbase["hash"],
-                        "index": index,
-                        "capacity": capacity,
-                        "generated_blocks": generated,
-                    }
+                    live_status = wait_live_cell(cellbase["hash"], index)
+                    if live_status and live_status.get("status") == "live":
+                        return {
+                            "block_hash": block_hash,
+                            "tx_hash": cellbase["hash"],
+                            "index": index,
+                            "capacity": capacity,
+                            "generated_blocks": generated,
+                        }
     raise RuntimeError(f"no spendable cellbase output found after {max_blocks} generated blocks")
 
 def collect_spendable_cellbases(min_capacity, max_cells=256):
@@ -2760,7 +2804,7 @@ def expect_dry_run_rejected(tx, label, expected_fragments):
     raise RuntimeError(f"{label} was unexpectedly accepted by dry-run: {estimate}")
 
 def assert_live(tx_hash, index, label):
-    result = rpc("get_live_cell", [out_point(tx_hash, index), True])
+    result = wait_live_cell(tx_hash, index)
     if not result or result.get("status") != "live":
         raise RuntimeError(f"{label} is not live: {result}")
     return result
@@ -2987,6 +3031,241 @@ def create_script_locked_cells(label, cells, cell_deps):
             }
             for index, cell in enumerate(cells)
         ],
+    }
+
+SCRIPT_REJECTION_FRAGMENTS = (
+    "Script",
+    "script",
+    "ValidationFailure",
+    "error code",
+    "VM",
+    "Run result",
+    "Invalid",
+)
+LOCK_PREDICATE_REJECTION_FRAGMENTS = (
+    "TransactionFailedToVerify: Script(",
+    "source: Inputs[0].Lock",
+    "ValidationFailure",
+    "error code 5",
+)
+
+def lock_spend_case_specs(example, lock_name, lock_script):
+    addr_a = bytes([0x11]) * 32
+    addr_b = bytes([0x22]) * 32
+    addr_c = bytes([0x33]) * 32
+    hash_a = bytes([0x44]) * 32
+    hash_b = bytes([0x55]) * 32
+    zero_hash = bytes(32)
+    signature_a = bytes([0xaa]) * 64
+    signature_b = bytes([0xbb]) * 64
+    cell_capacity = 1_000 * 100_000_000
+
+    def cell(data):
+        return {
+            "capacity": cell_capacity,
+            "lock": lock_script,
+            "type": None,
+            "data": data,
+        }
+
+    proposal_valid = multisig_proposal_molecule_data(
+        zero_hash, 1, addr_a, 0, addr_c, 500, b"", [(addr_a, signature_a), (addr_b, signature_b)], 2, 10, 2000
+    )
+    proposal_missing_signature = multisig_proposal_molecule_data(
+        zero_hash, 1, addr_a, 0, addr_c, 500, b"", [(addr_a, signature_a)], 2, 10, 2000
+    )
+    nft_valid = nft_data(1, addr_a, hash_a, addr_b, 250)
+    asset_type_native = molecule_table([bytes([0])])
+    time_lock_valid = timelock_data(addr_a, 0, 100, 10)
+    emergency_valid = emergency_release_molecule_data(zero_hash, addr_a, b"operator review", 10, [addr_a, addr_b])
+
+    cases = {
+        ("multisig.cell", "is_signer_lock"): {
+            "valid_cells": [cell(multisig_wallet_molecule_data([addr_a, addr_b], 2, 0, 10))],
+            "valid_witnesses": [entry_witness(addr_a)],
+            "invalid_cells": [cell(multisig_wallet_molecule_data([addr_a, addr_b], 2, 0, 10))],
+            "invalid_witnesses": [entry_witness(addr_c)],
+        },
+        ("multisig.cell", "can_execute"): {
+            "valid_cells": [cell(proposal_valid)],
+            "valid_witnesses": [entry_witness(100)],
+            "invalid_cells": [cell(proposal_valid)],
+            "invalid_witnesses": [entry_witness(2500)],
+        },
+        ("multisig.cell", "can_cancel"): {
+            "valid_cells": [cell(proposal_valid)],
+            "valid_witnesses": [entry_witness(addr_a)],
+            "invalid_cells": [cell(proposal_valid)],
+            "invalid_witnesses": [entry_witness(addr_b)],
+        },
+        ("multisig.cell", "has_enough_signatures"): {
+            "valid_cells": [cell(proposal_valid)],
+            "valid_witnesses": [entry_witness()],
+            "invalid_cells": [cell(proposal_missing_signature)],
+            "invalid_witnesses": [entry_witness()],
+        },
+        ("multisig.cell", "not_expired"): {
+            "valid_cells": [cell(proposal_valid)],
+            "valid_witnesses": [entry_witness(100)],
+            "invalid_cells": [cell(proposal_valid)],
+            "invalid_witnesses": [entry_witness(2500)],
+        },
+        ("nft.cell", "nft_ownership"): {
+            "valid_cells": [cell(nft_valid)],
+            "valid_witnesses": [entry_witness(addr_a)],
+            "invalid_cells": [cell(nft_valid)],
+            "invalid_witnesses": [entry_witness(addr_c)],
+        },
+        ("nft.cell", "listing_seller"): {
+            "valid_cells": [cell(listing_data(1, addr_a, 500, 10))],
+            "valid_witnesses": [entry_witness(addr_a)],
+            "invalid_cells": [cell(listing_data(1, addr_a, 500, 10))],
+            "invalid_witnesses": [entry_witness(addr_c)],
+        },
+        ("nft.cell", "offer_buyer"): {
+            "valid_cells": [cell(offer_data(1, addr_b, 500, 2000))],
+            "valid_witnesses": [entry_witness(addr_b)],
+            "invalid_cells": [cell(offer_data(1, addr_b, 500, 2000))],
+            "invalid_witnesses": [entry_witness(addr_c)],
+        },
+        ("nft.cell", "valid_royalty"): {
+            "valid_cells": [cell(nft_valid)],
+            "valid_witnesses": [entry_witness()],
+            "invalid_cells": [cell(nft_data(1, addr_a, hash_a, addr_b, 1001))],
+            "invalid_witnesses": [entry_witness()],
+        },
+        ("nft.cell", "collection_creator"): {
+            "valid_cells": [cell(collection_molecule_data(addr_a, 1, 1000))],
+            "valid_witnesses": [entry_witness(addr_a)],
+            "invalid_cells": [cell(collection_molecule_data(addr_a, 1, 1000))],
+            "invalid_witnesses": [entry_witness(addr_c)],
+        },
+        ("timelock.cell", "can_unlock_lock"): {
+            "valid_cells": [cell(time_lock_valid)],
+            "valid_witnesses": [entry_witness(101)],
+            "invalid_cells": [cell(time_lock_valid)],
+            "invalid_witnesses": [entry_witness(99)],
+        },
+        ("timelock.cell", "is_owner"): {
+            "valid_cells": [cell(time_lock_valid)],
+            "valid_witnesses": [entry_witness(addr_a)],
+            "invalid_cells": [cell(time_lock_valid)],
+            "invalid_witnesses": [entry_witness(addr_c)],
+        },
+        ("timelock.cell", "asset_matches"): {
+            "valid_cells": [cell(locked_asset_molecule_data(asset_type_native, 100, zero_hash)), cell(time_lock_valid)],
+            "valid_witnesses": [entry_witness(), "0x"],
+            "invalid_cells": [cell(locked_asset_molecule_data(asset_type_native, 100, hash_b)), cell(time_lock_valid)],
+            "invalid_witnesses": [entry_witness(), "0x"],
+        },
+        ("timelock.cell", "not_expired"): {
+            "valid_cells": [cell(time_lock_valid)],
+            "valid_witnesses": [entry_witness(99)],
+            "invalid_cells": [cell(time_lock_valid)],
+            "invalid_witnesses": [entry_witness(100)],
+        },
+        ("timelock.cell", "emergency_approved"): {
+            "valid_cells": [cell(emergency_valid)],
+            "valid_witnesses": [entry_witness(bytes([2]))],
+            "invalid_cells": [cell(emergency_valid)],
+            "invalid_witnesses": [entry_witness(bytes([3]))],
+        },
+        ("vesting.cell", "vesting_admin"): {
+            "valid_cells": [cell(vesting_config_data(addr_a, b"VEST0001", 10, 100, True))],
+            "valid_witnesses": [entry_witness(addr_a)],
+            "invalid_cells": [cell(vesting_config_data(addr_a, b"VEST0001", 10, 100, True))],
+            "invalid_witnesses": [entry_witness(addr_c)],
+        },
+    }
+    try:
+        return cases[(example, lock_name)]
+    except KeyError as exc:
+        raise RuntimeError(f"missing lock spend matrix case for {example}:{lock_name}") from exc
+
+def run_lock_spend_case(label, cells, witnesses, cell_deps, commit_valid):
+    initial = create_script_locked_cells(label, cells, cell_deps)
+    total_capacity = sum(cell["capacity"] for cell in initial["cells"])
+    tx = transaction(
+        initial["cells"],
+        [
+            {
+                "capacity": hex_u64(total_capacity),
+                "lock": always_success_lock(),
+                "type": None,
+            }
+        ],
+        ["0x"],
+        cell_deps,
+        witnesses,
+    )
+    if not commit_valid:
+        rejection = expect_dry_run_rejected(tx, f"{label} invalid lock spend", LOCK_PREDICATE_REJECTION_FRAGMENTS)
+        live_after_reject = [
+            assert_live(cell["tx_hash"], cell["index"], f"{label} invalid input {index} after rejection").get("status") == "live"
+            for index, cell in enumerate(initial["cells"])
+        ]
+        return {
+            "input_create": initial,
+            "tx": tx,
+            "rejection": rejection,
+            "input_cells_live_after_rejection": live_after_reject,
+            "status": "rejected",
+        }
+
+    valid_dry_run = rpc("dry_run_transaction", [tx])
+    commit = submit_and_commit(tx, f"{label} valid lock spend")
+    output_live = assert_live(commit["tx_hash"], 0, f"{label} valid spend output").get("status") == "live"
+    return {
+        "input_create": initial,
+        "tx": tx,
+        "dry_run": valid_dry_run,
+        "commit": commit,
+        "output_live": output_live,
+        "measured_constraints": measure_release_constraints(tx, valid_dry_run),
+        "status": "passed",
+    }
+
+def run_lock_spend_matrix(lock_record, always_success_dep):
+    example = lock_record["example"]
+    lock_name = lock_record["lock"]
+    name = lock_record["name"]
+    code = deploy_code_cell(name, lock_record["artifact"], always_success_dep)
+    lock_script = {
+        "code_hash": code["artifact_ckb_data_hash_blake2b"],
+        "hash_type": "data1",
+        "args": "0x",
+    }
+    cell_deps = [always_success_dep, code["code_cell_dep"]]
+    specs = lock_spend_case_specs(example, lock_name, lock_script)
+    invalid_spend = run_lock_spend_case(
+        f"{name} invalid-spend",
+        specs["invalid_cells"],
+        specs["invalid_witnesses"],
+        cell_deps,
+        False,
+    )
+    valid_spend = run_lock_spend_case(
+        f"{name} valid-spend",
+        specs["valid_cells"],
+        specs["valid_witnesses"],
+        cell_deps,
+        True,
+    )
+    return {
+        "name": name,
+        "example": example,
+        "lock": lock_name,
+        "kind": lock_record["kind"],
+        "harness_origin": "builder-backed-local-ckb-lock-spend-matrix",
+        "builder_backed": True,
+        "builder_name": "cellscript-lock-spend-matrix-builder-v1",
+        "source": lock_record["source"],
+        "artifact": lock_record["artifact"],
+        "code": code,
+        "valid_spend": valid_spend,
+        "invalid_spend": invalid_spend,
+        "measured_constraints": valid_spend["measured_constraints"],
+        "status": "passed",
     }
 
 def build_token_action_case(action, cellscript_lock, cellscript_type, destination_lock, destination_lock_hash, token_symbol, cell_deps):
@@ -4606,6 +4885,12 @@ try:
         report["onchain"]["completed_launch_actions"] = len(report["onchain"]["launch_action_runs"])
         write_report()
 
+    for lock_record in original_scoped_lock_artifacts:
+        lock_result = run_lock_spend_matrix(lock_record, always_success_dep)
+        report["onchain"]["lock_spend_matrix_runs"].append(lock_result)
+        report["onchain"]["completed_lock_spend_matrix"] = len(report["onchain"]["lock_spend_matrix_runs"])
+        write_report()
+
     tip_after = rpc("get_tip_header")
     report["onchain"]["tip_after"] = tip_after
     expected_artifact_count = len(artifacts)
@@ -4723,6 +5008,46 @@ try:
         for run in all_action_runs
         if ((run.get("measured_constraints") or {}).get("occupied_capacity_shannons")) is not None
     )
+    all_lock_runs = report["onchain"]["lock_spend_matrix_runs"]
+    expected_lock_spend_count = len(original_scoped_lock_artifacts)
+    report["onchain"]["lock_spend_matrix_count"] = len(all_lock_runs)
+    report["onchain"]["builder_backed_lock_spend_matrix_count"] = sum(
+        1 for run in all_lock_runs if run.get("builder_backed")
+    )
+    report["onchain"]["lock_valid_spend_count"] = sum(
+        1
+        for run in all_lock_runs
+        if (run.get("valid_spend") or {}).get("status") == "passed"
+        and (run.get("valid_spend") or {}).get("output_live") is True
+    )
+    report["onchain"]["lock_invalid_spend_count"] = sum(
+        1
+        for run in all_lock_runs
+        if ((run.get("invalid_spend") or {}).get("rejection") or {}).get("expected_reason_matched") is True
+        and ((run.get("invalid_spend") or {}).get("rejection") or {}).get("policy_or_capacity_reason") is False
+    )
+    report["onchain"]["measured_cycles_lock_count"] = sum(
+        1
+        for run in all_lock_runs
+        if ((run.get("measured_constraints") or {}).get("measured_cycles")) is not None
+    )
+    report["onchain"]["tx_size_measured_lock_count"] = sum(
+        1
+        for run in all_lock_runs
+        if ((run.get("measured_constraints") or {}).get("consensus_serialized_tx_size_bytes")) is not None
+    )
+    report["onchain"]["occupied_capacity_measured_lock_count"] = sum(
+        1
+        for run in all_lock_runs
+        if ((run.get("measured_constraints") or {}).get("occupied_capacity_shannons")) is not None
+    )
+    report["onchain"]["locks_behavior_exercised"] = [run["name"] for run in all_lock_runs]
+    report["onchain"]["all_locks_behavior_exercised"] = (
+        report["onchain"]["lock_spend_matrix_count"] == expected_lock_spend_count
+        and report["onchain"]["builder_backed_lock_spend_matrix_count"] == expected_lock_spend_count
+        and report["onchain"]["lock_valid_spend_count"] == expected_lock_spend_count
+        and report["onchain"]["lock_invalid_spend_count"] == expected_lock_spend_count
+    )
     final_hardening_failures = []
     handwritten_actions = [f"{run['name']}" for run in all_action_runs if not run.get("builder_backed")]
     if handwritten_actions:
@@ -4755,6 +5080,37 @@ try:
     if under_capacity_actions:
         final_hardening_failures.append(
             "builder-generated transactions contain under-capacity outputs: " + ", ".join(under_capacity_actions)
+        )
+    missing_lock_matrix = [
+        run["name"]
+        for run in all_lock_runs
+        if not run.get("builder_backed")
+        or (run.get("valid_spend") or {}).get("status") != "passed"
+        or ((run.get("invalid_spend") or {}).get("rejection") or {}).get("expected_reason_matched") is not True
+        or ((run.get("invalid_spend") or {}).get("rejection") or {}).get("policy_or_capacity_reason") is not False
+    ]
+    if len(all_lock_runs) != expected_lock_spend_count or missing_lock_matrix:
+        final_hardening_failures.append(
+            "builder-backed lock valid/invalid spend matrix is incomplete: "
+            + ", ".join(missing_lock_matrix or [f"{len(all_lock_runs)}/{expected_lock_spend_count} locks"])
+        )
+    missing_lock_tx_size = [
+        run["name"]
+        for run in all_lock_runs
+        if ((run.get("measured_constraints") or {}).get("consensus_serialized_tx_size_bytes")) is None
+    ]
+    if missing_lock_tx_size:
+        final_hardening_failures.append(
+            "consensus-serialized tx size is not yet measured for lock spends: " + ", ".join(missing_lock_tx_size)
+        )
+    under_capacity_locks = [
+        f"{run['name']}@{(run.get('measured_constraints') or {}).get('under_capacity_output_indexes')}"
+        for run in all_lock_runs
+        if ((run.get("measured_constraints") or {}).get("capacity_is_sufficient") is False)
+    ]
+    if under_capacity_locks:
+        final_hardening_failures.append(
+            "builder-generated lock spend transactions contain under-capacity outputs: " + ", ".join(under_capacity_locks)
         )
     report["final_production_hardening_gate"] = {
         "status": "passed" if not final_hardening_failures else "blocked",
@@ -4800,6 +5156,8 @@ try:
         raise RuntimeError(f"incomplete AMM action coverage: {report['onchain']['amm_actions_exercised']}")
     if not report["onchain"]["all_launch_actions_exercised"]:
         raise RuntimeError(f"incomplete launch action coverage: {report['onchain']['launch_actions_exercised']}")
+    if not report["onchain"]["all_locks_behavior_exercised"]:
+        raise RuntimeError(f"incomplete lock behavior coverage: {report['onchain']['locks_behavior_exercised']}")
     report["status"] = "passed"
     report["onchain"]["status"] = "passed"
     write_report()

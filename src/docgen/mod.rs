@@ -902,15 +902,34 @@ fn format_param(param: &Param) -> String {
     }
     rendered.push_str(&param.name);
     rendered.push_str(": ");
-    if param.is_read_ref {
-        rendered.push_str("read_ref ");
-        let ty = match &param.ty {
-            Type::Ref(inner) => inner.as_ref(),
-            other => other,
-        };
-        rendered.push_str(&format_type(ty));
-    } else {
-        rendered.push_str(&format_type(&param.ty));
+    match param.source {
+        ParamSource::Protected => {
+            rendered.push_str("protected ");
+            let ty = match &param.ty {
+                Type::Ref(inner) => inner.as_ref(),
+                other => other,
+            };
+            rendered.push_str(&format_type(ty));
+        }
+        ParamSource::Witness => {
+            rendered.push_str("witness ");
+            rendered.push_str(&format_type(&param.ty));
+        }
+        ParamSource::LockArgs => {
+            rendered.push_str("lock_args ");
+            rendered.push_str(&format_type(&param.ty));
+        }
+        ParamSource::Default if param.is_read_ref => {
+            rendered.push_str("read_ref ");
+            let ty = match &param.ty {
+                Type::Ref(inner) => inner.as_ref(),
+                other => other,
+            };
+            rendered.push_str(&format_type(ty));
+        }
+        ParamSource::Default => {
+            rendered.push_str(&format_type(&param.ty));
+        }
     }
     rendered
 }

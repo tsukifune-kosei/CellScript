@@ -240,6 +240,9 @@ impl Optimizer {
                 message: Box::new(self.optimize_expr(&assert.message)?),
                 span: assert.span,
             })),
+            Expr::Require(require) => {
+                Ok(Expr::Require(RequireExpr { condition: Box::new(self.optimize_expr(&require.condition)?), span: require.span }))
+            }
             Expr::Block(stmts) => Ok(Expr::Block(self.with_child_scope(|this| this.optimize_stmts(stmts))?)),
             Expr::Tuple(items) => {
                 let mut optimized = Vec::with_capacity(items.len());
@@ -579,6 +582,7 @@ fn walk_expr_children_for_calls(expr: &Expr, names: &mut Vec<String>) {
             collect_call_names_from_expr(&assert.condition, names);
             collect_call_names_from_expr(&assert.message, names);
         }
+        Expr::Require(require) => collect_call_names_from_expr(&require.condition, names),
         Expr::Block(stmts) => collect_call_names_from_stmts(stmts, names),
         Expr::Tuple(items) | Expr::Array(items) => {
             for item in items {
@@ -695,6 +699,7 @@ fn collect_names_by_walking_expr(expr: &Expr, names: &mut HashSet<String>) {
             collect_names_by_walking_expr(&assert.condition, names);
             collect_names_by_walking_expr(&assert.message, names);
         }
+        Expr::Require(require) => collect_names_by_walking_expr(&require.condition, names),
         Expr::Block(stmts) => {
             for stmt in stmts {
                 collect_used_names_from_stmt(stmt, names);
@@ -759,7 +764,8 @@ fn expr_is_pure_inlineable(expr: &Expr) -> bool {
         | Expr::ReadRef(_)
         | Expr::Claim(_)
         | Expr::Settle(_)
-        | Expr::Assert(_) => false,
+        | Expr::Assert(_)
+        | Expr::Require(_) => false,
     }
 }
 
@@ -844,6 +850,9 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Expr>) -> Expr {
                 .collect(),
             span: match_expr.span,
         }),
+        Expr::Require(require) => {
+            Expr::Require(RequireExpr { condition: Box::new(substitute_expr(&require.condition, substitutions)), span: require.span })
+        }
         Expr::Create(_)
         | Expr::Consume(_)
         | Expr::Transfer(_)
@@ -944,6 +953,7 @@ mod tests {
                         is_mut: false,
                         is_ref: false,
                         is_read_ref: false,
+                        source: ParamSource::Default,
                         span: Span::default(),
                     }],
                     return_type: Some(Type::U64),

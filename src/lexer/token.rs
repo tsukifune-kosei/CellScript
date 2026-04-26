@@ -37,6 +37,7 @@ pub enum TokenKind {
     Settle,     // settle
     Launch,     // launch
     Assert,     // assert_invariant
+    Require,    // require
     True,       // true
     False,      // false
     Self_,      // self
@@ -136,6 +137,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Settle => write!(f, "'settle'"),
             TokenKind::Launch => write!(f, "'launch'"),
             TokenKind::Assert => write!(f, "'assert_invariant'"),
+            TokenKind::Require => write!(f, "'require'"),
             TokenKind::True => write!(f, "'true'"),
             TokenKind::False => write!(f, "'false'"),
             TokenKind::Self_ => write!(f, "'self'"),
@@ -247,6 +249,7 @@ pub fn keyword_or_identifier(text: &str) -> TokenKind {
         "settle" => TokenKind::Settle,
         "launch" => TokenKind::Launch,
         "assert" | "assert_invariant" => TokenKind::Assert,
+        "require" => TokenKind::Require,
         "true" => TokenKind::True,
         "false" => TokenKind::False,
         "self" => TokenKind::Self_,

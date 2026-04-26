@@ -311,6 +311,15 @@ fn type_repr(ty: &Type) -> String {
     }
 }
 
+fn param_source_repr(source: ParamSource) -> &'static str {
+    match source {
+        ParamSource::Default => "default",
+        ParamSource::Protected => "protected",
+        ParamSource::Witness => "witness",
+        ParamSource::LockArgs => "lock_args",
+    }
+}
+
 fn type_def_type_id(type_def: &TypeDef) -> Option<&TypeIdentity> {
     match type_def {
         TypeDef::Resource(resource) => resource.type_id.as_ref(),
@@ -823,11 +832,91 @@ impl<'a> TypeChecker<'a> {
                 ));
             }
             self.validate_type(&param.ty)?;
+            self.validate_callable_param_source(param, callable_kind, callable_name)?;
             self.validate_callable_param_reference_shape(param, callable_kind, callable_name)?;
             self.validate_callable_param_state_authority(param, callable_kind, callable_name)?;
             self.validate_callable_param_mutability(param)?;
             let is_linear = self.is_linear_type(&param.ty);
             env.bind_new(param.name.clone(), param.ty.clone(), is_linear, param.is_mut, param.span)?;
+        }
+        Ok(())
+    }
+
+    fn validate_callable_param_source(&self, param: &Param, callable_kind: &str, callable_name: &str) -> Result<()> {
+        if param.source == ParamSource::Default {
+            return Ok(());
+        }
+        if callable_kind != "lock" {
+            return Err(CompileError::new(
+                format!(
+                    "{} '{}' parameter '{}' cannot use {} source classification; protected/witness/lock_args are lock-boundary syntax",
+                    callable_kind,
+                    callable_name,
+                    param.name,
+                    param_source_repr(param.source)
+                ),
+                param.span,
+            ));
+        }
+
+        match param.source {
+            ParamSource::Protected => {
+                if param.is_mut || param.is_read_ref || param.is_ref {
+                    return Err(CompileError::new(
+                        format!(
+                            "protected lock parameter '{}' must use 'name: protected T' without mut/ref/read_ref modifiers",
+                            param.name
+                        ),
+                        param.span,
+                    ));
+                }
+                let Type::Ref(inner) = &param.ty else {
+                    return Err(CompileError::new(
+                        format!("protected lock parameter '{}' must lower to a read-only Cell view", param.name),
+                        param.span,
+                    ));
+                };
+                let Some(name) = Self::base_type_name(inner) else {
+                    return Err(CompileError::new(
+                        format!(
+                            "protected lock parameter '{}' must name a Cell-backed resource, shared cell, or receipt type",
+                            param.name
+                        ),
+                        param.span,
+                    ));
+                };
+                if self.resolve_cell_type_kind(name).is_none() {
+                    return Err(CompileError::new(
+                        format!(
+                            "protected lock parameter '{}' references non-Cell type {}; protected only marks the current lock invocation's Cell spend surface",
+                            param.name,
+                            type_repr(inner)
+                        ),
+                        param.span,
+                    ));
+                }
+            }
+            ParamSource::Witness => {
+                if param.is_mut || param.is_read_ref || matches!(param.ty, Type::Ref(_) | Type::MutRef(_)) {
+                    return Err(CompileError::new(
+                        format!(
+                            "witness lock parameter '{}' must be plain transaction witness data, not a Cell reference",
+                            param.name
+                        ),
+                        param.span,
+                    ));
+                }
+            }
+            ParamSource::LockArgs => {
+                return Err(CompileError::new(
+                    format!(
+                        "lock_args parameter '{}' is reserved until explicit CKB script-args binding is implemented; use ordinary parameters or witness classification for now",
+                        param.name
+                    ),
+                    param.span,
+                ));
+            }
+            ParamSource::Default => {}
         }
         Ok(())
     }
@@ -1071,6 +1160,11 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn infer_let_value_type(&mut self, env: &mut TypeEnv, let_stmt: &LetStmt) -> Result<Type> {
+        if let Some(declared_ty) = &let_stmt.ty {
+            if matches!(let_stmt.value, Expr::Array(_)) {
+                return self.infer_expr_with_expected_type(env, &let_stmt.value, declared_ty, let_stmt.span);
+            }
+        }
         if let Expr::Array(elems) = &let_stmt.value {
             if elems.is_empty() {
                 return match &let_stmt.ty {
@@ -1085,6 +1179,72 @@ impl<'a> TypeChecker<'a> {
             }
         }
         self.infer_expr(env, &let_stmt.value)
+    }
+
+    fn infer_expr_with_expected_type(&mut self, env: &mut TypeEnv, expr: &Expr, expected_ty: &Type, span: Span) -> Result<Type> {
+        match expr {
+            Expr::Array(elems) => self.infer_array_literal_with_expected_type(env, elems, expected_ty, span),
+            _ => self.infer_expr(env, expr),
+        }
+    }
+
+    fn infer_array_literal_with_expected_type(
+        &mut self,
+        env: &mut TypeEnv,
+        elems: &[Expr],
+        expected_ty: &Type,
+        span: Span,
+    ) -> Result<Type> {
+        if let Type::Named(name) = expected_ty {
+            if let Some(item_ty) = self.parse_named_collection_item_type(name) {
+                for elem in elems {
+                    let actual_ty = self.infer_expr(env, elem)?;
+                    if self.type_contains_reference(&actual_ty) {
+                        return Err(CompileError::new(
+                            format!(
+                                "Vec literal cannot store reference type {}; Vec<T> values must use owned non-reference items",
+                                type_repr(&actual_ty)
+                            ),
+                            expr_span(elem),
+                        ));
+                    }
+                    if !self.types_equal(&actual_ty, &item_ty) {
+                        return Err(CompileError::new(
+                            format!("Vec literal type mismatch: expected {:?}, found {:?}", item_ty, actual_ty),
+                            expr_span(elem),
+                        ));
+                    }
+                }
+                return Ok(expected_ty.clone());
+            }
+        }
+
+        if let Type::Array(item_ty, expected_len) = expected_ty {
+            if elems.len() != *expected_len {
+                if elems.is_empty() {
+                    return Err(CompileError::new(
+                        format!("empty array literal cannot initialize non-empty array of length {}", expected_len),
+                        span,
+                    ));
+                }
+                return Err(CompileError::new(
+                    format!("array literal length mismatch: expected {}, found {}", expected_len, elems.len()),
+                    span,
+                ));
+            }
+            for elem in elems {
+                let actual_ty = self.infer_expr(env, elem)?;
+                if !self.types_equal(&actual_ty, item_ty) {
+                    return Err(CompileError::new(
+                        format!("array literal type mismatch: expected {:?}, found {:?}", item_ty, actual_ty),
+                        expr_span(elem),
+                    ));
+                }
+            }
+            return Ok(expected_ty.clone());
+        }
+
+        self.infer_expr(env, &Expr::Array(elems.to_vec()))
     }
 
     fn infer_expr(&mut self, env: &mut TypeEnv, expr: &Expr) -> Result<Type> {
@@ -1252,6 +1412,13 @@ impl<'a> TypeChecker<'a> {
                     return Err(CompileError::new("assert message must be a string literal", expr_span(&assert_expr.message)));
                 }
                 Ok(Type::Unit)
+            }
+            Expr::Require(require_expr) => {
+                let cond_ty = self.infer_expr(env, &require_expr.condition)?;
+                if !self.is_bool_type(&cond_ty) {
+                    return Err(CompileError::new("require condition must be boolean", require_expr.span));
+                }
+                Ok(Type::Bool)
             }
             Expr::Block(stmts) => {
                 let mut block_env = env.child();
@@ -1470,7 +1637,7 @@ impl<'a> TypeChecker<'a> {
             let Some(expected_ty) = expected_fields.get(field_name) else {
                 return Err(CompileError::new(format!("unknown field '{}' in {} for '{}'", field_name, context, type_name), span));
             };
-            let actual_ty = self.infer_expr(env, value)?;
+            let actual_ty = self.infer_expr_with_expected_type(env, value, expected_ty, expr_span(value))?;
             if !self.initializer_types_equal(&actual_ty, expected_ty) {
                 return Err(CompileError::new(
                     format!(
@@ -1556,6 +1723,13 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn validate_expr_allowed_in_current_callable(&self, expr: &Expr) -> Result<()> {
+        if matches!(expr, Expr::Require(_)) && self.current_callable != Some(CallableKind::Lock) {
+            return Err(CompileError::new(
+                "require is lock-boundary syntax; use assert_invariant inside actions and ordinary boolean expressions inside pure functions",
+                expr_span(expr),
+            ));
+        }
+
         let operation = match expr {
             Expr::Create(_) => Some("create"),
             Expr::Consume(_) => Some("consume"),
@@ -1812,6 +1986,7 @@ impl<'a> TypeChecker<'a> {
             Expr::Assign(assign) => self.mark_expr_as_moved(env, &assign.value),
             Expr::Transfer(_) | Expr::Claim(_) | Expr::Settle(_) => Ok(()),
             Expr::Assert(assert_expr) => self.mark_expr_as_moved(env, &assert_expr.condition),
+            Expr::Require(require_expr) => self.mark_expr_as_moved(env, &require_expr.condition),
             Expr::If(if_expr) => {
                 let mut then_env = env.child();
                 self.mark_expr_as_moved(&mut then_env, &if_expr.then_branch)?;
@@ -2834,6 +3009,7 @@ fn expr_span(expr: &Expr) -> Span {
         Expr::Claim(claim) => claim.span,
         Expr::Settle(settle) => settle.span,
         Expr::Assert(assert_expr) => assert_expr.span,
+        Expr::Require(require_expr) => require_expr.span,
         Expr::Block(stmts) => stmts.last().map(stmt_span).unwrap_or_default(),
         Expr::Tuple(_) | Expr::Array(_) => Span::default(),
         Expr::If(if_expr) => if_expr.span,

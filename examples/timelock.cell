@@ -1,5 +1,5 @@
 
-module timelock_contract;
+module cellscript::timelock
 
 
 const MIN_LOCK_PERIOD: u64 = 10;
@@ -12,16 +12,14 @@ enum LockType {
     Relative,
 }
 
-#[capability(store)]
-resource TimeLock has destroy {
+resource TimeLock has store, destroy {
     owner: Address,
     lock_type: LockType,
     unlock_height: u64,
     created_at: u64,
 }
 
-#[capability(store)]
-resource LockedAsset has destroy {
+resource LockedAsset has store, destroy {
     asset_type: AssetType,
     amount: u64,
     lock_hash: Hash,
@@ -73,9 +71,9 @@ action create_absolute_lock(
     );
     
     let lock = create TimeLock {
-        owner: owner,
+        owner,
         lock_type: LockType::Absolute,
-        unlock_height: unlock_height,
+        unlock_height,
         created_at: current_height,
     };
     
@@ -93,7 +91,7 @@ action create_relative_lock(
     assert!(lock_period <= MAX_LOCK_PERIOD, "Lock period too long");
     
     let lock = create TimeLock {
-        owner: owner,
+        owner,
         lock_type: LockType::Relative,
         unlock_height: current_height + lock_period,
         created_at: current_height,
@@ -112,8 +110,8 @@ action lock_asset(
     assert!(amount > 0, "Amount must be positive");
     
     let locked = create LockedAsset {
-        asset_type: asset_type,
-        amount: amount,
+        asset_type,
+        amount,
         lock_hash: hash_lock(time_lock),
     };
     
@@ -131,7 +129,7 @@ action request_release(
     
     let request = create ReleaseRequest {
         lock_hash: hash_lock(time_lock),
-        requester: requester,
+        requester,
         requested_at: current_height,
     };
     
@@ -188,10 +186,10 @@ action request_emergency_release(
     
     let emergency = create EmergencyRelease {
         lock_hash: hash_lock(time_lock),
-        requester: requester,
-        reason: reason,
+        requester,
+        reason,
         requested_at: current_height,
-        approvers: Vec::new(),
+        approvers: [],
     };
     
     emergency
@@ -357,22 +355,22 @@ fn hash_lock(time_lock: &TimeLock) -> Hash {
 }
 
 
-lock can_unlock_lock(time_lock: &TimeLock, current_height: u64) -> bool {
-    can_unlock(time_lock, current_height)
+lock can_unlock_lock(time_lock: protected TimeLock, current_height: witness u64) -> bool {
+    require can_unlock(time_lock, current_height)
 }
 
-lock is_owner(time_lock: &TimeLock, addr: Address) -> bool {
-    time_lock.owner == addr
+lock is_owner(time_lock: protected TimeLock, addr: witness Address) -> bool {
+    require time_lock.owner == addr
 }
 
-lock asset_matches(locked_asset: &LockedAsset, time_lock: &TimeLock) -> bool {
-    locked_asset.lock_hash == hash_lock(time_lock)
+lock asset_matches(locked_asset: protected LockedAsset, time_lock: &TimeLock) -> bool {
+    require locked_asset.lock_hash == hash_lock(time_lock)
 }
 
-lock emergency_approved(emergency: &EmergencyRelease, required: u8) -> bool {
-    emergency.approvers.len() >= required as usize
+lock emergency_approved(emergency: protected EmergencyRelease, required: witness u8) -> bool {
+    require emergency.approvers.len() >= required as usize
 }
 
-lock not_expired(time_lock: &TimeLock, current_height: u64) -> bool {
-    current_height < time_lock.unlock_height
+lock not_expired(time_lock: protected TimeLock, current_height: witness u64) -> bool {
+    require current_height < time_lock.unlock_height
 }

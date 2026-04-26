@@ -2424,6 +2424,14 @@ pub struct ParamMetadata {
     pub ty: String,
     pub is_mut: bool,
     pub is_ref: bool,
+    #[serde(default = "default_param_source", skip_serializing_if = "is_default_param_source")]
+    pub source: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub protected_spend_surface: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub witness_data_source: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub lock_args_data_source: bool,
     #[serde(default)]
     pub cell_bound_abi: bool,
     pub schema_pointer_abi: bool,
@@ -2434,6 +2442,18 @@ pub struct ParamMetadata {
     pub type_hash_pointer_abi: bool,
     pub type_hash_length_abi: bool,
     pub type_hash_len: Option<usize>,
+}
+
+fn default_param_source() -> String {
+    "default".to_string()
+}
+
+fn is_default_param_source(source: &String) -> bool {
+    source == "default"
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11706,6 +11726,10 @@ fn param_metadata(
         ty: ir_type_to_string(&param.ty),
         is_mut: param.is_mut,
         is_ref: param.is_ref,
+        source: param_source_metadata(param.source).to_string(),
+        protected_spend_surface: param.source == ast::ParamSource::Protected,
+        witness_data_source: param.source == ast::ParamSource::Witness,
+        lock_args_data_source: param.source == ast::ParamSource::LockArgs,
         cell_bound_abi,
         schema_pointer_abi,
         schema_length_abi: schema_pointer_abi,
@@ -11715,6 +11739,15 @@ fn param_metadata(
         type_hash_pointer_abi: type_hash_abi,
         type_hash_length_abi: type_hash_abi,
         type_hash_len: type_hash_abi.then_some(32),
+    }
+}
+
+fn param_source_metadata(source: ast::ParamSource) -> &'static str {
+    match source {
+        ast::ParamSource::Default => "default",
+        ast::ParamSource::Protected => "protected",
+        ast::ParamSource::Witness => "witness",
+        ast::ParamSource::LockArgs => "lock_args",
     }
 }
 
@@ -13070,6 +13103,58 @@ module test
 action checked(x: u64) -> u64 {
     assert_invariant(x > 0, "x must be positive")
     return x
+}
+"#;
+
+    const LOCK_BOUNDARY_CLASSIFICATION_PROGRAM: &str = r#"
+module test
+
+resource Token {
+    owner: Address,
+}
+
+lock owner_guard(token: protected Token, claimed_owner: witness Address) -> bool {
+    require claimed_owner == token.owner
+}
+"#;
+
+    const ACTION_PROTECTED_PARAM_PROGRAM: &str = r#"
+module test
+
+resource Token {
+    owner: Address,
+}
+
+action bad(token: protected Token) -> u64 {
+    return 0
+}
+"#;
+
+    const LOCK_ARGS_PARAM_PROGRAM: &str = r#"
+module test
+
+resource Token {
+    owner: Address,
+}
+
+lock bad(token: protected Token, owner: lock_args Address) -> bool {
+    require owner == token.owner
+}
+"#;
+
+    const ACTION_REQUIRE_PROGRAM: &str = r#"
+module test
+
+action bad(x: u64) -> bool {
+    require x > 0
+}
+"#;
+
+    const FUNCTION_REQUIRE_PROGRAM: &str = r#"
+module test
+
+fn bad(x: u64) -> bool {
+    require x > 0
 }
 "#;
 
@@ -14456,6 +14541,21 @@ action bad() -> u64 {
 }
 "#;
 
+    const EMPTY_LITERAL_NON_VEC_CONTEXT_PROGRAM: &str = r#"
+module test
+
+struct Snapshot {
+    values: [u8; 1],
+}
+
+action bad() -> u64 {
+    let snapshot = Snapshot {
+        values: [],
+    }
+    return 0
+}
+"#;
+
     const LOCAL_ARRAY_STATIC_INDEX_PROGRAM: &str = r#"
 module test
 
@@ -14848,6 +14948,40 @@ action stack_vec_with_capacity_sum() -> u64 {
     values.push(7)
     values.push(9)
     return values.len() + values[1]
+}
+"#;
+
+    const BOUNDED_VEC_LITERAL_PROGRAM: &str = r#"
+module test
+
+action bounded_vec_literal_sum() -> u64 {
+    let mut values: Vec<u64> = [7, 9]
+    return values.len() + values[1]
+}
+"#;
+
+    const EMPTY_VEC_LITERAL_PROGRAM: &str = r#"
+module test
+
+action empty_vec_literal_capacity() -> u64 {
+    let values: Vec<Address> = []
+    return values.capacity()
+}
+"#;
+
+    const CREATE_VEC_LITERAL_FIELD_PROGRAM: &str = r#"
+module test
+
+resource Group has store {
+    members: Vec<Address>,
+    labels: Vec<u8>,
+}
+
+action create_group(owner: Address) -> Group {
+    return create Group {
+        members: [owner],
+        labels: [],
+    }
 }
 "#;
 
@@ -16061,6 +16195,65 @@ action activate(ticket: Ticket) -> Ticket {
     }
 
     #[test]
+    fn compile_accepts_lock_boundary_param_sources_and_require() {
+        let result = compile(LOCK_BOUNDARY_CLASSIFICATION_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(asm.contains(".global owner_guard"), "missing lock symbol:\n{}", asm);
+        assert!(
+            asm.contains("cellscript runtime error 5 assertion-failed"),
+            "require failure path did not lower to the lock script failure path:\n{}",
+            asm
+        );
+
+        let lock = result.metadata.locks.iter().find(|lock| lock.name == "owner_guard").expect("owner_guard metadata");
+        assert_eq!(lock.params[0].name, "token");
+        assert_eq!(lock.params[0].ty, "&Token");
+        assert_eq!(lock.params[0].source, "protected");
+        assert!(lock.params[0].protected_spend_surface);
+        assert!(!lock.params[0].witness_data_source);
+
+        assert_eq!(lock.params[1].name, "claimed_owner");
+        assert_eq!(lock.params[1].ty, "Address");
+        assert_eq!(lock.params[1].source, "witness");
+        assert!(lock.params[1].witness_data_source);
+        assert!(!lock.params[1].protected_spend_surface);
+    }
+
+    #[test]
+    fn compile_rejects_lock_boundary_sources_outside_supported_scope() {
+        let action_err = compile(ACTION_PROTECTED_PARAM_PROGRAM, CompileOptions::default()).unwrap_err();
+        assert!(
+            action_err.message.contains("protected/witness/lock_args are lock-boundary syntax"),
+            "unexpected error: {}",
+            action_err.message
+        );
+
+        let lock_args_err = compile(LOCK_ARGS_PARAM_PROGRAM, CompileOptions::default()).unwrap_err();
+        assert!(
+            lock_args_err
+                .message
+                .contains("lock_args parameter 'owner' is reserved until explicit CKB script-args binding is implemented"),
+            "unexpected error: {}",
+            lock_args_err.message
+        );
+
+        let action_require_err = compile(ACTION_REQUIRE_PROGRAM, CompileOptions::default()).unwrap_err();
+        assert!(
+            action_require_err.message.contains("require is lock-boundary syntax"),
+            "unexpected error: {}",
+            action_require_err.message
+        );
+
+        let function_require_err = compile(FUNCTION_REQUIRE_PROGRAM, CompileOptions::default()).unwrap_err();
+        assert!(
+            function_require_err.message.contains("require is lock-boundary syntax"),
+            "unexpected error: {}",
+            function_require_err.message
+        );
+    }
+
+    #[test]
     fn compile_rejects_non_bool_assert_condition() {
         let err = compile(ASSERT_NON_BOOL_PROGRAM, CompileOptions::default()).unwrap_err();
         assert!(err.message.contains("assert condition must be boolean"), "unexpected error: {}", err.message);
@@ -17202,6 +17395,13 @@ action grant(config: read_ref Config, token: Token) -> Grant {
     }
 
     #[test]
+    fn compile_rejects_empty_literal_in_non_vec_context() {
+        let err = compile(EMPTY_LITERAL_NON_VEC_CONTEXT_PROGRAM, CompileOptions::default()).unwrap_err();
+
+        assert!(err.message.contains("empty array literal cannot initialize non-empty array"), "unexpected error: {}", err.message);
+    }
+
+    #[test]
     fn compile_lowers_local_fixed_array_static_index_reads_and_writes() {
         let result = compile(LOCAL_ARRAY_STATIC_INDEX_PROGRAM, CompileOptions::default()).unwrap();
         let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
@@ -17655,6 +17855,96 @@ action bad(point: Point) -> u64 {
             "Vec::with_capacity stack runtime should not be reported as fail-closed: {:?}",
             action.fail_closed_runtime_features
         );
+    }
+
+    #[test]
+    fn compile_lowers_bounded_vec_literal_to_stack_collection() {
+        let result = compile(BOUNDED_VEC_LITERAL_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# cellscript abi: stack collection with_capacity uses fixed backing buffer"),
+            "bounded Vec literal should lower through the existing stack Vec constructor:\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection push element_size=8"),
+            "bounded Vec literal elements should lower through existing push instructions:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# call Vec::with_capacity") && !asm.contains("# call push"),
+            "bounded Vec literal leaked through generic call lowering:\n{}",
+            asm
+        );
+
+        let action = result.metadata.actions.iter().find(|action| action.name == "bounded_vec_literal_sum").unwrap();
+        assert!(
+            !action.fail_closed_runtime_features.contains(&"collection-new".to_string())
+                && !action.fail_closed_runtime_features.contains(&"collection-push".to_string())
+                && !action.fail_closed_runtime_features.contains(&"dynamic-length".to_string())
+                && !action.fail_closed_runtime_features.contains(&"index-access".to_string()),
+            "bounded Vec literal should stay on the checked stack collection path: {:?}",
+            action.fail_closed_runtime_features
+        );
+    }
+
+    #[test]
+    fn compile_accepts_empty_vec_literal_with_declared_type() {
+        let result = compile(EMPTY_VEC_LITERAL_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# collection new Vec"),
+            "empty Vec literal should lower through the existing stack Vec constructor:\n{}",
+            asm
+        );
+        assert!(
+            !asm.contains("# cellscript abi: stack collection with_capacity uses fixed backing buffer"),
+            "empty Vec literal should be Vec::new() sugar, not Vec::with_capacity(0):\n{}",
+            asm
+        );
+        assert!(
+            asm.contains("# cellscript abi: stack collection capacity element_size=32"),
+            "typed empty Vec literal should retain its declared item type:\n{}",
+            asm
+        );
+    }
+
+    #[test]
+    fn compile_accepts_vec_literals_in_create_fields() {
+        let result = compile(CREATE_VEC_LITERAL_FIELD_PROGRAM, CompileOptions::default()).unwrap();
+        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
+
+        assert!(
+            asm.contains("# collection new Vec"),
+            "Vec literal create fields should lower through existing collection construction:\n{}",
+            asm
+        );
+        let action = result.metadata.actions.iter().find(|action| action.name == "create_group").unwrap();
+        let create = action.create_set.iter().find(|pattern| pattern.ty == "Group").expect("Group create metadata");
+        assert!(
+            create.fields.iter().any(|field| field == "members") && create.fields.iter().any(|field| field == "labels"),
+            "Vec literal fields should remain visible in create metadata: {:?}",
+            create.fields
+        );
+    }
+
+    #[test]
+    fn compile_rejects_bounded_vec_literal_type_mismatch() {
+        let err = compile(
+            r#"
+module test
+
+action bad() -> u64 {
+    let values: Vec<Address> = [1]
+    return values.len()
+}
+"#,
+            CompileOptions::default(),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("Vec literal type mismatch"), "unexpected error: {}", err.message);
     }
 
     #[test]
@@ -19805,6 +20095,30 @@ resource Token has store {
     }
 
     #[test]
+    fn compile_accepts_create_field_shorthand() {
+        let source = r#"
+module cellscript::shorthand
+
+resource Token has store {
+    amount: u64
+    symbol: [u8; 8]
+}
+
+action mint(amount: u64, symbol: [u8; 8]) -> Token {
+    create Token {
+        amount,
+        symbol,
+    }
+}
+"#;
+        let result = compile(source, CompileOptions::default()).unwrap();
+        assert_eq!(result.metadata.actions.len(), 1);
+        let action = &result.metadata.actions[0];
+        assert_eq!(action.create_set.len(), 1);
+        assert_eq!(action.create_set[0].fields, vec!["amount".to_string(), "symbol".to_string()]);
+    }
+
+    #[test]
     fn compile_accepts_complete_branch_return_paths() {
         compile(BRANCH_COMPLETE_RETURN_PROGRAM, CompileOptions::default()).unwrap();
     }
@@ -20769,6 +21083,38 @@ action unsupported(name: String) -> DynamicCell {
         assert!(scoped.metadata.actions.is_empty());
         assert!(!scoped.metadata.types.iter().any(|ty| ty.name == "DynamicCell"));
         assert!(scoped.artifact_bytes.starts_with(b"\x7fELF"));
+    }
+
+    #[test]
+    fn ckb_lock_false_return_lowers_to_script_failure() {
+        let source = r#"
+module scoped_lock
+
+lock owner_lock(owner: Address, claimed: Address) -> bool {
+    owner == claimed
+}
+"#;
+        let temp = tempdir().unwrap();
+        let entry = Utf8Path::from_path(temp.path()).unwrap().join("scoped_lock.cell");
+        std::fs::write(&entry, source).unwrap();
+
+        let scoped = compile_file_with_entry_lock(
+            &entry,
+            CompileOptions {
+                target_profile: Some("ckb".to_string()),
+                target: Some("riscv64-asm".to_string()),
+                ..CompileOptions::default()
+            },
+            "owner_lock",
+        )
+        .unwrap();
+        let asm = String::from_utf8(scoped.artifact_bytes).unwrap();
+        assert!(
+            asm.contains("cellscript runtime error 5 assertion-failed"),
+            "lock false return must lower to a non-zero CKB script exit:\n{}",
+            asm
+        );
+        assert!(asm.contains("lock_predicate_true"), "lock predicate true branch missing:\n{}", asm);
     }
 
     #[test]

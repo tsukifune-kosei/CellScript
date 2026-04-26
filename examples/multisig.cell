@@ -1,5 +1,5 @@
 
-module multisig_wallet;
+module cellscript::multisig
 
 
 const MIN_SIGNERS: u8 = 2;
@@ -24,8 +24,7 @@ enum OperationType {
     Custom,
 }
 
-#[capability(store)]
-resource MultisigWallet {
+resource MultisigWallet has store {
     signers: Vec<Address>,
     threshold: u8,
     nonce: u64,
@@ -93,8 +92,8 @@ action create_wallet(
     }
     
     let wallet = create MultisigWallet {
-        signers: signers,
-        threshold: threshold,
+        signers,
+        threshold,
         nonce: 0,
         created_at: current_time,
     };
@@ -121,14 +120,14 @@ action propose_transfer(
     
     let proposal = create Proposal {
         wallet_hash: hash_wallet(wallet),
-        proposal_id: proposal_id,
-        proposer: proposer,
+        proposal_id,
+        proposer,
         operation: OperationType::Transfer,
-        target: target,
-        amount: amount,
-        data: Vec::new(),
+        target,
+        amount,
+        data: [],
         required_signatures: wallet.threshold,
-        signatures: Vec::new(),
+        signatures: [],
         created_at: current_time,
         expires_at: current_time + DEFAULT_TIMEOUT,
     };
@@ -153,13 +152,13 @@ action add_signature(
     assert!(!has_signed(proposal, signer), "Already signed");
     
     proposal.signatures.push(Signature {
-        signer: signer,
-        signature: signature,
+        signer,
+        signature,
     });
     
     let confirmation = create SignatureConfirmation {
         proposal_id: proposal.proposal_id,
-        signer: signer,
+        signer,
         timestamp: current_time,
     };
     
@@ -199,9 +198,9 @@ action execute_proposal(
     
     let record = create ExecutionRecord {
         proposal_id: proposal.proposal_id,
-        executor: executor,
+        executor,
         executed_at: current_time,
-        success: success,
+        success,
     };
     
     record
@@ -244,19 +243,19 @@ action propose_add_signer(
     let proposal_id = wallet.nonce + 1;
     wallet.nonce = proposal_id;
     
-    let mut data = Vec::new();
+    let mut data: Vec<u8> = [];
     data.extend_from_slice(&new_signer.0);
     
     let proposal = create Proposal {
         wallet_hash: hash_wallet(wallet),
-        proposal_id: proposal_id,
-        proposer: proposer,
+        proposal_id,
+        proposer,
         operation: OperationType::AddSigner,
         target: new_signer,
         amount: 0,
-        data: data,
+        data,
         required_signatures: wallet.threshold,
-        signatures: Vec::new(),
+        signatures: [],
         created_at: current_time,
         expires_at: current_time + DEFAULT_TIMEOUT,
     };
@@ -286,14 +285,14 @@ action propose_remove_signer(
     
     let proposal = create Proposal {
         wallet_hash: hash_wallet(wallet),
-        proposal_id: proposal_id,
-        proposer: proposer,
+        proposal_id,
+        proposer,
         operation: OperationType::RemoveSigner,
         target: signer_to_remove,
         amount: 0,
-        data: Vec::new(),
+        data: [],
         required_signatures: wallet.threshold,
-        signatures: Vec::new(),
+        signatures: [],
         created_at: current_time,
         expires_at: current_time + DEFAULT_TIMEOUT,
     };
@@ -319,19 +318,19 @@ action propose_change_threshold(
     let proposal_id = wallet.nonce + 1;
     wallet.nonce = proposal_id;
     
-    let mut data = Vec::new();
+    let mut data: Vec<u8> = [];
     data.push(new_threshold);
     
     let proposal = create Proposal {
         wallet_hash: hash_wallet(wallet),
-        proposal_id: proposal_id,
-        proposer: proposer,
+        proposal_id,
+        proposer,
         operation: OperationType::ChangeThreshold,
         target: Address::zero(),
         amount: new_threshold as u64,
-        data: data,
+        data,
         required_signatures: wallet.threshold,
-        signatures: Vec::new(),
+        signatures: [],
         created_at: current_time,
         expires_at: current_time + DEFAULT_TIMEOUT,
     };
@@ -363,23 +362,23 @@ fn hash_wallet(wallet: &MultisigWallet) -> Hash {
 }
 
 
-lock is_signer_lock(wallet: &MultisigWallet, addr: Address) -> bool {
-    is_signer(wallet, addr)
+lock is_signer_lock(wallet: protected MultisigWallet, addr: witness Address) -> bool {
+    require is_signer(wallet, addr)
 }
 
-lock can_execute(proposal: &Proposal, current_time: u64) -> bool {
-    proposal.signatures.len() >= proposal.required_signatures as usize
+lock can_execute(proposal: protected Proposal, current_time: witness u64) -> bool {
+    require proposal.signatures.len() >= proposal.required_signatures as usize
         && current_time < proposal.expires_at
 }
 
-lock can_cancel(proposal: &Proposal, caller: Address) -> bool {
-    proposal.proposer == caller
+lock can_cancel(proposal: protected Proposal, caller: witness Address) -> bool {
+    require proposal.proposer == caller
 }
 
-lock has_enough_signatures(proposal: &Proposal) -> bool {
-    proposal.signatures.len() >= proposal.required_signatures as usize
+lock has_enough_signatures(proposal: protected Proposal) -> bool {
+    require proposal.signatures.len() >= proposal.required_signatures as usize
 }
 
-lock not_expired(proposal: &Proposal, current_time: u64) -> bool {
-    current_time < proposal.expires_at
+lock not_expired(proposal: protected Proposal, current_time: witness u64) -> bool {
+    require current_time < proposal.expires_at
 }

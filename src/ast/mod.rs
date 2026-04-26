@@ -168,7 +168,16 @@ pub struct Param {
     pub is_mut: bool,
     pub is_ref: bool,
     pub is_read_ref: bool,
+    pub source: ParamSource,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ParamSource {
+    Default,
+    Protected,
+    Witness,
+    LockArgs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -259,6 +268,7 @@ pub enum Expr {
     Claim(ClaimExpr),
     Settle(SettleExpr),
     Assert(AssertExpr),
+    Require(RequireExpr),
     Block(Vec<Stmt>),
     Tuple(Vec<Expr>),
     Array(Vec<Expr>),
@@ -394,6 +404,13 @@ pub struct SettleExpr {
 pub struct AssertExpr {
     pub condition: Box<Expr>,
     pub message: Box<Expr>,
+    pub span: Span,
+}
+
+/// Lock/action failure requirement expression.
+#[derive(Debug, Clone)]
+pub struct RequireExpr {
+    pub condition: Box<Expr>,
     pub span: Span,
 }
 

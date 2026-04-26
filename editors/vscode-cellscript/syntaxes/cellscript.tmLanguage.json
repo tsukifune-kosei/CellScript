@@ -167,7 +167,7 @@
         },
         {
           "name": "keyword.other.cellscript",
-          "match": "\\b(has|store|consume|create|read_ref|claim|settle|launch|self|env|with_lock|assert_invariant|transfer|destroy)\\b"
+          "match": "\\b(has|store|consume|create|read_ref|claim|settle|launch|self|env|with_lock|assert_invariant|require|protected|witness|lock_args|transfer|destroy)\\b"
         },
         {
           "name": "constant.language.boolean.cellscript",
@@ -211,7 +211,7 @@
         },
         {
           "name": "support.function.builtin.cellscript",
-          "match": "\\b(assert_invariant|min|max|isqrt)\\b"
+          "match": "\\b(assert_invariant|require|min|max|isqrt)\\b"
         },
         {
           "name": "support.function.namespace.cellscript",

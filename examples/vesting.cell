@@ -33,11 +33,11 @@ action create_vesting_config(
     assert_invariant(cliff_period < total_period, "cliff >= total")
     
     create VestingConfig {
-        admin: admin,
-        token_symbol: token_symbol,
-        cliff_period: cliff_period,
+        admin,
+        token_symbol,
+        cliff_period,
         total_vesting_period: total_period,
-        revocable: revocable
+        revocable
     } with_lock(admin)
 }
 
@@ -55,7 +55,7 @@ action grant_vesting(
     
     create VestingGrant {
         state: 0,  // Granted
-        beneficiary: beneficiary,
+        beneficiary,
         total_amount: tokens.amount,
         claimed_amount: 0,
         grant_timepoint: now,
@@ -107,7 +107,7 @@ action claim_vested(grant: VestingGrant) -> (Token, VestingGrant) {
 
 // `claimed_admin` is still an entry witness argument. The equality check below
 // is factored through `vesting_admin` so the authority predicate is visible as a
-// lock entry and can be promoted into an on-chain spend/deny-spend matrix.
+// lock entry and is covered by the CKB valid-spend and invalid-spend matrix.
 action revoke_grant(
     config: read_ref VestingConfig,
     grant: VestingGrant,
@@ -151,9 +151,9 @@ fn is_vesting_admin(config: &VestingConfig, claimed_admin: Address) -> bool {
     claimed_admin == config.admin
 }
 
-// Strict-compilation coverage proves this predicate lowers under the CKB
-// profile. Full witness-sighash authorization still requires a builder-backed
-// lock spend/deny-spend acceptance matrix.
-lock vesting_admin(config: &VestingConfig, claimed_admin: Address) -> bool {
-    is_vesting_admin(config, claimed_admin)
+// The CKB acceptance matrix spends this lock with the configured admin and
+// rejects a non-admin witness. Full witness-sighash authorization still needs a
+// first-class signer/lock-args binding in the language surface.
+lock vesting_admin(config: protected VestingConfig, claimed_admin: witness Address) -> bool {
+    require is_vesting_admin(config, claimed_admin)
 }

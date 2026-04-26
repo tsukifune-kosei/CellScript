@@ -13,7 +13,7 @@ CellScript language surface and the current production gates.
 |---|---|
 | `examples/token.cell` | Minting, transfer, burn, and guarded token merge. |
 | `examples/timelock.cell` | Time-gated state transitions and release flows. |
-| `examples/multisig.cell` | Threshold authorization and signature-oriented locks. |
+| `examples/multisig.cell` | Threshold policy, proposal lifecycle, and lock-boundary predicates. |
 | `examples/nft.cell` | Unique assets, metadata, and owner transitions. |
 | `examples/vesting.cell` | Vesting grants, receipts, and claim lifecycle. |
 | `examples/amm_pool.cell` | Shared pool state, swap, and liquidity effects. |
@@ -100,23 +100,29 @@ Read the examples in this order if you are learning the language:
 - Start with `token.cell` to learn linear resources and creation.
 - Read `nft.cell` to learn fixed ownership and unique-asset state.
 - Read `timelock.cell` to learn time guards and state replacement.
-- Read `multisig.cell` to learn lock-style authorization.
+- Read `multisig.cell` to learn threshold proposal flow and lock-boundary predicates.
 - Read `vesting.cell` to learn receipt-style claim flows.
 - Read `amm_pool.cell` after you understand `shared`, because pools introduce contention-sensitive state.
 - Read `launch.cell` last; it composes multiple protocol patterns.
 
 ## CKB Production Expectations
 
-The CKB profile is strict, and the current bundled-example suite is closed for the 0.12 production boundary:
+The CKB profile is strict, and the current bundled-example suite is closed for the current production boundary:
 
 - all seven bundled examples strict-admit under the CKB profile;
 - all 43 bundled business actions have scoped CKB production harnesses;
-- all 16 bundled locks strict-compile; this is not an on-chain lock spend matrix;
+- all 16 bundled locks strict-compile and have builder-backed valid-spend and invalid-spend matrices;
 - valid CKB transactions are builder-generated and dry-run;
 - malformed transactions are rejected for non-policy/non-capacity reasons;
 - tx-size, cycle, and occupied-capacity evidence is retained;
 - all seven bundled examples are deployed in the CKB production acceptance report;
 - the final production hardening gate must pass.
+
+The bundled locks use `protected` to show the input Cell guarded by the current
+lock invocation and `witness` to show decoded transaction witness data. Those
+markers do not make an `Address` a signer proof. Real signature authorization
+still needs explicit script-args binding, sighash verification, and its own
+positive and negative CKB transaction matrix.
 
 This does not mean arbitrary new contracts are automatically production-ready. Use the examples as patterns, then run your own constraints review, entry ABI review, builder evidence, and chain acceptance evidence.
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.13.0 - Unreleased
+
+- Add builder-backed local CKB valid-spend and invalid-spend acceptance coverage
+  for all 16 bundled lock entries, in the same production gate as the 43 action
+  flows.
+- Fix lock predicate lowering so tail-expression lock results are preserved and
+  `false` exits with a stable non-zero CKB script error.
+- Start the CellScript surface elegance pass: canonicalize bundled example
+  module names and capability declarations, and document the staged syntax RFC.
+- Add create/struct field shorthand (`field` as `field: field`) and format
+  redundant field initializers into shorthand form.
+- Add contextual bounded `Vec<T>` literals for typed local bindings and
+  create/struct field initializers, lowering to the existing stack collection
+  constructor and push path without changing untyped array literal semantics.
+- Add lock-boundary surface syntax for `protected` Cell parameters, `witness`
+  data parameters, and `require` fail-closed predicates; reserve `lock_args`
+  until explicit CKB script-args binding is implemented.
+- Refresh LSP completions and the VS Code grammar/snippets for the new
+  lock-boundary syntax.
+
 ## 0.12.0 - 2026-04-24
 
 - Add a stable CellScript runtime error registry and expose code/name/hint

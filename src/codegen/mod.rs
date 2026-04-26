@@ -507,6 +507,8 @@ pub struct CodeGenerator {
     read_ref_param_dep_indices: HashMap<usize, usize>,
     /// Whether the current entry function should bind read-only schema params from Inputs.
     bind_readonly_schema_params: bool,
+    /// Whether the current function is a CKB lock predicate entry.
+    current_lock_entry: bool,
     /// Mutable schema parameter variable ids keyed by source binding name.
     mutate_param_ids: HashMap<String, usize>,
     /// Output index for source-level operations that materialize transaction Outputs.
@@ -595,6 +597,7 @@ impl CodeGenerator {
             read_ref_param_input_indices: HashMap::new(),
             read_ref_param_dep_indices: HashMap::new(),
             bind_readonly_schema_params: false,
+            current_lock_entry: false,
             mutate_param_ids: HashMap::new(),
             operation_output_indices: HashMap::new(),
             verified_operation_outputs: BTreeSet::new(),
@@ -1259,6 +1262,7 @@ impl CodeGenerator {
     fn generate_lock(&mut self, lock: &IrLock) -> Result<()> {
         self.current_function = Some(lock.name.clone());
         self.bind_readonly_schema_params = true;
+        self.current_lock_entry = true;
         self.fail_handler_codes.clear();
         self.prepare_function_layout(&lock.body, &lock.params);
         self.next_virtual_output = 0;
@@ -1285,6 +1289,7 @@ impl CodeGenerator {
 
         self.current_function = None;
         self.bind_readonly_schema_params = false;
+        self.current_lock_entry = false;
         self.schema_pointer_vars.clear();
         self.schema_pointer_size_offsets.clear();
         self.fixed_byte_param_size_offsets.clear();
@@ -2267,6 +2272,17 @@ impl CodeGenerator {
                     }
                 }
                 self.emit_operand_to_register("a0", operand);
+                if self.current_lock_entry {
+                    let ok_label = self.fresh_label("lock_predicate_true");
+                    self.emit(format!("bnez a0, {}", ok_label));
+                    self.emit_runtime_error_comment(CellScriptRuntimeError::AssertionFailed);
+                    self.emit(format!("li a0, {}", CellScriptRuntimeError::AssertionFailed.code()));
+                    self.emit_epilogue();
+                    self.emit_label(&ok_label);
+                    self.emit("li a0, 0");
+                    self.emit_epilogue();
+                    return Ok(());
+                }
                 self.emit_epilogue();
             }
             IrTerminator::Jump(block_id) => {

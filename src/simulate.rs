@@ -376,6 +376,15 @@ impl SimulateInterpreter {
                     Ok(SimValue::Unit)
                 }
             }
+            Expr::Require(require) => {
+                let cond = self.eval_expr(&require.condition)?;
+                self.trace.push(TraceEvent::Assert { condition: cond.clone(), message: "require failed".to_string() });
+                if !self.is_truthy(&cond) {
+                    Ok(SimValue::Simulated { ty: "require_failed".to_string(), description: "require failed".to_string() })
+                } else {
+                    Ok(SimValue::Bool(true))
+                }
+            }
             Expr::Block(stmts) => {
                 let result = self.exec_stmts(stmts)?;
                 Ok(result.unwrap_or(SimValue::Unit))

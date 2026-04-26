@@ -168,6 +168,9 @@ Notes:
   - [x] broader malformed/adversarial coverage:
     `tests/adversarial_0_13.rs` locks rejection of unsupported full maps,
     cell-backed vectors, untyped vector mutation, and invalid hash_type DSL.
+  - [x] builder-backed on-chain lock valid-spend and invalid-spend matrix for
+    all bundled production locks. The matrix is now part of the CKB production
+    acceptance report instead of a compile-only claim.
 
 ---
 
@@ -181,9 +184,9 @@ Notes:
 - First-class signer / witness-sighash authorization syntax. Authority-sensitive
   examples must expose explicit lock predicates, but full signature binding is
   deferred to the next authorization hardening milestone.
-- Builder-backed on-chain lock spend and deny-spend matrices. 0.13
-  strict-compiles bundled locks, while action coverage remains the
-  builder-backed CKB production matrix.
+- Hidden signer derivation from `Address`, witness data, or parameter names.
+- Hidden sighash defaults. Future signature verification syntax must expose
+  digest mode, script group scope, witness layout, and replay assumptions.
 - Fully declarative capacity and since/header policy. 0.13 keeps these as
   compiler-visible metadata plus builder/runtime release evidence.
 - Treating 0.12 `Vec<Address>` / `Vec<Hash>` schema/ABI support as new 0.13

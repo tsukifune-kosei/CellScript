@@ -466,6 +466,9 @@ fn collect_lifecycle_expr_context(specs: &HashMap<String, LifecycleSpec>, contex
             collect_lifecycle_expr_context(specs, context, &assert_expr.condition);
             collect_lifecycle_expr_context(specs, context, &assert_expr.message);
         }
+        Expr::Require(require_expr) => {
+            collect_lifecycle_expr_context(specs, context, &require_expr.condition);
+        }
         Expr::Block(stmts) => collect_lifecycle_stmt_context(specs, context, stmts),
         Expr::Tuple(items) | Expr::Array(items) => {
             for item in items {
@@ -583,6 +586,7 @@ fn validate_lifecycle_expr(specs: &HashMap<String, LifecycleSpec>, context: &Act
             validate_lifecycle_expr(specs, context, &assert_expr.condition)?;
             validate_lifecycle_expr(specs, context, &assert_expr.message)
         }
+        Expr::Require(require_expr) => validate_lifecycle_expr(specs, context, &require_expr.condition),
         Expr::Block(stmts) => validate_stmt_list(specs, context, stmts),
         Expr::Tuple(items) | Expr::Array(items) => {
             for item in items {

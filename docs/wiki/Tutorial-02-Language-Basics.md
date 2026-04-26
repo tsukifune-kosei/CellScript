@@ -6,7 +6,7 @@ CellScript source reads best when you think of it as a small Cell story. First y
 - when to use `struct`, `resource`, `shared`, and `receipt`;
 - what `action` entries do;
 - what `lock` entries do;
-- which type shapes are part of the documented 0.12 production surface.
+- which type shapes are part of the documented production surface.
 
 A source file normally contains:
 
@@ -21,13 +21,13 @@ A source file normally contains:
 module cellscript::demo
 ```
 
-Some older examples use a semicolon form:
+Prefer a stable namespace path for package code because module names are
+included in metadata and source identity. Bundled examples use the
+`cellscript::` namespace:
 
 ```cellscript
-module timelock_contract;
+module cellscript::timelock
 ```
-
-Prefer a stable module path for package code because module names are included in metadata and source identity.
 
 ## Scalar and Fixed Types
 
@@ -56,7 +56,7 @@ struct Signature {
 }
 ```
 
-For dynamic payloads that cross ABI or persistent schema boundaries, the documented 0.12 production surface includes targeted `Vec<u8>`, `Vec<Address>`, `Vec<Hash>`, and concrete fixed-width struct-vector paths. Generic collection ownership is intentionally narrower than "all collections are supported"; use the collections support matrix before advertising a collection shape as production-ready.
+For dynamic payloads that cross ABI or persistent schema boundaries, the documented production surface includes targeted `Vec<u8>`, `Vec<Address>`, `Vec<Hash>`, and concrete fixed-width struct-vector paths. Generic collection ownership is intentionally narrower than "all collections are supported"; use the collections support matrix before advertising a collection shape as production-ready.
 
 ## Structs
 
@@ -128,7 +128,10 @@ action transfer_token(token: Token, to: Address) -> Token {
 
 ## Locks
 
-Use `lock` for authorization logic. Keep early locks boring: pass in the state and the signer-like value you need, then return a boolean.
+Use `lock` for CKB spend-boundary predicates. Keep locks literal: mark the typed
+input Cell guarded by this lock invocation with `protected`, mark decoded
+transaction witness data with `witness`, and use `require` for conditions that
+should fail the current script validation.
 
 ```cellscript
 shared Wallet has store {
@@ -136,12 +139,21 @@ shared Wallet has store {
     nonce: u64
 }
 
-lock owner_only(wallet: &Wallet, signer: Address) -> bool {
-    wallet.owner == signer
+lock owner_only(wallet: protected Wallet, claimed_owner: witness Address) -> bool {
+    require wallet.owner == claimed_owner
 }
 ```
 
-Locks must return `bool`. Target-profile policy determines which runtime helpers are allowed. For example, unsupported helper syscalls are rejected under the CKB profile, and CKB signature/witness verification must be represented through the supported claim/metadata/runtime evidence path instead of a generic `verify_signature` helper.
+Locks must return `bool`. `protected Wallet` means a typed view of one selected
+input Cell in the current script group whose spend is guarded by this lock
+invocation. It is not an output Cell, not a transaction-wide scan, and not all
+same-type Cells unless the language explicitly adds such multiplicity syntax.
+`witness Address` means decoded transaction witness data only; it is not a
+signer or ownership proof. Target-profile policy determines which runtime
+helpers are allowed. For example, unsupported helper syscalls are rejected under
+the CKB profile, and CKB signature/witness verification must be represented
+through explicit script-args and sighash verification primitives once those
+primitives are implemented.
 
 ## Assertions
 
@@ -152,6 +164,22 @@ assert_invariant(amount > 0, "amount must be positive")
 ```
 
 Assertions lower into script checks and appear in metadata as part of verifier analysis.
+
+## Comments
+
+CellScript supports line comments and nested block comments:
+
+```cellscript
+// Explain Cell movement or security boundaries.
+
+/*
+   Block comments may contain nested /* inner */ comments.
+*/
+```
+
+Use comments sparingly. In examples, comments should explain Cell lifecycle,
+protected/witness scope, or builder obligations rather than restating ordinary
+arithmetic.
 
 ## Next
 

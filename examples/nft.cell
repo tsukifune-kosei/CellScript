@@ -1,5 +1,5 @@
 
-module nft_contract;
+module cellscript::nft
 
 
 const MAX_SUPPLY: u64 = 10000;
@@ -14,8 +14,7 @@ struct Metadata {
     attributes: Vec<(String, String)>,
 }
 
-#[capability(store, transfer, destroy)]
-resource NFT has destroy {
+resource NFT has store, transfer, destroy {
     token_id: u64,
     owner: Address,
     metadata_hash: Hash,
@@ -23,8 +22,7 @@ resource NFT has destroy {
     royalty_bps: u16,
 }
 
-#[capability(store)]
-resource Collection {
+resource Collection has store {
     name: String,
     symbol: String,
     creator: Address,
@@ -70,9 +68,9 @@ action mint(
     collection.total_supply = token_id;
     
     let nft = create NFT {
-        token_id: token_id,
+        token_id,
         owner: to,
-        metadata_hash: metadata_hash,
+        metadata_hash,
         royalty_recipient: collection.creator,
         royalty_bps: ROYALTY_BASIS_POINTS,
     };
@@ -100,7 +98,7 @@ action create_listing(
     let listing = create Listing {
         token_id: nft.token_id,
         seller: nft.owner,
-        price: price,
+        price,
         created_at: current_time,
     };
     
@@ -159,10 +157,10 @@ action create_offer(
     assert!(expires_at > 0, "Expiration must be in the future");
     
     let offer = create Offer {
-        token_id: token_id,
-        buyer: buyer,
-        price: price,
-        expires_at: expires_at,
+        token_id,
+        buyer,
+        price,
+        expires_at,
     };
     
     offer
@@ -261,22 +259,22 @@ action batch_mint(
 }
 
 
-lock nft_ownership(nft: &NFT, claimed_owner: Address) -> bool {
-    nft.owner == claimed_owner
+lock nft_ownership(nft: protected NFT, claimed_owner: witness Address) -> bool {
+    require nft.owner == claimed_owner
 }
 
-lock listing_seller(listing: &Listing, claimed_seller: Address) -> bool {
-    listing.seller == claimed_seller
+lock listing_seller(listing: protected Listing, claimed_seller: witness Address) -> bool {
+    require listing.seller == claimed_seller
 }
 
-lock offer_buyer(offer: &Offer, claimed_buyer: Address) -> bool {
-    offer.buyer == claimed_buyer
+lock offer_buyer(offer: protected Offer, claimed_buyer: witness Address) -> bool {
+    require offer.buyer == claimed_buyer
 }
 
-lock valid_royalty(nft: &NFT) -> bool {
-    nft.royalty_bps <= 1000
+lock valid_royalty(nft: protected NFT) -> bool {
+    require nft.royalty_bps <= 1000
 }
 
-lock collection_creator(collection: &Collection, claimed_creator: Address) -> bool {
-    collection.creator == claimed_creator
+lock collection_creator(collection: protected Collection, claimed_creator: witness Address) -> bool {
+    require collection.creator == claimed_creator
 }

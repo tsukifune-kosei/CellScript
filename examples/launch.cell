@@ -3,7 +3,7 @@
 module cellscript::launch
 
 use cellscript::fungible_token::{Token, MintAuthority}
-use cellscript::amm::{Pool, LPReceipt, seed_pool}
+use cellscript::amm_pool::{Pool, LPReceipt, seed_pool}
 
 /// Launch a new token and seed liquidity pool
 action launch_token(
@@ -28,7 +28,7 @@ action launch_token(
     // Create mint authority
     let auth = create MintAuthority {
         token_symbol: symbol,
-        max_supply: max_supply,
+        max_supply,
         minted: initial_mint
     } with_lock(creator)
 
@@ -36,8 +36,8 @@ action launch_token(
     for (addr, amount) in distribution {
         if amount > 0 {
             create Token {
-                amount: amount,
-                symbol: symbol
+                amount,
+                symbol
             } with_lock(addr)
         }
     }
@@ -45,7 +45,7 @@ action launch_token(
     // Create pool seed token
     let pool_token = create Token {
         amount: pool_seed_amount,
-        symbol: symbol
+        symbol
     } with_lock(creator)
 
     // Call pool pattern helper to seed the pool
@@ -79,7 +79,7 @@ action simple_launch(
     // Create mint authority
     let auth = create MintAuthority {
         token_symbol: symbol,
-        max_supply: max_supply,
+        max_supply,
         minted: initial_mint
     } with_lock(creator)
 
@@ -87,8 +87,8 @@ action simple_launch(
     for (addr, amount) in recipients {
         if amount > 0 {
             create Token {
-                amount: amount,
-                symbol: symbol
+                amount,
+                symbol
             } with_lock(addr)
         }
     }
@@ -98,7 +98,7 @@ action simple_launch(
     if remaining > 0 {
         create Token {
             amount: remaining,
-            symbol: symbol
+            symbol
         } with_lock(creator)
     }
 

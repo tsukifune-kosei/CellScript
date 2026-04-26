@@ -21,7 +21,7 @@ action mint(auth: &mut MintAuthority, to: Address, amount: u64) -> Token {
     auth.minted = auth.minted + amount
     
     create Token {
-        amount: amount,
+        amount,
         symbol: auth.token_symbol
     } with_lock(to)
 }

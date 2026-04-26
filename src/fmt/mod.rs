@@ -335,7 +335,7 @@ impl Formatter {
                 let fields = create
                     .fields
                     .iter()
-                    .map(|(name, value)| format!("{}: {}", name, self.format_expr(value)))
+                    .map(|(name, value)| self.format_field_initializer(name, value))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let mut rendered = format!("create {} {{ {} }}", create.ty, fields);
@@ -353,6 +353,7 @@ impl Formatter {
             Expr::Assert(assert_expr) => {
                 format!("assert_invariant({}, {})", self.format_expr(&assert_expr.condition), self.format_expr(&assert_expr.message))
             }
+            Expr::Require(require_expr) => format!("require {}", self.format_expr(&require_expr.condition)),
             Expr::Block(stmts) => {
                 let inner = stmts
                     .iter()
@@ -377,12 +378,8 @@ impl Formatter {
             Expr::Cast(cast) => format!("{} as {}", self.format_expr(&cast.expr), format_type(&cast.ty)),
             Expr::Range(range) => format!("{}..{}", self.format_expr(&range.start), self.format_expr(&range.end)),
             Expr::StructInit(init) => {
-                let fields = init
-                    .fields
-                    .iter()
-                    .map(|(name, value)| format!("{}: {}", name, self.format_expr(value)))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let fields =
+                    init.fields.iter().map(|(name, value)| self.format_field_initializer(name, value)).collect::<Vec<_>>().join(", ");
                 format!("{} {{ {} }}", init.ty, fields)
             }
             Expr::Match(match_expr) => {
@@ -394,6 +391,14 @@ impl Formatter {
                     .join(", ");
                 format!("match {} {{ {} }}", self.format_expr(&match_expr.expr), arms)
             }
+        }
+    }
+
+    fn format_field_initializer(&self, name: &str, value: &Expr) -> String {
+        if matches!(value, Expr::Identifier(identifier) if identifier == name) {
+            name.to_string()
+        } else {
+            format!("{}: {}", name, self.format_expr(value))
         }
     }
 
@@ -438,15 +443,34 @@ fn format_param(param: &Param) -> String {
     }
     rendered.push_str(&param.name);
     rendered.push_str(": ");
-    if param.is_read_ref {
-        rendered.push_str("read_ref ");
-        let ty = match &param.ty {
-            Type::Ref(inner) => inner.as_ref(),
-            other => other,
-        };
-        rendered.push_str(&format_type(ty));
-    } else {
-        rendered.push_str(&format_type(&param.ty));
+    match param.source {
+        ParamSource::Protected => {
+            rendered.push_str("protected ");
+            let ty = match &param.ty {
+                Type::Ref(inner) => inner.as_ref(),
+                other => other,
+            };
+            rendered.push_str(&format_type(ty));
+        }
+        ParamSource::Witness => {
+            rendered.push_str("witness ");
+            rendered.push_str(&format_type(&param.ty));
+        }
+        ParamSource::LockArgs => {
+            rendered.push_str("lock_args ");
+            rendered.push_str(&format_type(&param.ty));
+        }
+        ParamSource::Default if param.is_read_ref => {
+            rendered.push_str("read_ref ");
+            let ty = match &param.ty {
+                Type::Ref(inner) => inner.as_ref(),
+                other => other,
+            };
+            rendered.push_str(&format_type(ty));
+        }
+        ParamSource::Default => {
+            rendered.push_str(&format_type(&param.ty));
+        }
     }
     rendered
 }
@@ -554,5 +578,26 @@ action add(x: u64, y: u64) -> u64 {
         assert!(formatted.contains("action add(x: u64, y: u64) -> u64 {"));
         assert!(formatted.contains("let z = x + y"));
         assert!(formatted.contains("return z"));
+    }
+
+    #[test]
+    fn format_uses_field_shorthand_when_value_matches_name() {
+        let source = r#"
+module demo
+
+resource Token has store {
+    amount: u64
+    symbol: [u8; 8]
+}
+
+action mint(amount: u64, symbol: [u8; 8]) -> Token {
+    create Token { amount: amount, symbol: symbol }
+}
+"#;
+        let tokens = lexer::lex(source).unwrap();
+        let module = parser::parse(&tokens).unwrap();
+        let formatted = format_default(&module).unwrap();
+
+        assert!(formatted.contains("create Token { amount, symbol }"), "unexpected formatted source:\n{}", formatted);
     }
 }
