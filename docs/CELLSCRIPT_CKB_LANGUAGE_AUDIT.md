@@ -53,7 +53,7 @@ split across compiler metadata, builders, and production evidence.
 | Gap | Current status | Required direction |
 |---|---|---|
 | Signer authorization | `Address` parameters can prove equality only when paired with an explicit lock predicate such as `vesting_admin`; they still do not prove witness-sighash ownership by themselves. | Add first-class signer, lock-args, script-hash, or witness-sighash binding. |
-| Lock behavior | Locks are strict-compiled under the CKB profile. | Add builder-backed on-chain spend and deny-spend matrices for lock entries. |
+| Lock behavior | Locks are strict-compiled under the CKB profile, and the production report now carries a machine-checked pending spend/deny matrix. | Add builder-backed on-chain spend and deny-spend transactions for each pending lock entry. |
 | `&mut` Cell updates | Metadata exposes mutate input/output access, but syntax can look like in-place account storage. | Add explicit continuity policy for type id, lock, data schema, and capacity. |
 | Capacity policy | Capacity evidence is builder/runtime-required and validated by reports. | Promote common capacity requirements into declarative DSL policy where practical. |
 | Timelock policy | since/header/runtime features are visible in metadata. | Make since/header assumptions more directly declarative and statically auditable. |
@@ -72,7 +72,8 @@ For 0.13 follow-up, the recommended order is:
 1. Add a real authorization abstraction that ties parameters to CKB lock args,
    script hashes, and witness signatures.
 2. Extend CKB acceptance with lock spend and deny-spend matrices for multisig,
-   NFT, and timelock locks.
+   NFT, timelock, and vesting locks, then flip the report from a pending matrix
+   to enforced on-chain lock evidence.
 3. Make mutable Cell transitions declare continuity requirements explicitly.
 4. Turn common capacity and timelock assumptions from report-only evidence into
    DSL-level policy where the compiler can check them.

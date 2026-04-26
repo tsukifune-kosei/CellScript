@@ -23,6 +23,12 @@ EXPECTED_ACTION_COUNT = 43
 EXPECTED_LOCK_COUNT = 16
 EXPECTED_STATUS = "passed"
 EXPECTED_MODE = "production"
+EXPECTED_PENDING_LOCK_SPEND_MATRIX = {
+    "multisig.cell": ["is_signer_lock", "can_execute", "can_cancel", "has_enough_signatures", "not_expired"],
+    "nft.cell": ["nft_ownership", "listing_seller", "offer_buyer", "valid_royalty", "collection_creator"],
+    "timelock.cell": ["can_unlock_lock", "is_owner", "asset_matches", "not_expired", "emergency_approved"],
+    "vesting.cell": ["vesting_admin"],
+}
 
 ACTION_RUN_KEYS = [
     "token_action_runs",
@@ -189,6 +195,8 @@ def validate_compile_gate(report: dict[str, Any]) -> None:
     require(isinstance(lock_scope, dict), "lock_acceptance_scope must be an object")
     require_field(lock_scope, "strict_compile_only", True, "lock_acceptance_scope")
     require_field(lock_scope, "onchain_lock_spend_matrix", False, "lock_acceptance_scope")
+    require_field(lock_scope, "pending_onchain_lock_spend_matrix", EXPECTED_PENDING_LOCK_SPEND_MATRIX, "lock_acceptance_scope")
+    require_field(lock_scope, "required_cases_per_lock_when_promoted", ["valid_spend", "invalid_spend"], "lock_acceptance_scope")
     lock_scope_note = lock_scope.get("scope_note")
     require(
         isinstance(lock_scope_note, str)

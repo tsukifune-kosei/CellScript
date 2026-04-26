@@ -24,6 +24,9 @@ matrix. It is a 0.13 bounded-collection language example for local
 `Vec<Address>` and `Vec<Hash>` helpers, covered by compiler/tooling tests rather
 than CKB production action acceptance.
 
+For a visual business-flow map of every bundled example, see
+[`CELLSCRIPT_EXAMPLE_BUSINESS_FLOWS.md`](../CELLSCRIPT_EXAMPLE_BUSINESS_FLOWS.md).
+
 ## Compile All Examples
 
 From the repository root:

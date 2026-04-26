@@ -105,6 +105,9 @@ action claim_vested(grant: VestingGrant) -> (Token, VestingGrant) {
     (tokens, updated_grant)
 }
 
+// `claimed_admin` is still an entry witness argument. The equality check below
+// is factored through `vesting_admin` so the authority predicate is visible as a
+// lock entry and can be promoted into an on-chain spend/deny-spend matrix.
 action revoke_grant(
     config: read_ref VestingConfig,
     grant: VestingGrant,
@@ -148,6 +151,9 @@ fn is_vesting_admin(config: &VestingConfig, claimed_admin: Address) -> bool {
     claimed_admin == config.admin
 }
 
+// Strict-compilation coverage proves this predicate lowers under the CKB
+// profile. Full witness-sighash authorization still requires a builder-backed
+// lock spend/deny-spend acceptance matrix.
 lock vesting_admin(config: &VestingConfig, claimed_admin: Address) -> bool {
     is_vesting_admin(config, claimed_admin)
 }

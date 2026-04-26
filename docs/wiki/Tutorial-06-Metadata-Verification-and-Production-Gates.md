@@ -144,6 +144,10 @@ consensus-serialized tx size, occupied-capacity evidence, no under-capacity
 outputs, all seven production bundled examples deployed, and a passed final production hardening gate.
 Lock coverage is strict-compile coverage; it is not a claim that every lock has
 a builder-backed on-chain spend/deny-spend matrix.
+The report keeps that gap machine-readable through
+`lock_acceptance_scope.pending_onchain_lock_spend_matrix`; promotion to full lock
+production evidence requires both valid-spend and invalid-spend cases for each
+listed lock.
 `examples/registry.cell` is a 0.13 bounded-collection language example covered by
 compiler/tooling tests, not by the seven-example CKB production matrix.
 

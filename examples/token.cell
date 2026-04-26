@@ -12,6 +12,9 @@ resource MintAuthority has store {
     minted: u64
 }
 
+// On CKB, `&mut MintAuthority` is a consumed input Cell plus a replacement
+// output Cell. The generated verifier checks the replacement output against the
+// declared field transition; it is not account-style in-place storage.
 action mint(auth: &mut MintAuthority, to: Address, amount: u64) -> Token {
     assert_invariant(auth.minted + amount <= auth.max_supply, "exceeds max supply")
     

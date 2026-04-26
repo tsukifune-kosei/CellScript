@@ -289,6 +289,13 @@ EXAMPLE_SCOPE = {
 LOCK_ACCEPTANCE_SCOPE = {
     "strict_compile_only": True,
     "onchain_lock_spend_matrix": False,
+    "pending_onchain_lock_spend_matrix": {
+        "multisig.cell": ["is_signer_lock", "can_execute", "can_cancel", "has_enough_signatures", "not_expired"],
+        "nft.cell": ["nft_ownership", "listing_seller", "offer_buyer", "valid_royalty", "collection_creator"],
+        "timelock.cell": ["can_unlock_lock", "is_owner", "asset_matches", "not_expired", "emergency_approved"],
+        "vesting.cell": ["vesting_admin"],
+    },
+    "required_cases_per_lock_when_promoted": ["valid_spend", "invalid_spend"],
     "scope_note": (
         "Scoped lock entries are strict-compiled under the CKB profile and counted as strict lock coverage. "
         "They are not counted as builder-backed on-chain lock spend/deny-spend transactions."
