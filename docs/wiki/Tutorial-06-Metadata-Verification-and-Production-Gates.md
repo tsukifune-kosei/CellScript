@@ -27,7 +27,7 @@ cellc build --json
 Or request metadata directly:
 
 ```bash
-cellc metadata src/main.cell --target riscv64-elf --target-profile spora -o /tmp/main.meta.json
+cellc metadata src/main.cell --target riscv64-elf --target-profile ckb -o /tmp/main.meta.json
 ```
 
 ## Verify an Artifact
@@ -39,7 +39,6 @@ cellc verify-artifact build/main.elf
 Pin the target profile:
 
 ```bash
-cellc verify-artifact build/main.elf --expect-target-profile spora
 cellc verify-artifact build/main.elf --expect-target-profile ckb
 ```
 
@@ -57,7 +56,7 @@ cellc verify-artifact build/main.elf --deny-fail-closed
 cellc verify-artifact build/main.elf --deny-runtime-obligations
 ```
 
-Artifact verification is a compiler artifact gate. It verifies the artifact, metadata, source hash expectations, and selected policy flags. It does not prove that a concrete Spora or CKB transaction has been built, deployed, dry-run, indexed, or measured.
+Artifact verification is a compiler artifact gate. It verifies the artifact, metadata, source hash expectations, and selected policy flags. It does not prove that a concrete CKB transaction has been built, deployed, dry-run, indexed, or measured.
 
 This distinction matters during release work. If a report says only "verify-artifact passed", you know the compiler output is internally consistent. You do not yet know that a chain transaction builder can spend the right inputs, serialize the right witness, fit capacity rules, pass dry-run, or commit successfully.
 
@@ -105,7 +104,6 @@ You do not need to memorize the whole sidecar on the first pass. Start with thes
 - `constraints.ckb.capacity_evidence_contract`
 - `constraints.ckb.hash_type_policy`
 - `constraints.ckb.dep_group_manifest`
-- scheduler witness metadata for Spora profile builds
 
 ## Suggested Compiler CI Gate
 
@@ -114,8 +112,8 @@ For a package that must remain portable, a useful compiler CI gate is:
 ```bash
 cellc fmt --check
 cellc check --target-profile portable-cell --all-targets --production
-cellc build --target riscv64-elf --target-profile spora --production
-cellc verify-artifact build/main.elf --expect-target-profile spora --verify-sources --production
+cellc build --target riscv64-elf --target-profile ckb --production
+cellc verify-artifact build/main.elf --expect-target-profile ckb --verify-sources --production
 ```
 
 For CKB, make the profile explicit in every step:

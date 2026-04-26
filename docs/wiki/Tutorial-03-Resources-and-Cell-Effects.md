@@ -71,15 +71,14 @@ The compiler records read-only accesses so schedulers, wallet builders, and poli
 
 ## CKB Portability Notes
 
-The CKB profile is intentionally strict. If the compiler rejects a shape that depends on Spora-only runtime behavior, that is the right outcome:
+The CKB profile is intentionally strict. If the compiler rejects a shape that depends on unsupported runtime behavior, that is the right outcome:
 
-- no Spora-only helper syscalls;
 - CKB syscall numbers and source constants;
-- CKB-style ELF packaging with no Spora ABI trailer;
+- CKB-style ELF packaging;
 - CKB Molecule/BLAKE2b conventions where applicable;
 - unsupported stateful shapes must fail closed.
 
-For portable code, keep persistent schemas fixed and avoid Spora-only scheduler, DAA, and helper features.
+For portable code, keep persistent schemas fixed and avoid target-specific scheduler, time, and helper features.
 
 ## Next
 

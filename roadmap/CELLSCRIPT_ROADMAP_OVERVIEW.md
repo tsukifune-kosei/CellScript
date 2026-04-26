@@ -14,14 +14,14 @@ CellScript's mission is to make the power of CKB's Cell model — linear resourc
 |---------|-------|-----------|--------|
 | v0.12 | Production Foundation | "Write real CKB contracts safely" | ✅ Released |
 | v0.13 | Performance & Expressiveness | "Write less, run faster" | 🚧 In Progress |
-| v0.14 | CKB Semantic Completeness | "Expose the full CKB execution surface" | 📋 Planned |
+| v0.14 | CKB Semantic Completeness | "Expose CKB surface and bounded verifier reuse" | 📋 Planned |
 | v0.15 | Scoped Invariants & Covenant ProofPlan | "Show when constraints run, what they read, and who they protect" | 📋 Planned |
 | v0.16 | Formal Semantics & Production Tooling | "Prove, validate, deploy, and audit" | 📋 Planned |
 
 **Evolution arc**:
 - **v0.12** — *Can we use it?* Prove CellScript can compile production-grade CKB contracts.
 - **v0.13** — *Is it good to use?* Make contracts smaller, faster, and the CLI friendlier.
-- **v0.14** — *Is the CKB surface complete?* Cover Spawn, WitnessArgs, Source views, ScriptGroup, outputs_data binding, TYPE_ID metadata validation, script references, capacity, and time constraints.
+- **v0.14** — *Is the CKB surface complete?* Cover Spawn as bounded verifier composition, WitnessArgs, Source views, ScriptGroup, outputs_data binding, TYPE_ID metadata validation, script references, capacity, and time constraints.
 - **v0.15** — *Is the safety boundary auditable?* Model scoped invariants, covenant triggers, coverage, builder assumptions, and ProofPlan output without hiding lock/type semantics.
 - **v0.16** — *Can we trust it in production?* Add formal semantics, ProofPlan soundness checks, standard CKB compatibility suites, transaction solving, deployment governance, and audit tooling.
 
@@ -113,7 +113,7 @@ Target: `token.elf` 15 KB → 12 KB; AMM `swap` cycles −30%.
 
 **Theme**: Expose CKB's full execution surface before redesigning higher-level primitives.
 
-### 4.1 Spawn/IPC Script Composition (P0)
+### 4.1 Spawn/IPC Bounded Verifier Composition (P0)
 
 ```cellscript
 // Delegate verification: Lock Script spawns a child verifier
@@ -122,7 +122,7 @@ action verify_with_delegate(proof: Proof) {
     assert_invariant(result == 0, "verification failed")
 }
 
-// Pipe composition: multi-step verification chain
+// Pipe-based multi-step verification chain
 action multi_step_verify(data: VerifyData) {
     let (read_fd, write_fd) = pipe()
     spawn("hash_checker", fds: [read_fd])
@@ -135,6 +135,7 @@ action multi_step_verify(data: VerifyData) {
 - Maps to CKB VM v2 Spawn syscalls (2601–2606)
 - Type-safe inter-process communication
 - Compile-time cycle budget static analysis
+- Does not make a CKB cell's type script slot multi-tenant; full protocol composability remains a v0.15+ ProofPlan/scoped-invariant concern
 
 ### 4.2 Structured WitnessArgs & Source Views (P0)
 
@@ -189,9 +190,9 @@ action transfer_with_fee(token: Token, fee: u64) {
 ### 4.6 Declarative Time Constraints (P1)
 
 ```cellscript
-action claim_after_timeout(htlc: HtlcReceipt) {
-    require_maturity(blocks: 100)               // relative block-height lock
-    require_time(after: Timestamp(1714000000))   // absolute timestamp lock
+action claim_after_ckb_timeout(htlc: HtlcReceipt) {
+    require_maturity(blocks: 100)               // CKB block-number lock
+    require_time(after: Timestamp(1714000000))  // CKB timestamp since
     claim htlc
 }
 ```
@@ -453,7 +454,7 @@ dates, quarters, week counts, and effort estimates.
 
 **Soon (v0.13)**: Your contracts will be smaller and faster. Bounded value-vector helpers make whitelists, fixed membership sets, simple registries, and AMM helper code easier to write. Proof-backed maps and order books stay explicit future work instead of being hidden inside generic collection syntax.
 
-**Next (v0.14)**: CellScript will cover CKB's complete execution surface. Spawn/IPC lets you compose multiple verification scripts. WitnessArgs, Source views, ScriptGroup, outputs_data binding, TYPE_ID metadata validation, script references, Capacity, and time constraints become explicit and testable.
+**Next (v0.14)**: CellScript will cover CKB's complete execution surface. Spawn/IPC enables bounded verifier reuse and delegated checks within explicit lock/type boundaries; it is not a promise of multi-tenant type-script composition. WitnessArgs, Source views, ScriptGroup, outputs_data binding, TYPE_ID metadata validation, script references, Capacity, and time constraints become explicit and testable.
 
 **Future (v0.15)**: CellScript becomes a semantic auditing layer for CKB transaction invariants. It does not hide lock/type differences; it shows when each invariant runs, what it reads, which cells it protects, which obligations are checked on-chain, and which are builder assumptions.
 

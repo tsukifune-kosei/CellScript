@@ -7,7 +7,7 @@
 [![CellScript CI](https://github.com/tsukifune-kosei/CellScript/actions/workflows/ci.yml/badge.svg)](https://github.com/tsukifune-kosei/CellScript/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
-[![Targets: Spora and CKB](https://img.shields.io/badge/targets-Spora%20%7C%20CKB-2f6f4e.svg)](#target-profiles)
+[![Target: CKB](https://img.shields.io/badge/target-CKB-2f6f4e.svg)](#target-profiles)
 [![Package Workflow: Local First](https://img.shields.io/badge/package%20workflow-local%20first-2f6f4e.svg)](#包工作流)
 [![LSP: Production Tooling](https://img.shields.io/badge/LSP-production%20tooling-2f6f4e.svg)](#编辑器支持)
 [![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](https://github.com/tsukifune-kosei/CellScript/wiki)
@@ -16,21 +16,19 @@
 
 **用你思考 Cell 合约的方式来写 Cell 合约——而不是按线格式的方式来写。**
 
-CellScript 是面向 Spora 和 CKB 的 Cell 模型智能合约 DSL。它把 `.cell`
-源码编译为 ckb-vm RISC-V assembly 或 ELF 产物，并同时输出可用于审计、
-策略检查、schema 绑定和调度感知执行的类型化 metadata。
+CellScript 是面向 Cell 模型智能合约的 DSL。它把 `.cell` 源码编译为
+ckb-vm RISC-V assembly 或 ELF 产物，并同时输出可用于审计、策略检查、
+schema 绑定和 verifier tooling 的类型化 metadata。
 
 CellScript 是刻意收窄的语言：它不是新的 VM，也不是账户存储合约语言。
 它为协议作者提供一种类型化方式来描述资产、共享 Cell 状态、receipt、
-生命周期转换、lock 和交易形状的效果——同时仍然直接映射到 Spora 和 CKB
-使用的 Cell 模型。
+生命周期转换、lock 和交易形状的效果——同时仍然直接映射到 Cell 模型。
 
 ---
 
 ## 为什么需要 CellScript
 
-Spora 和 CKB 都暴露了强大的 Cell 执行模型，但手写脚本会迫使作者靠近线
-格式工作：
+Cell 执行模型很强大，但手写脚本会迫使作者靠近线格式工作：
 
 - 手动解析 witness bytes
 - 按 index 跟踪 inputs、CellDeps、outputs 和 output data
@@ -58,9 +56,6 @@ cargo install --path .
 # 仅做类型检查
 cellc examples/token.cell
 
-# 输出 Spora 的 RISC-V ELF
-cellc examples/token.cell --target riscv64-elf --target-profile spora
-
 # 输出 CKB 的 RISC-V ELF，指定入口 action
 cellc examples/nft.cell --target riscv64-elf --target-profile ckb --entry-action transfer
 ```
@@ -71,7 +66,7 @@ cellc examples/nft.cell --target riscv64-elf --target-profile ckb --entry-action
 cellc init token-package
 cd token-package
 cellc add shared-types --path ../shared-types
-cellc build --target riscv64-elf --target-profile spora
+cellc build --target riscv64-elf --target-profile ckb
 ```
 
 检查跨目标可移植性：
@@ -86,21 +81,18 @@ cellc check --target-profile portable-cell
 
 ## Target Profiles
 
-CellScript 通过 `--target-profile` 支持多个 Cell 兼容目标：
+CellScript 通过 `--target-profile` 支持目标 profile：
 
 | Profile | 何时使用 | 你得到什么 |
 |---|---|---|
-| `spora` | Spora 原生产物 | BLAKE3 metadata、Spora syscall ABI、scheduler witness、ABI trailer |
-| `ckb` | CKB mainnet 产物 | BLAKE2b/Molecule 约定、CKB syscall profile、无 Spora 扩展 |
-| `portable-cell` | 源码可移植性检查 | 验证代码在两个目标上都能工作——不生成产物 |
+| `ckb` | CKB mainnet 产物 | BLAKE2b/Molecule 约定和 CKB syscall profile |
+| `portable-cell` | 源码可移植性检查 | 验证 target-neutral source——不生成产物 |
 
 > `ckb` profile 已按 bundled CellScript suite 进入 production-gated 状态。
-> 它输出不带 Spora ABI trailer 的原生 CKB ckb-vm artifact，使用 CKB syscall
-> 与 Molecule/BLAKE2b 约定，并通过正常 target-profile policy 拒绝未支持形状，
-> 不依赖 portability shortcut。
+> 它输出原生 CKB ckb-vm artifact，使用 CKB syscall 与 Molecule/BLAKE2b
+> 约定，并通过正常 target-profile policy 拒绝未支持形状，不依赖 portability shortcut。
 
 ```bash
-cellc examples/token.cell --target riscv64-elf --target-profile spora
 cellc examples/token.cell --target riscv64-elf --target-profile ckb
 cellc check --target-profile portable-cell
 ```
@@ -138,8 +130,8 @@ CellScript 程序围绕 Cell 生命周期操作书写：
   例如 `Granted -> Claimable -> FullyClaimed`。
 - **Effect 推断** — `action` 会根据 Cell 操作被分类为 `Pure`、`ReadOnly`、
   `Mutating`、`Creating` 或 `Destroying`。
-- **调度感知 metadata** — Spora target 可以暴露 access summary 和 shared
-  touch domain，让区块构建器判断哪些工作可以独立处理。
+- **Effect/access metadata** — build 可以暴露 access summary 和 verifier
+  obligation，让工具判断交易形状。
 - **类型化 schema metadata** — Cell data layout、type identity、source hash、
   runtime access 和 verifier obligation 都会作为机器可读 metadata 输出。
 - **RISC-V 输出** — 可执行目标是 ckb-vm 兼容 RISC-V assembly 或 ELF。
@@ -158,7 +150,7 @@ CellScript 程序围绕 Cell 生命周期操作书写：
 **声明：**
 
 ```cellscript
-module spora::example
+module cellscript::example
 
 struct Config {
     threshold: u64
@@ -171,7 +163,7 @@ resource Token has store, transfer, destroy {
 
 shared Pool has store {
     token_reserve: u64
-    spora_reserve: u64
+    quote_reserve: u64
 }
 
 receipt VestingGrant has store, claim {
@@ -206,13 +198,13 @@ action move_token(token: Token, to: Address) -> Token {
 
 编译器把 `consume`、`create`、`transfer`、`destroy`、`claim`、`settle` 和
 `read_ref` 当作 **Cell effect**，而不是普通函数调用。这些 effect 会反映到
-metadata 中，使 Spora 调度、CKB admission policy、schema decoding 和
-artifact verification 都能审计生成脚本。
+metadata 中，使 CKB admission policy、schema decoding 和 artifact
+verification 都能审计生成脚本。
 
 **完整的 fungible-token 示例：**
 
 ```cellscript
-module spora::fungible_token
+module cellscript::fungible_token
 
 resource Token has store, transfer, destroy {
     amount: u64
@@ -276,12 +268,12 @@ artifact 设计——而不是围绕账户存储或单链专用 VM：
 | 线性所有权 | 编译器强制 | 无 | 通过 abilities | 无通用用户定义 |
 | 共享状态 | 显式 `shared` Cells | 隐式 contract storage | 部分 Move 链的 shared objects | 无 shared Cell 对应物 |
 | 重入 | 无 callback 风格重入 | 常见风险面 | 设计上较低 | predicate 风险较低 |
-| 调度 metadata | Spora 原生支持 | 无 | 非 GhostDAG 导向 | predicate 级 |
+| Effect/access metadata | 原生支持 | 无 | 链特定 | predicate 级 |
 | CKB 兼容性 | 面向 bundled Cell suite 的 production-gated CKB ckb-vm artifact profile | 需要不同 VM | 需要不同 VM | 需要 FuelVM |
 
-与手写 CKB 或 Spora 脚本相比，CellScript 保留同一个 runtime substrate，
-但用类型化 Cell 操作、线性检查、schema metadata 和可被策略验证的产物取代
-原始 byte/syscall 编程。
+与手写 CKB 脚本相比，CellScript 保留同一个 runtime substrate，但用类型化
+Cell 操作、线性检查、schema metadata 和可被策略验证的产物取代原始
+byte/syscall 编程。
 
 ---
 
@@ -298,8 +290,8 @@ CellScript 包含生产级本地语言工具：
   所以编辑器行为和 CLI/CI 保持一致。
 
 - [VS Code 扩展](https://github.com/tsukifune-kosei/CellScript/tree/main/editors/vscode-cellscript)
-- [双链生产计划](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md)
-- [双链包 registry 设计](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_DUAL_CHAIN_PACKAGE_REGISTRY_DESIGN.md)
+- [生产计划](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md)
+- [包 registry 设计](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_DUAL_CHAIN_PACKAGE_REGISTRY_DESIGN.md)
 - [运行时错误码](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_RUNTIME_ERROR_CODES.md)
 - [Entry witness ABI](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_ENTRY_WITNESS_ABI.md)
 - [Collections 支持矩阵](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_COLLECTIONS_SUPPORT_MATRIX.md)
@@ -363,12 +355,12 @@ graph LR
 **5. 代码生成**（`codegen/`）
 输出 ckb-vm 兼容 RISC-V assembly（`.s`）或 ELF（`.elf`）：
 - Syscall wrapper：`ckb_load_cell_data`、`ckb_load_witness`、
-  `ckb_load_header_by_field`、`ckb_load_input_by_field`，以及 Spora 扩展
-  syscall（`secp256k1_verify`、`load_ecdsa_signature_hash`）。
+  `ckb_load_header_by_field`、`ckb_load_input_by_field`，以及支持的 verifier
+  helper（`secp256k1_verify`、`load_ecdsa_signature_hash`）。
 - Cell input/output/dep 索引映射、witness ABI 帧、运行时 scratch buffer
   和每入口点 trampoline。
-- Profile 切换的 syscall ABI — Spora 和 CKB 使用不同的 syscall 编号表和
-  source-flag 约定。
+- Profile 切换的 syscall ABI — target profile 可以使用不同的 syscall 编号表
+  和 source-flag 约定。
 
 ### Metadata 与策略
 
@@ -379,14 +371,13 @@ graph LR
 |---|---|---|
 | Schema 布局、type ID、字段偏移 | `ir/` | Schema 解码器、索引器 |
 | Effect 分类、资源摘要 | `types/` | 调度器、审计工具 |
-| Scheduler witness ABI 与访问域 | `codegen/`（Spora） | Spora 区块构建器、并行调度器 |
+| 访问域与 verifier obligations | `codegen/` | builder、indexer、审计工具 |
 | 源码哈希、artifact BLAKE3 | `lib.rs` | `cellc verify-artifact`、CI |
 | Verifier obligations、pool invariants | `ir/` | 链上 verifier、策略检查器 |
 | Target-profile 策略违规 | `lib.rs` | `cellc check`、CI |
 
 `cellc constraints` 输出关注生产就绪性的可读子集：ABI slot 用量、寄存器/
-stack-spill 布局、witness byte bounds、CKB cycle/capacity 估算和 Spora v0
-mass 估算。
+stack-spill 布局、witness byte bounds、CKB cycle/capacity 估算。
 
 ### 运行时与标准库
 
@@ -422,26 +413,23 @@ mass 估算。
 ```mermaid
 graph TB
     subgraph "Target Profile"
-        subgraph Spora
-            S1[BLAKE3]
-            S2[Molecule]
-            S3[Spora syscall ABI]
-            S4[Spora scheduler witness]
-            S5[Spora ABI trailer]
-        end
         subgraph CKB
             C1[BLAKE2b]
             C2[Molecule]
             C3[CKB syscall ABI]
-            C4["no Spora scheduler witness"]
-            C5["no ABI trailer"]
+            C4["CKB Source rules"]
+            C5["raw ELF artifact"]
+        end
+        subgraph Portable
+            P1[Check-only]
+            P2[No target syscalls]
         end
     end
-    Policy["Policy gate 在 codegen 前拒绝不兼容 metadata"] --> Spora
     Policy --> CKB
+    Policy["Policy gate 在 codegen 前拒绝不兼容 metadata"] --> Portable
 ```
 
-`portable-cell` 是仅检查 profile，验证源码在两个目标上的兼容性，不生成产物。
+`portable-cell` 是仅检查 profile，验证 target-neutral source，不生成产物。
 
 ### Wasm 门禁
 
@@ -468,7 +456,7 @@ source_roots = ["src"]
 
 [build]
 target = "riscv64-elf"
-target_profile = "spora"
+target_profile = "ckb"
 
 [policy]
 production = true
@@ -519,7 +507,7 @@ path dependencies、lockfile 刷新，以及 package build/check/doc/fmt 流程
 | `cellc constraints` | 输出 profile-aware 生产约束 |
 | `cellc abi` | 说明 action 或 lock 的 `_cellscript_entry` witness ABI 布局 |
 | `cellc entry-witness` | 编码 `_cellscript_entry` witness 字节 |
-| `cellc scheduler-plan` | 消费 Spora scheduler hints，输出串行/冲突策略报告 |
+| `cellc scheduler-plan` | 从 compiler access hints 输出串行/冲突策略报告 |
 | `cellc ckb-hash` | 为 builder 和 release evidence 计算 CKB 默认 Blake2b-256 hash |
 | `cellc opt-report` | 对比 O0..O3 的 artifact size 和 constraints status |
 | `cellc verify-artifact` | 用 metadata sidecar 校验 artifact |
@@ -540,7 +528,6 @@ path dependencies、lockfile 刷新，以及 package build/check/doc/fmt 流程
 |---|---|
 | `--target riscv64-asm` | 输出 RISC-V assembly |
 | `--target riscv64-elf` | 输出 RISC-V ELF artifact |
-| `--target-profile spora` | 使用 Spora profile |
 | `--target-profile ckb` | 使用 CKB profile |
 | `--target-profile portable-cell` | 检查 Cell profile 间的源码可移植性 |
 | `--entry-action <ACTION>` | 将单个 action 编译为 artifact entrypoint |

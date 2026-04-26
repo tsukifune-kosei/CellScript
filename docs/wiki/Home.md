@@ -1,4 +1,4 @@
-CellScript is a small language for Cell-based smart contracts on Spora and CKB. You describe the Cell state you want to protect, the actions that may change it, and the lock rules that authorize it. The compiler turns that `.cell` source into ckb-vm compatible RISC-V assembly or ELF artifacts and writes metadata that explains what was built.
+CellScript is a small language for Cell-based smart contracts. You describe the Cell state you want to protect, the actions that may change it, and the lock rules that authorize it. The compiler turns that `.cell` source into ckb-vm compatible RISC-V assembly or ELF artifacts and writes metadata that explains what was built.
 
 This wiki is meant to be read as a guided path. Each chapter introduces one idea, shows the smallest useful commands, and then points to the production checks that matter before deployment.
 
@@ -10,7 +10,7 @@ If you already have a contract, jump to the page that matches your current quest
 
 - writing source: start with language basics and Cell effects;
 - building a package: use the package workflow chapter;
-- targeting Spora or CKB: read the target-profile chapter before compiling;
+- targeting CKB: read the target-profile chapter before compiling;
 - preparing a release: use the metadata and production gates chapter;
 - learning by example: read the bundled examples last, after the core language model is clear.
 
@@ -20,7 +20,7 @@ If you already have a contract, jump to the page that matches your current quest
 2. [Language Basics](Tutorial-02-Language-Basics): learn the shape of a `.cell` file.
 3. [Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects): understand how values move through a Cell transaction.
 4. [Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow): create a package, build it, check it, and inspect reports.
-5. [Spora and CKB Target Profiles](Tutorial-05-Spora-and-CKB-Target-Profiles): choose the right runtime assumptions.
+5. [CKB Target Profile](Tutorial-05-CKB-Target-Profile): choose the right runtime assumptions.
 6. [Metadata, Verification, and Production Gates](Tutorial-06-Metadata-Verification-and-Production-Gates): know what artifact verification proves and what it does not prove.
 7. [LSP and Tooling](Tutorial-07-LSP-and-Tooling): use editor feedback and command-backed reports.
 8. [Bundled Example Contracts](Tutorial-08-Bundled-Example-Contracts): study the examples in a useful order.
@@ -33,11 +33,11 @@ CellScript 0.12 supports:
 - Cell-native persistent values through `resource`, `shared`, and `receipt`.
 - Explicit Cell effects: `consume`, `create`, `read_ref`, `transfer`, `destroy`, `claim`, and `settle`.
 - RISC-V assembly and ELF output for ckb-vm compatible execution.
-- `spora`, `ckb`, and `portable-cell` target profiles.
+- `ckb` and `portable-cell` target profiles.
 - Metadata sidecars and artifact verification.
 - Local package workflows based on `Cell.toml`, local source roots, path dependencies, lockfile checks, build/check/doc/fmt, and production policy flags. Remote registry workflows remain experimental/fail-closed.
 - LSP and VS Code tooling for diagnostics, hover, completion, definitions, references, rename, formatting, signature help, folding, document symbols, and compiler-backed reports.
-- Production-facing constraints and evidence surfaces for runtime error codes, entry witness ABI, CKB capacity/tx-size requirements, CKB `hash_type`/DepGroup policy, and Spora scheduler metadata.
+- Production-facing constraints and evidence surfaces for runtime error codes, entry witness ABI, CKB capacity/tx-size requirements, and CKB `hash_type`/DepGroup policy.
 
 CellScript 0.12 is also the first release aimed at an initial stable foundation. That does not mean every future language feature is frozen. It means the current compiler, profiles, examples, metadata, LSP, and package workflow are being documented and tested as a coherent base.
 
@@ -63,8 +63,8 @@ The current bundled example suite is seven contracts: `amm_pool.cell`, `launch.c
 git clone https://github.com/tsukifune-kosei/CellScript.git
 cd CellScript
 cargo test --locked
-cargo run --locked --bin cellc -- examples/token.cell --target riscv64-elf --target-profile spora -o /tmp/token.elf
-cargo run --locked --bin cellc -- verify-artifact /tmp/token.elf --expect-target-profile spora
+cargo run --locked --bin cellc -- examples/token.cell --target riscv64-elf --target-profile ckb -o /tmp/token.elf
+cargo run --locked --bin cellc -- verify-artifact /tmp/token.elf --expect-target-profile ckb
 ```
 
 Use the CKB profile for CKB artifacts:

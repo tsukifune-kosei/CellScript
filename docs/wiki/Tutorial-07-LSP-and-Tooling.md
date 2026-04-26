@@ -62,7 +62,7 @@ Useful settings:
 | `cellscript.compilerPath` | Path to the `cellc` binary used for LSP and CLI-backed commands. |
 | `cellscript.useCargoRunFallback` | Use `cargo run -q -p cellscript --` from a workspace when `cellc` is unavailable. |
 | `cellscript.target` | Compiler target for command-backed reports: `riscv64-asm` or `riscv64-elf`. |
-| `cellscript.targetProfile` | Profile for command-backed reports: `spora`, `ckb`, or `portable-cell`. |
+| `cellscript.targetProfile` | Profile for command-backed reports: `ckb` or `portable-cell`. |
 | `cellscript.commandTimeoutMs` | Timeout for compiler-backed commands. |
 
 The extension contributes commands for compile, metadata, constraints, production report, and target-profile selection. `CellScript: Show Production Report` is useful while editing because it displays compiler version, metadata, constraints, and release-audit boundaries. It does not replace chain acceptance gates.
@@ -122,9 +122,9 @@ A practical local loop is:
 ```bash
 cellc fmt --check
 cellc check --all-targets --json
-cellc metadata . --target riscv64-elf --target-profile spora -o /tmp/metadata.json
-cellc build --target riscv64-elf --target-profile spora --json
-cellc verify-artifact build/main.elf --verify-sources --expect-target-profile spora
+cellc metadata . --target riscv64-elf --target-profile ckb -o /tmp/metadata.json
+cellc build --target riscv64-elf --target-profile ckb --json
+cellc verify-artifact build/main.elf --verify-sources --expect-target-profile ckb
 ```
 
 For CKB admission:

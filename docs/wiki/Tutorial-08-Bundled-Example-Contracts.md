@@ -24,7 +24,7 @@ From the repository root:
 ```bash
 for f in examples/*.cell; do
   echo "==> $f"
-  cellc "$f" --target riscv64-elf --target-profile spora -o "/tmp/$(basename "$f" .cell).elf"
+  cellc "$f" --target riscv64-elf --target-profile ckb -o "/tmp/$(basename "$f" .cell).elf"
 done
 ```
 

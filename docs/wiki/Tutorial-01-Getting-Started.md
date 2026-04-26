@@ -6,7 +6,7 @@ This chapter takes you from a fresh checkout to one compiled CellScript artifact
 - build the `cellc` compiler;
 - compile the bundled token example to assembly and ELF;
 - verify that the ELF matches its metadata;
-- repeat the same check with the CKB target profile.
+- verify the result with the CKB target profile.
 
 ## Prerequisites
 
@@ -47,13 +47,13 @@ Start with `examples/token.cell`. It is small enough to read in one sitting, but
 Compile the token example to RISC-V assembly:
 
 ```bash
-cargo run --locked --bin cellc -- examples/token.cell --target riscv64-asm --target-profile spora -o /tmp/token.s
+cargo run --locked --bin cellc -- examples/token.cell --target riscv64-asm --target-profile ckb -o /tmp/token.s
 ```
 
 Compile the same source to ELF:
 
 ```bash
-cargo run --locked --bin cellc -- examples/token.cell --target riscv64-elf --target-profile spora -o /tmp/token.elf
+cargo run --locked --bin cellc -- examples/token.cell --target riscv64-elf --target-profile ckb -o /tmp/token.elf
 ```
 
 Compilation writes a metadata sidecar next to the artifact:
@@ -68,7 +68,7 @@ Treat the `.meta.json` file as part of the build output. The ELF is what runs; t
 ## Verify the Artifact
 
 ```bash
-cargo run --locked --bin cellc -- verify-artifact /tmp/token.elf --expect-target-profile spora
+cargo run --locked --bin cellc -- verify-artifact /tmp/token.elf --expect-target-profile ckb
 ```
 
 This command answers a narrow but important question: does this artifact match its sidecar and the target profile you expected? It is the first gate before you start thinking about transaction builders or chain acceptance.
@@ -76,19 +76,19 @@ This command answers a narrow but important question: does this artifact match i
 Use source verification when you want the metadata sidecar to be checked against files on disk:
 
 ```bash
-cargo run --locked --bin cellc -- verify-artifact /tmp/token.elf --verify-sources --expect-target-profile spora
+cargo run --locked --bin cellc -- verify-artifact /tmp/token.elf --verify-sources --expect-target-profile ckb
 ```
 
 ## CKB Quick Check
 
-When targeting CKB, compile the same source again with the CKB profile. The CKB profile emits raw ELF bytes without the Spora ABI trailer and uses CKB syscall/profile rules.
+The CKB profile emits raw ELF bytes and uses CKB syscall/profile rules.
 
 ```bash
 cargo run --locked --bin cellc -- examples/token.cell --target riscv64-elf --target-profile ckb -o /tmp/token.ckb.elf
 cargo run --locked --bin cellc -- verify-artifact /tmp/token.ckb.elf --expect-target-profile ckb
 ```
 
-If a source uses a Spora-only feature or an unsupported CKB stateful shape, the CKB profile should fail closed with a target-profile policy error.
+If a source uses an unsupported CKB stateful shape, the CKB profile should fail closed with a target-profile policy error.
 
 ## Next
 

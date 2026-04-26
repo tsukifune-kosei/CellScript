@@ -7,7 +7,7 @@
 [![CellScript CI](https://github.com/tsukifune-kosei/CellScript/actions/workflows/ci.yml/badge.svg)](https://github.com/tsukifune-kosei/CellScript/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
-[![Targets: Spora and CKB](https://img.shields.io/badge/targets-Spora%20%7C%20CKB-2f6f4e.svg)](#target-profiles)
+[![Target: CKB](https://img.shields.io/badge/target-CKB-2f6f4e.svg)](#target-profiles)
 [![Package Workflow: Local First](https://img.shields.io/badge/package%20workflow-local%20first-2f6f4e.svg)](#package-workflow)
 [![LSP: Production Tooling](https://img.shields.io/badge/LSP-production%20tooling-2f6f4e.svg)](#editor-support)
 [![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](https://github.com/tsukifune-kosei/CellScript/wiki)
@@ -16,23 +16,23 @@
 
 **Write Cell contracts the way you think about them — not the way the wire format does.**
 
-CellScript is a domain-specific language for Cell-based smart contracts on
-Spora and CKB. It compiles `.cell` source into ckb-vm RISC-V assembly or ELF
+CellScript is a domain-specific language for Cell-based smart contracts. It
+compiles `.cell` source into ckb-vm RISC-V assembly or ELF
 artifacts, together with typed metadata for auditing, policy checks, schema
-binding, and scheduler-aware execution.
+binding, and verifier tooling.
 
 The language is intentionally narrow: it is not a new VM, and it is not an
 account-storage contract language. CellScript gives protocol authors a typed
 way to describe assets, shared Cell state, receipts, lifecycle transitions,
 locks, and transaction-shaped effects — while still mapping directly to the
-Cell model used by Spora and CKB.
+Cell model.
 
 ---
 
 ## Why CellScript
 
-Spora and CKB both expose powerful Cell-oriented execution, but hand-written
-scripts force authors to work close to the wire format:
+Cell-oriented execution is powerful, but hand-written scripts force authors to
+work close to the wire format:
 
 - parse witness bytes manually
 - track inputs, CellDeps, outputs, and output data by index
@@ -61,9 +61,6 @@ Compile your first contract:
 # Just type-check
 cellc examples/token.cell
 
-# Emit a RISC-V ELF for Spora
-cellc examples/token.cell --target riscv64-elf --target-profile spora
-
 # Emit a RISC-V ELF for CKB, with a specific entry action
 cellc examples/nft.cell --target riscv64-elf --target-profile ckb --entry-action transfer
 ```
@@ -74,7 +71,7 @@ Start a package:
 cellc init token-package
 cd token-package
 cellc add shared-types --path ../shared-types
-cellc build --target riscv64-elf --target-profile spora
+cellc build --target riscv64-elf --target-profile ckb
 ```
 
 Check portability across targets:
@@ -90,22 +87,19 @@ cellc check --target-profile portable-cell
 
 ## Target Profiles
 
-CellScript supports multiple Cell-compatible target profiles through
-`--target-profile`:
+CellScript supports target profiles through `--target-profile`:
 
 | Profile | When to use | What you get |
 |---|---|---|
-| `spora` | Spora-native artifacts | BLAKE3 metadata, Spora syscall ABI, scheduler witness, ABI trailer |
-| `ckb` | CKB mainnet artifacts | BLAKE2b/Molecule conventions, CKB syscall profile, no Spora extensions |
-| `portable-cell` | Source portability checks | Validates your code works on both targets — no artifacts produced |
+| `ckb` | CKB mainnet artifacts | BLAKE2b/Molecule conventions and CKB syscall profile |
+| `portable-cell` | Source portability checks | Validates target-neutral source — no artifacts produced |
 
 > The `ckb` profile is production-gated for the bundled CellScript suite. It
-> emits raw CKB ckb-vm artifacts without Spora ABI trailers, uses CKB syscall
+> emits raw CKB ckb-vm artifacts, uses CKB syscall
 > and Molecule/BLAKE2b conventions, and rejects unsupported shapes through
 > normal target-profile policy instead of portability shortcuts.
 
 ```bash
-cellc examples/token.cell --target riscv64-elf --target-profile spora
 cellc examples/token.cell --target riscv64-elf --target-profile ckb
 cellc check --target-profile portable-cell
 ```
@@ -146,8 +140,8 @@ CellScript programs are written in terms of Cell lifecycle operations:
   state machine, e.g. `Granted -> Claimable -> FullyClaimed`.
 - **Effect inference** — `action` bodies are classified as `Pure`, `ReadOnly`,
   `Mutating`, `Creating`, or `Destroying` based on their Cell operations.
-- **Scheduler-aware metadata** — Spora-targeted builds expose access summaries
-  and shared touch domains so block builders can reason about independent work.
+- **Effect/access metadata** — builds expose access summaries and verifier
+  obligations so tooling can reason about transaction shape.
 - **Typed schema metadata** — Cell data layout, type identity, source hashes,
   runtime accesses, and verifier obligations are emitted as machine-readable
   metadata.
@@ -167,7 +161,7 @@ or `lock`; effects are written with explicit lifecycle operations.
 **Declarations:**
 
 ```cellscript
-module spora::example
+module cellscript::example
 
 struct Config {
     threshold: u64
@@ -180,7 +174,7 @@ resource Token has store, transfer, destroy {
 
 shared Pool has store {
     token_reserve: u64
-    spora_reserve: u64
+    quote_reserve: u64
 }
 
 receipt VestingGrant has store, claim {
@@ -215,13 +209,13 @@ action move_token(token: Token, to: Address) -> Token {
 
 The compiler treats `consume`, `create`, `transfer`, `destroy`, `claim`,
 `settle`, and `read_ref` as **Cell effects**, not ordinary function calls. Those
-effects are reflected in metadata so Spora scheduling, CKB admission policy,
-schema decoding, and artifact verification can audit the generated script.
+effects are reflected in metadata so CKB admission policy, schema decoding, and
+artifact verification can audit the generated script.
 
 **Complete fungible-token example:**
 
 ```cellscript
-module spora::fungible_token
+module cellscript::fungible_token
 
 resource Token has store, transfer, destroy {
     amount: u64
@@ -286,11 +280,11 @@ chain-specific VM:
 | Linear ownership | Compiler-enforced | No | Yes (abilities) | No general user-defined |
 | Shared state | Explicit `shared` Cells | Implicit contract storage | Shared objects (some chains) | No shared Cell analogue |
 | Reentrancy | No callback-style reentrancy | Common risk surface | Lower by design | Lower predicate risk |
-| Scheduler metadata | Native for Spora | None | Not GhostDAG-oriented | Predicate-level |
+| Effect/access metadata | Native | None | Chain-specific | Predicate-level |
 | CKB compatibility | Production-gated CKB ckb-vm artifact profile for the bundled Cell suite | Requires different VM | Requires different VM | Requires FuelVM |
 
-Compared with hand-written CKB or Spora scripts, CellScript keeps the same
-runtime substrate but replaces raw byte and syscall programming with typed Cell
+Compared with hand-written CKB scripts, CellScript keeps the same runtime
+substrate but replaces raw byte and syscall programming with typed Cell
 operations, linear checking, schema metadata, and policy-verifiable artifacts.
 
 ---
@@ -310,8 +304,8 @@ CellScript includes production-grade local language tooling:
   CI gates.
 
 - [VS Code extension](https://github.com/tsukifune-kosei/CellScript/tree/main/editors/vscode-cellscript)
-- [Dual-chain production plan](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md)
-- [Dual-chain package registry design](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_DUAL_CHAIN_PACKAGE_REGISTRY_DESIGN.md)
+- [Production plan](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md)
+- [Package registry design](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_DUAL_CHAIN_PACKAGE_REGISTRY_DESIGN.md)
 - [Runtime error codes](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_RUNTIME_ERROR_CODES.md)
 - [Entry witness ABI](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_ENTRY_WITNESS_ABI.md)
 - [Collections support matrix](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_COLLECTIONS_SUPPORT_MATRIX.md)
@@ -381,12 +375,12 @@ statement/expression forms.
 **5. Code generation** (`codegen/`)
 Emits ckb-vm-compatible RISC-V assembly (`.s`) or ELF (`.elf`):
 - Syscall wrappers: `ckb_load_cell_data`, `ckb_load_witness`,
-  `ckb_load_header_by_field`, `ckb_load_input_by_field`, and Spora extension
-  syscalls (`secp256k1_verify`, `load_ecdsa_signature_hash`).
+  `ckb_load_header_by_field`, `ckb_load_input_by_field`, and supported
+  verifier helpers (`secp256k1_verify`, `load_ecdsa_signature_hash`).
 - Cell input/output/dep index mapping, witness ABI frames, runtime scratch
   buffers, and per-entrypoint trampolines.
-- Profile-switched syscall ABI — Spora and CKB use different syscall number
-  tables and source-flag conventions.
+- Profile-switched syscall ABI — target profiles can use different syscall
+  number tables and source-flag conventions.
 
 ### Metadata & Policy
 
@@ -398,14 +392,14 @@ policy gates need — without re-parsing source:
 |---|---|---|
 | Schema layout, type IDs, field offsets | `ir/` | Schema decoder, indexer |
 | Effect classification, resource summaries | `types/` | Scheduler, audit tools |
-| Scheduler witness ABI & access domains | `codegen/` (Spora) | Spora block builder, parallel scheduler |
+| Access domains and verifier obligations | `codegen/` | Builders, indexers, audit tools |
 | Source hashes, artifact BLAKE3 | `lib.rs` | `cellc verify-artifact`, CI gates |
 | Verifier obligations, pool invariants | `ir/` | On-chain verifier, policy checker |
 | Target-profile policy violations | `lib.rs` | `cellc check`, CI gates |
 
 `cellc constraints` produces a human-readable subset focused on production
 readiness: ABI slot usage, register/stack-spill placement, witness byte bounds,
-CKB cycle/capacity estimates, and Spora v0 mass estimates.
+and CKB cycle/capacity estimates.
 
 ### Runtime & Stdlib
 
@@ -441,27 +435,24 @@ The compiler is profile-aware from type checking through code generation:
 ```mermaid
 graph TB
     subgraph "Target Profile"
-        subgraph Spora
-            S1[BLAKE3]
-            S2[Molecule]
-            S3[Spora syscall ABI]
-            S4[Spora scheduler witness]
-            S5[Spora ABI trailer]
-        end
         subgraph CKB
             C1[BLAKE2b]
             C2[Molecule]
             C3[CKB syscall ABI]
-            C4["no Spora scheduler witness"]
-            C5["no ABI trailer"]
+            C4["CKB Source rules"]
+            C5["raw ELF artifact"]
+        end
+        subgraph Portable
+            P1[Check-only]
+            P2[No target syscalls]
         end
     end
-    Policy["Policy gate rejects incompatible metadata before codegen"] --> Spora
     Policy --> CKB
+    Policy["Policy gate rejects incompatible metadata before codegen"] --> Portable
 ```
 
-`portable-cell` is a check-only profile that verifies source compatibility with
-both targets without producing artifacts.
+`portable-cell` is a check-only profile that verifies target-neutral source
+without producing artifacts.
 
 ### Wasm Gate
 
@@ -489,7 +480,7 @@ source_roots = ["src"]
 
 [build]
 target = "riscv64-elf"
-target_profile = "spora"
+target_profile = "ckb"
 
 [policy]
 production = true
@@ -542,7 +533,7 @@ registry dependency resolution remain experimental and fail-closed.
 | `cellc constraints` | Emit profile-aware production constraints |
 | `cellc abi` | Explain `_cellscript_entry` witness ABI layout for an action or lock |
 | `cellc entry-witness` | Encode `_cellscript_entry` witness bytes |
-| `cellc scheduler-plan` | Consume Spora scheduler hints and report serial/conflict policy |
+| `cellc scheduler-plan` | Report serial/conflict policy from compiler access hints |
 | `cellc ckb-hash` | Compute CKB default Blake2b-256 hashes for builders and release evidence |
 | `cellc opt-report` | Compare O0..O3 artifact size and constraints status |
 | `cellc verify-artifact` | Verify an artifact against its metadata sidecar |
@@ -563,7 +554,6 @@ registry dependency resolution remain experimental and fail-closed.
 |---|---|
 | `--target riscv64-asm` | Emit RISC-V assembly |
 | `--target riscv64-elf` | Emit a RISC-V ELF artifact |
-| `--target-profile spora` | Use the Spora profile |
 | `--target-profile ckb` | Use the CKB profile |
 | `--target-profile portable-cell` | Check source portability across Cell profiles |
 | `--entry-action <ACTION>` | Compile a single action as the artifact entrypoint |

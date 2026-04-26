@@ -1,22 +1,24 @@
 # CellScript v0.14 Roadmap
 
 **Status**: Draft (Pending Team Review)
-**Scope**: CKB Semantic Completeness, Source/Witness Ergonomics, and Script Composability
+**Scope**: CKB Semantic Completeness, Source/Witness Ergonomics, and Bounded Verifier Composition
 **Dependencies**: v0.13 released (bounded value-vector helpers, zero-cost abstractions, CLI ergonomics)
 
 ---
 
 ## 📊 Executive Summary
 
-**v0.14 Theme**: **CKB Semantic Completeness and Script Composability**
+**v0.14 Theme**: **CKB Semantic Completeness and Bounded Verifier Composition**
 
 CellScript's evolution follows a deliberate maturity curve:
 
-- **v0.12** — Production closure: proved CellScript can run on both Spora and CKB chains (43/43 actions, 7/7 examples, entry witness ABI, mutate replacement outputs, low-level time helpers, dep cell reads).
+- **v0.12** — Production closure: proved CellScript can compile production-grade cell contracts (43/43 actions, 7/7 examples, entry witness ABI, mutate replacement outputs, low-level time helpers, dep cell reads).
 - **v0.13** — Performance and expressiveness: bounded value-vector helpers, zero-cost abstractions (deserialization specialization, inlining, DCE, const propagation), CLI ergonomics.
-- **v0.14** — CKB semantic completeness and composability: structured `WitnessArgs`, profile-aware `since`/epoch time constraints, explicit Source views, ScriptGroup/transaction-shape conformance, script-to-script composition via Spawn/IPC, formalized cross-chain profiles, declarative capacity syntax, and WASM simulation backend.
+- **v0.14** — CKB semantic completeness and bounded verifier composition: structured `WitnessArgs`, profile-aware `since`/epoch time constraints, explicit Source views, ScriptGroup/transaction-shape conformance, bounded verifier reuse via Spawn/IPC, formalized target profiles, declarative capacity syntax, and WASM simulation backend.
 
-v0.14 closes the remaining DSL-level semantic gaps between CKB/Spora VM reality and CellScript source code: CKB witness structure, CKB epoch-based `since`, Source transaction/group views, ScriptGroup/outputs_data conformance, TYPE_ID metadata validation MVP, and Spawn/IPC. It should not re-plan v0.13 bounded generics, repeat v0.12 production evidence, or start the v0.15 primitive-kernel reset.
+v0.14 closes the remaining DSL-level semantic gaps between CKB VM reality and CellScript source code: CKB witness structure, CKB epoch-based `since`, Source transaction/group views, ScriptGroup/outputs_data conformance, TYPE_ID metadata validation MVP, and Spawn/IPC. It should not re-plan v0.13 bounded generics, repeat v0.12 production evidence, or start the v0.15 primitive-kernel reset.
+
+v0.14 provides low-level Spawn/IPC and CKB Source/Witness semantics. It does not define the full protocol composability model. The higher-level question of trigger, scope, reads, coverage, and builder assumptions is intentionally deferred to v0.15's Scoped Invariants and Covenant ProofPlan.
 
 ---
 
@@ -32,7 +34,7 @@ The following capabilities are already delivered and will not be re-planned:
 - ✅ MutatePattern + MutateTransitionOp (Set/Add/Sub/Append)
 - ✅ type_hash / lock_hash preservation
 - ✅ Low-level `ckb::input_since()` and CKB header epoch helper APIs
-- ✅ Spora timelock fixtures and runtime since validation for DAA/timestamp
+- ✅ Timelock fixtures and runtime since validation for profile time/timestamp
 - ✅ Dep cell typed reads for declared `read_ref<T>` CellDep paths
 - ✅ 43/43 production actions, 7/7 bundled examples deployed
 - ✅ Molecule ABI manifest, metadata schema 29
@@ -56,17 +58,28 @@ The following capabilities are already delivered and will not be re-planned:
 
 ### P0 - Blocking (Must Complete in v0.14)
 
-#### 1. Spawn/IPC Script Composition 🔴
+#### 1. Spawn/IPC Bounded Verifier Composition 🔴
 
-**This is one of the core new features in v0.14.**
+**This is one of the core low-level features in v0.14.**
 
 **Problem**: The VM layer already implements Spawn/IPC syscalls (2601-2608), but the DSL has no first-class support. Developers must drop to raw syscall numbers to compose scripts, which is error-prone, untyped, and unauditable.
 
-**Why It Matters**: Script composition is the fundamental building block for:
+**Why It Matters**: Bounded verifier composition is an important building block for:
 - Delegate verification patterns (lock script spawns a verifier)
+- Reusable verification libraries (shared utility scripts)
 - Multi-step validation pipelines (hash → signature → authorization)
-- Modular script architecture (shared utility scripts)
+- Modular validation pipelines with explicit lock/type boundaries
 - CKB VM v2 compatibility
+
+**Composability Boundary**:
+
+Spawn/IPC does not make a CKB cell's `type script` slot multi-tenant.
+
+If protocol A already occupies the type script of a cell, protocol B cannot simply attach another independent type-level rule to that same cell through spawn. Spawn/IPC is a mechanism for bounded verifier reuse, delegated checks, and modular validation pipelines. It does not erase lock/type coverage boundaries.
+
+Protocol composition around an existing cell should still use receipt/companion cells, read-only deps, explicit transaction constraints, validating locks where appropriate, and later ProofPlan-scoped covenant patterns.
+
+Full protocol composability remains a v0.15+ ProofPlan / scoped-invariant concern, not a v0.14 Spawn/IPC promise.
 
 **DSL Design**:
 
@@ -78,7 +91,7 @@ action verify_with_delegate(proof: Proof) {
 }
 ```
 
-**Pipe composition — multi-step verification chain**:
+**Pipe-based verification chain**:
 ```cellscript
 action multi_step_verify(data: VerifyData) {
     let (read_fd, write_fd) = pipe()
@@ -118,7 +131,7 @@ action multi_step_verify(data: VerifyData) {
 - Standard lock scripts read signatures from `WitnessArgs.lock`.
 - Type scripts may use `input_type` / `output_type` for protocol-specific proofs.
 - Advanced scripts need to choose transaction-global vs script-group views intentionally.
-- Profile-correct Source encodings differ between CKB strict mode and Spora legacy compatibility paths, so the compiler must own this boundary.
+- Profile-correct Source encodings differ between CKB strict mode and portable compatibility paths, so the compiler must own this boundary.
 
 **DSL Design**:
 
@@ -142,37 +155,37 @@ action prove_type_transition(state: &mut State) {
 | `source::*` DSL | `input(n)`, `output(n)`, `cell_dep(n)`, `header_dep(n)`, `group_input(n)`, `group_output(n)` with profile-correct encoding |
 | `witness::*` DSL | `raw<T>`, `lock<T>`, `input_type<T>`, `output_type<T>` with CKB Molecule `WitnessArgs` decoding |
 | Metadata exposure | Emit runtime access records with witness field, source view, index, ABI, and expected byte bounds |
-| Profile gates | CKB profile requires `WitnessArgs` decoding for structured fields; Spora profile keeps raw/entry witness ABI unless an explicit compatibility mode is selected |
+| Profile gates | CKB profile requires `WitnessArgs` decoding for structured fields; portable profile keeps raw/entry witness ABI unless an explicit compatibility mode is selected |
 | Tests | Secp256k1-style lock fixture, type-script input/output witness fixture, source view mismatch tests |
 
 **Risk**: **HIGH** — This changes author-facing authentication/proof semantics and must fail closed
-**Depends on**: Cross-chain Profile Formalization (#3)
+**Depends on**: Target Profile Formalization (#3)
 
 ---
 
-#### 3. Cross-chain Profile Formalization 🔴
+#### 3. Target Profile Formalization 🔴
 
-**Problem**: The dual-chain target architecture (Spora profile vs CKB profile) has existed implicitly since v0.12, but the semantics are not formally documented or enforced. Developers encounter surprising differences (BLAKE3 vs BLAKE2B domains, DAA Score vs CKB block/epoch time, since encoding, and Source group encoding) without clear guidance.
+**Problem**: The target-profile architecture has existed implicitly since v0.12, but the semantics are not formally documented or enforced. Developers encounter surprising differences (hash domains, CKB block/epoch time, since encoding, and Source group encoding) without clear guidance.
 
 **Profile Semantic Reference**:
 
-| Feature | Spora Profile | CKB Profile | Portable Cell |
-|---------|---------------|-------------|---------------|
-| Hash function | BLAKE3 + V1 domain separation | BLAKE2B | configurable |
-| Time reference | DAA Score | Block Number / EpochNumberWithFraction | abstract |
-| Since metric | `daa` / `timestamp` | `block_number` / `epoch` / `timestamp` | N/A |
-| Script hash / identity | BLAKE3 V1 domain-separated | BLAKE2B standard | profile-declared |
-| Witness structure | Raw bytes + CellScript entry/scheduler ABI | Molecule `WitnessArgs` + raw bytes fallback | explicit |
-| Source encoding | Spora extended + legacy group aliases | CKB strict high-bit group flag | explicit |
-| Spawn/IPC | Available | Available (VM v2+) | not available |
-| Tx version | 0xC001 | 0 | N/A |
+| Feature | CKB Profile | Portable Cell |
+|---------|-------------|---------------|
+| Hash function | BLAKE2B | configurable |
+| Time reference | Block Number / EpochNumberWithFraction | abstract |
+| Since metric | `block_number` / `epoch` / `timestamp` | N/A |
+| Script hash / identity | BLAKE2B standard | profile-declared |
+| Witness structure | Molecule `WitnessArgs` + raw bytes fallback | explicit |
+| Source encoding | CKB strict high-bit group flag | explicit |
+| Spawn/IPC | Available (VM v2+) | not available |
+| Tx version | 0 | N/A |
 
-**Key Design Decision**: Spora uses DAA Score as its time abstraction. Epoch is a CKB-specific concept that does **not** exist in Spora's DAG consensus. The profile system handles this divergence cleanly — no epoch emulation in Spora profile.
+**Key Design Decision**: CKB epoch semantics are CKB-specific. The portable profile remains abstract and must not emulate CKB epoch behavior without an explicit target profile.
 
 **Implementation Items**:
 
 **3a. TargetProfile Enum Specification**
-- Formalize `TargetProfile::Spora`, `TargetProfile::Ckb`, `TargetProfile::PortableCell` with complete semantic contracts
+- Formalize `TargetProfile::Ckb` and `TargetProfile::PortableCell` with complete semantic contracts
 - Document which builtins, syscalls, and constraints each profile enables
 - Publish as `docs/wiki/CELLSCRIPT_TARGET_PROFILES.md`
 
@@ -186,8 +199,8 @@ action prove_type_transition(state: &mut State) {
 - v0.14 must decide whether any bundled v0.14 example truly needs dynamic in-script BLAKE2b.
 - If yes, promote the real RISC-V implementation to P1 with test vectors and cycle limits; if no, defer it and reject `hash_blake2b()` in on-chain code with a precise diagnostic.
 
-**3d. Cross-chain Script Mapping Registry Design**
-- Standard scripts (secp256k1, multisig, etc.) have different `code_hash` values on Spora vs CKB
+**3d. Profile Script Mapping Registry Design**
+- Standard scripts (secp256k1, multisig, etc.) may have different `code_hash` values across target profiles
 - Design a registry format: `scripts.toml` mapping `(script_name, profile) → code_hash`
 - Compiler resolves spawn targets and dep cell references through this registry
 
@@ -219,7 +232,7 @@ action prove_type_transition(state: &mut State) {
 **Boundary**: This is not the v0.15 identity lifecycle redesign. v0.14 validates CKB transaction-shape facts and existing TYPE_ID metadata plans. It does not add new identity primitives, destruction policies, or protocol macro lowering.
 
 **Risk**: **HIGH** — Mis-modeling ScriptGroup or TYPE_ID behavior creates false confidence in CKB strict mode
-**Depends on**: Structured CKB WitnessArgs and Source Views (#2), Cross-chain Profile Formalization (#3)
+**Depends on**: Structured CKB WitnessArgs and Source Views (#2), Target Profile Formalization (#3)
 
 ---
 
@@ -227,7 +240,7 @@ action prove_type_transition(state: &mut State) {
 
 #### 5. Declarative Capacity Syntax 🟡
 
-**Problem**: Capacity management is the most common source of CKB/Spora transaction failures. The compiler, builder, and acceptance layers expose capacity evidence, but the DSL has no declarative capacity policy — developers still reason about byte counts and change outputs outside the source contract.
+**Problem**: Capacity management is the most common source of CKB transaction failures. The compiler, builder, and acceptance layers expose capacity evidence, but the DSL has no declarative capacity policy — developers still reason about byte counts and change outputs outside the source contract.
 
 **DSL Design**:
 
@@ -266,14 +279,14 @@ action transfer_with_fee(token: Token, fee: u64) {
 
 #### 6. Declarative Time and Since Constraints 🟡
 
-**Problem**: Time-based constraints (`since` encoding) differ between Spora and CKB profiles. Spora supports DAA/timestamp locks, while CKB supports block-number, epoch-with-fraction, and timestamp metrics. The low-level `ckb::input_since()` and header epoch APIs work, but they expose raw encoding details and do not express policy at the DSL level.
+**Problem**: Time-based constraints (`since` encoding) require CKB-specific handling for block-number, epoch-with-fraction, and timestamp metrics. The low-level `ckb::input_since()` and header epoch APIs work, but they expose raw encoding details and do not express policy at the DSL level.
 
 **DSL Design**:
 
 ```cellscript
-action claim_after_timeout(htlc: HtlcReceipt) {
-    require_maturity(blocks: 100)          // Spora: DAA delta; CKB: block_number delta
-    require_time(after: Timestamp(target)) // Both: absolute timestamp
+action claim_after_ckb_timeout(htlc: HtlcReceipt) {
+    require_maturity(blocks: 100)          // CKB: block-number delta
+    require_time(after: Timestamp(target)) // CKB: absolute timestamp since
     require_epoch(relative: EpochFraction(10, 0, 1)) // CKB-only epoch since
     claim htlc
 }
@@ -281,12 +294,12 @@ action claim_after_timeout(htlc: HtlcReceipt) {
 
 **Profile-gated Compilation**:
 
-| Primitive | Spora Profile | CKB Profile |
-|-----------|---------------|-------------|
-| `require_maturity(blocks: N)` | Relative DAA Score since | Relative block-number since |
-| `require_time(after: Timestamp(T))` | Absolute timestamp since | Absolute timestamp since |
-| `require_epoch(after: EpochFraction(...))` | Compile error | Absolute epoch since |
-| `require_epoch(relative: EpochFraction(...))` | Compile error | Relative epoch since |
+| Primitive | CKB Profile | Portable Cell |
+|-----------|-------------|---------------|
+| `require_maturity(blocks: N)` | Relative block-number since | Compile error |
+| `require_time(after: Timestamp(T))` | Absolute timestamp since | Compile error |
+| `require_epoch(after: EpochFraction(...))` | Absolute epoch since | Compile error |
+| `require_epoch(relative: EpochFraction(...))` | Relative epoch since | Compile error |
 
 **Implementation Items**:
 
@@ -297,20 +310,20 @@ action claim_after_timeout(htlc: HtlcReceipt) {
 - Coexistence: `ckb::input_since()` low-level API remains available (not removed)
 
 **Risk**: **MEDIUM** — CKB epoch since semantics must match consensus exactly
-**Depends on**: Cross-chain Profile Formalization (#3)
+**Depends on**: Target Profile Formalization (#3)
 
 ---
 
 #### 7. Conditional `hash_blake2b()` Stdlib 🟡
 
-> Tracked as part of Cross-chain Profile Formalization (#3c) and promoted only when a concrete compatibility target requires it.
+> Tracked as part of Target Profile Formalization (#3c) and promoted only when a concrete compatibility target requires it.
 
 - Add `hash_blake2b()` to stdlib only if a v0.14 bundled example or CKB compatibility target requires dynamic in-script BLAKE2b.
 - Must link a real RISC-V BLAKE2b implementation; stubs are forbidden.
 - Must pass production gates: known test vectors, cycle reporting, and CKB profile fail-closed behavior when unavailable.
 
 **Risk**: **MEDIUM**
-**Depends on**: Cross-chain Profile Formalization (#3)
+**Depends on**: Target Profile Formalization (#3)
 
 ---
 
@@ -330,7 +343,7 @@ action claim_after_timeout(htlc: HtlcReceipt) {
 **Boundary**: This does not split `Address`, `LockScript`, and `LockHash` in the type system. That is v0.15. v0.14 only makes CKB artifact references precise and auditable.
 
 **Risk**: **MEDIUM** — Incorrect hash_type or dep linkage can produce artifacts that look valid but cannot execute on CKB
-**Depends on**: Cross-chain Profile Formalization (#3), Advanced CellDep Patterns (#11) for full DepGroup coverage
+**Depends on**: Target Profile Formalization (#3), Advanced CellDep Patterns (#11) for full DepGroup coverage
 
 ---
 
@@ -393,7 +406,7 @@ v0.14 introduces Spawn/IPC and profile formalization at the DSL layer. Periphera
 | **Wallet** | `wallet/` | Already supports witness/timelock/signing. v0.14: sync spawn-aware transaction construction (pass child script deps, allocate cycle budget) |
 | **SDK Adaptor** | `sdk/adaptor/` | Add spawn transaction construction examples, capacity planning API |
 | **WASM SDK** | `wasm/` | Sync new syscall bindings (spawn/pipe/wait/read/write/close) |
-| **Standard Scripts** | `exec/src/scripts/` | Add spawn composition example scripts: delegate verifier, multi-step pipeline |
+| **Standard Scripts** | `exec/src/scripts/` | Add bounded spawn verifier example scripts: delegate verifier, multi-step pipeline |
 | **CLI** | `cli/` | v0.13 covered CLI enhancements. v0.14 adds `cellc spawn-test` for local spawn simulation |
 | **CI** | `.github/workflows/` | Mandatory dual-profile testing for all new features |
 
@@ -405,10 +418,10 @@ v0.14 introduces Spawn/IPC and profile formalization at the DSL layer. Periphera
 
 | Metric | Target |
 |--------|--------|
-| All 43+ production actions compile under **both** Spora and CKB profiles | ✅ Required |
+| All CKB-targeted bundled examples compile under CKB profile | ✅ Required |
 | At least 2 spawn-based examples in bundled examples | ✅ Required |
 | Structured `WitnessArgs.lock/input_type/output_type` examples pass under CKB profile | ✅ Required |
-| Source global/group view tests pass under CKB strict and Spora extended modes | ✅ Required |
+| Source global/group view tests pass under CKB strict mode | ✅ Required |
 | ScriptGroup metadata matches CKB lock/type group fixtures | ✅ Required |
 | `outputs` ↔ `outputs_data` binding tests reject detached or mismatched output data | ✅ Required |
 | CKB TYPE_ID metadata validation covers create/continue/duplicate/missing-plan cases | ✅ Required |
@@ -420,12 +433,11 @@ v0.14 introduces Spawn/IPC and profile formalization at the DSL layer. Periphera
 | `hash_blake2b()` passes known test vectors if promoted | Conditional |
 | Profile semantic spec published | ✅ Required |
 
-### Dual-Profile CI Gate
+### Profile CI Gate
 
-All features introduced in v0.14 must pass CI under both profiles:
+All features introduced in v0.14 must pass CKB profile CI:
 ```bash
 for file in examples/*.cell; do
-    cellc "$file" --target-profile spora
     cellc "$file" --target-profile ckb
 done
 ```
@@ -436,14 +448,14 @@ done
 
 | Non-Goal | Rationale |
 |----------|-----------|
-| Epoch support in Spora profile | DAA Score is the correct time abstraction for DAG consensus. Epoch is CKB-specific and must not leak into Spora semantics. |
+| Epoch support outside CKB profile | Epoch is CKB-specific and must not leak into portable semantics. |
 | On-chain WASM execution | RISC-V remains the on-chain target. WASM is for browser simulation only. |
 | Breaking changes to existing DSL syntax | All new features are additive. Existing `.cell` files must compile without modification. |
 | Primitive kernel reset | v0.15 owns protocol-macro lowering, ProofPlan unification, and core primitive redesign. |
 | Moving `transfer` / `claim` / `settle` / `shared` out of the compiler core | v0.14 may improve metadata and strict-mode checks, but does not change the primitive surface. |
 | `Address` / `LockScript` / `LockHash` type-system split | v0.14 records precise CKB script references; v0.15 owns semantic type separation. |
 | Destruction-policy redesign | Bare `destroy` behavior is not redefined in v0.14; explicit destruction policies are v0.15 scope. |
-| Formal verification | Future milestone (v0.16+). v0.14 focuses on composability, not proof. |
+| Formal verification | Future milestone (v0.16+). v0.14 focuses on bounded verifier composition, not proof. |
 | `T: CellBacked` / `T: Linear` generic constraints | Deferred to v0.15+ per the phased generics plan from v0.13. |
 | Full generic `HashMap<K, V>` | Remains fail-closed per v0.13 boundary. |
 
@@ -461,9 +473,9 @@ done
 
 ### Risk 2: Profile Divergence on New Features 🟡
 
-**Scenario**: New features (spawn, WitnessArgs, Source views, capacity syntax, time constraints) behave subtly differently across Spora and CKB profiles, creating portability bugs.
+**Scenario**: New features (spawn, WitnessArgs, Source views, capacity syntax, time constraints) behave subtly differently across CKB and portable profiles, creating portability bugs.
 
-**Mitigation**: **Mandatory dual-profile CI testing**. Every new feature must include test cases for both profiles. The `cellscript-dual-chain.yml` workflow is extended to cover v0.14 features. Profile-specific behavior must be explicitly documented in the semantic reference table.
+**Mitigation**: **Mandatory profile CI testing**. Every new feature must include test cases for the relevant target profiles. The CI workflow is extended to cover v0.14 features. Profile-specific behavior must be explicitly documented in the semantic reference table.
 
 ---
 
@@ -475,7 +487,7 @@ done
 - Structured witness APIs must always include source view and index in metadata.
 - CKB profile decodes Molecule `WitnessArgs` fields explicitly and rejects malformed tables.
 - Tests must include mismatched global/group indexes, missing fields, extra witnesses, and wrong field placement.
-- Spora profile must not pretend raw witness bytes are CKB `WitnessArgs` unless compatibility mode is explicit.
+- Non-CKB profiles must not pretend raw witness bytes are CKB `WitnessArgs` unless compatibility mode is explicit.
 
 ---
 
@@ -486,7 +498,7 @@ done
 **Mitigation**:
 - Reuse CKB-compatible bit encoding and well-formedness rules in tests.
 - Include absolute and relative epoch cases against fixture vectors.
-- Keep `require_epoch` unavailable in Spora profile; do not emulate epoch on DAG consensus.
+- Keep `require_epoch` unavailable outside CKB profile; do not emulate epoch in portable semantics.
 
 ---
 
@@ -541,9 +553,8 @@ done
 
 ### CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md
 
-v0.14 **extends** the dual-chain production plan:
+v0.14 **extends** the production plan:
 
-- ✅ Spora production gate remains 43/43+ actions
 - ✅ CKB production gate remains 43/43+ actions
 - ✅ 7+ bundled examples remain regression test suite (extended with spawn examples)
 - ✅ Molecule ABI remains public format
@@ -570,9 +581,8 @@ v0.14 **extends** the dual-chain production plan:
 # Run all CellScript tests
 cargo test -p cellscript -- --test-threads=1
 
-# Compile all examples through the top-level file workflow
+# Compile all examples through the CKB top-level file workflow
 for file in examples/*.cell; do
-    cargo run -p cellscript -- "$file" --target-profile spora
     cargo run -p cellscript -- "$file" --target-profile ckb
 done
 
@@ -580,7 +590,6 @@ done
 cargo run -p cellscript -- spawn-test examples/delegate_verify.cell
 
 # Check profile-specific compilation
-cargo run -p cellscript -- explain-profile spora
 cargo run -p cellscript -- explain-profile ckb
 ```
 
@@ -594,28 +603,28 @@ cargo run -p cellscript -- explain-profile ckb
 | `script_group_type_transition.cell` | Type script reads group input/output views | ScriptGroup metadata, `source::group_input`, `source::group_output` |
 | `ckb_type_id_create.cell` | TYPE_ID creation and rejection fixtures | `#[type_id]`, output index plan, duplicate/missing-plan validation |
 | `capacity_aware_token.cell` | Token with capacity floor annotation | `@capacity_floor`, `occupied_capacity(T)` |
-| `cross_chain_htlc.cell` | HTLC with profile-gated time constraints | `require_maturity`, `require_time`, `require_epoch`, dual-profile |
+| `cross_chain_htlc.cell` | HTLC with profile-gated time constraints | `require_maturity`, `require_time`, `require_epoch`, CKB profile |
 | `script_reference_manifest.cell` | Script reference table and dep linkage | `code_hash`, `hash_type`, `args`, CellDep/DepGroup linkage |
 
 ---
 
 ## 🎉 Summary
 
-**v0.12 proved CellScript can run on both chains.**
+**v0.12 proved CellScript can compile production-grade cell contracts.**
 **v0.13 proved CellScript runs efficiently with strong developer ergonomics.**
-**v0.14 will prove CellScript scripts can compose, and the dual-chain model is formally complete.**
+**v0.14 will prove CellScript exposes bounded verifier composition, and the target-profile model is formally complete.**
 
 v0.14 delivers:
 
-- **Composability**: First-class `spawn`/`pipe`/`wait`/fd operations in DSL, mapped to VM syscalls 2601-2608
-- **CKB Semantic Completeness**: Structured `WitnessArgs`, explicit Source views, CKB epoch since, and formalized profiles (Spora/CKB/Portable)
+- **Bounded Verifier Composition**: First-class `spawn`/`pipe`/`wait`/fd operations in DSL, mapped to VM syscalls 2601-2608, without claiming multi-tenant type-script composition
+- **CKB Semantic Completeness**: Structured `WitnessArgs`, explicit Source views, CKB epoch since, and formalized profiles (CKB/Portable)
 - **CKB Transaction Conformance**: ScriptGroup metadata, outputs_data binding, TYPE_ID metadata validation MVP, and strict script-reference records
 - **Declarative Safety**: `@capacity_floor`, `occupied_capacity(T)`, `require_maturity`, `require_time`, `require_epoch`
 - **Hash Policy Clarity**: Profile-aware hash-domain metadata and conditional dynamic BLAKE2b support only when production-gated
 - **Simulation**: WASM backend for browser-side testing (P2)
 
 **Expected Outcomes**:
-- Script composition patterns unlocked (delegate verify, multi-step pipelines)
+- Bounded verifier reuse patterns unlocked (delegate verify, multi-step pipelines)
 - CKB lock/type witness patterns become source-level, typed, and auditable
 - CKB transaction shape assumptions become fixture-tested instead of implicit
 - Profile divergence becomes explicit instead of implicit

@@ -42,7 +42,7 @@ entry = "src/main.cell"
 
 [build]
 target = "riscv64-elf"
-target_profile = "spora"
+target_profile = "ckb"
 out_dir = "build"
 
 [dependencies]
@@ -62,7 +62,6 @@ Useful flags:
 ```bash
 cellc build --target riscv64-asm
 cellc build --target riscv64-elf
-cellc build --target-profile spora
 cellc build --target-profile ckb
 cellc build --production
 cellc build --json
@@ -109,11 +108,11 @@ Generated docs summarize modules, actions, resources, receipts, locks, lifecycle
 When a package is ready for review, ask the compiler for the facts it already knows. These commands are useful when reviewing a package boundary or preparing release evidence:
 
 ```bash
-cellc metadata . --target riscv64-elf --target-profile spora -o build/main.metadata.json
-cellc constraints . --target riscv64-elf --target-profile spora -o build/main.constraints.json
-cellc abi . --target-profile spora
-cellc scheduler-plan . --target-profile spora --json
-cellc opt-report . --target riscv64-elf --target-profile spora --json
+cellc metadata . --target riscv64-elf --target-profile ckb -o build/main.metadata.json
+cellc constraints . --target riscv64-elf --target-profile ckb -o build/main.constraints.json
+cellc abi . --target-profile ckb
+cellc scheduler-plan . --target-profile ckb --json
+cellc opt-report . --target riscv64-elf --target-profile ckb --json
 ```
 
 For CKB-specific builder and deployment review:
@@ -126,7 +125,7 @@ cellc ckb-hash --file build/main.elf
 cellc verify-artifact build/main.elf --expect-target-profile ckb --verify-sources --production
 ```
 
-`metadata` and `constraints` expose the compiler-side production contract. They do not replace chain acceptance reports, builder-generated transactions, occupied-capacity evidence, or Spora/CKB production gates.
+`metadata` and `constraints` expose the compiler-side production contract. They do not replace chain acceptance reports, builder-generated transactions, occupied-capacity evidence, or CKB production gates.
 
 ## Local Dependencies
 
@@ -169,4 +168,4 @@ Registry publishing, registry package installation, `login`, `run`, and `repl` r
 
 ## Next
 
-With a repeatable package workflow in place, continue with [Spora and CKB Target Profiles](Tutorial-05-Spora-and-CKB-Target-Profiles).
+With a repeatable package workflow in place, continue with [CKB Target Profile](Tutorial-05-CKB-Target-Profile).
