@@ -19,7 +19,7 @@ action local_registry_membership(owner: Address, candidate: Address) -> bool {
 }
 
 action local_registry_key_roundtrip(first: Hash, second: Hash) -> bool {
-    let mut keys = Vec::new();
+    let mut keys: Vec<Hash> = [];
     keys.push(first);
     keys.push(second);
     let popped = keys.pop();
