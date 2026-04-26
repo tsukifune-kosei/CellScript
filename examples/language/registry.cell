@@ -1,0 +1,35 @@
+module cellscript::language::registry
+
+
+action local_registry_membership(owner: Address, candidate: Address) -> bool {
+    let mut owners = Vec::with_capacity(2);
+    owners.push(owner);
+    owners.insert(0, candidate);
+    owners.swap(0, 1);
+    let removed = owners.remove(1);
+    owners.push(removed);
+    owners.truncate(1);
+    owners.set(0, owner);
+
+    if owners.contains(owner) {
+        return owners.first() == owner;
+    }
+
+    false
+}
+
+action local_registry_key_roundtrip(first: Hash, second: Hash) -> bool {
+    let mut keys = Vec::new();
+    keys.push(first);
+    keys.push(second);
+    let popped = keys.pop();
+    keys.push(popped);
+    keys.swap(0, 1);
+    keys.reverse();
+
+    if keys.first() == first {
+        return keys.last() == second;
+    }
+
+    false
+}

@@ -33,6 +33,13 @@ New in 0.13 branch work:
   `Vec<Hash>` helper usage without implying full `HashMap<K, V>` support. It is
   a compiler/tooling language example, not part of the seven-example CKB
   production action acceptance matrix.
+- The canonical business examples are now mirrored under `examples/business/`,
+  while production/profile metadata lives under `examples/acceptance/`. The CKB
+  acceptance script compiles the profiled copies when present, keeping
+  `#[effect(...)]` and `#[scheduler_hint(...)]` out of beginner-facing files
+  without dropping release evidence. Subdirectory copies use scoped module
+  namespaces so they can coexist with the canonical top-level examples during
+  module loading.
 - Runtime and constraints metadata expose each checked stack-backed
   fixed-width `Vec<T>` instantiation, including scope, element type/width,
   backing capacity, status, and helper set. Constructor helpers now preserve

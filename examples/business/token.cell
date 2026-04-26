@@ -1,0 +1,52 @@
+
+module cellscript::business::fungible_token
+
+resource Token has store, transfer, destroy {
+    amount: u64
+    symbol: [u8; 8]
+}
+
+resource MintAuthority has store {
+    token_symbol: [u8; 8]
+    max_supply: u64
+    minted: u64
+}
+
+// On CKB, `&mut MintAuthority` is a consumed input Cell plus a replacement
+// output Cell. The generated verifier checks the replacement output against the
+// declared field transition; it is not account-style in-place storage.
+action mint(auth: &mut MintAuthority, to: Address, amount: u64) -> Token {
+    assert_invariant(auth.minted + amount <= auth.max_supply, "exceeds max supply")
+    
+    auth.minted = auth.minted + amount
+    
+    create Token {
+        amount,
+        symbol: auth.token_symbol
+    } with_lock(to)
+}
+
+action transfer_token(token: Token, to: Address) -> Token {
+    consume token
+    create Token {
+        amount: token.amount,
+        symbol: token.symbol
+    } with_lock(to)
+}
+
+action burn(token: Token) {
+    assert_invariant(token.amount > 0, "cannot burn zero")
+    destroy token
+}
+
+action merge(a: Token, b: Token, to: Address) -> Token {
+    assert_invariant(a.symbol == b.symbol, "symbol mismatch")
+    let total = a.amount + b.amount
+    consume a
+    consume b
+    
+    create Token {
+        amount: total,
+        symbol: a.symbol
+    } with_lock(to)
+}

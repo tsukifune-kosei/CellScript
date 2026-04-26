@@ -389,13 +389,22 @@ examples/language/
   bounded_vec.cell
 
 examples/acceptance/
-  token.acceptance.cell
-  timelock.acceptance.cell
-  multisig.acceptance.cell
+  token.cell
+  amm_pool.cell
+  launch.cell
+  vesting.cell
+  nft.cell
+  multisig.cell
+  timelock.cell
 ```
 
-The current flat `examples/` directory may remain until tooling and acceptance
-scripts are ready for the split.
+The flat `examples/*.cell` files remain as compatibility mirrors of the
+canonical business examples. CKB production acceptance compiles
+`examples/acceptance/*.cell` when that directory is present, so scheduler and
+effect-profile metadata can stay out of beginner-facing business files.
+Subdirectory copies use scoped module namespaces (`cellscript::business::*`,
+`cellscript::acceptance::*`, and `cellscript::language::*`) so they can coexist
+with the canonical top-level modules during compiler module loading.
 
 ## Canonical Style Example
 
@@ -445,7 +454,7 @@ This list is the living implementation tracker for the RFC.
 | `protects T { self ... }` sugar | Deferred | Wait until `self` binding and lock-group aggregation semantics are exact. |
 | Hidden sighash defaults | Rejected | Digest mode and signature scope must be visible. |
 | Implicit `Address` as signer | Rejected | Address values do not become authorization proofs by name. |
-| Business/language/acceptance example directory split | Deferred | Keep flat `examples/` until scripts and package tooling are ready. |
+| Business/language/acceptance example directory split | Done | `examples/business` holds clean canonical examples, `examples/acceptance` holds production/profiled examples, and `examples/language` holds `registry.cell`. Flat `examples/*.cell` remains a compatibility mirror for existing commands. |
 | `examples/canonical_style.cell` | Not started | Should become the idiomatic reference once pending syntax is available. |
 | Action production acceptance | Done | Existing bundled action acceptance remains builder-backed. |
 | Lock valid-spend and invalid-spend matrix | Done | Existing bundled locks are exercised through builder-backed local CKB transactions. |

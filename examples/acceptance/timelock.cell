@@ -1,5 +1,5 @@
 
-module cellscript::timelock
+module cellscript::acceptance::timelock
 
 
 const MIN_LOCK_PERIOD: u64 = 10;
@@ -54,6 +54,8 @@ receipt EmergencyRelease has destroy {
 }
 
 
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 3000)]
 action create_absolute_lock(
     owner: Address,
     unlock_height: u64,
@@ -78,6 +80,8 @@ action create_absolute_lock(
     lock
 }
 
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 3000)]
 action create_relative_lock(
     owner: Address,
     lock_period: u64,
@@ -96,6 +100,8 @@ action create_relative_lock(
     lock
 }
 
+#[effect(Creating)]
+#[scheduler_hint(sequential, estimated_cycles = 5000)]
 action lock_asset(
     time_lock: &TimeLock,
     asset_type: AssetType,
@@ -112,6 +118,8 @@ action lock_asset(
     locked
 }
 
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 2000)]
 action request_release(
     time_lock: &TimeLock,
     requester: Address,
@@ -128,6 +136,8 @@ action request_release(
     request
 }
 
+#[effect(Mutating)]
+#[scheduler_hint(sequential, estimated_cycles = 4000)]
 action execute_release(
     time_lock: TimeLock,
     locked_asset: LockedAsset,
@@ -162,6 +172,8 @@ action execute_release(
     record
 }
 
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 3000)]
 action request_emergency_release(
     time_lock: &TimeLock,
     requester: Address,
@@ -183,6 +195,8 @@ action request_emergency_release(
     emergency
 }
 
+#[effect(Mutating)]
+#[scheduler_hint(parallel, estimated_cycles = 2000)]
 action approve_emergency_release(
     emergency: &mut EmergencyRelease,
     approver: Address,
@@ -196,6 +210,8 @@ action approve_emergency_release(
     
 }
 
+#[effect(Mutating)]
+#[scheduler_hint(sequential, estimated_cycles = 5000)]
 action execute_emergency_release(
     time_lock: TimeLock,
     locked_asset: LockedAsset,
@@ -233,6 +249,8 @@ action execute_emergency_release(
     record
 }
 
+#[effect(Mutating)]
+#[scheduler_hint(parallel, estimated_cycles = 2000)]
 action extend_lock(
     time_lock: &mut TimeLock,
     additional_period: u64,
@@ -252,6 +270,8 @@ action extend_lock(
     time_lock.unlock_height = new_unlock_height;
 }
 
+#[effect(Creating)]
+#[scheduler_hint(sequential, estimated_cycles = 15000)]
 action batch_create_locks(
     owners: [Address; 4],
     unlock_heights: [u64; 4],

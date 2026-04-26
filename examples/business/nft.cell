@@ -1,5 +1,5 @@
 
-module cellscript::nft
+module cellscript::business::nft
 
 
 const MAX_SUPPLY: u64 = 10000;

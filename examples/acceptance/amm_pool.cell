@@ -1,0 +1,157 @@
+// amm_pool.cell - Constant Product AMM Liquidity Pool
+
+module cellscript::acceptance::amm_pool
+
+use cellscript::fungible_token::Token
+
+/// LP (Liquidity Provider) receipt
+receipt LPReceipt has store {
+    pool_id: Hash
+    lp_amount: u64
+    provider: Address
+}
+
+shared Pool has store {
+    token_a_symbol: [u8; 8]
+    token_b_symbol: [u8; 8]
+    reserve_a: u64
+    reserve_b: u64
+    total_lp: u64
+    fee_rate_bps: u16
+}
+
+action seed_pool(
+    token_a: Token,
+    token_b: Token,
+    fee_rate_bps: u16,
+    provider: Address
+) -> (Pool, LPReceipt) {
+    assert_invariant(token_a.symbol != token_b.symbol, "same token")
+    assert_invariant(token_a.amount > 0 && token_b.amount > 0, "zero liquidity")
+    assert_invariant(fee_rate_bps <= 10000, "fee too high")
+    
+    let initial_lp = isqrt(token_a.amount * token_b.amount)
+    
+    consume token_a
+    consume token_b
+
+    let pool = create Pool {
+        token_a_symbol: token_a.symbol,
+        token_b_symbol: token_b.symbol,
+        reserve_a: token_a.amount,
+        reserve_b: token_b.amount,
+        total_lp: initial_lp,
+        fee_rate_bps
+    }
+
+    let receipt = create LPReceipt {
+        pool_id: pool.type_hash(),
+        lp_amount: initial_lp,
+        provider
+    } with_lock(provider)
+
+    (pool, receipt)
+}
+
+action swap_a_for_b(
+    pool: &mut Pool,
+    input: Token,
+    min_output: u64,
+    to: Address
+) -> Token {
+    assert_invariant(input.symbol == pool.token_a_symbol, "wrong input token")
+    
+    let fee = input.amount * pool.fee_rate_bps as u64 / 10000
+    let net_input = input.amount - fee
+    
+    let output = pool.reserve_b * net_input / (pool.reserve_a + net_input)
+    
+    assert_invariant(output >= min_output, "slippage exceeded")
+    assert_invariant(output < pool.reserve_b, "insufficient reserves")
+    
+    consume input
+    
+    pool.reserve_a = pool.reserve_a + input.amount
+    pool.reserve_b = pool.reserve_b - output
+
+    create Token {
+        amount: output,
+        symbol: pool.token_b_symbol
+    } with_lock(to)
+}
+
+action add_liquidity(
+    pool: &mut Pool,
+    token_a: Token,
+    token_b: Token,
+    provider: Address
+) -> LPReceipt {
+    assert_invariant(token_a.symbol == pool.token_a_symbol, "wrong token a")
+    assert_invariant(token_b.symbol == pool.token_b_symbol, "wrong token b")
+    
+    let lp_from_a = token_a.amount * pool.total_lp / pool.reserve_a
+    let lp_from_b = token_b.amount * pool.total_lp / pool.reserve_b
+    let lp_amount = min(lp_from_a, lp_from_b)
+    
+    consume token_a
+    consume token_b
+    
+    pool.reserve_a = pool.reserve_a + token_a.amount
+    pool.reserve_b = pool.reserve_b + token_b.amount
+    pool.total_lp = pool.total_lp + lp_amount
+
+    create LPReceipt {
+        pool_id: pool.type_hash(),
+        lp_amount,
+        provider
+    } with_lock(provider)
+}
+
+action remove_liquidity(
+    pool: &mut Pool,
+    receipt: LPReceipt,
+    provider: Address
+) -> (Token, Token) {
+    assert_invariant(receipt.pool_id == pool.type_hash(), "wrong pool")
+    
+    let amount_a = receipt.lp_amount * pool.reserve_a / pool.total_lp
+    let amount_b = receipt.lp_amount * pool.reserve_b / pool.total_lp
+    
+    consume receipt
+    
+    pool.reserve_a = pool.reserve_a - amount_a
+    pool.reserve_b = pool.reserve_b - amount_b
+    pool.total_lp = pool.total_lp - receipt.lp_amount
+
+    let token_a = create Token {
+        amount: amount_a,
+        symbol: pool.token_a_symbol
+    } with_lock(provider)
+
+    let token_b = create Token {
+        amount: amount_b,
+        symbol: pool.token_b_symbol
+    } with_lock(provider)
+
+    (token_a, token_b)
+}
+
+action isqrt(n: u64) -> u64 {
+    if n == 0 {
+        return 0
+    }
+    
+    let mut x = n
+    let mut y = (x + 1) / 2
+    
+    while y < x {
+        x = y
+        y = (x + n / x) / 2
+    }
+    
+    x
+}
+
+action min(a: u64, b: u64) -> u64 {
+    if a < b { a } else { b }
+}

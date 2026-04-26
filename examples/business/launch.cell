@@ -1,0 +1,106 @@
+// launch.cell - Token Launch and Pool Seeding
+
+module cellscript::business::launch
+
+use cellscript::fungible_token::{Token, MintAuthority}
+use cellscript::amm_pool::{Pool, LPReceipt, seed_pool}
+
+/// Launch a new token and seed liquidity pool
+action launch_token(
+    symbol: [u8; 8],
+    max_supply: u64,
+    initial_mint: u64,
+    pool_seed_amount: u64,
+    pool_paired_token: Token,
+    fee_rate_bps: u16,
+    creator: Address,
+    distribution: [(Address, u64); 4]
+) -> (MintAuthority, Pool, LPReceipt) {
+    assert_invariant(initial_mint <= max_supply, "initial exceeds max")
+    assert_invariant(pool_seed_amount <= initial_mint, "pool seed exceeds mint")
+    
+    // Calculate distribution total
+    let dist_total = distribution[0].1 + distribution[1].1 
+                   + distribution[2].1 + distribution[3].1
+    assert_invariant(dist_total + pool_seed_amount <= initial_mint,
+        "allocation exceeds mint")
+
+    // Create mint authority
+    let auth = create MintAuthority {
+        token_symbol: symbol,
+        max_supply,
+        minted: initial_mint
+    } with_lock(creator)
+
+    // Create distribution tokens
+    for (addr, amount) in distribution {
+        if amount > 0 {
+            create Token {
+                amount,
+                symbol
+            } with_lock(addr)
+        }
+    }
+
+    // Create pool seed token
+    let pool_token = create Token {
+        amount: pool_seed_amount,
+        symbol
+    } with_lock(creator)
+
+    // Call pool pattern helper to seed the pool
+    let (pool, lp_receipt) = seed_pool(
+        pool_token,
+        pool_paired_token,
+        fee_rate_bps,
+        creator
+    )
+
+    (auth, pool, lp_receipt)
+}
+
+/// Simple token launch (without liquidity pool)
+action simple_launch(
+    symbol: [u8; 8],
+    max_supply: u64,
+    initial_mint: u64,
+    creator: Address,
+    recipients: [(Address, u64); 8]
+) -> MintAuthority {
+    assert_invariant(initial_mint <= max_supply, "initial exceeds max")
+    
+    // Calculate distribution total
+    let mut total_distributed: u64 = 0
+    for (_, amount) in recipients {
+        total_distributed = total_distributed + amount
+    }
+    assert_invariant(total_distributed <= initial_mint, "distribution exceeds mint")
+
+    // Create mint authority
+    let auth = create MintAuthority {
+        token_symbol: symbol,
+        max_supply,
+        minted: initial_mint
+    } with_lock(creator)
+
+    // Distribute tokens
+    for (addr, amount) in recipients {
+        if amount > 0 {
+            create Token {
+                amount,
+                symbol
+            } with_lock(addr)
+        }
+    }
+
+    // Remaining tokens go to creator
+    let remaining = initial_mint - total_distributed
+    if remaining > 0 {
+        create Token {
+            amount: remaining,
+            symbol
+        } with_lock(creator)
+    }
+
+    auth
+}

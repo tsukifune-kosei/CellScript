@@ -320,13 +320,44 @@ TRUNCATE = 12000
 UNEXPECTED_PROFILE_TRAILER = bytes.fromhex("53504f5241424900")
 
 examples_dir = repo_root / "examples"
-actual_examples = sorted(
+business_examples_dir = examples_dir / "business"
+acceptance_examples_dir = examples_dir / "acceptance"
+language_examples_dir = examples_dir / "language"
+
+def business_example_path(name):
+    source = business_examples_dir / name
+    if source.is_file():
+        return source
+    return examples_dir / name
+
+def acceptance_example_path(name):
+    source = acceptance_examples_dir / name
+    if source.is_file():
+        return source
+    return business_example_path(name)
+
+def language_example_path(name):
+    source = language_examples_dir / name
+    if source.is_file():
+        return source
+    return examples_dir / name
+
+actual_flat_examples = sorted(
     path.name
     for path in examples_dir.glob("*.cell")
     if path.is_file() and path.name not in NON_PRODUCTION_EXAMPLES
 )
-if actual_examples != sorted(EXAMPLES):
-    raise SystemExit(f"bundled examples changed: expected {sorted(EXAMPLES)}, found {actual_examples}")
+actual_business_examples = sorted(path.name for path in business_examples_dir.glob("*.cell") if path.is_file())
+actual_acceptance_examples = sorted(path.name for path in acceptance_examples_dir.glob("*.cell") if path.is_file())
+if actual_flat_examples != sorted(EXAMPLES):
+    raise SystemExit(f"flat bundled examples changed: expected {sorted(EXAMPLES)}, found {actual_flat_examples}")
+if actual_business_examples != sorted(EXAMPLES):
+    raise SystemExit(f"business examples changed: expected {sorted(EXAMPLES)}, found {actual_business_examples}")
+if actual_acceptance_examples != sorted(EXAMPLES):
+    raise SystemExit(f"acceptance examples changed: expected {sorted(EXAMPLES)}, found {actual_acceptance_examples}")
+for name in NON_PRODUCTION_EXAMPLES:
+    if not language_example_path(name).is_file():
+        raise SystemExit(f"missing non-production language example: {name}")
 
 source_root = run_dir / "generated-sources"
 baseline_source_root = source_root / "baseline"
@@ -1356,7 +1387,7 @@ def load_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 def source_entries(name, keyword):
-    text = (examples_dir / name).read_text(encoding="utf-8")
+    text = acceptance_example_path(name).read_text(encoding="utf-8")
     pattern = re.compile(rf"^\s*{keyword}\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.MULTILINE)
     return pattern.findall(text)
 
@@ -1515,7 +1546,7 @@ def compile_artifact(name, kind, source, artifact, *, entry_args=None):
 validate_source_coverage_matrix()
 
 def strict_original_compile(name):
-    source = examples_dir / name
+    source = acceptance_example_path(name)
     artifact = strict_root / f"{name}.strict.elf"
     result = run([cellc, source, "--target-profile", "ckb", "--target", "riscv64-elf", "-o", artifact])
     policy_fail_closed = result["returncode"] != 0 and "target profile policy failed for 'ckb'" in result["stderr"]
@@ -1577,7 +1608,7 @@ for name in EXAMPLES:
     record = {
         "name": name,
         "kind": "bundled-example-strict-original",
-        "source": str(examples_dir / name),
+        "source": str(acceptance_example_path(name)),
         "strict_original_ckb_compile": strict,
     }
     bundled_examples.append(record)
@@ -1585,7 +1616,7 @@ for name in EXAMPLES:
         bundled_example_deployment_artifacts.append({
             "name": name,
             "kind": "bundled-example-strict-original",
-            "source": str(examples_dir / name),
+            "source": str(acceptance_example_path(name)),
             "artifact": strict["artifact"],
         })
 
@@ -1599,7 +1630,7 @@ for action in TOKEN_ACTION_SOURCES:
         artifact_root / f"token_{action}.elf",
     )
     record["action"] = action
-    record["original_source"] = str(examples_dir / "token.cell")
+    record["original_source"] = str(acceptance_example_path("token.cell"))
     token_action_artifacts.append(record)
 
 nft_action_artifacts = []
@@ -1612,7 +1643,7 @@ for action in NFT_ACTION_SOURCES:
         artifact_root / f"nft_{action}.elf",
     )
     record["action"] = action
-    record["original_source"] = str(examples_dir / "nft.cell")
+    record["original_source"] = str(acceptance_example_path("nft.cell"))
     nft_action_artifacts.append(record)
 
 timelock_action_artifacts = []
@@ -1625,7 +1656,7 @@ for action in TIMELOCK_ACTION_SOURCES:
         artifact_root / f"timelock_{action}.elf",
     )
     record["action"] = action
-    record["original_source"] = str(examples_dir / "timelock.cell")
+    record["original_source"] = str(acceptance_example_path("timelock.cell"))
     timelock_action_artifacts.append(record)
 
 amm_action_artifacts = []
@@ -1638,7 +1669,7 @@ for action in AMM_ACTION_SOURCES:
         artifact_root / f"amm_{action}.elf",
     )
     record["action"] = action
-    record["original_source"] = str(examples_dir / "amm_pool.cell")
+    record["original_source"] = str(acceptance_example_path("amm_pool.cell"))
     amm_action_artifacts.append(record)
 
 multisig_action_artifacts = []
@@ -1651,7 +1682,7 @@ for action in MULTISIG_ACTION_SOURCES:
         artifact_root / f"multisig_{action}.elf",
     )
     record["action"] = action
-    record["original_source"] = str(examples_dir / "multisig.cell")
+    record["original_source"] = str(acceptance_example_path("multisig.cell"))
     multisig_action_artifacts.append(record)
 
 original_scoped_action_artifacts = []
@@ -1660,13 +1691,13 @@ for example_name, actions in ORIGINAL_SCOPED_ACTIONS.items():
         record = compile_artifact(
             f"{example_name}:{action}",
             "original-scoped-action-strict",
-            examples_dir / example_name,
+            acceptance_example_path(example_name),
             artifact_root / f"original_{example_name.removesuffix('.cell')}_{action}.elf",
             entry_args=["--entry-action", action],
         )
         record["example"] = example_name
         record["action"] = action
-        record["original_source"] = str(examples_dir / example_name)
+        record["original_source"] = str(acceptance_example_path(example_name))
         original_scoped_action_artifacts.append(record)
 
 launch_action_artifacts = [
@@ -1754,13 +1785,13 @@ for example_name, locks in ORIGINAL_SCOPED_LOCKS.items():
         record = compile_artifact(
             f"{example_name}:{lock}",
             "original-scoped-lock-strict",
-            examples_dir / example_name,
+            acceptance_example_path(example_name),
             artifact_root / f"original_{example_name.removesuffix('.cell')}_{lock}.elf",
             entry_args=["--entry-lock", lock],
         )
         record["example"] = example_name
         record["lock"] = lock
-        record["original_source"] = str(examples_dir / example_name)
+        record["original_source"] = str(acceptance_example_path(example_name))
         original_scoped_lock_artifacts.append(record)
 
 original_scoped_action_fail_closed = []
@@ -1768,13 +1799,13 @@ for example_name, actions in ORIGINAL_SCOPED_ACTION_FAIL_CLOSED.items():
     for action in actions:
         record = strict_scoped_compile(
             f"{example_name}:{action}",
-            examples_dir / example_name,
+            acceptance_example_path(example_name),
             "--entry-action",
             action,
         )
         record["example"] = example_name
         record["action"] = action
-        record["original_source"] = str(examples_dir / example_name)
+        record["original_source"] = str(acceptance_example_path(example_name))
         original_scoped_action_fail_closed.append(record)
 
 original_scoped_lock_fail_closed = []
@@ -1782,13 +1813,13 @@ for example_name, locks in ORIGINAL_SCOPED_LOCK_FAIL_CLOSED.items():
     for lock in locks:
         record = strict_scoped_compile(
             f"{example_name}:{lock}",
-            examples_dir / example_name,
+            acceptance_example_path(example_name),
             "--entry-lock",
             lock,
         )
         record["example"] = example_name
         record["lock"] = lock
-        record["original_source"] = str(examples_dir / example_name)
+        record["original_source"] = str(acceptance_example_path(example_name))
         original_scoped_lock_fail_closed.append(record)
 
 expected_original_scoped_action_count = sum(len(actions) for actions in ORIGINAL_SCOPED_ACTIONS.values())
@@ -1879,6 +1910,16 @@ report = {
     "bundled_examples_count": len(EXAMPLES),
     "non_production_examples": NON_PRODUCTION_EXAMPLES,
     "example_scope": EXAMPLE_SCOPE,
+    "example_source_layout": {
+        "canonical_business_examples": str(business_examples_dir),
+        "flat_business_compatibility_examples": str(examples_dir),
+        "production_acceptance_examples": str(acceptance_examples_dir),
+        "language_examples": str(language_examples_dir),
+        "profiled_acceptance_metadata_note": (
+            "Production acceptance compiles examples/acceptance when present so "
+            "canonical business examples can stay free of effect and scheduler hints."
+        ),
+    },
     "lock_acceptance_scope": LOCK_ACCEPTANCE_SCOPE,
     "bundled_examples_strict_admitted": [
         record["name"]

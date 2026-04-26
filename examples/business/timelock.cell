@@ -1,5 +1,5 @@
 
-module cellscript::timelock
+module cellscript::business::timelock
 
 
 const MIN_LOCK_PERIOD: u64 = 10;

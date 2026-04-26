@@ -1,5 +1,5 @@
 
-module cellscript::multisig
+module cellscript::business::multisig
 
 
 const MIN_SIGNERS: u8 = 2;

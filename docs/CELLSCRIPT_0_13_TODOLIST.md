@@ -171,6 +171,10 @@ Notes:
   - [x] builder-backed on-chain lock valid-spend and invalid-spend matrix for
     all bundled production locks. The matrix is now part of the CKB production
     acceptance report instead of a compile-only claim.
+  - [x] split examples by audience: clean canonical business examples live in
+    `examples/business` and flat `examples/*.cell`; profiled production
+    acceptance copies live in `examples/acceptance`; `registry.cell` is mirrored
+    under `examples/language`.
 
 ---
 

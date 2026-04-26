@@ -1,0 +1,159 @@
+
+module cellscript::acceptance::vesting
+
+use cellscript::fungible_token::Token
+
+shared VestingConfig has store {
+    admin: Address
+    token_symbol: [u8; 8]
+    cliff_period: u64
+    total_vesting_period: u64
+    revocable: bool
+}
+
+#[lifecycle(Granted -> Claimable -> FullyClaimed)]
+receipt VestingGrant has store {
+    state: u8                  // 0=Granted, 1=Claimable, 2=FullyClaimed
+    beneficiary: Address
+    total_amount: u64
+    claimed_amount: u64
+    grant_timepoint: u64
+    cliff_timepoint: u64
+    end_timepoint: u64
+    token_symbol: [u8; 8]
+}
+
+action create_vesting_config(
+    admin: Address,
+    token_symbol: [u8; 8],
+    cliff_period: u64,
+    total_period: u64,
+    revocable: bool
+) -> VestingConfig {
+    assert_invariant(cliff_period < total_period, "cliff >= total")
+    
+    create VestingConfig {
+        admin,
+        token_symbol,
+        cliff_period,
+        total_vesting_period: total_period,
+        revocable
+    } with_lock(admin)
+}
+
+action grant_vesting(
+    config: read_ref VestingConfig,
+    tokens: Token,
+    beneficiary: Address
+) -> VestingGrant {
+    assert_invariant(tokens.symbol == config.token_symbol, "wrong token")
+    assert_invariant(tokens.amount > 0, "zero grant")
+    
+    let now = env::current_timepoint()
+    
+    consume tokens
+    
+    create VestingGrant {
+        state: 0,  // Granted
+        beneficiary,
+        total_amount: tokens.amount,
+        claimed_amount: 0,
+        grant_timepoint: now,
+        cliff_timepoint: now + config.cliff_period,
+        end_timepoint: now + config.total_vesting_period,
+        token_symbol: config.token_symbol
+    } with_lock(beneficiary)
+}
+
+action claim_vested(grant: VestingGrant) -> (Token, VestingGrant) {
+    let now = env::current_timepoint()
+    
+    assert_invariant(now >= grant.cliff_timepoint, "cliff not reached")
+    assert_invariant(grant.state < 2, "already fully claimed")
+    
+    let vested_total = if now >= grant.end_timepoint {
+        grant.total_amount
+    } else {
+        let elapsed = now - grant.cliff_timepoint
+        let period = grant.end_timepoint - grant.cliff_timepoint
+        grant.total_amount * elapsed / period
+    }
+    
+    let claimable = vested_total - grant.claimed_amount
+    assert_invariant(claimable > 0, "nothing to claim")
+    
+    consume grant
+    
+    let new_state: u8 = if vested_total == grant.total_amount { 2 } else { 1 }
+    
+    let tokens = create Token {
+        amount: claimable,
+        symbol: grant.token_symbol
+    } with_lock(grant.beneficiary)
+    
+    let updated_grant = create VestingGrant {
+        state: new_state,
+        beneficiary: grant.beneficiary,
+        total_amount: grant.total_amount,
+        claimed_amount: grant.claimed_amount + claimable,
+        grant_timepoint: grant.grant_timepoint,
+        cliff_timepoint: grant.cliff_timepoint,
+        end_timepoint: grant.end_timepoint,
+        token_symbol: grant.token_symbol
+    } with_lock(grant.beneficiary)
+    
+    (tokens, updated_grant)
+}
+
+// `claimed_admin` is still an entry witness argument. The equality check below
+// is factored through `vesting_admin` so the authority predicate is visible as a
+// lock entry and is covered by the CKB valid-spend and invalid-spend matrix.
+action revoke_grant(
+    config: read_ref VestingConfig,
+    grant: VestingGrant,
+    claimed_admin: Address
+) -> (Token, Token) {
+    assert_invariant(config.revocable, "not revocable")
+    assert_invariant(is_vesting_admin(config, claimed_admin), "not admin")
+    assert_invariant(grant.state < 2, "already fully claimed")
+    
+    let now = env::current_timepoint()
+    
+    let vested = if now >= grant.end_timepoint {
+        grant.total_amount
+    } else if now >= grant.cliff_timepoint {
+        let elapsed = now - grant.cliff_timepoint
+        let period = grant.end_timepoint - grant.cliff_timepoint
+        grant.total_amount * elapsed / period
+    } else {
+        0
+    }
+    
+    let unclaimed_vested = vested - grant.claimed_amount
+    let unvested = grant.total_amount - vested
+    
+    consume grant
+    
+    let employee_tokens = create Token {
+        amount: unclaimed_vested,
+        symbol: grant.token_symbol
+    } with_lock(grant.beneficiary)
+    
+    let admin_tokens = create Token {
+        amount: unvested,
+        symbol: grant.token_symbol
+    } with_lock(claimed_admin)
+    
+    (employee_tokens, admin_tokens)
+}
+
+fn is_vesting_admin(config: &VestingConfig, claimed_admin: Address) -> bool {
+    claimed_admin == config.admin
+}
+
+// The CKB acceptance matrix spends this lock with the configured admin and
+// rejects a non-admin witness. Full witness-sighash authorization still needs a
+// first-class signer/lock-args binding in the language surface.
+lock vesting_admin(config: protected VestingConfig, claimed_admin: witness Address) -> bool {
+    require is_vesting_admin(config, claimed_admin)
+}

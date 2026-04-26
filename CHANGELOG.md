@@ -17,6 +17,9 @@
 - Add lock-boundary surface syntax for `protected` Cell parameters, `witness`
   data parameters, and `require` fail-closed predicates; reserve `lock_args`
   until explicit CKB script-args binding is implemented.
+- Split bundled examples into clean business examples and profiled acceptance
+  examples, so scheduler/effect hints stay in release evidence without
+  crowding the canonical teaching surface.
 - Refresh LSP completions and the VS Code grammar/snippets for the new
   lock-boundary syntax.
 

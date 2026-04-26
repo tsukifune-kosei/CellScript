@@ -143,6 +143,10 @@ valid-spend and invalid-spend matrices, valid transaction dry-runs, committed
 valid transactions, malformed rejection, measured cycles, consensus-serialized tx
 size, occupied-capacity evidence, no under-capacity outputs, all seven production
 bundled examples deployed, and a passed final production hardening gate.
+The production gate compiles `examples/acceptance/*.cell` when present; those
+files intentionally retain scheduler and effect-profile metadata while
+`examples/*.cell` and `examples/business/*.cell` remain the cleaner business
+reading surface.
 Lock behavior coverage is machine-readable through
 `lock_acceptance_scope.onchain_lock_spend_matrix_scope`; each listed lock must
 have both valid-spend and invalid-spend evidence.

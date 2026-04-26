@@ -1,5 +1,5 @@
 
-module cellscript::nft
+module cellscript::acceptance::nft
 
 
 const MAX_SUPPLY: u64 = 10000;
@@ -54,6 +54,8 @@ receipt RoyaltyPayment {
 }
 
 
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 5000)]
 action mint(
     collection: &mut Collection,
     to: Address,
@@ -76,12 +78,16 @@ action mint(
     nft
 }
 
+#[effect(Mutating)]
+#[scheduler_hint(parallel, estimated_cycles = 2000)]
 action transfer(nft: &mut NFT, to: Address) {
     assert!(nft.owner != to, "Cannot transfer to self");
     
     nft.owner = to;
 }
 
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 3000)]
 action create_listing(
     nft: &NFT,
     price: u64,
@@ -99,11 +105,15 @@ action create_listing(
     listing
 }
 
+#[effect(Destroying)]
+#[scheduler_hint(parallel, estimated_cycles = 2000)]
 action cancel_listing(listing: Listing) {
     
     destroy listing;
 }
 
+#[effect(Mutating, Destroying)]
+#[scheduler_hint(sequential, estimated_cycles = 8000)]
 action buy_from_listing(
     nft: &mut NFT,
     listing: Listing,
@@ -135,6 +145,8 @@ action buy_from_listing(
     (royalty_payment, seller_payment)
 }
 
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 3000)]
 action create_offer(
     token_id: u64,
     buyer: Address,
@@ -154,6 +166,8 @@ action create_offer(
     offer
 }
 
+#[effect(Mutating, Destroying)]
+#[scheduler_hint(sequential, estimated_cycles = 8000)]
 action accept_offer(
     nft: &mut NFT,
     offer: Offer,
@@ -187,10 +201,14 @@ action accept_offer(
     (royalty_payment, seller_payment)
 }
 
+#[effect(Destroying)]
+#[scheduler_hint(parallel, estimated_cycles = 1000)]
 action burn(nft: NFT) {
     destroy nft;
 }
 
+#[effect(Creating)]
+#[scheduler_hint(sequential, estimated_cycles = 30000)]
 action batch_mint(
     collection: &mut Collection,
     recipients: [Address; 4],

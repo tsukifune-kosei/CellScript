@@ -19,6 +19,14 @@ CellScript language surface and the current production gates.
 | `examples/amm_pool.cell` | Shared pool state, swap, and liquidity effects. |
 | `examples/launch.cell` | Launch/pool composition patterns. |
 
+The top-level `examples/*.cell` files are the canonical business reading
+surface. `examples/business/*.cell` mirrors that clean surface explicitly.
+`examples/acceptance/*.cell` carries production/profile metadata such as
+`#[effect(...)]` and `#[scheduler_hint(...)]`; the CKB acceptance script uses
+those profiled copies when generating release evidence. Subdirectory copies use
+`cellscript::business::*` and `cellscript::acceptance::*` module namespaces so
+they can coexist with the top-level examples during module loading.
+
 `examples/registry.cell` is intentionally outside this seven-example production
 matrix. It is a 0.13 bounded-collection language example for local
 `Vec<Address>` and `Vec<Hash>` helpers, covered by compiler/tooling tests rather

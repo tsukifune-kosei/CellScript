@@ -8,6 +8,7 @@ use cellscript::{
 
 const BUNDLED_EXAMPLES: [&str; 7] =
     ["amm_pool.cell", "launch.cell", "multisig.cell", "nft.cell", "timelock.cell", "token.cell", "vesting.cell"];
+const PROFILED_ACCEPTANCE_EXAMPLES: [&str; 3] = ["multisig.cell", "nft.cell", "timelock.cell"];
 const BACKEND_SHAPE_BASELINE_JSON: &str = include_str!("backend_shape_baseline.json");
 
 const BUNDLED_EXAMPLE_ELF_SIZE_BUDGETS: [(&str, usize); 7] = [
@@ -177,6 +178,50 @@ struct MoleculeSchemaManifestReportRow {
 
 fn example_path(name: &str) -> Utf8PathBuf {
     Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples").join(name)
+}
+
+fn business_example_path(name: &str) -> Utf8PathBuf {
+    Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples").join("business").join(name)
+}
+
+fn acceptance_example_path(name: &str) -> Utf8PathBuf {
+    Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples").join("acceptance").join(name)
+}
+
+fn language_example_path(name: &str) -> Utf8PathBuf {
+    Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples").join("language").join(name)
+}
+
+#[test]
+fn business_examples_are_free_of_profile_hint_noise() {
+    for example in BUNDLED_EXAMPLES {
+        let flat_path = example_path(example);
+        let business_path = business_example_path(example);
+        let flat = std::fs::read_to_string(&flat_path).unwrap_or_else(|err| panic!("failed to read {flat_path}: {err}"));
+        let business = std::fs::read_to_string(&business_path).unwrap_or_else(|err| panic!("failed to read {business_path}: {err}"));
+        let normalized_business = business.replace("module cellscript::business::", "module cellscript::");
+        assert_eq!(
+            flat, normalized_business,
+            "{business_path} should mirror the top-level business example except for its duplicate-safe module namespace"
+        );
+        assert!(!flat.contains("#[effect("), "{flat_path} should not expose effect profile attributes");
+        assert!(!flat.contains("#[scheduler_hint("), "{flat_path} should not expose scheduler profile attributes");
+    }
+}
+
+#[test]
+fn acceptance_examples_preserve_profile_metadata_surface() {
+    for example in BUNDLED_EXAMPLES {
+        compile_file(acceptance_example_path(example), CompileOptions::default())
+            .unwrap_or_else(|err| panic!("acceptance example {example} should compile: {}", err.message));
+    }
+
+    for example in PROFILED_ACCEPTANCE_EXAMPLES {
+        let path = acceptance_example_path(example);
+        let source = std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("failed to read {path}: {err}"));
+        assert!(source.contains("#[effect("), "{path} should preserve effect profile attributes");
+        assert!(source.contains("#[scheduler_hint("), "{path} should preserve scheduler profile attributes");
+    }
 }
 
 fn bundled_example_elf_size_budget(name: &str) -> usize {
@@ -417,7 +462,8 @@ fn action<'a>(metadata: &'a cellscript::CompileMetadata, name: &str) -> &'a cell
 
 #[test]
 fn registry_example_uses_bounded_local_vec_helpers_without_collection_debt() {
-    let result = compile_file(example_path("registry.cell"), CompileOptions::default()).expect("registry example should compile");
+    let result =
+        compile_file(language_example_path("registry.cell"), CompileOptions::default()).expect("registry example should compile");
     let asm = String::from_utf8(result.artifact_bytes.clone()).expect("registry asm should be utf8");
 
     for marker in [
@@ -1113,7 +1159,7 @@ fn token_mint_authority_mutation_is_explicit() {
 
 #[test]
 fn nft_core_actions_expose_action_specific_builder_metadata() {
-    let result = compile_file(example_path("nft.cell"), CompileOptions::default()).expect("nft example should compile");
+    let result = compile_file(acceptance_example_path("nft.cell"), CompileOptions::default()).expect("nft example should compile");
     let asm = String::from_utf8(result.artifact_bytes.clone()).expect("nft asm should be utf8");
 
     let mint = action(&result.metadata, "mint");
@@ -1159,7 +1205,8 @@ fn nft_core_actions_expose_action_specific_builder_metadata() {
 
 #[test]
 fn timelock_core_actions_expose_time_and_release_metadata() {
-    let result = compile_file(example_path("timelock.cell"), CompileOptions::default()).expect("timelock example should compile");
+    let result =
+        compile_file(acceptance_example_path("timelock.cell"), CompileOptions::default()).expect("timelock example should compile");
     let asm = String::from_utf8(result.artifact_bytes.clone()).expect("timelock asm should be utf8");
 
     let create_absolute_lock = action(&result.metadata, "create_absolute_lock");
@@ -1257,7 +1304,8 @@ fn timelock_core_actions_expose_time_and_release_metadata() {
 
 #[test]
 fn multisig_core_actions_expose_threshold_lifecycle_metadata() {
-    let result = compile_file(example_path("multisig.cell"), CompileOptions::default()).expect("multisig example should compile");
+    let result =
+        compile_file(acceptance_example_path("multisig.cell"), CompileOptions::default()).expect("multisig example should compile");
     let asm = String::from_utf8(result.artifact_bytes.clone()).expect("multisig asm should be utf8");
 
     let create_wallet = action(&result.metadata, "create_wallet");

@@ -1,5 +1,5 @@
 
-module cellscript::multisig
+module cellscript::acceptance::multisig
 
 
 const MIN_SIGNERS: u8 = 2;
@@ -65,6 +65,8 @@ receipt ExecutionRecord {
 }
 
 
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 3000)]
 action create_wallet(
     signers: Vec<Address>,
     threshold: u8,
@@ -99,6 +101,8 @@ action create_wallet(
     wallet
 }
 
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 4000)]
 action propose_transfer(
     wallet: &mut MultisigWallet,
     proposer: Address,
@@ -132,6 +136,8 @@ action propose_transfer(
     proposal
 }
 
+#[effect(Mutating)]
+#[scheduler_hint(parallel, estimated_cycles = 3000)]
 action add_signature(
     proposal: &mut Proposal,
     wallet: &MultisigWallet,
@@ -159,6 +165,8 @@ action add_signature(
     confirmation
 }
 
+#[effect(Mutating, Destroying)]
+#[scheduler_hint(sequential, estimated_cycles = 6000)]
 action execute_proposal(
     wallet: &MultisigWallet,
     proposal: Proposal,
@@ -198,6 +206,8 @@ action execute_proposal(
     record
 }
 
+#[effect(Destroying)]
+#[scheduler_hint(parallel, estimated_cycles = 2000)]
 action cancel_proposal(
     wallet: &MultisigWallet,
     proposal: Proposal,
@@ -213,6 +223,8 @@ action cancel_proposal(
     destroy proposal;
 }
 
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 4000)]
 action propose_add_signer(
     wallet: &mut MultisigWallet,
     proposer: Address,
@@ -251,6 +263,8 @@ action propose_add_signer(
     proposal
 }
 
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 4000)]
 action propose_remove_signer(
     wallet: &mut MultisigWallet,
     proposer: Address,
@@ -286,6 +300,8 @@ action propose_remove_signer(
     proposal
 }
 
+#[effect(Creating)]
+#[scheduler_hint(parallel, estimated_cycles = 4000)]
 action propose_change_threshold(
     wallet: &mut MultisigWallet,
     proposer: Address,
