@@ -185,14 +185,14 @@ action prove_type_transition(state: &mut State) {
 **Implementation Items**:
 
 **3a. TargetProfile Enum Specification**
-- Formalize `TargetProfile::Ckb` and `TargetProfile::PortableCell` with complete semantic contracts
+- Formalize `TargetProfile::Ckb` with a complete semantic contract
 - Document which builtins, syscalls, and constraints each profile enables
 - Publish as `docs/wiki/CELLSCRIPT_TARGET_PROFILES.md`
 
 **3b. Profile-gated hash policy**
 - Keep existing hash-domain metadata explicit; do not silently make portable code depend on different hash algorithms.
 - Add `hash_chain(data)` only for code that intentionally wants the active profile's canonical data hash.
-- Keep explicit variants (`hash_blake3`, `hash_blake2b`) profile-gated by linked implementation availability.
+- Keep explicit CKB Blake2b helpers profile-gated by linked implementation availability.
 
 **3c. Dynamic CKB BLAKE2b implementation decision**
 - v0.13 scoped BLAKE2b to builder/release tooling, not a guaranteed in-script stdlib.

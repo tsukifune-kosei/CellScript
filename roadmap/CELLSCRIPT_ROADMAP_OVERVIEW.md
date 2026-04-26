@@ -202,7 +202,7 @@ action claim_after_ckb_timeout(htlc: HtlcReceipt) {
 > **Note:** `hash_blake2b()` will be provided conditionally — only when a concrete v0.14 contract requires CKB-native BLAKE2B hashing and passes the production gate. Otherwise, the compiler will emit a profile-level diagnostic and reject on-chain usage.
 
 - CKB-native BLAKE2B hash function (with `"ckb-default-hash"` personalization)
-- Configurable hash function support: `hash_blake2b()` and `hash_blake3()` selected automatically by deployment target configuration
+- CKB Blake2b helper support selected by the CKB target profile
 
 ---
 

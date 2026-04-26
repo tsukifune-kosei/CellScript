@@ -90,7 +90,7 @@ Use `shared` for contention-sensitive state such as pools or registries. Shared 
 ```cellscript
 shared Pool has store {
     token_reserve: u64
-    quote_reserve: u64
+    ckb_reserve: u64
 }
 ```
 
@@ -141,7 +141,7 @@ lock owner_only(wallet: &Wallet, signer: Address) -> bool {
 }
 ```
 
-Locks must return `bool`. Target-profile policy determines which runtime helpers are allowed. CKB signature/witness verification must be represented through the supported claim/metadata/runtime evidence path instead of a generic `verify_signature` helper.
+Locks must return `bool`. Target-profile policy determines which runtime helpers are allowed. For example, unsupported helper syscalls are rejected under the CKB profile, and CKB signature/witness verification must be represented through the supported claim/metadata/runtime evidence path instead of a generic `verify_signature` helper.
 
 ## Assertions
 
@@ -155,4 +155,4 @@ Assertions lower into script checks and appear in metadata as part of verifier a
 
 ## Next
 
-With the source shape in mind, continue with [Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects).
+With the source shape in mind, continue with [Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects.md).

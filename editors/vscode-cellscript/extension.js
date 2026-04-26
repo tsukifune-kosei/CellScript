@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const cp = require("node:child_process");
-const { LanguageClient, TransportKind } = require("vscode-languageclient");
+const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
 
 const LANGUAGE_ID = "cellscript";
 const OUTPUT_NAME = "CellScript";
@@ -50,21 +50,6 @@ function activate(context) {
       if (document) {
         await runProductionReport(document, output, status);
       }
-    }),
-    vscode.commands.registerCommand("cellscript.selectTargetProfile", async () => {
-      const picked = await vscode.window.showQuickPick(
-        [
-          { label: "spora", description: "Spora artifact profile" },
-          { label: "ckb", description: "CKB artifact profile" },
-          { label: "portable-cell", description: "Portability policy profile" }
-        ],
-        { title: "CellScript Target Profile" }
-      );
-      if (!picked) {
-        return;
-      }
-      await vscode.workspace.getConfiguration("cellscript").update("targetProfile", picked.label, vscode.ConfigurationTarget.Workspace);
-      vscode.window.showInformationMessage(`CellScript target profile set to ${picked.label}`);
     })
   );
 }
@@ -288,7 +273,7 @@ async function runProductionReport(document, output, status) {
   output.appendLine("## Release Audit Boundary");
   output.appendLine("- Verify artifact metadata, compiler version pin, schema hash, constraints hash, and build provenance from the JSON above.");
   output.appendLine("- Audit signatures are release artifacts produced by the release process; this extension displays compiler evidence but does not sign artifacts.");
-  output.appendLine("- Chain production readiness still requires Spora/CKB acceptance gates and builder-generated transactions.");
+  output.appendLine("- Chain production readiness still requires CKB acceptance gates and builder-generated transactions.");
   output.show(true);
 
   if (versionResult.code === 0 && metadataResult.code === 0 && constraintsResult.code === 0) {
@@ -344,16 +329,12 @@ function compilerTarget(document) {
 }
 
 function targetProfileArgs(document) {
-  const config = vscode.workspace.getConfiguration("cellscript", document.uri);
   const target = compilerTarget(document);
-  const profile = config.get("targetProfile", "spora");
   const args = [];
   if (target) {
     args.push("--target", target);
   }
-  if (profile) {
-    args.push("--target-profile", profile);
-  }
+  args.push("--target-profile", "ckb");
   return args;
 }
 

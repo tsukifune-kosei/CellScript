@@ -1,7 +1,7 @@
 # Mutate Append Example
 
 CellScript `mutate` is modeled as a replacement output. It is not physical
-in-place mutation of a CKB or Spora cell.
+in-place mutation of a CKB cell.
 
 Conceptual source shape:
 
@@ -30,11 +30,9 @@ Expected transaction shape:
 Relevant inspection commands:
 
 ```bash
-cellc check contract.cell --target-profile spora
 cellc check contract.cell --target-profile ckb
 cellc constraints contract.cell --target-profile ckb --json
 ```
 
 For CKB, the builder must also provide occupied-capacity and transaction-size
 evidence for the replacement output.
-

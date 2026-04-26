@@ -11,7 +11,7 @@ use cellscript::{
 
 #[derive(Parser, Debug)]
 #[command(name = "cellc")]
-#[command(about = "CellScript compiler for Spora blockchain")]
+#[command(about = "CellScript compiler for CKB blockchain")]
 #[command(version = cellscript::VERSION)]
 struct Cli {
     #[arg(value_name = "INPUT")]
@@ -128,7 +128,7 @@ fn main() {
                 print_cli_error(&e);
                 process::exit(1);
             })
-            .unwrap_or(cellscript::TargetProfile::Spora);
+            .unwrap_or(cellscript::TargetProfile::Ckb);
         let asm = cellscript::stdlib::StdLib::generate_assembly_for_target_profile(target_profile);
         println!("{}", asm);
         return;

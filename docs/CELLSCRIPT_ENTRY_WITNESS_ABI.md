@@ -79,9 +79,7 @@ compiler marks the entry unsupported and the production gate must fail.
 Use:
 
 ```bash
-cellc abi contract.cell --target-profile spora --action action_name
 cellc abi contract.cell --target-profile ckb --action action_name
-cellc constraints contract.cell --target-profile spora --entry-action action_name
 cellc constraints contract.cell --target-profile ckb --entry-action action_name
 ```
 

@@ -307,7 +307,7 @@ impl ModuleResolver {
         for imports in self.imports.values() {
             for import in imports {
                 let target_module = import.module_path.join("::");
-                if !self.modules.contains_key(&target_module) && !target_module.starts_with("spora::") {
+                if !self.modules.contains_key(&target_module) {
                     return Err(CompileError::new(format!("module '{}' not found", target_module), import.span));
                 }
             }
@@ -395,7 +395,7 @@ mod tests {
 
         resolver
             .register_module(Module {
-                name: "spora::fungible_token".to_string(),
+                name: "cellscript::fungible_token".to_string(),
                 items: vec![
                     Item::Resource(ResourceDef {
                         name: "Token".to_string(),
@@ -420,9 +420,9 @@ mod tests {
 
         resolver
             .register_module(Module {
-                name: "spora::launch".to_string(),
+                name: "cellscript::launch".to_string(),
                 items: vec![Item::Use(UseStmt {
-                    module_path: vec!["spora".to_string(), "fungible_token".to_string()],
+                    module_path: vec!["cellscript".to_string(), "fungible_token".to_string()],
                     imports: vec![
                         UseImport { name: "Token".to_string(), alias: None },
                         UseImport { name: "MintAuthority".to_string(), alias: None },
@@ -433,8 +433,8 @@ mod tests {
             })
             .unwrap();
 
-        assert!(matches!(resolver.resolve_type("spora::launch", "Token"), Some(TypeDef::Resource(_))));
-        assert!(matches!(resolver.resolve_type("spora::launch", "MintAuthority"), Some(TypeDef::Resource(_))));
+        assert!(matches!(resolver.resolve_type("cellscript::launch", "Token"), Some(TypeDef::Resource(_))));
+        assert!(matches!(resolver.resolve_type("cellscript::launch", "MintAuthority"), Some(TypeDef::Resource(_))));
     }
 
     #[test]
@@ -476,7 +476,7 @@ mod tests {
         let mut resolver = ModuleResolver::new();
         resolver
             .register_module(Module {
-                name: "spora::token".to_string(),
+                name: "cellscript::token".to_string(),
                 items: vec![Item::Resource(ResourceDef {
                     name: "Token".to_string(),
                     type_id: None,
@@ -494,7 +494,7 @@ mod tests {
                 name: "app".to_string(),
                 items: vec![
                     Item::Use(UseStmt {
-                        module_path: vec!["spora".to_string(), "token".to_string()],
+                        module_path: vec!["cellscript".to_string(), "token".to_string()],
                         imports: vec![UseImport { name: "Token".to_string(), alias: None }],
                         span: Span::default(),
                     }),
@@ -515,10 +515,10 @@ mod tests {
 
     #[test]
     fn test_path_resolver() {
-        let path = PathResolver::parse_path("spora::fungible_token::Token");
-        assert_eq!(path, vec!["spora", "fungible_token", "Token"]);
+        let path = PathResolver::parse_path("cellscript::fungible_token::Token");
+        assert_eq!(path, vec!["cellscript", "fungible_token", "Token"]);
 
-        let qualified = PathResolver::build_qualified_name("spora", "Token");
-        assert_eq!(qualified, "spora::Token");
+        let qualified = PathResolver::build_qualified_name("cellscript", "Token");
+        assert_eq!(qualified, "cellscript::Token");
     }
 }

@@ -1,6 +1,6 @@
 pub mod collections;
 
-use crate::{ir::IrType, runtime_errors::CellScriptRuntimeError, TargetProfile};
+use crate::{ckb_blake2b256, ir::IrType, runtime_errors::CellScriptRuntimeError, TargetProfile};
 
 pub struct StdLib;
 
@@ -101,12 +101,6 @@ impl StdLib {
                 params: vec![("a".to_string(), IrType::U64), ("b".to_string(), IrType::U64)],
                 return_type: Some(IrType::U64),
             },
-            StdFunction {
-                name: "hash_blake3".to_string(),
-                params: vec![("data".to_string(), IrType::Array(Box::new(IrType::U8), 0))],
-                return_type: Some(IrType::Hash),
-            },
-            StdFunction { name: "env_current_daa_score".to_string(), params: vec![], return_type: Some(IrType::U64) },
             StdFunction { name: "env_current_timepoint".to_string(), params: vec![], return_type: Some(IrType::U64) },
             StdFunction { name: "ckb_header_epoch_number".to_string(), params: vec![], return_type: Some(IrType::U64) },
             StdFunction { name: "ckb_header_epoch_start_block_number".to_string(), params: vec![], return_type: Some(IrType::U64) },
@@ -125,7 +119,7 @@ impl StdLib {
     }
 
     pub fn generate_assembly() -> String {
-        Self::generate_assembly_for_target_profile(TargetProfile::Spora)
+        Self::generate_assembly_for_target_profile(TargetProfile::Ckb)
     }
 
     pub fn generate_assembly_for_target_profile(target_profile: TargetProfile) -> String {
@@ -137,8 +131,6 @@ impl StdLib {
         asm.push_str(&Self::generate_syscalls(target_profile));
 
         asm.push_str(&Self::generate_math());
-
-        asm.push_str(&Self::generate_hash());
 
         asm.push_str(&Self::generate_env(target_profile));
 
@@ -226,7 +218,6 @@ impl StdLib {
 
         let load_script_syscall = match target_profile {
             TargetProfile::Ckb => 2052,
-            TargetProfile::Spora | TargetProfile::PortableCell => 2075,
         };
         asm.push_str(&format!("# Syscall: load_script ({})\n", load_script_syscall));
         asm.push_str(".global __syscall_load_script\n");
@@ -359,70 +350,19 @@ impl StdLib {
         asm
     }
 
-    fn generate_hash() -> String {
-        let mut asm = String::new();
-
-        asm.push_str("# Hash: blake3 (Spora extension)\n");
-        asm.push_str(".global __hash_blake3\n");
-        asm.push_str("__hash_blake3:\n");
-        asm.push_str("    addi sp, sp, -16\n");
-        asm.push_str("    sd ra, 8(sp)\n");
-        asm.push_str("    # a0 = data pointer, a1 = data length\n");
-        asm.push_str("    # result (32 bytes) returned in buffer pointed by a0\n");
-        asm.push_str("    li a7, 3001  # Spora BLAKE3_HASH syscall\n");
-        asm.push_str("    ecall\n");
-        asm.push_str("    ld ra, 8(sp)\n");
-        asm.push_str("    addi sp, sp, 16\n");
-        asm.push_str("    ret\n\n");
-
-        asm
-    }
-
     fn generate_env(target_profile: TargetProfile) -> String {
         let mut asm = String::new();
-
-        // env_current_daa_score
-        asm.push_str("# Env: current_daa_score\n");
-        asm.push_str(".global __env_current_daa_score\n");
-        asm.push_str("__env_current_daa_score:\n");
-        if target_profile == TargetProfile::Ckb {
-            asm.push_str("    # rejected by ckb target-profile policy\n");
-            asm.push_str(&format!(
-                "    # cellscript runtime error {} {}\n",
-                CellScriptRuntimeError::ConsumeInvalidOperand.code(),
-                CellScriptRuntimeError::ConsumeInvalidOperand.name()
-            ));
-            asm.push_str(&format!("    li a0, {}\n", CellScriptRuntimeError::ConsumeInvalidOperand.code()));
-            asm.push_str("    ret\n\n");
-        } else {
-            asm.push_str("    addi sp, sp, -16\n");
-            asm.push_str("    sd ra, 8(sp)\n");
-            asm.push_str("    # Load from header dep\n");
-            asm.push_str("    li a7, 2072  # LOAD_HEADER\n");
-            asm.push_str("    li a0, 0     # header index\n");
-            asm.push_str("    li a1, 0     # field = DAA score\n");
-            asm.push_str("    ecall\n");
-            asm.push_str("    ld ra, 8(sp)\n");
-            asm.push_str("    addi sp, sp, 16\n");
-            asm.push_str("    ret\n\n");
-        }
 
         asm.push_str("# Env: current_timepoint\n");
         asm.push_str(".global __env_current_timepoint\n");
         asm.push_str("__env_current_timepoint:\n");
         asm.push_str("    addi sp, sp, -16\n");
         asm.push_str("    sd ra, 8(sp)\n");
-        if target_profile == TargetProfile::Ckb {
-            asm.push_str("    # Load CKB epoch number from header dep\n");
-            asm.push_str("    li a7, 2082  # LOAD_HEADER_BY_FIELD\n");
-            asm.push_str("    li a0, 0     # header index\n");
-            asm.push_str("    li a1, 0     # field = epoch number\n");
-        } else {
-            asm.push_str("    # Load Spora DAA score from header dep\n");
-            asm.push_str("    li a7, 2072  # LOAD_HEADER\n");
-            asm.push_str("    li a0, 0     # header index\n");
-            asm.push_str("    li a1, 0     # field = DAA score\n");
-        }
+        // All profiles use CKB epoch number
+        asm.push_str("    # Load CKB epoch number from header dep\n");
+        asm.push_str("    li a7, 2082  # LOAD_HEADER_BY_FIELD\n");
+        asm.push_str("    li a0, 0     # header index\n");
+        asm.push_str("    li a1, 0     # field = epoch number\n");
         asm.push_str("    ecall\n");
         asm.push_str("    ld ra, 8(sp)\n");
         asm.push_str("    addi sp, sp, 16\n");
@@ -590,7 +530,7 @@ impl SchedulerMetadata {
                 out.push(scheduler_operation_id(&access.operation));
                 out.push(scheduler_source_id(&access.source));
                 out.extend_from_slice(&access.index.to_le_bytes());
-                out.extend_from_slice(blake3::hash(access.binding.as_bytes()).as_bytes());
+                out.extend_from_slice(&ckb_blake2b256(access.binding.as_bytes()));
                 out
             })
             .collect::<Vec<_>>();
@@ -680,8 +620,6 @@ mod tests {
     fn test_std_functions() {
         let funcs = StdLib::functions();
         assert!(!funcs.is_empty());
-        assert!(!StdLib::is_std_function("borsh_serialize_u64"));
-        assert!(!StdLib::is_std_function("borsh_deserialize_u64"));
         assert!(StdLib::is_std_function("syscall_load_cell"));
         assert!(StdLib::is_std_function("syscall_load_script"));
         assert!(StdLib::is_std_function("syscall_load_cell_by_field"));
@@ -700,17 +638,16 @@ mod tests {
     #[test]
     fn test_generate_assembly() {
         let asm = StdLib::generate_assembly();
-        assert!(!asm.contains("__borsh_serialize_u64"));
-        assert!(!asm.contains("__borsh_deserialize_u64"));
         assert!(asm.contains("__syscall_load_cell"));
         assert!(asm.contains("__syscall_load_script:\n"));
         assert!(asm.contains("__syscall_load_cell_by_field:\n"));
         assert!(asm.contains("__syscall_load_cell_data:\n"));
-        assert!(asm.contains("li a7, 2075"));
+        // Default is now CKB profile which uses 2052 for load_script
+        assert!(asm.contains("li a7, 2052"));
         assert!(asm.contains("li a7, 2081"));
         assert!(asm.contains("li a7, 2092"));
-        assert!(asm.contains("li a7, 3001  # Spora BLAKE3_HASH syscall"));
-        assert!(!asm.contains("BLAKE3 syscall number (TBD)"));
+        assert!(!asm.contains("__hash"));
+        assert!(!asm.contains("3001"));
         assert!(!asm.contains("li a7, 2100"));
         assert!(asm.contains("__math_isqrt"));
     }
@@ -721,8 +658,7 @@ mod tests {
         assert!(asm.contains("# Syscall: load_script (2052)"));
         assert!(asm.contains("li a7, 2052"));
         assert!(!asm.contains("li a7, 2075"));
-        assert!(asm.contains("current_daa_score"));
-        assert!(asm.contains("rejected by ckb target-profile policy"));
+        assert!(asm.contains("current_timepoint"));
         assert!(asm.contains("__ckb_input_since"));
         assert!(asm.contains("li a7, 2083  # LOAD_INPUT_BY_FIELD"));
         assert!(asm.contains("Source::GroupInput"));

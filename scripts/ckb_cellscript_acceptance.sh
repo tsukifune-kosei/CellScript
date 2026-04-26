@@ -33,8 +33,8 @@ Usage: scripts/ckb_cellscript_acceptance.sh [--ckb-repo <path>] [--ckb-bin <path
 
 Runs CellScript CKB compatibility acceptance against a local CKB integration
 devnet from the parent CKB repository. The default mode is the production gate:
-it fails closed if any CKB coverage still depends on standalone portable
-harnesses, expected fail-closed entries, or non-original artifacts.
+it fails closed if any CKB coverage still depends on synthetic harnesses,
+expected fail-closed entries, or non-original artifacts.
 
 Options:
   --ckb-repo <path>   Parent CKB checkout. Defaults to ../ckb.
@@ -277,6 +277,23 @@ NON_PRODUCTION_EXAMPLES = [
     # bundled-contract matrix.
     "registry.cell",
 ]
+EXAMPLE_SCOPE = {
+    "production_bundled_examples": EXAMPLES,
+    "non_production_language_examples": NON_PRODUCTION_EXAMPLES,
+    "production_scope_note": (
+        "Only production_bundled_examples are deployed and action-exercised by this CKB production "
+        "acceptance report. non_production_language_examples are covered by compiler/tooling tests unless "
+        "they are promoted into production_bundled_examples."
+    ),
+}
+LOCK_ACCEPTANCE_SCOPE = {
+    "strict_compile_only": True,
+    "onchain_lock_spend_matrix": False,
+    "scope_note": (
+        "Scoped lock entries are strict-compiled under the CKB profile and counted as strict lock coverage. "
+        "They are not counted as builder-backed on-chain lock spend/deny-spend transactions."
+    ),
+}
 TRUNCATE = 12000
 UNEXPECTED_PROFILE_TRAILER = bytes.fromhex("53504f5241424900")
 
@@ -1232,6 +1249,7 @@ ORIGINAL_SCOPED_LOCKS = {
     "nft.cell": ["nft_ownership", "listing_seller", "offer_buyer", "valid_royalty", "collection_creator"],
     "timelock.cell": ["can_unlock_lock", "is_owner", "asset_matches", "not_expired", "emergency_approved"],
     "multisig.cell": ["is_signer_lock", "can_execute", "can_cancel", "has_enough_signatures", "not_expired"],
+    "vesting.cell": ["vesting_admin"],
 }
 
 ORIGINAL_SCOPED_ACTION_FAIL_CLOSED = {}
@@ -1283,7 +1301,7 @@ EXPECTED_SOURCE_LOCKS = {
     "nft.cell": ["nft_ownership", "listing_seller", "offer_buyer", "valid_royalty", "collection_creator"],
     "timelock.cell": ["can_unlock_lock", "is_owner", "asset_matches", "emergency_approved", "not_expired"],
     "multisig.cell": ["is_signer_lock", "can_execute", "can_cancel", "has_enough_signatures", "not_expired"],
-    "vesting.cell": [],
+    "vesting.cell": ["vesting_admin"],
     "amm_pool.cell": [],
     "launch.cell": [],
 }
@@ -1831,13 +1849,15 @@ report = {
     "status": "artifact-verified",
     "acceptance_mode": acceptance_mode,
     "ckb_acceptance_scope": (
-        "Production mode is a hard gate and must not depend on standalone portable harnesses, "
+        "Production mode is a hard gate and must not depend on synthetic harnesses, "
         "expected fail-closed entries, or non-original artifacts. Bounded mode is a development coverage matrix only."
     ),
     "cellc": str(cellc),
     "bundled_examples_exact_order": EXAMPLES,
     "bundled_examples_count": len(EXAMPLES),
     "non_production_examples": NON_PRODUCTION_EXAMPLES,
+    "example_scope": EXAMPLE_SCOPE,
+    "lock_acceptance_scope": LOCK_ACCEPTANCE_SCOPE,
     "bundled_examples_strict_admitted": [
         record["name"]
         for record in bundled_examples
@@ -1911,7 +1931,7 @@ def production_gate_failures(report):
     ]
     if non_original_harnesses:
         failures.append(
-            "on-chain action harnesses still use standalone or portable sources: "
+            "on-chain action harnesses still use synthetic or non-original sources: "
             + ", ".join(non_original_harnesses)
         )
     coverage = report.get("ckb_business_coverage") or {}
@@ -1925,7 +1945,7 @@ production_failures = production_gate_failures(report)
 report["production_gate"] = {
     "status": "passed" if not production_failures else "failed",
     "failures": production_failures,
-    "requires_no_standalone_or_portable_harnesses": True,
+    "requires_original_scoped_harnesses": True,
     "requires_no_expected_fail_closed_entries": True,
     "requires_all_bundled_examples_strict_original_ckb": True,
 }

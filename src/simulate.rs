@@ -7,7 +7,7 @@ pub enum SimValue {
     Bool(bool),
     String(String),
     Unit,
-    Symbolic { ty: String, description: String },
+    Simulated { ty: String, description: String },
     Struct { name: String, fields: Vec<(String, SimValue)> },
     Array(Vec<SimValue>),
     Tuple(Vec<SimValue>),
@@ -20,7 +20,7 @@ impl std::fmt::Display for SimValue {
             SimValue::Bool(b) => write!(f, "{}", b),
             SimValue::String(s) => write!(f, "\"{}\"", s),
             SimValue::Unit => write!(f, "()"),
-            SimValue::Symbolic { ty, description } => write!(f, "<simulated {} ({})>", ty, description),
+            SimValue::Simulated { ty, description } => write!(f, "<simulated {} ({})>", ty, description),
             SimValue::Struct { name, fields } => {
                 write!(f, "{} {{ ", name)?;
                 let parts: Vec<String> = fields.iter().map(|(n, v)| format!("{}: {}", n, v)).collect();
@@ -97,7 +97,7 @@ impl std::fmt::Display for SimulateResult {
         writeln!(f, "Simulated entry: {}", self.entry_name)?;
         writeln!(f, "Steps: {}", self.steps)?;
         if self.has_cell_ops {
-            writeln!(f, "Cell operations: yes (symbolic)")?;
+            writeln!(f, "Cell operations: yes (simulated)")?;
         } else {
             writeln!(f, "Cell operations: none (pure computation)")?;
         }
@@ -301,7 +301,7 @@ impl SimulateInterpreter {
                         .find(|(n, _)| n == &access.field)
                         .map(|(_, v)| v.clone())
                         .ok_or_else(|| SimulateError::UndefinedVariable { name: access.field.clone() }),
-                    _ => Ok(SimValue::Symbolic { ty: "field".to_string(), description: format!("{}.{}", obj, access.field) }),
+                    _ => Ok(SimValue::Simulated { ty: "field".to_string(), description: format!("{}.{}", obj, access.field) }),
                 }
             }
             Expr::Index(index) => {
@@ -311,7 +311,7 @@ impl SimulateInterpreter {
                     (SimValue::Array(items), SimValue::Integer(i)) => {
                         items.get(*i as usize).cloned().ok_or_else(|| SimulateError::UndefinedVariable { name: format!("[{}]", i) })
                     }
-                    _ => Ok(SimValue::Symbolic { ty: "index".to_string(), description: format!("{}[{}]", obj, idx) }),
+                    _ => Ok(SimValue::Simulated { ty: "index".to_string(), description: format!("{}[{}]", obj, idx) }),
                 }
             }
             Expr::Create(create) => {
@@ -322,26 +322,26 @@ impl SimulateInterpreter {
                     .map(|(name, expr)| {
                         let value = self
                             .eval_expr(expr)
-                            .unwrap_or_else(|_| SimValue::Symbolic { ty: "unknown".to_string(), description: "...".to_string() });
+                            .unwrap_or_else(|_| SimValue::Simulated { ty: "unknown".to_string(), description: "...".to_string() });
                         (name.clone(), value.to_string())
                     })
                     .collect();
                 self.trace.push(TraceEvent::Create { ty: create.ty.clone(), fields: fields.clone() });
-                Ok(SimValue::Symbolic { ty: create.ty.clone(), description: "created cell".to_string() })
+                Ok(SimValue::Simulated { ty: create.ty.clone(), description: "created cell".to_string() })
             }
             Expr::Consume(consume) => {
                 self.has_cell_ops = true;
                 let value = self.eval_expr(&consume.expr)?;
                 let desc = value.to_string();
                 self.trace.push(TraceEvent::Consume { description: desc.clone() });
-                Ok(SimValue::Symbolic { ty: "consumed".to_string(), description: desc })
+                Ok(SimValue::Simulated { ty: "consumed".to_string(), description: desc })
             }
             Expr::Transfer(transfer) => {
                 self.has_cell_ops = true;
                 let value = self.eval_expr(&transfer.expr)?;
                 let to = self.eval_expr(&transfer.to)?;
                 self.trace.push(TraceEvent::Transfer { description: value.to_string(), to: to.to_string() });
-                Ok(SimValue::Symbolic { ty: "transferred".to_string(), description: "transfer".to_string() })
+                Ok(SimValue::Simulated { ty: "transferred".to_string(), description: "transfer".to_string() })
             }
             Expr::Destroy(destroy) => {
                 self.has_cell_ops = true;
@@ -352,26 +352,26 @@ impl SimulateInterpreter {
             Expr::ReadRef(read_ref) => {
                 self.has_cell_ops = true;
                 self.trace.push(TraceEvent::ReadRef { ty: read_ref.ty.clone() });
-                Ok(SimValue::Symbolic { ty: read_ref.ty.clone(), description: "read_ref cell dep".to_string() })
+                Ok(SimValue::Simulated { ty: read_ref.ty.clone(), description: "read_ref cell dep".to_string() })
             }
             Expr::Claim(claim) => {
                 self.has_cell_ops = true;
                 let value = self.eval_expr(&claim.receipt)?;
                 self.trace.push(TraceEvent::Claim { description: value.to_string() });
-                Ok(SimValue::Symbolic { ty: "claimed".to_string(), description: "claim".to_string() })
+                Ok(SimValue::Simulated { ty: "claimed".to_string(), description: "claim".to_string() })
             }
             Expr::Settle(settle) => {
                 self.has_cell_ops = true;
                 let value = self.eval_expr(&settle.expr)?;
                 self.trace.push(TraceEvent::Settle { description: value.to_string() });
-                Ok(SimValue::Symbolic { ty: "settled".to_string(), description: "settle".to_string() })
+                Ok(SimValue::Simulated { ty: "settled".to_string(), description: "settle".to_string() })
             }
             Expr::Assert(assert) => {
                 let cond = self.eval_expr(&assert.condition)?;
                 let msg = self.eval_expr(&assert.message)?;
                 self.trace.push(TraceEvent::Assert { condition: cond.clone(), message: msg.to_string() });
                 if !self.is_truthy(&cond) {
-                    Ok(SimValue::Symbolic { ty: "assert_failed".to_string(), description: msg.to_string() })
+                    Ok(SimValue::Simulated { ty: "assert_failed".to_string(), description: msg.to_string() })
                 } else {
                     Ok(SimValue::Unit)
                 }
@@ -404,7 +404,7 @@ impl SimulateInterpreter {
                     _ => Ok(value),
                 }
             }
-            Expr::Range(_range) => Ok(SimValue::Symbolic { ty: "range".to_string(), description: "range".to_string() }),
+            Expr::Range(_range) => Ok(SimValue::Simulated { ty: "range".to_string(), description: "range".to_string() }),
             Expr::StructInit(init) => {
                 let fields: Vec<(String, SimValue)> = init
                     .fields
@@ -412,13 +412,13 @@ impl SimulateInterpreter {
                     .map(|(name, expr)| {
                         let value = self
                             .eval_expr(expr)
-                            .unwrap_or_else(|_| SimValue::Symbolic { ty: "unknown".to_string(), description: "...".to_string() });
+                            .unwrap_or_else(|_| SimValue::Simulated { ty: "unknown".to_string(), description: "...".to_string() });
                         (name.clone(), value)
                     })
                     .collect();
                 Ok(SimValue::Struct { name: init.ty.clone(), fields })
             }
-            Expr::Match(_match) => Ok(SimValue::Symbolic { ty: "match".to_string(), description: "match expression".to_string() }),
+            Expr::Match(_match) => Ok(SimValue::Simulated { ty: "match".to_string(), description: "match expression".to_string() }),
             Expr::Assign(assign) => {
                 let value = self.eval_expr(&assign.value)?;
                 if let Expr::Identifier(name) = assign.target.as_ref() {
@@ -437,14 +437,14 @@ impl SimulateInterpreter {
                 BinaryOp::Mul => SimValue::Integer(l.wrapping_mul(*r)),
                 BinaryOp::Div => {
                     if *r == 0 {
-                        SimValue::Symbolic { ty: "div_zero".to_string(), description: "division by zero".to_string() }
+                        SimValue::Simulated { ty: "div_zero".to_string(), description: "division by zero".to_string() }
                     } else {
                         SimValue::Integer(l / r)
                     }
                 }
                 BinaryOp::Mod => {
                     if *r == 0 {
-                        SimValue::Symbolic { ty: "mod_zero".to_string(), description: "modulo by zero".to_string() }
+                        SimValue::Simulated { ty: "mod_zero".to_string(), description: "modulo by zero".to_string() }
                     } else {
                         SimValue::Integer(l % r)
                     }
@@ -465,7 +465,7 @@ impl SimulateInterpreter {
                 BinaryOp::Or => SimValue::Bool(*l || *r),
                 _ => return Err(SimulateError::TypeError { expected: "integer".to_string(), got: "bool".to_string() }),
             }),
-            _ => Ok(SimValue::Symbolic { ty: "binary".to_string(), description: format!("{:?} {:?} {:?}", left, op, right) }),
+            _ => Ok(SimValue::Simulated { ty: "binary".to_string(), description: format!("{:?} {:?} {:?}", left, op, right) }),
         }
     }
 
@@ -474,14 +474,14 @@ impl SimulateInterpreter {
             (UnaryOp::Neg, SimValue::Integer(n)) => Ok(SimValue::Integer(n.wrapping_neg())),
             (UnaryOp::Not, SimValue::Bool(b)) => Ok(SimValue::Bool(!b)),
             (UnaryOp::Not, SimValue::Integer(n)) => Ok(SimValue::Bool(*n == 0)),
-            _ => Ok(SimValue::Symbolic { ty: "unary".to_string(), description: format!("{:?} {:?}", op, value) }),
+            _ => Ok(SimValue::Simulated { ty: "unary".to_string(), description: format!("{:?} {:?}", op, value) }),
         }
     }
 
     fn eval_call(&mut self, call: &CallExpr) -> Result<SimValue, SimulateError> {
         let func_name = match call.func.as_ref() {
             Expr::Identifier(name) => name.clone(),
-            _ => return Ok(SimValue::Symbolic { ty: "call".to_string(), description: "indirect call".to_string() }),
+            _ => return Ok(SimValue::Simulated { ty: "call".to_string(), description: "indirect call".to_string() }),
         };
 
         let args: Vec<SimValue> = call.args.iter().map(|e| self.eval_expr(e)).collect::<Result<_, _>>()?;
@@ -496,7 +496,7 @@ impl SimulateInterpreter {
                 if let Some(SimValue::Array(items)) = args.first() {
                     return Ok(SimValue::Integer(items.len() as u64));
                 }
-                return Ok(SimValue::Symbolic { ty: "len".to_string(), description: "len()".to_string() });
+                return Ok(SimValue::Simulated { ty: "len".to_string(), description: "len()".to_string() });
             }
             _ => {}
         }
@@ -507,7 +507,7 @@ impl SimulateInterpreter {
             return self.simulate_function(&func_name, &args);
         }
 
-        Ok(SimValue::Symbolic { ty: "call_result".to_string(), description: format!("{}()", func_name) })
+        Ok(SimValue::Simulated { ty: "call_result".to_string(), description: format!("{}()", func_name) })
     }
 
     fn bind_pattern(&mut self, pattern: &BindingPattern, value: SimValue) {
@@ -532,7 +532,7 @@ impl SimulateInterpreter {
             SimValue::Bool(b) => *b,
             SimValue::Integer(n) => *n != 0,
             SimValue::Unit => false,
-            SimValue::Symbolic { .. } => true,
+            SimValue::Simulated { .. } => true,
             _ => true,
         }
     }

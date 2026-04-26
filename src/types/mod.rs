@@ -2125,7 +2125,7 @@ impl<'a> TypeChecker<'a> {
                         }
                     }
                     return Ok(match (prefix, suffix) {
-                        ("env", "current_daa_score" | "current_timepoint") => {
+                        ("env", "current_timepoint") => {
                             self.validate_builtin_arity(name, 0, arg_types, call.span)?;
                             Type::U64
                         }
@@ -3013,9 +3013,9 @@ mod tests {
     fn imported_type_ids_must_not_collide_in_visible_module_scope() {
         let left = source_module(
             r#"
-module spora::left
+module cellscript::left
 
-#[type_id("spora::asset::Token:v1")]
+#[type_id("cellscript::asset::Token:v1")]
 resource TokenA has store {
     amount: u64
 }
@@ -3023,9 +3023,9 @@ resource TokenA has store {
         );
         let right = source_module(
             r#"
-module spora::right
+module cellscript::right
 
-#[type_id("spora::asset::Token:v1")]
+#[type_id("cellscript::asset::Token:v1")]
 resource TokenB has store {
     amount: u64
 }
@@ -3035,8 +3035,8 @@ resource TokenB has store {
             r#"
 module app
 
-use spora::left::TokenA
-use spora::right::TokenB
+use cellscript::left::TokenA
+use cellscript::right::TokenB
 
 action main(a: TokenA) -> u64 {
     return a.amount
@@ -3051,7 +3051,7 @@ action main(a: TokenA) -> u64 {
 
         let err = check_with_resolver(&app, &resolver, &app.name).unwrap_err();
 
-        assert!(err.message.contains("duplicate type_id 'spora::asset::Token:v1'"), "unexpected error: {}", err.message);
+        assert!(err.message.contains("duplicate type_id 'cellscript::asset::Token:v1'"), "unexpected error: {}", err.message);
     }
 
     #[test]

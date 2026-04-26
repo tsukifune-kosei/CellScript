@@ -1,10 +1,10 @@
-CellScript is a small language for Cell-based smart contracts. You describe the Cell state you want to protect, the actions that may change it, and the lock rules that authorize it. The compiler turns that `.cell` source into ckb-vm compatible RISC-V assembly or ELF artifacts and writes metadata that explains what was built.
+CellScript is a small language for Cell-based smart contracts on CKB. You describe the Cell state you want to protect, the actions that may change it, and the lock rules that authorize it. The compiler turns that `.cell` source into ckb-vm compatible RISC-V assembly or ELF artifacts and writes metadata that explains what was built.
 
 This wiki is meant to be read as a guided path. Each chapter introduces one idea, shows the smallest useful commands, and then points to the production checks that matter before deployment.
 
 ## How to Read This Wiki
 
-If you are new to CellScript, read the tutorials in order. The early chapters focus on the language itself: modules, resources, actions, locks, and Cell effects. The later chapters focus on packaging, target profiles, metadata, release evidence, editor tooling, and the bundled examples.
+If you are new to CellScript, read the tutorials in order. The early chapters focus on the language itself: modules, resources, actions, locks, and Cell effects. The later chapters focus on packaging, the CKB target profile, metadata, release evidence, editor tooling, and the bundled examples.
 
 If you already have a contract, jump to the page that matches your current question:
 
@@ -16,14 +16,14 @@ If you already have a contract, jump to the page that matches your current quest
 
 ## Tutorial Path
 
-1. [Getting Started](Tutorial-01-Getting-Started): build the compiler, compile one example, and verify the artifact.
-2. [Language Basics](Tutorial-02-Language-Basics): learn the shape of a `.cell` file.
-3. [Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects): understand how values move through a Cell transaction.
-4. [Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow): create a package, build it, check it, and inspect reports.
-5. [CKB Target Profile](Tutorial-05-CKB-Target-Profile): choose the right runtime assumptions.
-6. [Metadata, Verification, and Production Gates](Tutorial-06-Metadata-Verification-and-Production-Gates): know what artifact verification proves and what it does not prove.
-7. [LSP and Tooling](Tutorial-07-LSP-and-Tooling): use editor feedback and command-backed reports.
-8. [Bundled Example Contracts](Tutorial-08-Bundled-Example-Contracts): study the examples in a useful order.
+1. [Getting Started](Tutorial-01-Getting-Started.md): build the compiler, compile one example, and verify the artifact.
+2. [Language Basics](Tutorial-02-Language-Basics.md): learn the shape of a `.cell` file.
+3. [Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects.md): understand how values move through a Cell transaction.
+4. [Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow.md): create a package, build it, check it, and inspect reports.
+5. [CKB Target Profiles](Tutorial-05-CKB-Target-Profiles.md): choose the right runtime assumptions.
+6. [Metadata, Verification, and Production Gates](Tutorial-06-Metadata-Verification-and-Production-Gates.md): know what artifact verification proves and what it does not prove.
+7. [LSP and Tooling](Tutorial-07-LSP-and-Tooling.md): use editor feedback and command-backed reports.
+8. [Bundled Example Contracts](Tutorial-08-Bundled-Example-Contracts.md): study the examples in a useful order.
 
 ## What 0.12 Gives You
 
@@ -33,13 +33,13 @@ CellScript 0.12 supports:
 - Cell-native persistent values through `resource`, `shared`, and `receipt`.
 - Explicit Cell effects: `consume`, `create`, `read_ref`, `transfer`, `destroy`, `claim`, and `settle`.
 - RISC-V assembly and ELF output for ckb-vm compatible execution.
-- `ckb` and `portable-cell` target profiles.
+- CKB target-profile builds.
 - Metadata sidecars and artifact verification.
 - Local package workflows based on `Cell.toml`, local source roots, path dependencies, lockfile checks, build/check/doc/fmt, and production policy flags. Remote registry workflows remain experimental/fail-closed.
 - LSP and VS Code tooling for diagnostics, hover, completion, definitions, references, rename, formatting, signature help, folding, document symbols, and compiler-backed reports.
-- Production-facing constraints and evidence surfaces for runtime error codes, entry witness ABI, CKB capacity/tx-size requirements, and CKB `hash_type`/DepGroup policy.
+- Production-facing constraints and evidence surfaces for runtime error codes, entry witness ABI, CKB capacity/tx-size requirements, CKB `hash_type`/DepGroup policy, and CKB scheduler metadata.
 
-CellScript 0.12 is also the first release aimed at an initial stable foundation. That does not mean every future language feature is frozen. It means the current compiler, profiles, examples, metadata, LSP, and package workflow are being documented and tested as a coherent base.
+CellScript 0.12 is also the first release aimed at an initial stable foundation. That does not mean every future language feature is frozen. It means the current compiler, CKB profile, examples, metadata, LSP, and package workflow are being documented and tested as a coherent base.
 
 ## Before You Call It Production
 
@@ -56,6 +56,14 @@ Release-facing CKB production evidence comes from the CellScript repository root
 - `scripts/validate_ckb_cellscript_production_evidence.py`
 
 The current bundled example suite is seven contracts: `amm_pool.cell`, `launch.cell`, `multisig.cell`, `nft.cell`, `timelock.cell`, `token.cell`, and `vesting.cell`.
+
+## Reference Examples
+
+- [CKB hashing workflow](../examples/ckb_hashing.md)
+- [Collections matrix](../examples/collections_matrix.md)
+- [Deployment manifest](../examples/deployment_manifest.md)
+- [Mutate append](../examples/mutate_append.md)
+- [0.13 roadmap](../CELLSCRIPT_0_13_ROADMAP.md)
 
 ## First Run
 

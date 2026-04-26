@@ -5,7 +5,7 @@ CellScript is built around explicit Cell transaction effects. An effect is not j
 - how linear resources move through an action;
 - why `create`, `consume`, `destroy`, `claim`, and `settle` are explicit;
 - how mutable state turns into replacement-output style transitions;
-- what to avoid when the same source must stay portable to CKB.
+- what to avoid when a source depends on unsupported CKB runtime behavior.
 
 ## The Main Effects
 
@@ -69,17 +69,17 @@ Use read-only forms for configuration, registry data, or dependency-backed state
 
 The compiler records read-only accesses so schedulers, wallet builders, and policy checks can decide which CellDeps must be present.
 
-## CKB Portability Notes
+## CKB Profile Notes
 
 The CKB profile is intentionally strict. If the compiler rejects a shape that depends on unsupported runtime behavior, that is the right outcome:
 
-- CKB syscall numbers and source constants;
-- CKB-style ELF packaging;
-- CKB Molecule/BLAKE2b conventions where applicable;
+- only CKB syscall numbers and source constants are used;
+- CKB-style ELF packaging is required;
+- CKB Molecule/BLAKE2b conventions apply where applicable;
 - unsupported stateful shapes must fail closed.
 
-For portable code, keep persistent schemas fixed and avoid target-specific scheduler, time, and helper features.
+For CKB code, keep persistent schemas fixed and avoid unsupported scheduler and helper features.
 
 ## Next
 
-After you know how values move, continue with [Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow).
+After you know how values move, continue with [Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow.md).

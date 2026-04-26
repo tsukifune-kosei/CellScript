@@ -2110,7 +2110,7 @@ receipt Ticket has store {
     }
 
     #[test]
-    fn test_lowering_diagnostics_warn_for_symbolic_runtime_actions() {
+    fn test_lowering_diagnostics_warn_for_fail_closed_runtime_actions() {
         let mut server = LspServer::new();
         let uri = "file:///metadata_diagnostic.cell".to_string();
         let source = r#"

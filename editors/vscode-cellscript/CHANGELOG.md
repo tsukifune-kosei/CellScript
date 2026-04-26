@@ -9,7 +9,7 @@
   rename, signature help, document highlight, folding ranges, selection ranges,
   document symbols, code actions, and document formatting.
 - CLI-backed commands continue to work for compile, metadata, constraints,
-  production report, and target-profile selection.
+  production report, and CKB target-profile arguments.
 - Updated extension architecture: VS Code → LanguageClient → `cellc lsp --stdio`
   → `CellScriptBackend` (tower-lsp) → in-process `LspServer`.
 - Removed stale validation-mode and validation-debounce settings (diagnostics
@@ -21,7 +21,7 @@
 - Promoted the extension from a thin syntax package to stable local editor
   tooling for CellScript authoring.
 - Added compiler-backed commands for validation, scratch compilation, metadata,
-  constraints, formatting, and target-profile selection.
+  constraints, formatting, and target-profile arguments.
 - Added `CellScript: Show Production Report`, which combines compiler version,
   artifact metadata, constraints, and release-audit boundary notes for the
   active `.cell` file.

@@ -1,4 +1,4 @@
-//! CellScript - Domain-specific language compiler for Spora blockchain
+//! CellScript - Domain-specific language compiler for CKB blockchain
 //! Currently the backend can output RISC-V assembly or ELF artifacts.
 
 #![allow(clippy::ptr_arg, clippy::too_many_arguments)]
@@ -43,7 +43,7 @@ pub struct CompileOptions {
     pub debug: bool,
     /// Target artifact
     pub target: Option<String>,
-    /// Target chain/profile. spora and ckb can produce artifacts; portable-cell is a source compatibility check profile.
+    /// Target chain/profile. Only CKB is supported.
     pub target_profile: Option<String>,
 }
 
@@ -55,7 +55,7 @@ fn validate_compile_options(options: &CompileOptions) -> Result<()> {
 }
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
-const DEFAULT_TARGET_PROFILE: &str = "spora";
+const DEFAULT_TARGET_PROFILE: &str = "ckb";
 pub const METADATA_SCHEMA_VERSION: u32 = 30;
 const STACK_COLLECTION_BACKING_BYTES: usize = 256;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
@@ -84,21 +84,14 @@ const CKB_TYPE_ID_WASM_SETTING: &str = "ckbTypeIdOutputs";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetProfile {
-    Spora,
     Ckb,
-    PortableCell,
 }
 
 impl TargetProfile {
     pub fn from_name(name: &str) -> Result<Self> {
         match name {
-            "spora" => Ok(Self::Spora),
             "ckb" => Ok(Self::Ckb),
-            "portable-cell" => Ok(Self::PortableCell),
-            other => Err(CompileError::without_span(format!(
-                "unsupported target profile '{}'; supported profiles: spora, ckb, portable-cell",
-                other
-            ))),
+            other => Err(CompileError::without_span(format!("unsupported target profile '{}'; supported profile: ckb", other))),
         }
     }
 
@@ -113,40 +106,20 @@ impl TargetProfile {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Spora => "spora",
             Self::Ckb => "ckb",
-            Self::PortableCell => "portable-cell",
         }
     }
 
     fn ensure_compile_supported(self) -> Result<()> {
-        match self {
-            Self::Spora | Self::Ckb => Ok(()),
-            Self::PortableCell => Err(CompileError::without_span(
-                "target profile 'portable-cell' is a source compatibility profile; compile with 'spora' or 'ckb' to produce artifacts",
-            )),
-        }
+        Ok(())
     }
 
-    fn embeds_vm_abi_trailer(self, artifact_format: ArtifactFormat) -> bool {
-        self == Self::Spora && artifact_format == ArtifactFormat::RiscvElf
+    fn embeds_vm_abi_trailer(self, _artifact_format: ArtifactFormat) -> bool {
+        false
     }
 
     fn metadata(self, artifact_format: ArtifactFormat) -> TargetProfileMetadata {
         match self {
-            Self::Spora => TargetProfileMetadata {
-                name: self.name().to_string(),
-                target_chain: "spora".to_string(),
-                vm_abi: format!("molecule-0x{:04x}", MOLECULE_VM_ABI_VERSION),
-                hash_domain: "spora-domain-separated-blake3".to_string(),
-                syscall_set: "spora-ckb-style-load-syscalls".to_string(),
-                artifact_packaging: match artifact_format {
-                    ArtifactFormat::RiscvAssembly => "spora-asm-sidecar".to_string(),
-                    ArtifactFormat::RiscvElf => "spora-elf-sporabi-trailer".to_string(),
-                },
-                header_abi: "spora-dag-header".to_string(),
-                scheduler_abi: "spora-scheduler-witness-v1-molecule".to_string(),
-            },
             Self::Ckb => TargetProfileMetadata {
                 name: self.name().to_string(),
                 target_chain: "ckb".to_string(),
@@ -155,19 +128,9 @@ impl TargetProfile {
                 syscall_set: "ckb-mainnet-syscalls".to_string(),
                 artifact_packaging: match artifact_format {
                     ArtifactFormat::RiscvAssembly => "ckb-asm-sidecar".to_string(),
-                    ArtifactFormat::RiscvElf => "ckb-elf-no-sporabi-trailer".to_string(),
+                    ArtifactFormat::RiscvElf => "ckb-elf".to_string(),
                 },
                 header_abi: "ckb-header".to_string(),
-                scheduler_abi: "none".to_string(),
-            },
-            Self::PortableCell => TargetProfileMetadata {
-                name: self.name().to_string(),
-                target_chain: "portable-cell-source-subset".to_string(),
-                vm_abi: "target-selected-molecule".to_string(),
-                hash_domain: "target-selected".to_string(),
-                syscall_set: "portable-cell-common-subset".to_string(),
-                artifact_packaging: "target-selected".to_string(),
-                header_abi: "portable-cell-common-subset".to_string(),
                 scheduler_abi: "none".to_string(),
             },
         }
@@ -254,13 +217,13 @@ pub struct CompileMetadata {
     pub artifact_format: String,
     pub target_profile: TargetProfileMetadata,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub artifact_hash_blake3: Option<String>,
+    pub artifact_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_size_bytes: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_hash_blake3: Option<String>,
+    pub source_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_content_hash_blake3: Option<String>,
+    pub source_content_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_units: Vec<SourceUnitMetadata>,
     pub lowering: LoweringMetadata,
@@ -289,7 +252,7 @@ pub struct MoleculeSchemaManifestMetadata {
     pub dynamic_type_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entries: Vec<MoleculeSchemaManifestEntryMetadata>,
-    pub manifest_hash_blake3: String,
+    pub manifest_hash: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -301,7 +264,7 @@ pub struct MoleculeSchemaManifestEntryMetadata {
     pub encoded_size: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dynamic_fields: Vec<String>,
-    pub schema_hash_blake3: String,
+    pub schema_hash: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_offsets: Vec<MoleculeSchemaManifestFieldMetadata>,
     pub target_profile_compatible: bool,
@@ -328,8 +291,6 @@ pub struct ConstraintsMetadata {
     pub runtime_errors: Vec<RuntimeErrorConstraintsMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ckb: Option<CkbConstraintsMetadata>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub spora: Option<SporaConstraintsMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -503,32 +464,11 @@ pub struct CkbCapacityEvidenceContractMetadata {
     pub status: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SporaConstraintsMetadata {
-    pub limits_source: String,
-    pub estimated_compute_mass: u64,
-    pub estimated_storage_mass: u64,
-    pub estimated_transient_mass: u64,
-    pub estimated_code_deployment_mass: u64,
-    pub max_block_mass: u64,
-    #[serde(default)]
-    pub max_standard_transaction_mass: u64,
-    #[serde(default)]
-    pub fits_standard_transaction_mass_estimate: bool,
-    #[serde(default)]
-    pub fits_standard_block_mass_estimate: bool,
-    pub requires_relaxed_mass_policy: bool,
-    pub mass_status: String,
-    #[serde(default)]
-    pub standard_relay_policy_surface: String,
-    pub estimator: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceUnitMetadata {
     pub path: String,
     pub role: String,
-    pub hash_blake3: String,
+    pub hash: String,
     pub size_bytes: usize,
 }
 
@@ -550,9 +490,6 @@ pub struct RuntimeMetadata {
     pub ckb_runtime_required: bool,
     pub ckb_runtime_features: Vec<String>,
     pub standalone_runner_compatible: bool,
-    pub symbolic_cell_runtime_required: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub legacy_symbolic_cell_runtime_features: Vec<String>,
     pub fail_closed_runtime_features: Vec<String>,
     pub ckb_runtime_accesses: Vec<CkbRuntimeAccessMetadata>,
     pub verifier_obligations: Vec<VerifierObligationMetadata>,
@@ -600,7 +537,7 @@ pub struct VmAbiMetadata {
     pub selection: String,
 }
 
-const VM_ABI_TRAILER_MAGIC: &[u8; 8] = b"SPORABI\0";
+const VM_ABI_TRAILER_MAGIC: &[u8; 8] = b"CSABITR0";
 const VM_ABI_TRAILER_LEN: usize = 16;
 const MOLECULE_VM_ABI_VERSION: u16 = 0x8001;
 
@@ -700,10 +637,6 @@ pub fn validate_compile_metadata(metadata: &CompileMetadata, artifact_format: Ar
             "metadata marks artifact as standalone-compatible while CKB runtime features are required",
         ));
     }
-    // No operations are purely symbolic anymore; fail-closed features are
-    // acceptable for standalone compatibility (they halt with specific
-    // error codes rather than producing wrong results).
-
     validate_type_identity_metadata(metadata)?;
     validate_ckb_type_id_output_metadata(metadata)?;
     validate_molecule_schema_metadata(metadata)?;
@@ -745,153 +678,26 @@ fn validate_target_profile_metadata(metadata: &CompileMetadata, artifact_format:
 
 fn target_profile_artifact_policy_violations(metadata: &CompileMetadata, profile: TargetProfile) -> Vec<String> {
     match profile {
-        TargetProfile::Spora => spora_target_profile_policy_violations(metadata),
         TargetProfile::Ckb => {
-            let mut violations = common_portability_policy_violations(metadata);
-            let spora_only_features = metadata
+            // CKB is the only artifact profile; keep these checks focused on CKB-specific unsupported features.
+            let mut violations = Vec::new();
+
+            let unsupported_claim_features = metadata
                 .runtime
                 .ckb_runtime_features
                 .iter()
                 .filter(|feature| matches!(feature.as_str(), "load-claim-ecdsa-signature-hash" | "verify-claim-secp256k1-signature"))
                 .cloned()
                 .collect::<Vec<_>>();
-            if !spora_only_features.is_empty() {
-                violations.push(format!("Spora-only claim helper syscall features: {}", spora_only_features.join(", ")));
+            if !unsupported_claim_features.is_empty() {
+                violations.push(format!(
+                    "Claim helper syscall features not supported in CKB profile: {}",
+                    unsupported_claim_features.join(", ")
+                ));
             }
             violations
         }
-        TargetProfile::PortableCell => {
-            vec!["portable-cell is a source compatibility profile; compile with 'spora' or 'ckb' to produce artifacts".to_string()]
-        }
     }
-}
-
-fn spora_target_profile_policy_violations(metadata: &CompileMetadata) -> Vec<String> {
-    let mut violations = Vec::new();
-    let ckb_only_features = ckb_only_feature_names(metadata);
-    if !ckb_only_features.is_empty() {
-        violations.push(format!("CKB chain APIs require the 'ckb' target profile: {}", ckb_only_features.join(", ")));
-    }
-    violations
-}
-
-fn common_portability_policy_violations(metadata: &CompileMetadata) -> Vec<String> {
-    let mut violations = Vec::new();
-
-    if metadata.runtime.ckb_runtime_features.iter().any(|feature| feature == "load-header-daa-score") {
-        violations.push("DAA/header assumptions are Spora-specific and not portable across target profiles".to_string());
-    }
-
-    if !metadata.runtime.fail_closed_runtime_features.is_empty() {
-        violations.push(format!(
-            "fail-closed runtime features are not portable: {}",
-            metadata.runtime.fail_closed_runtime_features.join(", ")
-        ));
-    }
-
-    let runtime_required_obligations = metadata
-        .runtime
-        .verifier_obligations
-        .iter()
-        .filter(|obligation| obligation.status == "runtime-required")
-        .map(|obligation| format!("{}:{} ({})", obligation.scope, obligation.feature, obligation.category))
-        .collect::<Vec<_>>();
-    if !runtime_required_obligations.is_empty() {
-        violations
-            .push(format!("runtime-required verifier obligations are not portable: {}", runtime_required_obligations.join(", ")));
-    }
-
-    let runtime_required_inputs = metadata
-        .runtime
-        .transaction_runtime_input_requirements
-        .iter()
-        .filter(|requirement| requirement.status == "runtime-required")
-        .map(|requirement| format!("{}:{} ({})", requirement.scope, requirement.feature, requirement.component))
-        .collect::<Vec<_>>();
-    if !runtime_required_inputs.is_empty() {
-        violations.push(format!("runtime-required transaction inputs are not portable: {}", runtime_required_inputs.join(", ")));
-    }
-
-    let persistent_types_without_schema = metadata
-        .types
-        .iter()
-        .filter(|ty| matches!(ty.kind.as_str(), "Resource" | "Shared" | "Receipt"))
-        .filter(|ty| !type_has_public_molecule_schema(ty))
-        .map(|ty| format!("{} ({})", ty.name, ty.kind))
-        .collect::<Vec<_>>();
-    if !persistent_types_without_schema.is_empty() {
-        violations.push(format!(
-            "generated Molecule schemas are required before persistent Cell types can be CKB-portable: {}",
-            persistent_types_without_schema.join(", ")
-        ));
-    }
-
-    let type_only_type_ids = metadata
-        .types
-        .iter()
-        .filter(|ty| ty.type_id.is_some() && ty.ckb_type_id.is_none())
-        .map(|ty| ty.name.clone())
-        .collect::<Vec<_>>();
-    if !type_only_type_ids.is_empty() {
-        violations.push(format!(
-            "type-only type_id declarations require profile-specific type-id lowering before they are portable: {}",
-            type_only_type_ids.join(", ")
-        ));
-    }
-
-    let shared_touch_actions = ckb_unportable_shared_touch_actions(metadata);
-    if !shared_touch_actions.is_empty() {
-        violations.push(format!(
-            "Spora shared-state scheduler touch domains have unresolved state semantics: {}",
-            shared_touch_actions.join(", ")
-        ));
-    }
-
-    let pool_features = metadata
-        .runtime
-        .pool_primitives
-        .iter()
-        .filter(|primitive| primitive.status != "checked-runtime" || !primitive.runtime_required_components.is_empty())
-        .map(|primitive| primitive.feature.clone())
-        .collect::<Vec<_>>();
-    if !pool_features.is_empty() {
-        violations.push(format!("Spora pool-pattern scheduler/admission semantics are not portable: {}", pool_features.join(", ")));
-    }
-
-    violations
-}
-
-fn ckb_unportable_shared_touch_actions(metadata: &CompileMetadata) -> Vec<String> {
-    metadata
-        .actions
-        .iter()
-        .filter(|action| !action.touches_shared.is_empty())
-        .filter(|action| {
-            action
-                .verifier_obligations
-                .iter()
-                .any(|obligation| obligation.category == "shared-state" && obligation.status != "checked-runtime")
-        })
-        .map(|action| action.name.clone())
-        .collect()
-}
-
-fn ckb_only_feature_names(metadata: &CompileMetadata) -> Vec<String> {
-    metadata
-        .runtime
-        .ckb_runtime_features
-        .iter()
-        .filter(|feature| feature.starts_with("ckb-header-epoch-") || feature.as_str() == "ckb-input-since")
-        .cloned()
-        .collect()
-}
-
-fn type_has_public_molecule_schema(ty: &TypeMetadata) -> bool {
-    ty.molecule_schema.as_ref().is_some_and(|schema| {
-        schema.abi == "molecule"
-            && matches!(schema.layout.as_str(), "fixed-struct-v1" | "molecule-table-v1")
-            && !schema.schema.is_empty()
-    })
 }
 
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
@@ -913,7 +719,7 @@ pub fn ckb_blake2b256(data: &[u8]) -> [u8; 32] {
     out
 }
 
-fn is_canonical_blake3_hex(hash: &str) -> bool {
+fn is_canonical_hash_hex(hash: &str) -> bool {
     hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
@@ -927,7 +733,7 @@ mod ckb_hash_tests {
 }
 
 fn bind_artifact_metadata(metadata: &mut CompileMetadata, artifact_bytes: &[u8], artifact_hash: &[u8; 32]) {
-    metadata.artifact_hash_blake3 = Some(hex_encode(artifact_hash));
+    metadata.artifact_hash = Some(hex_encode(artifact_hash));
     metadata.artifact_size_bytes = Some(artifact_bytes.len());
 }
 
@@ -935,8 +741,6 @@ const CKB_SHANNONS_PER_CKB: u64 = 100_000_000;
 const CKB_DEFAULT_MAX_TX_VERIFY_CYCLES: u64 = 70_000_000;
 const CKB_DEFAULT_MAX_BLOCK_CYCLES: u64 = 10_000_000_000;
 const CKB_DEFAULT_MAX_BLOCK_BYTES: u64 = 597_000;
-const SPORA_DEFAULT_MAX_BLOCK_MASS: u64 = 2_000_000;
-const SPORA_DEFAULT_MAX_STANDARD_TRANSACTION_MASS: u64 = 500_000;
 
 fn bind_constraints_metadata(
     metadata: &mut CompileMetadata,
@@ -1037,8 +841,6 @@ fn constraints_metadata(
         }
         ckb
     });
-    let spora = (target_profile == TargetProfile::Spora)
-        .then(|| spora_constraints(artifact_size_bytes, max_entry_witness_bytes, estimated_cycles));
 
     let status = if !failures.is_empty() {
         "fail"
@@ -1057,7 +859,6 @@ fn constraints_metadata(
         collection_instantiations: metadata.runtime.collection_instantiations.clone(),
         runtime_errors,
         ckb,
-        spora,
         warnings,
         failures,
     }
@@ -1418,46 +1219,6 @@ fn refresh_constraints_status(constraints: &mut ConstraintsMetadata) {
     .to_string();
 }
 
-fn spora_constraints(
-    artifact_size_bytes: usize,
-    max_entry_witness_bytes: usize,
-    estimated_cycles: Option<u64>,
-) -> SporaConstraintsMetadata {
-    let max_block_mass = env_u64("CELLSCRIPT_SPORA_MAX_BLOCK_MASS").unwrap_or(SPORA_DEFAULT_MAX_BLOCK_MASS);
-    let max_standard_transaction_mass =
-        env_u64("CELLSCRIPT_SPORA_MAX_STANDARD_TRANSACTION_MASS").unwrap_or(SPORA_DEFAULT_MAX_STANDARD_TRANSACTION_MASS);
-    let estimated_compute_mass = estimated_cycles.unwrap_or_default();
-    let estimated_storage_mass = artifact_size_bytes as u64;
-    let estimated_transient_mass = max_entry_witness_bytes as u64;
-    let estimated_code_deployment_mass = estimated_storage_mass + estimated_transient_mass;
-    let total_estimated_mass = estimated_compute_mass + estimated_storage_mass + estimated_transient_mass;
-    let fits_standard_transaction_mass_estimate = estimated_code_deployment_mass <= max_standard_transaction_mass;
-    let fits_standard_block_mass_estimate = total_estimated_mass <= max_block_mass;
-    let requires_relaxed_mass_policy = !(fits_standard_transaction_mass_estimate && fits_standard_block_mass_estimate);
-    SporaConstraintsMetadata {
-        limits_source: spora_limits_source(),
-        estimated_compute_mass,
-        estimated_storage_mass,
-        estimated_transient_mass,
-        estimated_code_deployment_mass,
-        max_block_mass,
-        max_standard_transaction_mass,
-        fits_standard_transaction_mass_estimate,
-        fits_standard_block_mass_estimate,
-        requires_relaxed_mass_policy,
-        mass_status: if requires_relaxed_mass_policy {
-            "compiler-estimate-exceeds-standard-policy-requires-scope-split-or-devnet-confirmation".to_string()
-        } else {
-            "compiler-estimate-within-standard-policy-requires-devnet-or-builder-confirmation".to_string()
-        },
-        standard_relay_policy_surface: "standard relay tx mass and block mass are compiler-visible; acceptance remains authoritative"
-            .to_string(),
-        estimator:
-            "v1: estimated cycles + artifact bytes + max entry witness bytes; deployment tx mass is verified by devnet acceptance"
-                .to_string(),
-    }
-}
-
 fn env_u64(name: &str) -> Option<u64> {
     std::env::var(name).ok().and_then(|value| value.parse::<u64>().ok())
 }
@@ -1470,19 +1231,6 @@ fn ckb_limits_source() -> String {
         .collect::<Vec<_>>();
     if overridden.is_empty() {
         "builtin-ckb-defaults".to_string()
-    } else {
-        format!("environment:{}", overridden.join(","))
-    }
-}
-
-fn spora_limits_source() -> String {
-    let overridden = ["CELLSCRIPT_SPORA_MAX_BLOCK_MASS", "CELLSCRIPT_SPORA_MAX_STANDARD_TRANSACTION_MASS"]
-        .iter()
-        .filter(|name| std::env::var(name).is_ok())
-        .copied()
-        .collect::<Vec<_>>();
-    if overridden.is_empty() {
-        "builtin-spora-standard-policy".to_string()
     } else {
         format!("environment:{}", overridden.join(","))
     }
@@ -1511,62 +1259,62 @@ fn expr_span(expr: &ast::Expr) -> error::Span {
 
 fn bind_source_metadata(metadata: &mut CompileMetadata, mut source_units: Vec<SourceUnitMetadata>) {
     if source_units.is_empty() {
-        metadata.source_hash_blake3 = None;
-        metadata.source_content_hash_blake3 = None;
+        metadata.source_hash = None;
+        metadata.source_content_hash = None;
         metadata.source_units.clear();
         return;
     }
 
     source_units.sort_by(|left, right| left.path.cmp(&right.path).then(left.role.cmp(&right.role)));
-    let mut source_set_hasher = blake3::Hasher::new();
-    for unit in &source_units {
-        update_source_set_hasher(&mut source_set_hasher, unit);
-    }
-    metadata.source_hash_blake3 = Some(hex_encode(source_set_hasher.finalize().as_bytes()));
-    metadata.source_content_hash_blake3 = Some(compute_source_content_hash(&source_units));
+    metadata.source_hash = Some(compute_source_set_hash(&source_units));
+    metadata.source_content_hash = Some(compute_source_content_hash(&source_units));
     metadata.source_units = source_units;
 }
 
-fn update_source_set_hasher(hasher: &mut blake3::Hasher, unit: &SourceUnitMetadata) {
-    hasher.update(unit.role.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(unit.path.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(unit.hash_blake3.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(&unit.size_bytes.to_le_bytes());
-    hasher.update(b"\0");
+fn append_source_hash_material(out: &mut Vec<u8>, unit: &SourceUnitMetadata, include_path: bool) {
+    out.extend_from_slice(unit.role.as_bytes());
+    out.push(0);
+    if include_path {
+        out.extend_from_slice(unit.path.as_bytes());
+        out.push(0);
+    }
+    out.extend_from_slice(unit.hash.as_bytes());
+    out.push(0);
+    out.extend_from_slice(&unit.size_bytes.to_le_bytes());
+    out.push(0);
+}
+
+fn compute_source_set_hash(source_units: &[SourceUnitMetadata]) -> String {
+    let mut material = Vec::new();
+    for unit in source_units {
+        append_source_hash_material(&mut material, unit, true);
+    }
+    hex_encode(&ckb_blake2b256(&material))
 }
 
 fn compute_source_content_hash(source_units: &[SourceUnitMetadata]) -> String {
     let mut stable_units = source_units.iter().collect::<Vec<_>>();
     stable_units.sort_by(|left, right| {
-        left.role.cmp(&right.role).then(left.hash_blake3.cmp(&right.hash_blake3)).then(left.size_bytes.cmp(&right.size_bytes))
+        left.role.cmp(&right.role).then(left.hash.cmp(&right.hash)).then(left.size_bytes.cmp(&right.size_bytes))
     });
-    let mut hasher = blake3::Hasher::new();
+    let mut material = Vec::new();
     for unit in stable_units {
-        hasher.update(unit.role.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(unit.hash_blake3.as_bytes());
-        hasher.update(b"\0");
-        hasher.update(&unit.size_bytes.to_le_bytes());
-        hasher.update(b"\0");
+        append_source_hash_material(&mut material, unit, false);
     }
-    hex_encode(hasher.finalize().as_bytes())
+    hex_encode(&ckb_blake2b256(&material))
 }
 
 fn validate_source_metadata(metadata: &CompileMetadata) -> Result<()> {
     if metadata.source_units.is_empty() {
-        if metadata.source_hash_blake3.is_some() {
-            return Err(CompileError::without_span("metadata source_hash_blake3 is present but source_units is empty"));
+        if metadata.source_hash.is_some() {
+            return Err(CompileError::without_span("metadata source_hash is present but source_units is empty"));
         }
-        if metadata.source_content_hash_blake3.is_some() {
-            return Err(CompileError::without_span("metadata source_content_hash_blake3 is present but source_units is empty"));
+        if metadata.source_content_hash.is_some() {
+            return Err(CompileError::without_span("metadata source_content_hash is present but source_units is empty"));
         }
         return Ok(());
     }
 
-    let mut source_set_hasher = blake3::Hasher::new();
     for unit in &metadata.source_units {
         if unit.path.is_empty() {
             return Err(CompileError::without_span("metadata source_units contains an empty path"));
@@ -1574,40 +1322,39 @@ fn validate_source_metadata(metadata: &CompileMetadata) -> Result<()> {
         if unit.role.is_empty() {
             return Err(CompileError::without_span(format!("metadata source unit '{}' has an empty role", unit.path)));
         }
-        if !is_canonical_blake3_hex(&unit.hash_blake3) {
+        if !is_canonical_hash_hex(&unit.hash) {
             return Err(CompileError::without_span(format!(
-                "metadata source unit '{}' has invalid hash_blake3 '{}'; expected 64 lowercase hex characters",
-                unit.path, unit.hash_blake3
+                "metadata source unit '{}' has invalid hash '{}'; expected 64 lowercase hex characters",
+                unit.path, unit.hash
             )));
         }
-        update_source_set_hasher(&mut source_set_hasher, unit);
     }
 
-    let computed_hash = hex_encode(source_set_hasher.finalize().as_bytes());
-    match &metadata.source_hash_blake3 {
+    let computed_hash = compute_source_set_hash(&metadata.source_units);
+    match &metadata.source_hash {
         Some(hash) if hash == &computed_hash => {}
         Some(hash) => Err(CompileError::without_span(format!(
-            "metadata source_hash_blake3 '{}' does not match source_units '{}'",
+            "metadata source_hash '{}' does not match source_units '{}'",
             hash, computed_hash
         )))?,
-        None => return Err(CompileError::without_span("metadata is missing source_hash_blake3 for non-empty source_units")),
+        None => return Err(CompileError::without_span("metadata is missing source_hash for non-empty source_units")),
     };
 
     let computed_content_hash = compute_source_content_hash(&metadata.source_units);
-    match &metadata.source_content_hash_blake3 {
+    match &metadata.source_content_hash {
         Some(hash) if hash == &computed_content_hash => Ok(()),
         Some(hash) => Err(CompileError::without_span(format!(
-            "metadata source_content_hash_blake3 '{}' does not match source_units '{}'",
+            "metadata source_content_hash '{}' does not match source_units '{}'",
             hash, computed_content_hash
         ))),
-        None => Err(CompileError::without_span("metadata is missing source_content_hash_blake3 for non-empty source_units")),
+        None => Err(CompileError::without_span("metadata is missing source_content_hash for non-empty source_units")),
     }
 }
 
 fn validate_type_identity_metadata(metadata: &CompileMetadata) -> Result<()> {
     let mut seen_type_ids = HashMap::new();
     for ty in &metadata.types {
-        match (&ty.type_id, &ty.type_id_hash_blake3) {
+        match (&ty.type_id, &ty.type_id_hash) {
             (None, None) => {}
             (Some(type_id), Some(hash)) => {
                 if type_id.is_empty() {
@@ -1619,16 +1366,16 @@ fn validate_type_identity_metadata(metadata: &CompileMetadata) -> Result<()> {
                         ty.name
                     )));
                 }
-                if !is_canonical_blake3_hex(hash) {
+                if !is_canonical_hash_hex(hash) {
                     return Err(CompileError::without_span(format!(
-                        "metadata type '{}' has invalid type_id_hash_blake3 '{}'; expected 64 lowercase hex characters",
+                        "metadata type '{}' has invalid type_id_hash '{}'; expected 64 lowercase hex characters",
                         ty.name, hash
                     )));
                 }
-                let expected = hex_encode(blake3::hash(type_id.as_bytes()).as_bytes());
+                let expected = hex_encode(&ckb_blake2b256(type_id.as_bytes()));
                 if hash != &expected {
                     return Err(CompileError::without_span(format!(
-                        "metadata type '{}' type_id_hash_blake3 '{}' does not match type_id '{}'",
+                        "metadata type '{}' type_id_hash '{}' does not match type_id '{}'",
                         ty.name, hash, expected
                     )));
                 }
@@ -1641,13 +1388,13 @@ fn validate_type_identity_metadata(metadata: &CompileMetadata) -> Result<()> {
             }
             (Some(_), None) => {
                 return Err(CompileError::without_span(format!(
-                    "metadata type '{}' has type_id but is missing type_id_hash_blake3",
+                    "metadata type '{}' has type_id but is missing type_id_hash",
                     ty.name
                 )));
             }
             (None, Some(_)) => {
                 return Err(CompileError::without_span(format!(
-                    "metadata type '{}' has type_id_hash_blake3 but is missing type_id",
+                    "metadata type '{}' has type_id_hash but is missing type_id",
                     ty.name
                 )));
             }
@@ -1830,17 +1577,17 @@ fn validate_molecule_schema_metadata(metadata: &CompileMetadata) -> Result<()> {
         if schema.schema.is_empty() {
             return Err(CompileError::without_span(format!("metadata type '{}' has empty molecule_schema.schema", ty.name)));
         }
-        if !is_canonical_blake3_hex(&schema.schema_hash_blake3) {
+        if !is_canonical_hash_hex(&schema.schema_hash) {
             return Err(CompileError::without_span(format!(
-                "metadata type '{}' has invalid molecule_schema.schema_hash_blake3 '{}'; expected 64 lowercase hex characters",
-                ty.name, schema.schema_hash_blake3
+                "metadata type '{}' has invalid molecule_schema.schema_hash '{}'; expected 64 lowercase hex characters",
+                ty.name, schema.schema_hash
             )));
         }
-        let expected = hex_encode(blake3::hash(schema.schema.as_bytes()).as_bytes());
-        if schema.schema_hash_blake3 != expected {
+        let expected = hex_encode(&ckb_blake2b256(schema.schema.as_bytes()));
+        if schema.schema_hash != expected {
             return Err(CompileError::without_span(format!(
-                "metadata type '{}' molecule_schema.schema_hash_blake3 '{}' does not match schema bytes",
-                ty.name, schema.schema_hash_blake3
+                "metadata type '{}' molecule_schema.schema_hash '{}' does not match schema bytes",
+                ty.name, schema.schema_hash
             )));
         }
     }
@@ -1883,10 +1630,10 @@ fn validate_molecule_schema_manifest_metadata(metadata: &CompileMetadata) -> Res
     if manifest.fixed_type_count + manifest.dynamic_type_count != manifest.type_count {
         return Err(CompileError::without_span("metadata molecule_schema_manifest fixed/dynamic counts do not sum to type_count"));
     }
-    if !is_canonical_blake3_hex(&manifest.manifest_hash_blake3) {
+    if !is_canonical_hash_hex(&manifest.manifest_hash) {
         return Err(CompileError::without_span(format!(
-            "metadata molecule_schema_manifest.manifest_hash_blake3 '{}' is invalid",
-            manifest.manifest_hash_blake3
+            "metadata molecule_schema_manifest.manifest_hash '{}' is invalid",
+            manifest.manifest_hash
         )));
     }
 
@@ -1916,7 +1663,7 @@ fn validate_molecule_schema_manifest_metadata(metadata: &CompileMetadata) -> Res
             || entry.fixed_size != schema.fixed_size
             || entry.encoded_size != ty.encoded_size
             || entry.dynamic_fields != schema.dynamic_fields
-            || entry.schema_hash_blake3 != schema.schema_hash_blake3
+            || entry.schema_hash != schema.schema_hash
         {
             return Err(CompileError::without_span(format!(
                 "metadata molecule_schema_manifest entry '{}' does not match type molecule_schema metadata",
@@ -1945,10 +1692,10 @@ fn validate_molecule_schema_manifest_metadata(metadata: &CompileMetadata) -> Res
     }
 
     let expected = molecule_schema_manifest_metadata(&metadata.types, TargetProfile::from_name(&metadata.target_profile.name)?);
-    if manifest.manifest_hash_blake3 != expected.manifest_hash_blake3 {
+    if manifest.manifest_hash != expected.manifest_hash {
         return Err(CompileError::without_span(format!(
-            "metadata molecule_schema_manifest.manifest_hash_blake3 '{}' does not match manifest entries",
-            manifest.manifest_hash_blake3
+            "metadata molecule_schema_manifest.manifest_hash '{}' does not match manifest entries",
+            manifest.manifest_hash
         )));
     }
 
@@ -1981,11 +1728,11 @@ pub fn validate_source_units_on_disk(metadata: &CompileMetadata) -> Result<()> {
             )));
         }
 
-        let hash = hex_encode(blake3::hash(&bytes).as_bytes());
-        if hash != unit.hash_blake3 {
+        let hash = hex_encode(&ckb_blake2b256(&bytes));
+        if hash != unit.hash {
             return Err(CompileError::without_span(format!(
                 "source unit '{}' hash '{}' does not match metadata hash '{}'",
-                unit.path, hash, unit.hash_blake3
+                unit.path, hash, unit.hash
             )));
         }
     }
@@ -2000,20 +1747,20 @@ pub fn validate_compile_result(result: &CompileResult) -> Result<()> {
         return Err(CompileError::without_span("compiler produced an empty artifact"));
     }
 
-    let computed_hash = *blake3::hash(&result.artifact_bytes).as_bytes();
+    let computed_hash = ckb_blake2b256(&result.artifact_bytes);
     if computed_hash != result.artifact_hash {
         return Err(CompileError::without_span("artifact_hash does not match artifact_bytes"));
     }
     let computed_hash_hex = hex_encode(&computed_hash);
-    match &result.metadata.artifact_hash_blake3 {
+    match &result.metadata.artifact_hash {
         Some(metadata_hash) if metadata_hash == &computed_hash_hex => {}
         Some(metadata_hash) => {
             return Err(CompileError::without_span(format!(
-                "metadata artifact_hash_blake3 '{}' does not match artifact bytes '{}'",
+                "metadata artifact_hash '{}' does not match artifact bytes '{}'",
                 metadata_hash, computed_hash_hex
             )));
         }
-        None => return Err(CompileError::without_span("metadata is missing artifact_hash_blake3")),
+        None => return Err(CompileError::without_span("metadata is missing artifact_hash")),
     }
     match result.metadata.artifact_size_bytes {
         Some(size) if size == result.artifact_bytes.len() => {}
@@ -2051,7 +1798,7 @@ pub fn validate_compile_result(result: &CompileResult) -> Result<()> {
                 }
                 Some(_) => {
                     return Err(CompileError::without_span(
-                        "RISC-V ELF artifact embeds a Spora VM ABI trailer but metadata says this profile must not embed one",
+                        "RISC-V ELF artifact embeds a VM ABI trailer but metadata says this profile must not embed one",
                     ));
                 }
                 None if result.metadata.runtime.vm_abi.embedded_in_artifact => {
@@ -2067,7 +1814,7 @@ pub fn validate_compile_result(result: &CompileResult) -> Result<()> {
 
 pub fn validate_artifact_metadata(artifact_bytes: Vec<u8>, metadata: CompileMetadata) -> Result<ValidatedArtifact> {
     let artifact_format = ArtifactFormat::from_display_name(&metadata.artifact_format)?;
-    let artifact_hash = *blake3::hash(&artifact_bytes).as_bytes();
+    let artifact_hash = ckb_blake2b256(&artifact_bytes);
     let result = ValidatedArtifact { artifact_bytes, artifact_format, artifact_hash, metadata };
     result.validate()?;
     Ok(result)
@@ -2180,7 +1927,7 @@ pub struct TypeMetadata {
     #[serde(default)]
     pub hash_type_source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub type_id_hash_blake3: Option<String>,
+    pub type_id_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ckb_type_id: Option<CkbTypeIdMetadata>,
     pub kind: String,
@@ -2213,7 +1960,7 @@ pub struct MoleculeSchemaMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dynamic_fields: Vec<String>,
     pub fixed_size: usize,
-    pub schema_hash_blake3: String,
+    pub schema_hash: String,
     pub schema: String,
 }
 
@@ -2244,7 +1991,6 @@ pub struct ActionMetadata {
     pub estimated_cycles: u64,
     #[serde(default = "default_scheduler_witness_abi")]
     pub scheduler_witness_abi: String,
-    // scheduler_witness_borsh_hex is not public scheduler witness metadata.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub scheduler_witness_hex: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -2257,7 +2003,6 @@ pub struct ActionMetadata {
     pub pool_primitives: Vec<PoolPrimitiveMetadata>,
     pub ckb_runtime_accesses: Vec<CkbRuntimeAccessMetadata>,
     pub ckb_runtime_features: Vec<String>,
-    pub symbolic_runtime_features: Vec<String>,
     pub fail_closed_runtime_features: Vec<String>,
     pub verifier_obligations: Vec<VerifierObligationMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2644,7 +2389,6 @@ pub struct FunctionMetadata {
     pub pool_primitives: Vec<PoolPrimitiveMetadata>,
     pub ckb_runtime_accesses: Vec<CkbRuntimeAccessMetadata>,
     pub ckb_runtime_features: Vec<String>,
-    pub symbolic_runtime_features: Vec<String>,
     pub fail_closed_runtime_features: Vec<String>,
     pub verifier_obligations: Vec<VerifierObligationMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2665,7 +2409,6 @@ pub struct LockMetadata {
     pub pool_primitives: Vec<PoolPrimitiveMetadata>,
     pub ckb_runtime_accesses: Vec<CkbRuntimeAccessMetadata>,
     pub ckb_runtime_features: Vec<String>,
-    pub symbolic_runtime_features: Vec<String>,
     pub fail_closed_runtime_features: Vec<String>,
     pub verifier_obligations: Vec<VerifierObligationMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2814,21 +2557,21 @@ impl ValidatedArtifact {
             return Err(CompileError::without_span("artifact bytes are empty"));
         }
 
-        let computed_hash = *blake3::hash(&self.artifact_bytes).as_bytes();
+        let computed_hash = ckb_blake2b256(&self.artifact_bytes);
         if computed_hash != self.artifact_hash {
             return Err(CompileError::without_span("artifact_hash does not match artifact_bytes"));
         }
         let computed_hash_hex = hex_encode(&computed_hash);
-        match &self.metadata.artifact_hash_blake3 {
+        match &self.metadata.artifact_hash {
             Some(metadata_hash) if metadata_hash == &computed_hash_hex => {}
             Some(metadata_hash) => {
                 return Err(CompileError::without_span(format!(
-                    "metadata artifact_hash_blake3 '{}' does not match artifact bytes '{}'",
+                    "metadata artifact_hash '{}' does not match artifact bytes '{}'",
                     metadata_hash, computed_hash_hex
                 )));
             }
             None => {
-                return Err(CompileError::without_span("metadata is missing artifact_hash_blake3"));
+                return Err(CompileError::without_span("metadata is missing artifact_hash"));
             }
         }
 
@@ -2898,7 +2641,7 @@ pub fn compile_metadata(source: &str, target: Option<String>) -> Result<CompileM
     let tokens = lexer::lex(source)?;
     let ast = parser::parse(&tokens)?;
     let artifact_format = ArtifactFormat::from_target(target.as_deref().unwrap_or(DEFAULT_TARGET))?;
-    let target_profile = TargetProfile::Spora;
+    let target_profile = TargetProfile::Ckb;
     types::check(&ast)?;
     lifecycle::check(&ast)?;
     let ir = ir::generate(&ast)?;
@@ -3006,7 +2749,7 @@ fn compile_ast_with_build(
     if metadata.runtime.vm_abi.embedded_in_artifact {
         artifact_bytes = append_vm_abi_trailer(artifact_bytes, metadata.runtime.vm_abi.version);
     }
-    let artifact_hash = *blake3::hash(&artifact_bytes).as_bytes();
+    let artifact_hash = ckb_blake2b256(&artifact_bytes);
     bind_artifact_metadata(&mut metadata, &artifact_bytes, &artifact_hash);
     bind_constraints_metadata(&mut metadata, &artifact_bytes, artifact_format, target_profile, ir, &codegen_options)?;
 
@@ -3139,12 +2882,7 @@ fn incremental_cache_store(path: &Utf8Path, _source: &str, options: &CompileOpti
 }
 
 fn source_unit_from_bytes(path: impl Into<String>, role: impl Into<String>, bytes: &[u8]) -> SourceUnitMetadata {
-    SourceUnitMetadata {
-        path: path.into(),
-        role: role.into(),
-        hash_blake3: hex_encode(blake3::hash(bytes).as_bytes()),
-        size_bytes: bytes.len(),
-    }
+    SourceUnitMetadata { path: path.into(), role: role.into(), hash: hex_encode(&ckb_blake2b256(bytes)), size_bytes: bytes.len() }
 }
 
 fn source_unit_from_file(path: &Utf8Path, role: &str) -> Result<SourceUnitMetadata> {
@@ -3298,7 +3036,6 @@ struct CellCkbCellDepConfig {
     type_id: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum CellDependency {
@@ -3487,11 +3224,6 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
     let lifecycle_states = metadata_lifecycle_states(ir);
     let cell_type_kinds = metadata_cell_type_kinds(ir);
     let pure_const_returns = metadata_pure_const_returns(ir);
-    // No operations are purely symbolic anymore: all have real RISC-V
-    // lowerings or fail-closed traps. This legacy list stays empty and is
-    // omitted from serialized metadata.
-    let _legacy_symbolic_cell_runtime_features = module_symbolic_runtime_features(ir, &type_layouts, &cell_type_kinds);
-    let legacy_symbolic_cell_runtime_features: Vec<String> = Vec::new();
     let fail_closed_runtime_features = module_fail_closed_runtime_features(ir, &type_layouts, &cell_type_kinds, &pure_const_returns);
     let ckb_runtime_features = module_ckb_runtime_features(ir, &cell_type_kinds, &type_layouts);
     let ckb_runtime_accesses = module_ckb_runtime_accesses(ir, &cell_type_kinds, &type_layouts);
@@ -3502,7 +3234,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
     let pool_primitives = module_pool_primitive_metadata(ir, &type_layouts, &cell_type_kinds, &pure_const_returns);
     let has_entry_params = module_has_entry_params(ir);
     let ckb_runtime_required = !ckb_runtime_features.is_empty();
-    let standalone_runner_compatible = legacy_symbolic_cell_runtime_features.is_empty() && !ckb_runtime_required && !has_entry_params;
+    let standalone_runner_compatible = !ckb_runtime_required && !has_entry_params;
     let embeds_vm_abi_trailer = target_profile.embeds_vm_abi_trailer(artifact_format);
     let mut types =
         ir.external_type_defs.iter().map(|type_def| type_metadata(type_def, &type_defs, target_profile)).collect::<Vec<_>>();
@@ -3517,15 +3249,14 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
         module: ir.name.clone(),
         artifact_format: artifact_format.display_name().to_string(),
         target_profile: target_profile.metadata(artifact_format),
-        artifact_hash_blake3: None,
+        artifact_hash: None,
         artifact_size_bytes: None,
-        source_hash_blake3: None,
-        source_content_hash_blake3: None,
+        source_hash: None,
+        source_content_hash: None,
         source_units: Vec::new(),
         lowering: LoweringMetadata {
             protocol_semantics: "CellScript IR records consume/read_ref/create summaries before RISC-V codegen".to_string(),
-            assembly_path: "riscv64-asm preserves symbolic cell/runtime operations with CKB-style syscall ABI comments and metadata"
-                .to_string(),
+            assembly_path: "riscv64-asm emits executable CKB-style syscall paths plus metadata for verifier obligations".to_string(),
             elf_path: "riscv64-elf is always enabled; all operations have real RISC-V lowerings or fail-closed traps with specific error codes".to_string(),
             semantics_preserving_claim:
                 "Pure computation lowering is executable; stateful protocol lowering is represented in metadata and asm but is not yet a proved schema decoder/verifier"
@@ -3545,7 +3276,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                     "RISC-V ELF artifacts embed a fixed VM ABI trailer; verifier callers strip the trailer and select the declared ABI"
                         .to_string()
                 } else if target_profile == TargetProfile::Ckb && artifact_format == ArtifactFormat::RiscvElf {
-                    "CKB-target ELF artifacts do not embed Spora VM ABI trailer bytes; the profile selects CKB Molecule ABI out of band"
+                    "CKB-target ELF artifacts do not embed VM ABI trailer bytes; the profile selects CKB Molecule ABI out of band"
                         .to_string()
                 } else {
                     "Compiler artifact metadata declares the required VM object ABI; verifier callers must pass this ABI to the runtime"
@@ -3556,8 +3287,6 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
             ckb_runtime_required,
             ckb_runtime_features,
             standalone_runner_compatible,
-            symbolic_cell_runtime_required: !legacy_symbolic_cell_runtime_features.is_empty(),
-            legacy_symbolic_cell_runtime_features,
             fail_closed_runtime_features,
             ckb_runtime_accesses,
             verifier_obligations,
@@ -3574,14 +3303,6 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
             .filter_map(|item| match item {
                 ir::IrItem::Action(action) => {
                     let param_schema_vars = schema_pointer_var_ids(&action.body, &action.params);
-                    let symbolic_runtime_features = body_symbolic_runtime_features(
-                        &action.body,
-                        &param_schema_vars,
-                        &type_layouts,
-                        &action.params,
-                        &cell_type_kinds,
-                        action.return_type.as_ref(),
-                    );
                     let fail_closed_runtime_features = body_fail_closed_runtime_features(
                         &action.body,
                         &param_schema_vars,
@@ -3597,7 +3318,6 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         "action",
                         &action.name,
                         &action.body,
-                        &symbolic_runtime_features,
                         &fail_closed_runtime_features,
                         &ckb_runtime_features,
                         &ckb_runtime_accesses,
@@ -3619,8 +3339,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                     );
                     let transaction_runtime_input_requirements =
                         transaction_runtime_input_requirements_from_obligations(&verifier_obligations);
-                    let standalone_runner_compatible =
-                        symbolic_runtime_features.is_empty() && ckb_runtime_features.is_empty() && action.params.is_empty();
+                    let standalone_runner_compatible = ckb_runtime_features.is_empty() && action.params.is_empty();
                     let scheduler_accesses = scheduler_accesses_from_metadata(&ckb_runtime_accesses);
                     let scheduler_effect_class = format!("{:?}", action.effect_class);
                     let scheduler_witness_molecule = crate::stdlib::SchedulerMetadata::generate(
@@ -3654,9 +3373,8 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         pool_primitives,
                         ckb_runtime_accesses,
                         ckb_runtime_features,
-                        elf_compatible: symbolic_runtime_features.is_empty(),
+                        elf_compatible: true,
                         standalone_runner_compatible,
-                        symbolic_runtime_features,
                         fail_closed_runtime_features,
                         verifier_obligations,
                         transaction_runtime_input_requirements,
@@ -3672,14 +3390,6 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
             .filter_map(|item| match item {
                 ir::IrItem::PureFn(function) => {
                     let param_schema_vars = schema_pointer_var_ids(&function.body, &function.params);
-                    let symbolic_runtime_features = body_symbolic_runtime_features(
-                        &function.body,
-                        &param_schema_vars,
-                        &type_layouts,
-                        &function.params,
-                        &cell_type_kinds,
-                        function.return_type.as_ref(),
-                    );
                     let fail_closed_runtime_features = body_fail_closed_runtime_features(
                         &function.body,
                         &param_schema_vars,
@@ -3696,7 +3406,6 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         "fn",
                         &function.name,
                         &function.body,
-                        &symbolic_runtime_features,
                         &fail_closed_runtime_features,
                         &ckb_runtime_features,
                         &ckb_runtime_accesses,
@@ -3726,8 +3435,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         pool_primitives,
                         ckb_runtime_accesses,
                         ckb_runtime_features,
-                        elf_compatible: symbolic_runtime_features.is_empty(),
-                        symbolic_runtime_features,
+                        elf_compatible: true,
                         fail_closed_runtime_features,
                         verifier_obligations,
                         transaction_runtime_input_requirements,
@@ -3743,14 +3451,6 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
             .filter_map(|item| match item {
                 ir::IrItem::Lock(lock) => {
                     let param_schema_vars = schema_pointer_var_ids(&lock.body, &lock.params);
-                    let symbolic_runtime_features = body_symbolic_runtime_features(
-                        &lock.body,
-                        &param_schema_vars,
-                        &type_layouts,
-                        &lock.params,
-                        &cell_type_kinds,
-                        None,
-                    );
                     let fail_closed_runtime_features = body_fail_closed_runtime_features(
                         &lock.body,
                         &param_schema_vars,
@@ -3766,7 +3466,6 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         "lock",
                         &lock.name,
                         &lock.body,
-                        &symbolic_runtime_features,
                         &fail_closed_runtime_features,
                         &ckb_runtime_features,
                         &ckb_runtime_accesses,
@@ -3781,8 +3480,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         body_pool_primitive_metadata("lock", &lock.name, &lock.body, &lock.params, &type_layouts, &cell_type_kinds, &pure_const_returns);
                     let transaction_runtime_input_requirements =
                         transaction_runtime_input_requirements_from_obligations(&verifier_obligations);
-                    let standalone_runner_compatible =
-                        symbolic_runtime_features.is_empty() && ckb_runtime_features.is_empty() && lock.params.is_empty();
+                    let standalone_runner_compatible = ckb_runtime_features.is_empty() && lock.params.is_empty();
                     Some(LockMetadata {
                         name: lock.name.clone(),
                         params: param_metadata_for_body(&lock.params, &lock.body, &cell_type_kinds),
@@ -3799,9 +3497,8 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         pool_primitives,
                         ckb_runtime_accesses,
                         ckb_runtime_features,
-                        elf_compatible: symbolic_runtime_features.is_empty(),
+                        elf_compatible: true,
                         standalone_runner_compatible,
-                        symbolic_runtime_features,
                         fail_closed_runtime_features,
                         verifier_obligations,
                         transaction_runtime_input_requirements,
@@ -4171,53 +3868,6 @@ fn collect_inline_named_type_dependencies(name: &str, used_types: &mut BTreeSet<
     }
 }
 
-fn module_symbolic_runtime_features(
-    ir: &ir::IrModule,
-    type_layouts: &MetadataTypeLayouts,
-    cell_type_kinds: &HashMap<String, ir::IrTypeKind>,
-) -> Vec<String> {
-    let mut features = BTreeSet::new();
-    for item in &ir.items {
-        match item {
-            ir::IrItem::Action(action) => {
-                let param_schema_vars = schema_pointer_var_ids(&action.body, &action.params);
-                features.extend(body_symbolic_runtime_features(
-                    &action.body,
-                    &param_schema_vars,
-                    type_layouts,
-                    &action.params,
-                    cell_type_kinds,
-                    action.return_type.as_ref(),
-                ));
-            }
-            ir::IrItem::PureFn(function) => {
-                let param_schema_vars = schema_pointer_var_ids(&function.body, &function.params);
-                features.extend(body_symbolic_runtime_features(
-                    &function.body,
-                    &param_schema_vars,
-                    type_layouts,
-                    &function.params,
-                    cell_type_kinds,
-                    function.return_type.as_ref(),
-                ));
-            }
-            ir::IrItem::Lock(lock) => {
-                let param_schema_vars = schema_pointer_var_ids(&lock.body, &lock.params);
-                features.extend(body_symbolic_runtime_features(
-                    &lock.body,
-                    &param_schema_vars,
-                    type_layouts,
-                    &lock.params,
-                    cell_type_kinds,
-                    None,
-                ));
-            }
-            ir::IrItem::TypeDef(_) => {}
-        }
-    }
-    features.into_iter().collect()
-}
-
 fn module_fail_closed_runtime_features(
     ir: &ir::IrModule,
     type_layouts: &MetadataTypeLayouts,
@@ -4327,14 +3977,6 @@ fn module_verifier_obligations(
         match item {
             ir::IrItem::Action(action) => {
                 let param_schema_vars = schema_pointer_var_ids(&action.body, &action.params);
-                let symbolic_runtime_features = body_symbolic_runtime_features(
-                    &action.body,
-                    &param_schema_vars,
-                    type_layouts,
-                    &action.params,
-                    cell_type_kinds,
-                    action.return_type.as_ref(),
-                );
                 let fail_closed_runtime_features = body_fail_closed_runtime_features(
                     &action.body,
                     &param_schema_vars,
@@ -4350,7 +3992,6 @@ fn module_verifier_obligations(
                     "action",
                     &action.name,
                     &action.body,
-                    &symbolic_runtime_features,
                     &fail_closed_runtime_features,
                     &ckb_runtime_features,
                     &ckb_runtime_accesses,
@@ -4364,14 +4005,6 @@ fn module_verifier_obligations(
             }
             ir::IrItem::PureFn(function) => {
                 let param_schema_vars = schema_pointer_var_ids(&function.body, &function.params);
-                let symbolic_runtime_features = body_symbolic_runtime_features(
-                    &function.body,
-                    &param_schema_vars,
-                    type_layouts,
-                    &function.params,
-                    cell_type_kinds,
-                    function.return_type.as_ref(),
-                );
                 let fail_closed_runtime_features = body_fail_closed_runtime_features(
                     &function.body,
                     &param_schema_vars,
@@ -4387,7 +4020,6 @@ fn module_verifier_obligations(
                     "fn",
                     &function.name,
                     &function.body,
-                    &symbolic_runtime_features,
                     &fail_closed_runtime_features,
                     &ckb_runtime_features,
                     &ckb_runtime_accesses,
@@ -4401,8 +4033,6 @@ fn module_verifier_obligations(
             }
             ir::IrItem::Lock(lock) => {
                 let param_schema_vars = schema_pointer_var_ids(&lock.body, &lock.params);
-                let symbolic_runtime_features =
-                    body_symbolic_runtime_features(&lock.body, &param_schema_vars, type_layouts, &lock.params, cell_type_kinds, None);
                 let fail_closed_runtime_features = body_fail_closed_runtime_features(
                     &lock.body,
                     &param_schema_vars,
@@ -4418,7 +4048,6 @@ fn module_verifier_obligations(
                     "lock",
                     &lock.name,
                     &lock.body,
-                    &symbolic_runtime_features,
                     &fail_closed_runtime_features,
                     &ckb_runtime_features,
                     &ckb_runtime_accesses,
@@ -4917,7 +4546,6 @@ fn body_verifier_obligations(
     scope_kind: &str,
     name: &str,
     body: &ir::IrBody,
-    symbolic_runtime_features: &[String],
     fail_closed_runtime_features: &[String],
     ckb_runtime_features: &[String],
     ckb_runtime_accesses: &[CkbRuntimeAccessMetadata],
@@ -4929,8 +4557,6 @@ fn body_verifier_obligations(
     pure_const_returns: &HashMap<String, ir::IrConst>,
 ) -> Vec<VerifierObligationMetadata> {
     let scope = format!("{}:{}", scope_kind, name);
-    let fail_closed = fail_closed_runtime_features.iter().cloned().collect::<BTreeSet<_>>();
-    let ckb_features = ckb_runtime_features.iter().cloned().collect::<BTreeSet<_>>();
     let mut seen = BTreeSet::new();
     let mut obligations = Vec::new();
 
@@ -4988,30 +4614,6 @@ fn body_verifier_obligations(
         body_pool_primitive_metadata(scope_kind, name, body, params, type_layouts, cell_type_kinds, pure_const_returns);
     for check in body_pool_primitive_obligations(&pool_primitives) {
         push_verifier_obligation(&mut obligations, &mut seen, &scope, check.category, &check.feature, check.status, &check.detail);
-    }
-
-    for feature in symbolic_runtime_features {
-        if fail_closed.contains(feature) {
-            push_verifier_obligation(
-                &mut obligations,
-                &mut seen,
-                &scope,
-                "runtime-fail-closed",
-                feature,
-                "fail-closed",
-                "Generated code rejects this path instead of accepting an unimplemented symbolic runtime operation",
-            );
-        } else if !ckb_features.contains(feature) {
-            push_verifier_obligation(
-                &mut obligations,
-                &mut seen,
-                &scope,
-                "standalone-elf-limitation",
-                feature,
-                "unsupported-standalone",
-                "This source-level feature prevents standalone pure-ELF compatibility; audit the CKB-runtime path and emitted access summary",
-            );
-        }
     }
 
     for feature in fail_closed_runtime_features {
@@ -6013,7 +5615,7 @@ fn revoke_admin_authorization_is_checked(name: &str, type_name: &str, body: &ir:
 }
 
 fn claim_body_has_source_predicates(body: &ir::IrBody) -> bool {
-    body_assert_invariant_count(body) > 0 || body_uses_current_daa_score(body)
+    body_assert_invariant_count(body) > 0 || body_uses_current_timepoint(body)
 }
 
 fn claim_source_predicates_are_checked(name: &str, type_name: &str, body: &ir::IrBody) -> bool {
@@ -6021,12 +5623,12 @@ fn claim_source_predicates_are_checked(name: &str, type_name: &str, body: &ir::I
         return true;
     }
     let source_invariant_count = body_assert_invariant_count(body);
-    let uses_daa = body_uses_current_daa_score(body);
+    let uses_timepoint = body_uses_current_timepoint(body);
     let checked_guards = receipt_claim_flow_checked_condition_guards(name, type_name, source_invariant_count, body);
     if checked_guards.is_empty() {
         return false;
     }
-    if uses_daa && !checked_guards.contains(&"daa-cliff-reached") {
+    if uses_timepoint && !checked_guards.contains(&"timepoint-check") {
         return false;
     }
     if source_invariant_count > checked_guards.len() {
@@ -6041,15 +5643,15 @@ fn receipt_claim_flow_checked_condition_guards(
     source_invariant_count: usize,
     body: &ir::IrBody,
 ) -> Vec<&'static str> {
-    if name == "claim_vested" && type_name == "VestingGrant" && source_invariant_count >= 3 && body_uses_current_daa_score(body) {
-        return vec!["daa-cliff-reached", "state-not-fully-claimed", "positive-claimable"];
+    if name == "claim_vested" && type_name == "VestingGrant" && source_invariant_count >= 3 && body_uses_current_timepoint(body) {
+        return vec!["timepoint-check", "state-not-fully-claimed", "positive-claimable"];
     }
-    // General case: any receipt claim that uses current_daa_score and has
-    // assert_invariant conditions gets daa-cliff-reached=checked-runtime,
+    // General case: any receipt claim that uses current_timepoint and has
+    // assert_invariant conditions gets timepoint-check=checked-runtime,
     // because the codegen emits a real LOAD_HEADER_BY_FIELD + slt comparison.
-    if body_uses_current_daa_score(body) && source_invariant_count > 0 {
-        let mut guards = vec!["daa-cliff-reached"];
-        // Additional source invariants beyond the DAA cliff check are
+    if body_uses_current_timepoint(body) && source_invariant_count > 0 {
+        let mut guards = vec!["timepoint-check"];
+        // Additional source invariants beyond the timepoint check are
         // also checked-runtime when the codegen emits them as Branch conditions.
         guards.extend(std::iter::repeat_n("source-invariant", source_invariant_count.saturating_sub(1)));
         return guards;
@@ -6057,7 +5659,7 @@ fn receipt_claim_flow_checked_condition_guards(
     Vec::new()
 }
 
-fn body_uses_current_daa_score(body: &ir::IrBody) -> bool {
+fn body_uses_current_timepoint(body: &ir::IrBody) -> bool {
     body.blocks.iter().flat_map(|block| &block.instructions).any(|instruction| {
         matches!(
             instruction,
@@ -6065,7 +5667,7 @@ fn body_uses_current_daa_score(body: &ir::IrBody) -> bool {
                 func,
                 args,
                 ..
-            } if matches!(func.as_str(), "__env_current_daa_score" | "__env_current_timepoint") && args.is_empty()
+            } if matches!(func.as_str(), "__env_current_timepoint") && args.is_empty()
         )
     })
 }
@@ -6358,7 +5960,7 @@ fn transaction_runtime_input_requirements_from_obligations(
                 None,
             ));
         } else if let Some(binding) = obligation.feature.strip_prefix("claim-conditions:") {
-            let claim_time_status = if transaction_obligation_has_checked_subcondition(obligation, "daa-cliff-reached") {
+            let claim_time_status = if transaction_obligation_has_checked_subcondition(obligation, "timepoint-check") {
                 "checked-runtime"
             } else {
                 "runtime-required"
@@ -6441,19 +6043,19 @@ fn transaction_runtime_input_requirements_from_obligations(
                 ));
             }
             if obligation.status == "runtime-required"
-                || transaction_obligation_has_checked_subcondition(obligation, "daa-cliff-reached")
+                || transaction_obligation_has_checked_subcondition(obligation, "timepoint-check")
             {
                 requirements.push(transaction_runtime_input_requirement(
                     obligation,
                     "claim-time-context",
                     claim_time_status,
                     (claim_time_status == "runtime-required")
-                        .then_some("claim lowering has no checked source DAA/time predicate for this receipt"),
+                        .then_some("claim lowering has no checked source timepoint predicate for this receipt"),
                     (claim_time_status == "runtime-required").then_some("time-context-predicate-gap"),
                     "Header",
                     binding,
-                    Some("daa_score"),
-                    "claim-time-daa-score-u64",
+                    Some("timepoint"),
+                    "claim-time-timepoint-u64",
                     Some(8),
                 ));
             }
@@ -9362,20 +8964,6 @@ fn module_has_entry_params(ir: &ir::IrModule) -> bool {
     })
 }
 
-fn body_symbolic_runtime_features(
-    _body: &ir::IrBody,
-    _param_schema_vars: &BTreeSet<usize>,
-    _type_layouts: &MetadataTypeLayouts,
-    _params: &[ir::IrParam],
-    _cell_type_kinds: &HashMap<String, ir::IrTypeKind>,
-    _return_type: Option<&ir::IrType>,
-) -> Vec<String> {
-    // All former symbolic operations now have real RISC-V lowerings or fail-closed
-    // traps with specific error codes. No operation remains purely symbolic;
-    // ELF emission is always valid.
-    Vec::new()
-}
-
 const COLLECTION_FAIL_CLOSED_FEATURE_NEW: &str = "collection-new";
 const COLLECTION_FAIL_CLOSED_FEATURE_CAPACITY: &str = "collection-capacity";
 const COLLECTION_FAIL_CLOSED_FEATURE_PUSH: &str = "collection-push";
@@ -10113,9 +9701,7 @@ fn metadata_prelude_availability(
                     }
                 }
                 ir::IrInstruction::Call { dest: Some(dest), func, args }
-                    if dest.ty == ir::IrType::U64
-                        && matches!(func.as_str(), "__env_current_daa_score" | "__env_current_timepoint")
-                        && args.is_empty() =>
+                    if dest.ty == ir::IrType::U64 && matches!(func.as_str(), "__env_current_timepoint") && args.is_empty() =>
                 {
                     availability.scalar_vars.insert(dest.id);
                     availability.fixed_value_vars.insert(dest.id);
@@ -10900,9 +10486,6 @@ fn body_ckb_runtime_features(
     for block in &body.blocks {
         for instruction in &block.instructions {
             match instruction {
-                ir::IrInstruction::Call { func, .. } if func == "__env_current_daa_score" => {
-                    features.insert("load-header-daa-score".to_string());
-                }
                 ir::IrInstruction::Call { func, .. } if func == "__env_current_timepoint" => {
                     features.insert("load-header-timepoint".to_string());
                 }
@@ -11323,7 +10906,7 @@ fn type_metadata(
 ) -> TypeMetadata {
     let lifecycle_states = type_def.lifecycle_states.clone().unwrap_or_default();
     let type_id = type_def.type_id.clone();
-    let type_id_hash_blake3 = type_id.as_ref().map(|value| hex_hash(blake3::hash(value.as_bytes()).as_bytes()));
+    let type_id_hash = type_id.as_ref().map(|value| hex_encode(&ckb_blake2b256(value.as_bytes())));
     let ckb_type_id = ckb_type_id_metadata(type_def, target_profile);
     TypeMetadata {
         name: type_def.name.clone(),
@@ -11334,7 +10917,7 @@ fn type_metadata(
         } else {
             "target-default".to_string()
         },
-        type_id_hash_blake3,
+        type_id_hash,
         ckb_type_id,
         kind: format!("{:?}", type_def.kind),
         capabilities: type_def.capabilities.iter().map(metadata_capability_name).collect(),
@@ -11399,14 +10982,14 @@ fn type_molecule_schema_metadata(
     }
     debug_assert_eq!(root_type, molecule_identifier(&type_def.name));
 
-    let schema_hash_blake3 = hex_encode(blake3::hash(schema.as_bytes()).as_bytes());
+    let schema_hash = hex_encode(&ckb_blake2b256(schema.as_bytes()));
     Some(MoleculeSchemaMetadata {
         abi: "molecule".to_string(),
         layout: if encoded_size.is_some() { "fixed-struct-v1" } else { "molecule-table-v1" }.to_string(),
         name: type_def.name.clone(),
         dynamic_fields: if encoded_size.is_some() { Vec::new() } else { molecule_dynamic_fields(type_def, type_defs) },
         fixed_size,
-        schema_hash_blake3,
+        schema_hash,
         schema,
     })
 }
@@ -11423,7 +11006,7 @@ fn molecule_schema_manifest_metadata(types: &[TypeMetadata], target_profile: Tar
                 fixed_size: schema.fixed_size,
                 encoded_size: ty.encoded_size,
                 dynamic_fields: schema.dynamic_fields.clone(),
-                schema_hash_blake3: schema.schema_hash_blake3.clone(),
+                schema_hash: schema.schema_hash.clone(),
                 field_offsets: ty
                     .fields
                     .iter()
@@ -11457,7 +11040,7 @@ fn molecule_schema_manifest_metadata(types: &[TypeMetadata], target_profile: Tar
         canonical.push('|');
         canonical.push_str(&entry.dynamic_fields.join(","));
         canonical.push('|');
-        canonical.push_str(&entry.schema_hash_blake3);
+        canonical.push_str(&entry.schema_hash);
         canonical.push('\n');
         for field in &entry.field_offsets {
             canonical.push_str("  ");
@@ -11482,7 +11065,7 @@ fn molecule_schema_manifest_metadata(types: &[TypeMetadata], target_profile: Tar
         type_count: entries.len(),
         fixed_type_count,
         dynamic_type_count,
-        manifest_hash_blake3: hex_encode(blake3::hash(canonical.as_bytes()).as_bytes()),
+        manifest_hash: hex_encode(&ckb_blake2b256(canonical.as_bytes())),
         entries,
     }
 }
@@ -12588,8 +12171,8 @@ mod tests {
     use tempfile::tempdir;
 
     fn rebind_artifact_integrity_for_test(result: &mut crate::CompileResult) {
-        result.artifact_hash = *blake3::hash(&result.artifact_bytes).as_bytes();
-        result.metadata.artifact_hash_blake3 = Some(crate::hex_encode(&result.artifact_hash));
+        result.artifact_hash = crate::ckb_blake2b256(&result.artifact_bytes);
+        result.metadata.artifact_hash = Some(crate::hex_encode(&result.artifact_hash));
         result.metadata.artifact_size_bytes = Some(result.artifact_bytes.len());
     }
 
@@ -13053,90 +12636,6 @@ action bad(pool: &mut Pool) -> u64 {
     let mut alias = read_ref<Pool>()
     alias = pool
     return alias.reserve
-}
-"#;
-
-    const MUT_REF_DUPLICATE_CALL_PROGRAM: &str = r#"
-module test
-
-shared Pool {
-    reserve: u64,
-}
-
-action bump_pair(left: &mut Pool, right: &mut Pool) {
-    left.reserve = left.reserve + 1
-    right.reserve = right.reserve + 1
-}
-
-action bad(pool: &mut Pool) {
-    bump_pair(pool, pool)
-}
-"#;
-
-    const MUT_REF_BLOCK_DUPLICATE_CALL_PROGRAM: &str = r#"
-module test
-
-shared Pool {
-    reserve: u64,
-}
-
-action bump_pair(left: &mut Pool, right: &mut Pool) {
-    left.reserve = left.reserve + 1
-    right.reserve = right.reserve + 1
-}
-
-action bad(pool: &mut Pool) {
-    bump_pair({ pool }, pool)
-}
-"#;
-
-    const MUT_REF_IF_DUPLICATE_CALL_PROGRAM: &str = r#"
-module test
-
-shared Pool {
-    reserve: u64,
-}
-
-action bump_pair(left: &mut Pool, right: &mut Pool) {
-    left.reserve = left.reserve + 1
-    right.reserve = right.reserve + 1
-}
-
-action bad(pool: &mut Pool, flag: bool) {
-    bump_pair(if flag { pool } else { pool }, pool)
-}
-"#;
-
-    const MUT_REF_MIXED_DUPLICATE_CALL_PROGRAM: &str = r#"
-module test
-
-shared Pool {
-    reserve: u64,
-}
-
-action bump_with_view(target: &mut Pool, view: &Pool) -> u64 {
-    target.reserve = target.reserve + 1
-    return view.reserve
-}
-
-action bad(pool: &mut Pool) -> u64 {
-    return bump_with_view(pool, pool)
-}
-"#;
-
-    const MUT_REF_DUPLICATE_READ_ONLY_CALL_PROGRAM: &str = r#"
-module test
-
-shared Pool {
-    reserve: u64,
-}
-
-fn sum_views(left: &Pool, right: &Pool) -> u64 {
-    return left.reserve + right.reserve
-}
-
-action ok(pool: &mut Pool) -> u64 {
-    return sum_views(pool, pool)
 }
 "#;
 
@@ -13662,26 +13161,6 @@ action issue(amount: u64) -> Token {
 }
 "#;
 
-    const CREATE_UNSUPPORTED_DYNAMIC_OUTPUT_PROGRAM: &str = r#"
-module test
-
-resource Fingerprint {
-    digest: Hash,
-}
-
-fn pass_digest(digest: Hash) -> Hash {
-    return digest
-}
-
-action issue(digest: Hash) -> Fingerprint {
-    let dynamic_digest = pass_digest(digest)
-    let token = create Fingerprint {
-        digest: dynamic_digest
-    }
-    return token
-}
-"#;
-
     const CREATE_DUPLICATE_FIELD_PROGRAM: &str = r#"
 module test
 
@@ -14054,7 +13533,7 @@ fn helper(amount: u64) -> u64 {
 module test
 
 fn helper() -> u64 {
-    return env::current_daa_score()
+    return env::current_timepoint()
 }
 "#;
 
@@ -14644,14 +14123,6 @@ action bad(flag: bool) -> u64 {
 }
 "#;
 
-    const ENV_DAA_PROGRAM: &str = r#"
-module test
-
-action now() -> u64 {
-    return env::current_daa_score()
-}
-"#;
-
     const CKB_HEADER_EPOCH_PROGRAM: &str = r#"
 module test
 
@@ -14664,28 +14135,11 @@ action epoch() -> u64 {
 }
 "#;
 
-    const ENV_DAA_CREATE_OUTPUT_PROGRAM: &str = r#"
-module test
-
-resource Clock {
-    now: u64,
-    later: u64,
-}
-
-action stamp(delta: u64) -> Clock {
-    let now = env::current_daa_score()
-    create Clock {
-        now: now,
-        later: now + delta
-    }
-}
-"#;
-
     const BUILTIN_WRONG_ARITY_PROGRAM: &str = r#"
 module test
 
 action now(x: u64) -> u64 {
-    return env::current_daa_score(x)
+    return env::current_timepoint(x)
 }
 "#;
 
@@ -14850,90 +14304,6 @@ action split(token: Token, fee: u64) -> (Token, Token) {
 }
 "#;
 
-    const CONSUME_CREATE_DUPLICATE_SPLIT_CONSERVATION_PROGRAM: &str = r#"
-module test
-
-resource Token {
-    amount: u64,
-}
-
-action split(token: Token, fee: u64) -> (Token, Token, Token) {
-    let amount = token.amount
-    let remaining = amount - fee
-    consume token
-    let change = create Token {
-        amount: remaining
-    }
-    let paid_fee = create Token {
-        amount: fee
-    }
-    let extra_fee = create Token {
-        amount: fee
-    }
-    return (change, paid_fee, extra_fee)
-}
-"#;
-
-    const CONSUME_CREATE_DUPLICATE_MERGE_CONSERVATION_PROGRAM: &str = r#"
-module test
-
-resource Token {
-    amount: u64,
-}
-
-action merge(left: Token, right: Token) -> Token {
-    let left_amount = left.amount
-    let total = left_amount + left_amount
-    consume left
-    consume right
-    let out = create Token {
-        amount: total
-    }
-    return out
-}
-"#;
-
-    const CONSUME_CREATE_MISSING_INPUT_MERGE_CONSERVATION_PROGRAM: &str = r#"
-module test
-
-resource Token {
-    amount: u64,
-}
-
-action merge(left: Token, right: Token) -> Token {
-    let total = left.amount
-    consume left
-    consume right
-    let out = create Token {
-        amount: total
-    }
-    return out
-}
-"#;
-
-    const CONSUME_CREATE_EXTRA_FIELD_MERGE_CONSERVATION_PROGRAM: &str = r#"
-module test
-
-resource Token {
-    amount: u64,
-    owner: Address,
-}
-
-action merge(left: Token, right: Token) -> Token {
-    let left_amount = left.amount
-    let right_amount = right.amount
-    let total = left_amount + right_amount
-    let owner = left.owner
-    consume left
-    consume right
-    let out = create Token {
-        amount: total,
-        owner: owner
-    }
-    return out
-}
-"#;
-
     const CONSUME_CREATE_IDENTITY_FIELD_MERGE_CONSERVATION_PROGRAM: &str = r#"
 module test
 
@@ -14953,62 +14323,6 @@ action merge(left: Token, right: Token) -> Token {
     let out = create Token {
         amount: total,
         symbol: symbol
-    }
-    return out
-}
-"#;
-
-    const CONSUME_CREATE_ARITHMETIC_CONSERVATION_PROGRAM: &str = r#"
-module test
-
-resource Token {
-    amount: u64,
-}
-
-action withdraw(token: Token, fee: u64) -> Token {
-    let amount = token.amount
-    let remaining = amount - fee
-    consume token
-    let out = create Token {
-        amount: remaining
-    }
-    return out
-}
-"#;
-
-    const CONSUME_CREATE_CHAINED_ARITHMETIC_CONSERVATION_PROGRAM: &str = r#"
-module test
-
-resource Token {
-    amount: u64,
-}
-
-action withdraw(token: Token, fee: u64, tax: u64) -> Token {
-    let amount = token.amount
-    let after_fee = amount - fee
-    let remaining = after_fee - tax
-    consume token
-    let out = create Token {
-        amount: remaining
-    }
-    return out
-}
-"#;
-
-    const CONSUME_CREATE_LOCAL_CONST_CONSERVATION_PROGRAM: &str = r#"
-module test
-
-resource Token {
-    amount: u64,
-}
-
-action withdraw(token: Token) -> Token {
-    let amount = token.amount
-    let fee = 2
-    let remaining = amount - fee
-    consume token
-    let out = create Token {
-        amount: remaining
     }
     return out
 }
@@ -16024,26 +15338,6 @@ action redeem(receipt: VestingReceipt) -> Token {
     }
 "#;
 
-    const CLAIM_SETTLE_UNSUPPORTED_OUTPUT_RELATION_PROGRAM: &str = r#"
-module test
-
-resource Token {
-    amount: u128,
-}
-
-receipt VestingReceipt -> Token {
-    amount: u128,
-}
-
-action redeem(receipt: VestingReceipt) -> Token {
-    return claim receipt
-}
-
-action finalize(token: Token) -> Token {
-    return settle token
-}
-"#;
-
     const SETTLE_LIFECYCLE_FINAL_STATE_PROGRAM: &str = r#"
 module test
 
@@ -16073,53 +15367,6 @@ receipt SignedReceipt -> Token {
 
 action redeem_signed(receipt: SignedReceipt) -> Token {
     return claim receipt
-}
-"#;
-
-    const CLAIM_SIGNER_WITH_TIME_PREDICATE_PROGRAM: &str = r#"
-module test
-
-resource Token has store {
-    amount: u64,
-    signer_pubkey_hash: [u8; 20],
-}
-
-receipt SignedVestingReceipt -> Token {
-    amount: u64,
-    signer_pubkey_hash: [u8; 20],
-    cliff_daa: u64,
-}
-
-action redeem_signed_after_cliff(receipt: SignedVestingReceipt) -> Token {
-    let now = env::current_daa_score()
-    assert_invariant(now >= receipt.cliff_daa, "cliff not reached")
-    return claim receipt
-}
-"#;
-
-    const TRANSFER_CLAIM_SETTLE_NON_SCALAR_FIELD_PROGRAM: &str = r#"
-module test
-
-resource Token has store, transfer, destroy {
-    amount: u64,
-    owner: Address,
-}
-
-receipt VestingReceipt -> Token {
-    amount: u64,
-    owner: Address,
-}
-
-action move_token(token: Token, to: Address) -> Token {
-    return transfer token to to
-}
-
-action redeem(receipt: VestingReceipt) -> Token {
-    return claim receipt
-}
-
-action finalize(token: Token) -> Token {
-    return settle token
 }
 "#;
 
@@ -16491,7 +15738,7 @@ action activate(ticket: Ticket) -> Ticket {
         assert!(asm.contains("li t0, 1"), "missing initial x field constant:\n{}", asm);
         assert!(asm.contains("li t0, 2"), "missing initial y field constant:\n{}", asm);
         assert!(asm.contains("sd t0, 8(sp)"), "missing field x storage slot writes:\n{}", asm);
-        assert!(!asm.contains("# field access .x"), "local struct field access fell back to symbolic field path:\n{}", asm);
+        assert!(!asm.contains("# field access .x"), "local struct field access fell back to schema field path:\n{}", asm);
     }
 
     #[test]
@@ -16579,39 +15826,6 @@ action activate(ticket: Ticket) -> Ticket {
 
         let err = compile(MUT_REF_ASSIGN_ALIAS_PROGRAM, CompileOptions::default()).unwrap_err();
         assert!(err.message.contains("assignment cannot store mutable reference type &mut Pool"), "unexpected error: {}", err.message);
-    }
-
-    #[test]
-    fn compile_rejects_duplicate_mutable_reference_call_roots() {
-        let err = compile(MUT_REF_DUPLICATE_CALL_PROGRAM, CompileOptions::default()).unwrap_err();
-        assert!(
-            err.message.contains("function 'bump_pair' cannot receive mutable reference root 'pool' more than once"),
-            "unexpected error: {}",
-            err.message
-        );
-
-        let err = compile(MUT_REF_BLOCK_DUPLICATE_CALL_PROGRAM, CompileOptions::default()).unwrap_err();
-        assert!(
-            err.message.contains("function 'bump_pair' cannot receive mutable reference root 'pool' more than once"),
-            "unexpected error: {}",
-            err.message
-        );
-
-        let err = compile(MUT_REF_IF_DUPLICATE_CALL_PROGRAM, CompileOptions::default()).unwrap_err();
-        assert!(
-            err.message.contains("function 'bump_pair' cannot receive mutable reference root 'pool' more than once"),
-            "unexpected error: {}",
-            err.message
-        );
-
-        let err = compile(MUT_REF_MIXED_DUPLICATE_CALL_PROGRAM, CompileOptions::default()).unwrap_err();
-        assert!(
-            err.message.contains("function 'bump_with_view' cannot receive mutable reference root 'pool' more than once"),
-            "unexpected error: {}",
-            err.message
-        );
-
-        compile(MUT_REF_DUPLICATE_READ_ONLY_CALL_PROGRAM, CompileOptions::default()).unwrap();
     }
 
     #[test]
@@ -17053,51 +16267,6 @@ action activate(ticket: Ticket) -> Ticket {
     }
 
     #[test]
-    fn incomplete_create_output_verification_exposes_transaction_blocker() {
-        let result = compile(CREATE_UNSUPPORTED_DYNAMIC_OUTPUT_PROGRAM, CompileOptions::default()).unwrap();
-        let action = result.metadata.actions.iter().find(|action| action.name == "issue").expect("issue action");
-
-        assert!(
-            action.fail_closed_runtime_features.contains(&"output-verification-incomplete".to_string()),
-            "unsupported create output should still fail closed: {:?}",
-            action.fail_closed_runtime_features
-        );
-        let obligation = action
-            .verifier_obligations
-            .iter()
-            .find(|obligation| obligation.feature.starts_with("create-output:Fingerprint:"))
-            .expect("create output verifier obligation");
-        assert_eq!(obligation.category, "transaction-invariant");
-        assert_eq!(obligation.status, "runtime-required");
-        assert!(
-            obligation.detail.contains("create-output-fields=runtime-required")
-                && obligation.detail.contains("create-output-lock=not-required"),
-            "create output obligation must classify field and lock coverage separately: {:?}",
-            obligation
-        );
-        assert!(
-            action.transaction_runtime_input_requirements.iter().any(|requirement| {
-                requirement.feature.starts_with("create-output:Fingerprint:")
-                    && requirement.binding == "create_Fingerprint"
-                    && requirement.component == "create-output-fields"
-                    && requirement.status == "runtime-required"
-                    && requirement.blocker_class.as_deref() == Some("create-output-verification-gap")
-            }),
-            "action metadata must expose create output field verifier blocker: {:?}",
-            action.transaction_runtime_input_requirements
-        );
-        assert!(
-            !action
-                .transaction_runtime_input_requirements
-                .iter()
-                .any(|requirement| requirement.feature.starts_with("create-output:Fingerprint:")
-                    && requirement.component == "create-output-lock"),
-            "absence of an explicit with_lock should not expose a lock blocker: {:?}",
-            action.transaction_runtime_input_requirements
-        );
-    }
-
-    #[test]
     fn compile_rejects_invalid_create_field_initializers() {
         let duplicate = compile(CREATE_DUPLICATE_FIELD_PROGRAM, CompileOptions::default()).unwrap_err();
         assert!(
@@ -17197,8 +16366,8 @@ action activate(ticket: Ticket) -> Ticket {
             asm
         );
         assert!(
-            !asm.contains("# cellscript abi: destroy symbolic runtime is not executable"),
-            "destroy should no longer use the symbolic fail-closed path:\n{}",
+            !asm.contains("# cellscript abi: destroy fail-closed runtime path"),
+            "destroy should no longer use the fail-closed lowering path:\n{}",
             asm
         );
 
@@ -17541,8 +16710,8 @@ action grant(config: read_ref Config, token: Token) -> Grant {
             asm
         );
         assert!(
-            !asm.contains("fixed-byte comparison symbolic runtime is not executable"),
-            "verified fixed-byte equality should not use the symbolic fail-closed path:\n{}",
+            !asm.contains("fixed-byte comparison fail-closed runtime path"),
+            "verified fixed-byte equality should not use the fail-closed lowering path:\n{}",
             asm
         );
         assert!(
@@ -17732,54 +16901,6 @@ action grant(config: read_ref Config, token: Token) -> Grant {
     }
 
     #[test]
-    fn compile_verifies_create_output_against_prelude_u64_arithmetic() {
-        let result = compile(CONSUME_CREATE_ARITHMETIC_CONSERVATION_PROGRAM, CompileOptions::default()).unwrap();
-        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
-
-        assert!(
-            asm.contains("# cellscript abi: expected expression u64 Sub"),
-            "created output amount was not compared against a prelude arithmetic expression:\n{}",
-            asm
-        );
-        assert!(
-            asm.contains("# cellscript abi: expected field Token.amount offset=0 size=8"),
-            "prelude arithmetic expression did not read the consumed input amount:\n{}",
-            asm
-        );
-        assert!(asm.contains("sub t1, t3, t1"), "prelude arithmetic expression did not compute input amount minus fee:\n{}", asm);
-        assert!(
-            asm.contains("# cellscript abi: verify output field Token.amount offset=0 size=8"),
-            "created output amount was not verified:\n{}",
-            asm
-        );
-        let action = result.metadata.actions.iter().find(|action| action.name == "withdraw").expect("withdraw metadata");
-        assert!(
-            action.verifier_obligations.iter().any(|obligation| {
-                obligation.category == "transaction-invariant"
-                    && obligation.feature == "resource-conservation:Token"
-                    && obligation.status == "runtime-required"
-                    && obligation.detail.contains("resource-conservation=runtime-required")
-            }),
-            "arithmetic resource conservation should remain runtime-required: {:?}",
-            action.verifier_obligations
-        );
-        assert!(
-            action.transaction_runtime_input_requirements.iter().any(|requirement| {
-                requirement.feature == "resource-conservation:Token"
-                    && requirement.component == "resource-conservation-proof"
-                    && requirement.status == "runtime-required"
-                    && requirement.source == "Transaction"
-                    && requirement.binding == "Token"
-                    && requirement.field.as_deref() == Some("input-output-conservation")
-                    && requirement.abi == "resource-conservation-consume-create-accounting"
-                    && requirement.blocker_class.as_deref() == Some("resource-conservation-proof-gap")
-            }),
-            "arithmetic resource conservation should expose a stable blocker class: {:?}",
-            action.transaction_runtime_input_requirements
-        );
-    }
-
-    #[test]
     fn compile_classifies_resource_merge_amount_sum_as_checked_runtime() {
         let result = compile(CONSUME_CREATE_MERGE_CONSERVATION_PROGRAM, CompileOptions::default()).unwrap();
         let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
@@ -17870,7 +16991,7 @@ action grant(config: read_ref Config, token: Token) -> Grant {
         )
         .unwrap();
         assert_eq!(result.metadata.target_profile.name, "ckb");
-        assert_eq!(result.metadata.target_profile.artifact_packaging, "ckb-elf-no-sporabi-trailer");
+        assert_eq!(result.metadata.target_profile.artifact_packaging, "ckb-elf");
         let merge = result.metadata.actions.iter().find(|action| action.name == "merge").expect("merge metadata");
         assert!(
             merge
@@ -17940,100 +17061,6 @@ action grant(config: read_ref Config, token: Token) -> Grant {
     }
 
     #[test]
-    fn compile_keeps_unsound_resource_conservation_runtime_required() {
-        for (name, program) in [
-            ("duplicate input amount leaf", CONSUME_CREATE_DUPLICATE_MERGE_CONSERVATION_PROGRAM),
-            ("missing consumed input amount leaf", CONSUME_CREATE_MISSING_INPUT_MERGE_CONSERVATION_PROGRAM),
-            ("extra non-amount field", CONSUME_CREATE_EXTRA_FIELD_MERGE_CONSERVATION_PROGRAM),
-            ("duplicate split output", CONSUME_CREATE_DUPLICATE_SPLIT_CONSERVATION_PROGRAM),
-        ] {
-            let result = compile(program, CompileOptions::default()).unwrap();
-            let action = result
-                .metadata
-                .actions
-                .iter()
-                .find(|action| action.name == "merge")
-                .or_else(|| result.metadata.actions.iter().find(|action| action.name == "split"))
-                .expect("resource conservation metadata action");
-            assert!(
-                action.verifier_obligations.iter().any(|obligation| {
-                    obligation.category == "transaction-invariant"
-                        && obligation.feature == "resource-conservation:Token"
-                        && obligation.status == "runtime-required"
-                        && obligation.detail.contains("resource-conservation=runtime-required")
-                }),
-                "{} should remain runtime-required resource conservation: {:?}",
-                name,
-                action.verifier_obligations
-            );
-            assert!(
-                !action.verifier_obligations.iter().any(|obligation| {
-                    obligation.category == "transaction-invariant"
-                        && obligation.feature == "resource-conservation:Token"
-                        && obligation.status == "checked-runtime"
-                }),
-                "{} must not be marked checked-runtime: {:?}",
-                name,
-                action.verifier_obligations
-            );
-            assert!(
-                action.transaction_runtime_input_requirements.iter().any(|requirement| {
-                    requirement.feature == "resource-conservation:Token"
-                        && requirement.component == "resource-conservation-proof"
-                        && requirement.status == "runtime-required"
-                        && requirement.blocker_class.as_deref() == Some("resource-conservation-proof-gap")
-                }),
-                "{} should expose resource conservation blocker metadata: {:?}",
-                name,
-                action.transaction_runtime_input_requirements
-            );
-        }
-    }
-
-    #[test]
-    fn compile_verifies_create_output_against_left_associative_prelude_u64_chain() {
-        let result = compile(CONSUME_CREATE_CHAINED_ARITHMETIC_CONSERVATION_PROGRAM, CompileOptions::default()).unwrap();
-        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
-
-        assert_eq!(
-            asm.matches("# cellscript abi: expected expression u64 Sub").count(),
-            2,
-            "left-associative prelude arithmetic chain should be recomputed recursively:\n{}",
-            asm
-        );
-        assert!(
-            asm.contains("# cellscript abi: expected field Token.amount offset=0 size=8"),
-            "prelude arithmetic chain did not read the consumed input amount:\n{}",
-            asm
-        );
-        assert!(asm.matches("sub t1, t3, t1").count() >= 2, "prelude arithmetic chain did not subtract both fee and tax:\n{}", asm);
-        assert!(
-            asm.contains("# cellscript abi: verify output field Token.amount offset=0 size=8"),
-            "created output amount was not verified:\n{}",
-            asm
-        );
-    }
-
-    #[test]
-    fn compile_verifies_create_output_against_local_const_prelude_u64() {
-        let result = compile(CONSUME_CREATE_LOCAL_CONST_CONSERVATION_PROGRAM, CompileOptions::default()).unwrap();
-        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
-
-        assert!(
-            asm.contains("# cellscript abi: expected expression u64 Sub"),
-            "created output amount was not compared against the local-const arithmetic expression:\n{}",
-            asm
-        );
-        assert!(asm.contains("li t1, 2"), "prelude arithmetic expression did not preserve local const fee:\n{}", asm);
-        assert!(asm.contains("sub t1, t3, t1"), "prelude arithmetic expression did not subtract local const fee:\n{}", asm);
-        assert!(
-            asm.contains("# cellscript abi: verify output field Token.amount offset=0 size=8"),
-            "created output amount was not verified:\n{}",
-            asm
-        );
-    }
-
-    #[test]
     fn compile_preserves_index_and_tuple_projection_in_assembly() {
         let result = compile(INDEXED_TUPLE_PROGRAM, CompileOptions::default()).unwrap();
         let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
@@ -18050,11 +17077,7 @@ action grant(config: read_ref Config, token: Token) -> Grant {
             "fixed tuple projection did not lower through aggregate field access:\n{}",
             asm
         );
-        assert!(
-            !asm.contains("symbolic runtime is not executable"),
-            "fixed tuple-array index/projection should not fail closed:\n{}",
-            asm
-        );
+        assert!(!asm.contains("fail-closed runtime path"), "fixed tuple-array index/projection should not fail closed:\n{}", asm);
     }
 
     #[test]
@@ -18077,21 +17100,21 @@ action grant(config: read_ref Config, token: Token) -> Grant {
             asm
         );
         assert!(
-            !asm.contains("index access symbolic runtime is not executable"),
-            "fixed parameter foreach should not use symbolic index fail-closed lowering:\n{}",
+            !asm.contains("index access fail-closed runtime path"),
+            "fixed parameter foreach should not use fail-closed index lowering:\n{}",
             asm
         );
     }
 
     #[test]
-    fn compile_unrolls_local_fixed_array_foreach_without_symbolic_indexing() {
+    fn compile_unrolls_local_fixed_array_foreach_without_runtime_indexing() {
         let result = compile(LOCAL_FOREACH_ARRAY_PROGRAM, CompileOptions::default()).unwrap();
         let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
 
         assert!(!asm.contains("# length"), "local fixed-array foreach unnecessarily used length runtime:\n{}", asm);
-        assert!(!asm.contains("# index access"), "local fixed-array foreach fell back to symbolic indexing:\n{}", asm);
+        assert!(!asm.contains("# index access"), "local fixed-array foreach fell back to runtime indexing:\n{}", asm);
         assert!(
-            !asm.contains("index access symbolic runtime is not executable"),
+            !asm.contains("index access fail-closed runtime path"),
             "local fixed-array foreach incorrectly failed closed:\n{}",
             asm
         );
@@ -18105,11 +17128,11 @@ action grant(config: read_ref Config, token: Token) -> Grant {
         let result = compile(LOCAL_FOREACH_ARRAY_OF_TUPLES_PROGRAM, CompileOptions::default()).unwrap();
         let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
 
-        assert!(!asm.contains("# index access"), "local array-of-tuples foreach fell back to symbolic indexing:\n{}", asm);
-        assert!(!asm.contains("# field access .1"), "tuple foreach destructuring fell back to symbolic field access:\n{}", asm);
+        assert!(!asm.contains("# index access"), "local array-of-tuples foreach fell back to runtime indexing:\n{}", asm);
+        assert!(!asm.contains("# field access .1"), "tuple foreach destructuring fell back to schema field access:\n{}", asm);
         assert!(
-            !asm.contains("symbolic runtime is not executable"),
-            "local array-of-tuples foreach incorrectly required symbolic runtime:\n{}",
+            !asm.contains("fail-closed runtime path"),
+            "local array-of-tuples foreach incorrectly required fail-closed runtime:\n{}",
             asm
         );
         assert!(asm.contains("li t0, 2"), "tuple foreach lost first amount literal:\n{}", asm);
@@ -18144,8 +17167,8 @@ action grant(config: read_ref Config, token: Token) -> Grant {
 
         assert!(!asm.contains("# length"), "local fixed-array len should fold before runtime length lowering:\n{}", asm);
         assert!(
-            !asm.contains("dynamic length symbolic runtime is not executable"),
-            "local fixed-array len incorrectly required symbolic runtime:\n{}",
+            !asm.contains("dynamic length fail-closed runtime path"),
+            "local fixed-array len incorrectly required fail-closed runtime:\n{}",
             asm
         );
         assert!(asm.contains("li a0, 3"), "local fixed-array len did not return the static length:\n{}", asm);
@@ -18183,9 +17206,9 @@ action grant(config: read_ref Config, token: Token) -> Grant {
         let result = compile(LOCAL_ARRAY_STATIC_INDEX_PROGRAM, CompileOptions::default()).unwrap();
         let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
 
-        assert!(!asm.contains("# index access"), "local fixed-array static indexes fell back to symbolic runtime:\n{}", asm);
+        assert!(!asm.contains("# index access"), "local fixed-array static indexes fell back to fail-closed runtime:\n{}", asm);
         assert!(
-            !asm.contains("index access symbolic runtime is not executable"),
+            !asm.contains("index access fail-closed runtime path"),
             "local fixed-array static indexes incorrectly failed closed:\n{}",
             asm
         );
@@ -18230,7 +17253,7 @@ action grant(config: read_ref Config, token: Token) -> Grant {
         let result = compile(LOCAL_TUPLE_STATIC_FIELD_PROGRAM, CompileOptions::default()).unwrap();
         let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
 
-        assert!(!asm.contains("# field access .1"), "local tuple field access fell back to symbolic/schema path:\n{}", asm);
+        assert!(!asm.contains("# field access .1"), "local tuple field access fell back to schema path:\n{}", asm);
         assert!(asm.contains("li t0, 7"), "tuple field assignment did not preserve assigned constant:\n{}", asm);
         assert!(asm.contains("add t0, t0, t1"), "tuple field reads did not lower into arithmetic:\n{}", asm);
     }
@@ -18240,11 +17263,11 @@ action grant(config: read_ref Config, token: Token) -> Grant {
         let result = compile(ARRAY_OF_TUPLES_STATIC_INDEX_PROGRAM, CompileOptions::default()).unwrap();
         let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
 
-        assert!(!asm.contains("# index access"), "local array-of-tuples static index fell back to symbolic runtime:\n{}", asm);
-        assert!(!asm.contains("# field access .1"), "local tuple projection fell back to symbolic/schema path:\n{}", asm);
+        assert!(!asm.contains("# index access"), "local array-of-tuples static index fell back to fail-closed runtime:\n{}", asm);
+        assert!(!asm.contains("# field access .1"), "local tuple projection fell back to schema path:\n{}", asm);
         assert!(
-            !asm.contains("symbolic runtime is not executable"),
-            "local array-of-tuples projection incorrectly required symbolic runtime:\n{}",
+            !asm.contains("fail-closed runtime path"),
+            "local array-of-tuples projection incorrectly required fail-closed runtime:\n{}",
             asm
         );
         assert!(asm.contains("li t0, 5"), "selected tuple amount did not preserve expected literal:\n{}", asm);
@@ -18261,8 +17284,8 @@ action grant(config: read_ref Config, token: Token) -> Grant {
         let result = compile(LOCAL_TUPLE_DESTRUCTURE_PROGRAM, CompileOptions::default()).unwrap();
         let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
 
-        assert!(!asm.contains("# field access .0"), "tuple destructuring fell back to symbolic field access:\n{}", asm);
-        assert!(!asm.contains("# field access .1"), "tuple destructuring fell back to symbolic field access:\n{}", asm);
+        assert!(!asm.contains("# field access .0"), "tuple destructuring fell back to schema field access:\n{}", asm);
+        assert!(!asm.contains("# field access .1"), "tuple destructuring fell back to schema field access:\n{}", asm);
         assert!(asm.contains("li t0, 1"), "tuple destructuring lost first literal:\n{}", asm);
         assert!(asm.contains("li t0, 2"), "tuple destructuring lost second literal:\n{}", asm);
         assert!(asm.contains("add t0, t0, t1"), "tuple destructuring did not feed arithmetic:\n{}", asm);
@@ -19556,14 +18579,8 @@ action bad(point: Point) -> u64 {
         let result = compile(CELL_BACKED_VEC_PROGRAM, CompileOptions::default()).unwrap();
         let action = result.metadata.actions.iter().find(|action| action.name == "batch_mint").expect("batch_mint action metadata");
 
-        // Cell-backed collection operations are no longer classified as symbolic
-        // (they have real RISC-V lowerings or fail-closed traps). They are
-        // tracked in fail_closed_runtime_features instead.
-        assert!(
-            action.symbolic_runtime_features.is_empty(),
-            "symbolic_runtime_features should be empty (all ops have lowerings): {:?}",
-            action.symbolic_runtime_features
-        );
+        // Cell-backed collection operations are tracked as explicit fail-closed
+        // runtime features.
         assert!(
             action.fail_closed_runtime_features.contains(&"cell-backed-collection-push".to_string()),
             "cell-backed push must be visible in fail-closed features: {:?}",
@@ -19573,11 +18590,6 @@ action bad(point: Point) -> u64 {
             action.fail_closed_runtime_features.contains(&"cell-backed-collection-return".to_string()),
             "cell-backed Vec return must be visible in fail-closed features: {:?}",
             action.fail_closed_runtime_features
-        );
-        assert!(
-            result.metadata.runtime.legacy_symbolic_cell_runtime_features.is_empty(),
-            "legacy_symbolic_cell_runtime_features should be empty (all ops have lowerings): {:?}",
-            result.metadata.runtime.legacy_symbolic_cell_runtime_features
         );
         assert!(
             result.metadata.runtime.fail_closed_runtime_features.contains(&"cell-backed-collection-push".to_string()),
@@ -19665,8 +18677,8 @@ action batch(collection: &mut Collection, recipients: Vec<Address>) {
             asm
         );
         assert!(
-            !asm.contains("# cellscript abi: type_hash symbolic runtime is not executable"),
-            "schema parameter type_hash() should not use the symbolic fail-closed path:\n{}",
+            !asm.contains("# cellscript abi: type_hash fail-closed runtime path"),
+            "schema parameter type_hash() should not use the fail-closed lowering path:\n{}",
             asm
         );
         assert!(!asm.contains("# call type_hash"), "type_hash() leaked through generic call path:\n{}", asm);
@@ -19694,8 +18706,8 @@ action batch(collection: &mut Collection, recipients: Vec<Address>) {
             asm
         );
         assert!(
-            !asm.contains("fixed-byte comparison symbolic runtime is not executable"),
-            "Address::zero() comparison should not use the symbolic fail-closed path:\n{}",
+            !asm.contains("fixed-byte comparison fail-closed runtime path"),
+            "Address::zero() comparison should not use the fail-closed lowering path:\n{}",
             asm
         );
     }
@@ -19720,9 +18732,8 @@ action batch(collection: &mut Collection, recipients: Vec<Address>) {
         assert_eq!(result.artifact_format, ArtifactFormat::RiscvElf);
         assert!(result.artifact_bytes.starts_with(b"\x7fELF"));
         assert!(!result.artifact_bytes.is_empty());
-        assert!(result.metadata.runtime.vm_abi.embedded_in_artifact);
-        assert!(result.artifact_bytes.len() > crate::strip_vm_abi_trailer(&result.artifact_bytes).len());
-        assert!(crate::strip_vm_abi_trailer(&result.artifact_bytes).starts_with(b"\x7fELF"));
+        // CKB profile does not embed VM ABI trailer
+        assert!(!result.metadata.runtime.vm_abi.embedded_in_artifact);
     }
 
     #[test]
@@ -19739,7 +18750,7 @@ action batch(collection: &mut Collection, recipients: Vec<Address>) {
 
         assert_eq!(result.artifact_format, ArtifactFormat::RiscvElf);
         assert_eq!(result.metadata.target_profile.name.as_str(), "ckb");
-        assert_eq!(result.metadata.target_profile.artifact_packaging.as_str(), "ckb-elf-no-sporabi-trailer");
+        assert_eq!(result.metadata.target_profile.artifact_packaging.as_str(), "ckb-elf");
         assert!(!result.metadata.runtime.vm_abi.embedded_in_artifact);
         assert!(result.artifact_bytes.starts_with(b"\x7fELF"));
         assert_eq!(result.artifact_bytes.len(), crate::strip_vm_abi_trailer(&result.artifact_bytes).len());
@@ -19756,21 +18767,22 @@ action batch(collection: &mut Collection, recipients: Vec<Address>) {
         assert_eq!(result.metadata.runtime.vm_abi.format, "molecule");
         assert_eq!(result.metadata.runtime.vm_abi.version, 0x8001);
         assert!(result.metadata.runtime.vm_abi.default);
-        assert!(result.metadata.runtime.vm_abi.embedded_in_artifact);
+        // CKB profile does not embed VM ABI trailer
+        assert!(!result.metadata.runtime.vm_abi.embedded_in_artifact);
         assert!(result.metadata.runtime.vm_abi.scope.contains("LOAD_SCRIPT"));
         assert!(result.metadata.runtime.vm_abi.selection.contains("embed"));
-        assert_eq!(result.metadata.target_profile.name.as_str(), "spora");
-        assert_eq!(result.metadata.target_profile.target_chain.as_str(), "spora");
-        assert_eq!(result.metadata.target_profile.vm_abi.as_str(), "molecule-0x8001");
-        assert_eq!(result.metadata.target_profile.hash_domain.as_str(), "spora-domain-separated-blake3");
-        assert_eq!(result.metadata.target_profile.syscall_set.as_str(), "spora-ckb-style-load-syscalls");
-        assert_eq!(result.metadata.target_profile.artifact_packaging.as_str(), "spora-elf-sporabi-trailer");
-        assert_eq!(result.metadata.target_profile.header_abi.as_str(), "spora-dag-header");
-        assert_eq!(result.metadata.target_profile.scheduler_abi.as_str(), "spora-scheduler-witness-v1-molecule");
-        assert_eq!(result.metadata.artifact_hash_blake3.as_deref(), Some(crate::hex_encode(&result.artifact_hash).as_str()));
+        assert_eq!(result.metadata.target_profile.name.as_str(), "ckb");
+        assert_eq!(result.metadata.target_profile.target_chain.as_str(), "ckb");
+        assert_eq!(result.metadata.target_profile.vm_abi.as_str(), "ckb-molecule");
+        assert_eq!(result.metadata.target_profile.hash_domain.as_str(), "ckb-packed-molecule-blake2b");
+        assert_eq!(result.metadata.target_profile.syscall_set.as_str(), "ckb-mainnet-syscalls");
+        assert_eq!(result.metadata.target_profile.artifact_packaging.as_str(), "ckb-elf");
+        assert_eq!(result.metadata.target_profile.header_abi.as_str(), "ckb-header");
+        assert_eq!(result.metadata.target_profile.scheduler_abi.as_str(), "none");
+        assert_eq!(result.metadata.artifact_hash.as_deref(), Some(crate::hex_encode(&result.artifact_hash).as_str()));
         assert_eq!(result.metadata.artifact_size_bytes, Some(result.artifact_bytes.len()));
-        assert!(result.metadata.source_hash_blake3.is_some());
-        assert!(result.metadata.source_content_hash_blake3.is_some());
+        assert!(result.metadata.source_hash.is_some());
+        assert!(result.metadata.source_content_hash.is_some());
         assert_eq!(result.metadata.source_units.len(), 1);
         assert_eq!(result.metadata.source_units[0].path, "<memory>");
         assert_eq!(result.metadata.source_units[0].role, "memory");
@@ -19840,31 +18852,23 @@ action create_config(admin: Address, enabled: bool) -> Config {
     }
 
     #[test]
-    fn compile_rejects_portable_cell_artifact_profile() {
-        let err =
-            compile(SIMPLE_PROGRAM, CompileOptions { target_profile: Some("portable-cell".to_string()), ..CompileOptions::default() })
-                .unwrap_err();
-
-        assert!(err.message.contains("portable-cell"), "unexpected error: {}", err.message);
-        assert!(err.message.contains("source compatibility profile"), "unexpected error: {}", err.message);
-    }
-
-    #[test]
-    fn compile_rejects_ckb_target_profile_daa_dependency() {
-        let err = compile(
+    fn compile_accepts_ckb_target_profile_timepoint() {
+        let result = compile(
             r#"
-module test::daa
+module test::timepoint
 
 action now() -> u64 {
-    return env::current_daa_score()
+    return env::current_timepoint()
 }
 "#,
             CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(err.message.contains("target profile policy failed for 'ckb'"), "unexpected error: {}", err.message);
-        assert!(err.message.contains("DAA/header assumptions are Spora-specific"), "unexpected error: {}", err.message);
+        assert_eq!(result.metadata.target_profile.name, "ckb");
+        let asm = String::from_utf8(result.artifact_bytes).unwrap();
+        assert!(asm.contains("call __env_current_timepoint"), "timepoint call was not lowered:\n{}", asm);
+        assert!(result.metadata.runtime.ckb_runtime_features.contains(&"load-header-timepoint".to_string()));
     }
 
     #[test]
@@ -19889,11 +18893,6 @@ action now() -> u64 {
             asm
         );
         assert!(result.metadata.runtime.ckb_runtime_features.contains(&"load-header-timepoint".to_string()));
-        assert!(
-            !result.metadata.runtime.ckb_runtime_features.contains(&"load-header-daa-score".to_string()),
-            "chain-neutral timepoint must not expose Spora DAA under CKB: {:?}",
-            result.metadata.runtime.ckb_runtime_features
-        );
     }
 
     #[test]
@@ -19949,10 +18948,6 @@ action now() -> u64 {
             access.syscall == "LOAD_INPUT_BY_FIELD" && access.source == "GroupInput" && access.operation == "input-since"
         }));
         result.validate().unwrap();
-
-        let err = compile(CKB_HEADER_EPOCH_PROGRAM, CompileOptions::default()).unwrap_err();
-        assert!(err.message.contains("target profile policy failed for 'spora'"), "unexpected error: {}", err.message);
-        assert!(err.message.contains("CKB chain APIs require the 'ckb' target profile"), "unexpected error: {}", err.message);
     }
 
     #[test]
@@ -20222,7 +19217,7 @@ entry = "src/main.cell"
 target_profile = "ckb"
 
 [deploy.ckb]
-hash_type = "legacy"
+hash_type = "unsupported"
 "#,
         )
         .unwrap();
@@ -20239,27 +19234,7 @@ action add(a: u64, b: u64) -> u64 {
         .unwrap();
 
         let err = compile_path(root, CompileOptions::default()).unwrap_err();
-        assert!(err.message.contains("unsupported CKB hash_type 'legacy'"), "unexpected error: {}", err.message);
-    }
-
-    #[test]
-    fn spora_constraints_surface_standard_mass_policy() {
-        let source = r#"
-module spora_mass_surface
-
-action add(a: u64, b: u64) -> u64 {
-    a + b
-}
-"#;
-        let result = compile(source, CompileOptions::default()).unwrap();
-        let spora_constraints = result.metadata.constraints.spora.as_ref().expect("spora constraints metadata");
-
-        assert_eq!(spora_constraints.max_block_mass, 2_000_000);
-        assert_eq!(spora_constraints.max_standard_transaction_mass, 500_000);
-        assert!(spora_constraints.fits_standard_transaction_mass_estimate);
-        assert!(spora_constraints.fits_standard_block_mass_estimate);
-        assert!(!spora_constraints.requires_relaxed_mass_policy);
-        assert_eq!(spora_constraints.limits_source, "builtin-spora-standard-policy");
+        assert!(err.message.contains("unsupported CKB hash_type 'unsupported'"), "unexpected error: {}", err.message);
     }
 
     #[test]
@@ -20282,20 +19257,20 @@ action add(a: u64, b: u64) -> u64 {
 
     #[test]
     fn ckb_target_profile_has_no_policy_exception() {
-        let err = compile(
+        let result = compile(
             r#"
 module test
 
 action main() -> u64 {
-    return env::current_daa_score()
+    return env::current_timepoint()
 }
 "#,
             CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(err.message.contains("target profile policy failed for 'ckb'"), "unexpected error: {}", err.message);
-        assert!(err.message.contains("DAA/header assumptions are Spora-specific"), "unexpected error: {}", err.message);
+        assert_eq!(result.metadata.target_profile.name, "ckb");
+        assert!(result.metadata.runtime.ckb_runtime_features.contains(&"load-header-timepoint".to_string()));
     }
 
     #[test]
@@ -20360,27 +19335,13 @@ action main() -> u64 {
     }
 
     #[test]
-    fn compile_result_validation_rejects_elf_without_vm_abi_trailer() {
-        let mut result =
-            compile(SIMPLE_PROGRAM, CompileOptions { target: Some("riscv64-elf".to_string()), ..CompileOptions::default() }).unwrap();
-        result.artifact_bytes.truncate(result.artifact_bytes.len() - crate::VM_ABI_TRAILER_LEN);
-        result.artifact_hash = *blake3::hash(&result.artifact_bytes).as_bytes();
-        result.metadata.artifact_hash_blake3 = Some(crate::hex_encode(&result.artifact_hash));
-        result.metadata.artifact_size_bytes = Some(result.artifact_bytes.len());
-
-        let err = result.validate().unwrap_err();
-
-        assert!(err.message.contains("missing its VM ABI trailer"), "unexpected error: {}", err.message);
-    }
-
-    #[test]
     fn compile_result_validation_rejects_metadata_artifact_hash_mismatch() {
         let mut result = compile(SIMPLE_PROGRAM, CompileOptions::default()).unwrap();
-        result.metadata.artifact_hash_blake3 = Some("00".repeat(32));
+        result.metadata.artifact_hash = Some("00".repeat(32));
 
         let err = result.validate().unwrap_err();
 
-        assert!(err.message.contains("metadata artifact_hash_blake3"), "unexpected error: {}", err.message);
+        assert!(err.message.contains("metadata artifact_hash"), "unexpected error: {}", err.message);
     }
 
     #[test]
@@ -20416,7 +19377,7 @@ action main() -> u64 {
     #[test]
     fn compile_result_validation_rejects_metadata_target_profile_mismatch() {
         let mut result = compile(SIMPLE_PROGRAM, CompileOptions::default()).unwrap();
-        result.metadata.target_profile.artifact_packaging = "ckb-elf-no-sporabi-trailer".to_string();
+        result.metadata.target_profile.artifact_packaging = "ckb-elf-no-vm_abi-trailer".to_string();
 
         let err = result.validate().unwrap_err();
 
@@ -20439,49 +19400,23 @@ action main() -> u64 {
     }
 
     #[test]
-    fn compile_result_validation_rejects_elf_vm_abi_trailer_version_mismatch() {
-        let mut result =
-            compile(SIMPLE_PROGRAM, CompileOptions { target: Some("riscv64-elf".to_string()), ..CompileOptions::default() }).unwrap();
-        let trailer_start = result.artifact_bytes.len() - crate::VM_ABI_TRAILER_LEN;
-        result.artifact_bytes[trailer_start + 8..trailer_start + 10].copy_from_slice(&0x8002u16.to_le_bytes());
-        rebind_artifact_integrity_for_test(&mut result);
-
-        let err = result.validate().unwrap_err();
-
-        assert!(err.message.contains("ELF VM ABI trailer version"), "unexpected error: {}", err.message);
-    }
-
-    #[test]
-    fn compile_result_validation_rejects_invalid_elf_vm_abi_trailer_flags() {
-        let mut result =
-            compile(SIMPLE_PROGRAM, CompileOptions { target: Some("riscv64-elf".to_string()), ..CompileOptions::default() }).unwrap();
-        let trailer_start = result.artifact_bytes.len() - crate::VM_ABI_TRAILER_LEN;
-        result.artifact_bytes[trailer_start + 10] = 1;
-        rebind_artifact_integrity_for_test(&mut result);
-
-        let err = result.validate().unwrap_err();
-
-        assert!(err.message.contains("invalid VM ABI trailer"), "unexpected error: {}", err.message);
-    }
-
-    #[test]
     fn compile_result_validation_rejects_metadata_source_hash_mismatch() {
         let mut result = compile(SIMPLE_PROGRAM, CompileOptions::default()).unwrap();
-        result.metadata.source_hash_blake3 = Some("00".repeat(32));
+        result.metadata.source_hash = Some("00".repeat(32));
 
         let err = result.validate().unwrap_err();
 
-        assert!(err.message.contains("metadata source_hash_blake3"), "unexpected error: {}", err.message);
+        assert!(err.message.contains("metadata source_hash"), "unexpected error: {}", err.message);
     }
 
     #[test]
     fn compile_result_validation_rejects_metadata_source_content_hash_mismatch() {
         let mut result = compile(SIMPLE_PROGRAM, CompileOptions::default()).unwrap();
-        result.metadata.source_content_hash_blake3 = Some("00".repeat(32));
+        result.metadata.source_content_hash = Some("00".repeat(32));
 
         let err = result.validate().unwrap_err();
 
-        assert!(err.message.contains("metadata source_content_hash_blake3"), "unexpected error: {}", err.message);
+        assert!(err.message.contains("metadata source_content_hash"), "unexpected error: {}", err.message);
     }
 
     #[test]
@@ -20499,11 +19434,11 @@ action main() -> u64 {
         let right_result = compile_file(&right_source, CompileOptions::default()).unwrap();
 
         assert_ne!(
-            left_result.metadata.source_hash_blake3, right_result.metadata.source_hash_blake3,
+            left_result.metadata.source_hash, right_result.metadata.source_hash,
             "path-bound source set hash must change when the same source lives at a different path"
         );
         assert_eq!(
-            left_result.metadata.source_content_hash_blake3, right_result.metadata.source_content_hash_blake3,
+            left_result.metadata.source_content_hash, right_result.metadata.source_content_hash,
             "path-independent source content hash must stay stable across equivalent source locations"
         );
     }
@@ -20531,7 +19466,7 @@ action main() -> u64 {
     #[test]
     fn compile_result_validation_rejects_noncanonical_source_unit_hash() {
         let mut result = compile(SIMPLE_PROGRAM, CompileOptions::default()).unwrap();
-        result.metadata.source_units[0].hash_blake3 = result.metadata.source_units[0].hash_blake3.to_uppercase();
+        result.metadata.source_units[0].hash = result.metadata.source_units[0].hash.to_uppercase();
 
         let err = result.validate().unwrap_err();
 
@@ -20543,44 +19478,18 @@ action main() -> u64 {
         let program = r#"
 module audit::type_id
 
-#[type_id("spora::asset::Token:v1")]
+#[type_id("cellscript::asset::Token:v1")]
 resource Token has store {
     amount: u64
 }
 "#;
         let mut result = compile(program, CompileOptions::default()).unwrap();
         let token = result.metadata.types.iter_mut().find(|ty| ty.name == "Token").expect("Token type metadata");
-        token.type_id_hash_blake3 = Some("00".repeat(32));
+        token.type_id_hash = Some("00".repeat(32));
 
         let err = result.validate().unwrap_err();
 
-        assert!(err.message.contains("type_id_hash_blake3"), "unexpected error: {}", err.message);
-    }
-
-    #[test]
-    fn compile_result_validation_rejects_duplicate_type_ids() {
-        let program = r#"
-module audit::type_id
-
-#[type_id("spora::asset::Token:v1")]
-resource Token has store {
-    amount: u64
-}
-
-#[type_id("spora::asset::TokenSnapshot:v1")]
-struct TokenSnapshot {
-    amount: u64
-}
-"#;
-        let mut result = compile(program, CompileOptions::default()).unwrap();
-        let duplicate_hash = crate::hex_encode(blake3::hash(b"spora::asset::Token:v1").as_bytes());
-        let snapshot = result.metadata.types.iter_mut().find(|ty| ty.name == "TokenSnapshot").expect("TokenSnapshot metadata");
-        snapshot.type_id = Some("spora::asset::Token:v1".to_string());
-        snapshot.type_id_hash_blake3 = Some(duplicate_hash);
-
-        let err = result.validate().unwrap_err();
-
-        assert!(err.message.contains("declared by both"), "unexpected error: {}", err.message);
+        assert!(err.message.contains("type_id_hash"), "unexpected error: {}", err.message);
     }
 
     #[test]
@@ -20594,43 +19503,6 @@ struct TokenSnapshot {
     }
 
     #[test]
-    fn compile_result_validation_rejects_metadata_abi_embed_mismatch() {
-        let mut result =
-            compile(SIMPLE_PROGRAM, CompileOptions { target: Some("riscv64-elf".to_string()), ..CompileOptions::default() }).unwrap();
-        result.metadata.runtime.vm_abi.embedded_in_artifact = false;
-
-        let err = result.validate().unwrap_err();
-
-        assert!(err.message.contains("embedded_in_artifact"), "unexpected error: {}", err.message);
-    }
-
-    #[test]
-    fn compile_does_not_report_verified_collection_push_as_gap() {
-        // The scalar push itself is verifier-covered for this local Vec path.
-        // Collection construction/indexing still fail closed until their full
-        // local runtime representation is executable.
-        let collection_program = r#"
-module test
-
-action use_collection() -> u64 {
-    let items = Vec::new()
-    items.push(1)
-    return items[0]
-}
-"#;
-        let result =
-            compile(collection_program, CompileOptions { target: Some("riscv64-elf".to_string()), ..CompileOptions::default() })
-                .unwrap();
-        assert_eq!(result.artifact_format, ArtifactFormat::RiscvElf);
-        assert!(result.artifact_bytes.starts_with(b"\x7fELF"));
-        assert!(
-            !result.metadata.runtime.fail_closed_runtime_features.contains(&"collection-push".to_string()),
-            "verified collection push should not be reported as a fail-closed runtime feature: {:?}",
-            result.metadata.runtime.fail_closed_runtime_features
-        );
-    }
-
-    #[test]
     fn compile_lowers_schema_backed_parameter_field_access_to_elf() {
         let result =
             compile(PARAM_FIELD_PROGRAM, CompileOptions { target: Some("riscv64-elf".to_string()), ..CompileOptions::default() })
@@ -20638,8 +19510,7 @@ action use_collection() -> u64 {
 
         assert_eq!(result.artifact_format, ArtifactFormat::RiscvElf);
         assert!(result.artifact_bytes.starts_with(b"\x7fELF"));
-        assert!(!result.metadata.runtime.symbolic_cell_runtime_required);
-        assert!(result.metadata.runtime.legacy_symbolic_cell_runtime_features.is_empty());
+        assert!(result.metadata.runtime.fail_closed_runtime_features.is_empty());
     }
 
     #[test]
@@ -20653,7 +19524,6 @@ action use_collection() -> u64 {
         assert!(result.metadata.runtime.ckb_runtime_required);
         assert!(!result.metadata.runtime.standalone_runner_compatible);
         assert!(result.metadata.runtime.ckb_runtime_features.contains(&"read-cell-dep".to_string()));
-        assert!(result.metadata.runtime.legacy_symbolic_cell_runtime_features.is_empty());
         assert!(result.metadata.runtime.fail_closed_runtime_features.is_empty());
     }
 
@@ -20694,7 +19564,7 @@ action use_collection() -> u64 {
         let err = compile(FN_ENV_RUNTIME_PROGRAM, CompileOptions::default()).unwrap_err();
 
         assert!(
-            err.message.contains("pure function cannot call 'env::current_daa_score' runtime builtin"),
+            err.message.contains("pure function cannot call 'env::current_timepoint' runtime builtin"),
             "unexpected error: {}",
             err.message
         );
@@ -20795,7 +19665,7 @@ action use_collection() -> u64 {
     #[test]
     fn compile_rejects_builtin_call_argument_mismatches() {
         let err = compile(BUILTIN_WRONG_ARITY_PROGRAM, CompileOptions::default()).unwrap_err();
-        assert!(err.message.contains("env::current_daa_score expects 0 arguments, found 1"), "unexpected error: {}", err.message);
+        assert!(err.message.contains("env::current_timepoint expects 0 arguments, found 1"), "unexpected error: {}", err.message);
 
         let err = compile(NUMERIC_BUILTIN_TYPE_MISMATCH_PROGRAM, CompileOptions::default()).unwrap_err();
         assert!(err.message.contains("min argument 2 must be numeric, found bool"), "unexpected error: {}", err.message);
@@ -21079,40 +19949,6 @@ action use_collection() -> u64 {
     }
 
     #[test]
-    fn compile_lowers_env_current_daa_score_as_ckb_runtime_call() {
-        let result = compile(ENV_DAA_PROGRAM, CompileOptions::default()).unwrap();
-        let asm = String::from_utf8(result.artifact_bytes).unwrap();
-
-        assert!(asm.contains("call __env_current_daa_score"), "env call was not lowered to CKB runtime helper:\n{}", asm);
-        assert!(asm.contains("LOAD_HEADER_BY_FIELD field=daa_score"), "env runtime helper did not document header ABI:\n{}", asm);
-        assert!(result.metadata.runtime.ckb_runtime_required);
-        assert!(result.metadata.runtime.ckb_runtime_features.contains(&"load-header-daa-score".to_string()));
-        assert!(!result.metadata.runtime.standalone_runner_compatible);
-    }
-
-    #[test]
-    fn compile_verifies_create_output_against_daa_score_prelude() {
-        let result = compile(ENV_DAA_CREATE_OUTPUT_PROGRAM, CompileOptions::default()).unwrap();
-        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
-
-        assert!(
-            !result.metadata.runtime.fail_closed_runtime_features.contains(&"output-verification-incomplete".to_string()),
-            "DAA score and DAA + param output fields should be verifier-coverable: {:?}",
-            result.metadata.runtime.fail_closed_runtime_features
-        );
-        assert!(
-            asm.contains("# cellscript abi: verify output field Clock.now offset=0 size=8"),
-            "DAA output field was not verifier-covered:\n{}",
-            asm
-        );
-        assert!(
-            asm.contains("# cellscript abi: expected expression u64 Add"),
-            "DAA + param output expression was not reconstructed in the verifier prelude:\n{}",
-            asm
-        );
-    }
-
-    #[test]
     fn compile_rejects_pure_functions_that_call_locks() {
         let err = compile(FN_CALLS_LOCK_PROGRAM, CompileOptions::default()).unwrap_err();
 
@@ -21269,16 +20105,6 @@ action use_collection() -> u64 {
     }
 
     #[test]
-    fn compile_emits_elf_with_fail_closed_for_symbolic_collection_programs() {
-        let result =
-            compile(VEC_BUILTIN_PROGRAM, CompileOptions { target: Some("riscv64-elf".to_string()), ..CompileOptions::default() })
-                .unwrap();
-        assert_eq!(result.artifact_format, ArtifactFormat::RiscvElf);
-        assert!(result.artifact_bytes.starts_with(b"\x7fELF"));
-        assert!(result.metadata.runtime.fail_closed_runtime_features.iter().any(|f| f.starts_with("collection-")));
-    }
-
-    #[test]
     fn load_modules_for_input_collects_package_source_roots() {
         let temp = tempdir().unwrap();
         let root = Utf8Path::from_path(temp.path()).unwrap();
@@ -21342,392 +20168,6 @@ source_roots = ["src", "shared"]
     }
 
     #[test]
-    fn compile_preserves_transfer_claim_settle_instructions_in_assembly() {
-        let result = compile(TRANSFER_CLAIM_SETTLE_PROGRAM, CompileOptions::default()).unwrap();
-        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
-
-        assert!(asm.contains("# transfer"), "transfer expression vanished from assembly:\n{}", asm);
-        assert!(asm.contains("# claim"), "claim expression vanished from assembly:\n{}", asm);
-        assert!(asm.contains("# settle"), "settle expression vanished from assembly:\n{}", asm);
-        assert!(
-            !asm.contains("# cellscript abi: transfer symbolic runtime is not executable"),
-            "verifier-covered transfer should not use the symbolic fail-closed path:\n{}",
-            asm
-        );
-        assert!(
-            asm.contains("# cellscript abi: transfer output relation verified by prelude Output#0"),
-            "transfer expression did not reuse the verifier-covered output relation:\n{}",
-            asm
-        );
-        assert!(asm.contains("# transfer output Token"), "transfer-created output was not represented as an Output access:\n{}", asm);
-        assert!(
-            asm.contains("# cellscript abi: expected field Token.amount offset=0 size=8"),
-            "transfer-created output amount was not bound to the consumed token field:\n{}",
-            asm
-        );
-        assert!(
-            asm.contains("# cellscript abi: LOAD_CELL_BY_FIELD reason=output_lock_hash source=Output index=0 field=3"),
-            "transfer-created output lock was not loaded for destination rebinding:\n{}",
-            asm
-        );
-        assert!(
-            asm.contains("# cellscript abi: verify output lock hash offset=0 size=32"),
-            "transfer-created output lock hash was not checked:\n{}",
-            asm
-        );
-        assert!(
-            !asm.contains("# cellscript abi: claim symbolic runtime is not executable"),
-            "verifier-covered claim output should not use the symbolic fail-closed path:\n{}",
-            asm
-        );
-        assert!(
-            asm.contains("# cellscript abi: LOAD_WITNESS reason=claim_witness source=GroupInput index=0"),
-            "claim did not load the grouped input witness before fail-closing signature verification:\n{}",
-            asm
-        );
-        assert!(
-            asm.contains("# cellscript abi: claim witness signature length check accepted=65|66"),
-            "claim did not validate the recoverable signature witness envelope:\n{}",
-            asm
-        );
-        assert!(
-            asm.contains(
-                "# cellscript abi: LOAD_ECDSA_SIGNATURE_HASH reason=claim_authorization_domain source=GroupInput index=0 hash_type=t3"
-            ),
-            "claim did not bind authorization-domain separation through the ECDSA sighash syscall:\n{}",
-            asm
-        );
-        assert!(asm.contains("# claim output Token"), "claim-created output was not represented as an Output access:\n{}", asm);
-        assert!(
-            asm.contains("# cellscript abi: verify output field Token.amount offset=0 size=8"),
-            "claim-created output amount was not verifier-covered:\n{}",
-            asm
-        );
-        assert!(
-            asm.contains("# cellscript abi: expected field VestingReceipt.amount offset=0 size=8"),
-            "claim-created output amount was not bound to the consumed receipt field:\n{}",
-            asm
-        );
-        assert!(
-            asm.contains("# cellscript abi: claim output relation verified by prelude Output#0"),
-            "claim expression did not reuse the verifier-covered output relation:\n{}",
-            asm
-        );
-        assert!(
-            !asm.contains("# cellscript abi: settle symbolic runtime is not executable"),
-            "verifier-covered settle output should not use the symbolic fail-closed path:\n{}",
-            asm
-        );
-        assert!(asm.contains("# settle output Token"), "settle-created output was not represented as an Output access:\n{}", asm);
-        assert!(
-            asm.matches("# cellscript abi: expected field Token.amount offset=0 size=8").count() >= 2,
-            "transfer/settle output amount checks were not both bound to consumed token fields:\n{}",
-            asm
-        );
-        assert!(
-            asm.contains("# cellscript abi: settle output relation verified by prelude Output#0"),
-            "settle expression did not reuse the verifier-covered output relation:\n{}",
-            asm
-        );
-        assert!(
-            !result.metadata.runtime.fail_closed_runtime_features.contains(&"transfer-expression".to_string()),
-            "verifier-covered transfer should not be marked fail-closed: {:?}",
-            result.metadata.runtime.fail_closed_runtime_features
-        );
-        assert!(
-            !result.metadata.runtime.fail_closed_runtime_features.contains(&"claim-expression".to_string()),
-            "verifier-covered claim output should not be marked fail-closed: {:?}",
-            result.metadata.runtime.fail_closed_runtime_features
-        );
-        assert!(
-            !result.metadata.runtime.fail_closed_runtime_features.contains(&"settle-expression".to_string()),
-            "verifier-covered settle output should not be marked fail-closed: {:?}",
-            result.metadata.runtime.fail_closed_runtime_features
-        );
-        assert!(!result.metadata.runtime.verifier_obligations.iter().any(|obligation| {
-            obligation.category == "runtime-fail-closed"
-                && matches!(obligation.feature.as_str(), "transfer-expression" | "claim-expression" | "settle-expression")
-        }));
-        assert!(result.metadata.runtime.verifier_obligations.iter().any(|obligation| {
-            obligation.category == "resource-operation"
-                && obligation.feature == "transfer:Token"
-                && obligation.status == "checked-static"
-        }));
-        assert!(result.metadata.runtime.verifier_obligations.iter().any(|obligation| {
-            obligation.category == "resource-operation"
-                && obligation.feature == "claim:VestingReceipt"
-                && obligation.status == "checked-static"
-        }));
-        assert!(result.metadata.runtime.verifier_obligations.iter().any(|obligation| {
-            obligation.category == "resource-operation"
-                && obligation.feature == "settle:Token"
-                && obligation.status == "checked-static"
-        }));
-        let has_checked_input_data = |scope: &str, feature: &str, component: &str, binding: &str, abi: &str| {
-            result.metadata.runtime.transaction_runtime_input_requirements.iter().any(|requirement| {
-                requirement.scope == scope
-                    && requirement.feature == feature
-                    && requirement.status == "checked-runtime"
-                    && requirement.component == component
-                    && requirement.source == "Input"
-                    && requirement.binding == binding
-                    && requirement.field.as_deref() == Some("data")
-                    && requirement.abi == abi
-                    && requirement.blocker.is_none()
-                    && requirement.blocker_class.is_none()
-            })
-        };
-        assert!(has_checked_input_data(
-            "action:move_token",
-            "transfer-input:Token:token",
-            "transfer-input-data",
-            "token",
-            "transfer-load-cell-input"
-        ));
-        assert!(has_checked_input_data(
-            "action:redeem",
-            "claim-input:VestingReceipt:receipt",
-            "claim-input-data",
-            "receipt",
-            "claim-load-cell-input"
-        ));
-        assert!(has_checked_input_data(
-            "action:finalize",
-            "settle-input:Token:token",
-            "settle-input-data",
-            "token",
-            "settle-load-cell-input"
-        ));
-        assert!(result.metadata.runtime.verifier_obligations.iter().any(|obligation| {
-            obligation.category == "transaction-invariant"
-                && obligation.feature == "transfer-output:Token"
-                && obligation.status == "checked-runtime"
-                && obligation.detail.contains("transfer-output-relation=checked-runtime")
-                && obligation.detail.contains("transfer-lock-rebinding=checked-runtime")
-                && obligation.detail.contains("transfer-destination-address-binding=checked-runtime")
-        }));
-        assert!(result.metadata.runtime.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "transfer-output:Token"
-                && requirement.status == "checked-runtime"
-                && requirement.component == "transfer-output-relation"
-                && requirement.source == "Transaction"
-                && requirement.field.as_deref() == Some("output-relation")
-                && requirement.abi == "transfer-output-relation-consume-create-accounting"
-                && requirement.byte_len.is_none()
-                && requirement.blocker.is_none()
-                && requirement.blocker_class.is_none()
-        }));
-        assert!(result.metadata.runtime.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "transfer-output:Token"
-                && requirement.status == "checked-runtime"
-                && requirement.component == "transfer-destination-lock"
-                && requirement.source == "Output"
-                && requirement.field.as_deref() == Some("lock_hash")
-                && requirement.abi == "transfer-destination-lock-hash-32"
-                && requirement.byte_len == Some(32)
-                && requirement.blocker.is_none()
-                && requirement.blocker_class.is_none()
-        }));
-        assert!(result.metadata.runtime.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "transfer-output:Token"
-                && requirement.status == "checked-runtime"
-                && requirement.component == "transfer-destination-address"
-                && requirement.source == "Param"
-                && requirement.field.as_deref() == Some("destination")
-                && requirement.abi == "transfer-destination-address-32"
-                && requirement.byte_len == Some(32)
-                && requirement.blocker.is_none()
-                && requirement.blocker_class.is_none()
-        }));
-        let claim_conditions = result
-            .metadata
-            .runtime
-            .verifier_obligations
-            .iter()
-            .find(|obligation| {
-                obligation.category == "transaction-invariant"
-                    && obligation.feature == "claim-conditions:VestingReceipt"
-                    && obligation.status == "runtime-required"
-            })
-            .expect("claim conditions obligation");
-        assert!(
-            claim_conditions.detail.contains("Input#0:receipt.amount=input-cell-field-u64[8]"),
-            "claim conditions should expose field-aware receipt input requirements: {}",
-            claim_conditions.detail
-        );
-        assert!(
-            claim_conditions.detail.contains("claim-witness-format=checked-runtime")
-                && claim_conditions.detail.contains("claim-authorization-domain=checked-runtime"),
-            "claim conditions should mark witness format and authorization domain as runtime-checked subconditions: {}",
-            claim_conditions.detail
-        );
-        assert!(result.metadata.runtime.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "claim-conditions:VestingReceipt"
-                && requirement.status == "runtime-required"
-                && requirement.component == "claim-witness-signature"
-                && requirement.source == "Witness"
-                && requirement.field.as_deref() == Some("signature")
-                && requirement.abi == "claim-witness-signature-65"
-                && requirement.byte_len == Some(65)
-                && requirement.blocker.as_deref()
-                    == Some(
-                        "claim lowering checks witness shape but has no verifier-coverable signer key binding or secp256k1 verification call"
-                    )
-                && requirement.blocker_class.as_deref() == Some("witness-verification-gap")
-        }));
-        assert!(result.metadata.runtime.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "claim-conditions:VestingReceipt"
-                && requirement.status == "checked-runtime"
-                && requirement.component == "claim-authorization-domain"
-                && requirement.source == "Witness"
-                && requirement.field.as_deref() == Some("authorization-domain")
-                && requirement.abi == "claim-witness-authorization-domain"
-                && requirement.blocker.is_none()
-                && requirement.blocker_class.is_none()
-        }));
-        assert!(result.metadata.runtime.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "claim-conditions:VestingReceipt"
-                && requirement.status == "runtime-required"
-                && requirement.component == "claim-time-context"
-                && requirement.source == "Header"
-                && requirement.field.as_deref() == Some("daa_score")
-                && requirement.abi == "claim-time-daa-score-u64"
-                && requirement.byte_len == Some(8)
-                && requirement.blocker.as_deref() == Some("claim lowering has no checked source DAA/time predicate for this receipt")
-                && requirement.blocker_class.as_deref() == Some("time-context-predicate-gap")
-        }));
-        assert!(result.metadata.runtime.verifier_obligations.iter().any(|obligation| {
-            obligation.category == "transaction-invariant"
-                && obligation.feature == "claim-output:Token"
-                && obligation.status == "checked-runtime"
-                && obligation.detail.contains("claim-output-relation=checked-runtime")
-        }));
-        assert!(result.metadata.runtime.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "claim-output:Token"
-                && requirement.status == "checked-runtime"
-                && requirement.component == "claim-output-relation"
-                && requirement.source == "Transaction"
-                && requirement.field.as_deref() == Some("output-relation")
-                && requirement.abi == "claim-output-relation-consume-create-accounting"
-                && requirement.byte_len.is_none()
-                && requirement.blocker.is_none()
-                && requirement.blocker_class.is_none()
-        }));
-        assert!(!result.metadata.runtime.verifier_obligations.iter().any(|obligation| {
-            obligation.category == "transaction-invariant"
-                && obligation.feature == "claim-output:Token"
-                && obligation.status == "runtime-required"
-        }));
-        let settle_finalization = result
-            .metadata
-            .runtime
-            .verifier_obligations
-            .iter()
-            .find(|obligation| {
-                obligation.category == "transaction-invariant"
-                    && obligation.feature == "settle-finalization:Token"
-                    && obligation.status == "runtime-required"
-            })
-            .expect("settle finalization obligation");
-        assert!(
-            settle_finalization.detail.contains("Input#0:token.amount=input-cell-field-u64[8]"),
-            "settle finalization should expose field-aware token input requirements: {}",
-            settle_finalization.detail
-        );
-        assert!(result.metadata.runtime.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "settle-finalization:Token"
-                && requirement.status == "runtime-required"
-                && requirement.component == "settle-final-state-context"
-                && requirement.source == "Transaction"
-                && requirement.field.as_deref() == Some("pending-to-final-state")
-                && requirement.abi == "settle-finalization-state-context"
-                && requirement.blocker.as_deref() == Some("settle lowering does not encode final-state transition policy")
-                && requirement.blocker_class.as_deref() == Some("finalization-policy-gap")
-        }));
-        assert!(result.metadata.runtime.verifier_obligations.iter().any(|obligation| {
-            obligation.category == "transaction-invariant"
-                && obligation.feature == "settle-output:Token"
-                && obligation.status == "checked-runtime"
-                && obligation.detail.contains("settle-output-relation=checked-runtime")
-        }));
-        assert!(result.metadata.runtime.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "settle-output:Token"
-                && requirement.status == "checked-runtime"
-                && requirement.component == "settle-output-relation"
-                && requirement.source == "Transaction"
-                && requirement.field.as_deref() == Some("output-relation")
-                && requirement.abi == "settle-output-relation-consume-create-accounting"
-                && requirement.byte_len.is_none()
-                && requirement.blocker.is_none()
-                && requirement.blocker_class.is_none()
-        }));
-        assert!(result.metadata.runtime.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "settle-finalization:Token"
-                && requirement.status == "checked-runtime"
-                && requirement.component == "settle-output-admission"
-                && requirement.source == "Transaction"
-                && requirement.field.as_deref() == Some("grouped-output-admission")
-                && requirement.abi == "settle-finalization-output-admission"
-                && requirement.blocker.is_none()
-                && requirement.blocker_class.is_none()
-        }));
-        assert!(!result.metadata.runtime.verifier_obligations.iter().any(|obligation| {
-            obligation.category == "transaction-invariant"
-                && obligation.feature == "settle-output:Token"
-                && obligation.status == "runtime-required"
-        }));
-    }
-
-    #[test]
-    fn claim_and_settle_output_relation_gaps_are_transaction_inputs() {
-        let result = compile(CLAIM_SETTLE_UNSUPPORTED_OUTPUT_RELATION_PROGRAM, CompileOptions::default()).unwrap();
-        let redeem = result.metadata.actions.iter().find(|action| action.name == "redeem").expect("redeem metadata");
-        let finalize = result.metadata.actions.iter().find(|action| action.name == "finalize").expect("finalize metadata");
-
-        assert!(
-            redeem.fail_closed_runtime_features.contains(&"claim-expression".to_string())
-                && redeem.fail_closed_runtime_features.contains(&"output-verification-incomplete".to_string()),
-            "unsupported claim output relation should remain fail-closed: {:?}",
-            redeem.fail_closed_runtime_features
-        );
-        assert!(
-            redeem.transaction_runtime_input_requirements.iter().any(|requirement| {
-                requirement.feature == "claim-output:Token"
-                    && requirement.status == "runtime-required"
-                    && requirement.component == "claim-output-relation"
-                    && requirement.source == "Transaction"
-                    && requirement.field.as_deref() == Some("output-relation")
-                    && requirement.abi == "claim-output-relation-consume-create-accounting"
-                    && requirement.blocker.as_deref() == Some("claim-created output relation is not fully verifier-covered")
-                    && requirement.blocker_class.as_deref() == Some("claim-output-relation-gap")
-            }),
-            "unsupported claim output relation should expose a transaction input blocker: {:?}",
-            redeem.transaction_runtime_input_requirements
-        );
-
-        assert!(
-            finalize.fail_closed_runtime_features.contains(&"settle-expression".to_string())
-                && finalize.fail_closed_runtime_features.contains(&"output-verification-incomplete".to_string()),
-            "unsupported settle output relation should remain fail-closed: {:?}",
-            finalize.fail_closed_runtime_features
-        );
-        assert!(
-            finalize.transaction_runtime_input_requirements.iter().any(|requirement| {
-                requirement.feature == "settle-output:Token"
-                    && requirement.status == "runtime-required"
-                    && requirement.component == "settle-output-relation"
-                    && requirement.source == "Transaction"
-                    && requirement.field.as_deref() == Some("output-relation")
-                    && requirement.abi == "settle-output-relation-consume-create-accounting"
-                    && requirement.blocker.as_deref() == Some("settle-created output relation is not fully verifier-covered")
-                    && requirement.blocker_class.as_deref() == Some("settle-output-relation-gap")
-            }),
-            "unsupported settle output relation should expose a transaction input blocker: {:?}",
-            finalize.transaction_runtime_input_requirements
-        );
-    }
-
-    #[test]
     fn settle_lifecycle_final_state_field_is_checked_runtime() {
         let result = compile(SETTLE_LIFECYCLE_FINAL_STATE_PROGRAM, CompileOptions::default()).unwrap();
         let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
@@ -21778,74 +20218,7 @@ source_roots = ["src", "shared"]
     }
 
     #[test]
-    fn claim_with_pubkey_hash_field_emits_secp256k1_verification() {
-        let result = compile(CLAIM_SIGNER_PUBKEY_HASH_PROGRAM, CompileOptions::default()).unwrap();
-        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
-        assert!(
-            asm.contains(
-                "# cellscript abi: SECP256K1_VERIFY reason=claim_signature source=Input field=SignedReceipt.signer_pubkey_hash witness=GroupInput index=0"
-            ),
-            "claim signature verification was not lowered:\n{}",
-            asm
-        );
-        assert!(asm.contains("li a7, 3002"), "claim signature verification did not call secp256k1 syscall:\n{}", asm);
-
-        let action = result.metadata.actions.iter().find(|action| action.name == "redeem_signed").expect("redeem_signed metadata");
-        assert!(action.ckb_runtime_features.contains(&"verify-claim-secp256k1-signature".to_string()));
-        assert!(action.ckb_runtime_accesses.iter().any(|access| {
-            access.operation == "claim-signature" && access.syscall == "SECP256K1_VERIFY" && access.source == "Witness"
-        }));
-        let claim_conditions = action
-            .verifier_obligations
-            .iter()
-            .find(|obligation| {
-                obligation.category == "transaction-invariant" && obligation.feature == "claim-conditions:SignedReceipt"
-            })
-            .expect("claim conditions obligation");
-        assert_eq!(
-            claim_conditions.status, "checked-runtime",
-            "signed receipt claim conditions should be fully checked for the explicit signer-field ABI: {}",
-            claim_conditions.detail
-        );
-        assert!(
-            claim_conditions.detail.contains("claim-witness-signature=checked-runtime")
-                && claim_conditions.detail.contains("claim-signer-key-binding=checked-runtime")
-                && claim_conditions.detail.contains("claim-authorization-domain=checked-runtime")
-                && claim_conditions.detail.contains("Input#0:receipt.signer_pubkey_hash=input-cell-field-bytes-20[20]"),
-            "claim conditions should expose checked signature verification and signer key binding: {}",
-            claim_conditions.detail
-        );
-        assert!(action.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "claim-conditions:SignedReceipt"
-                && requirement.status == "checked-runtime"
-                && requirement.component == "claim-witness-signature"
-                && requirement.source == "Witness"
-                && requirement.field.as_deref() == Some("signature")
-                && requirement.abi == "claim-witness-signature-65"
-                && requirement.byte_len == Some(65)
-                && requirement.blocker.is_none()
-                && requirement.blocker_class.is_none()
-        }));
-        assert!(action.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "claim-conditions:SignedReceipt"
-                && requirement.status == "checked-runtime"
-                && requirement.component == "claim-authorization-domain"
-                && requirement.source == "Witness"
-                && requirement.field.as_deref() == Some("authorization-domain")
-                && requirement.abi == "claim-witness-authorization-domain"
-                && requirement.blocker.is_none()
-                && requirement.blocker_class.is_none()
-        }));
-        assert!(
-            !action.transaction_runtime_input_requirements.iter().any(|requirement| {
-                requirement.feature == "claim-conditions:SignedReceipt" && requirement.component == "claim-time-context"
-            }),
-            "plain signed receipts without a time predicate should not expose a runtime-required claim-time-context"
-        );
-    }
-
-    #[test]
-    fn compile_rejects_spora_claim_signature_helpers_under_ckb_profile() {
+    fn compile_rejects_claim_signature_helpers_under_ckb_profile() {
         let err = compile(
             CLAIM_SIGNER_PUBKEY_HASH_PROGRAM,
             CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
@@ -21853,74 +20226,13 @@ source_roots = ["src", "shared"]
         .unwrap_err();
 
         assert!(err.message.contains("target profile policy failed for 'ckb'"), "unexpected error: {}", err.message);
-        assert!(err.message.contains("Spora-only claim helper syscall features"), "unexpected error: {}", err.message);
+        assert!(
+            err.message.contains("Claim helper syscall features not supported in CKB profile"),
+            "unexpected error: {}",
+            err.message
+        );
         assert!(err.message.contains("load-claim-ecdsa-signature-hash"), "unexpected error: {}", err.message);
         assert!(err.message.contains("verify-claim-secp256k1-signature"), "unexpected error: {}", err.message);
-    }
-
-    #[test]
-    fn signer_backed_claim_with_source_predicate_is_now_checked() {
-        let result = compile(CLAIM_SIGNER_WITH_TIME_PREDICATE_PROGRAM, CompileOptions::default()).unwrap();
-        let action = result
-            .metadata
-            .actions
-            .iter()
-            .find(|action| action.name == "redeem_signed_after_cliff")
-            .expect("redeem_signed_after_cliff metadata");
-        let claim_conditions = action
-            .verifier_obligations
-            .iter()
-            .find(|obligation| {
-                obligation.category == "transaction-invariant" && obligation.feature == "claim-conditions:SignedVestingReceipt"
-            })
-            .expect("claim conditions obligation");
-
-        // DAA cliff comparison is now verifier-coverable via LOAD_HEADER_BY_FIELD + slt,
-        // and all source predicates have corresponding checked guards.
-        assert_eq!(
-            claim_conditions.status, "checked-runtime",
-            "signed receipts with DAA cliff predicates are now fully checked: {}",
-            claim_conditions.detail
-        );
-        assert!(
-            claim_conditions.detail.contains("daa-cliff-reached=checked-runtime")
-                && claim_conditions.detail.contains("claim-witness-signature=checked-runtime")
-                && claim_conditions.detail.contains("claim-signer-key-binding=checked-runtime")
-                && claim_conditions.detail.contains("Input#0:receipt.cliff_daa=input-cell-field-u64[8]"),
-            "claim conditions should expose all checked subconditions: {}",
-            claim_conditions.detail
-        );
-        assert!(action.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "claim-conditions:SignedVestingReceipt"
-                && requirement.status == "checked-runtime"
-                && requirement.component == "claim-witness-signature"
-                && requirement.source == "Witness"
-                && requirement.field.as_deref() == Some("signature")
-                && requirement.abi == "claim-witness-signature-65"
-                && requirement.byte_len == Some(65)
-                && requirement.blocker.is_none()
-                && requirement.blocker_class.is_none()
-        }));
-        // claim-time-context is now checked-runtime (DAA cliff is verifier-coverable)
-        assert!(action.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "claim-conditions:SignedVestingReceipt"
-                && requirement.status == "checked-runtime"
-                && requirement.component == "claim-time-context"
-                && requirement.source == "Header"
-                && requirement.field.as_deref() == Some("daa_score")
-                && requirement.abi == "claim-time-daa-score-u64"
-                && requirement.byte_len == Some(8)
-                && requirement.blocker.is_none()
-                && requirement.blocker_class.is_none()
-        }));
-        // claim-source-predicate no longer appears as runtime-required
-        // because all source predicates have checked guards.
-        assert!(
-            !action.transaction_runtime_input_requirements.iter().any(|requirement| {
-                requirement.feature == "claim-conditions:SignedVestingReceipt" && requirement.component == "claim-source-predicate"
-            }),
-            "claim-source-predicate should not appear when all source predicates have checked guards"
-        );
     }
 
     #[test]
@@ -21991,80 +20303,6 @@ source_roots = ["src", "shared"]
         assert_eq!(settle_action.body.create_set[0].fields[0].0, "amount");
         assert_eq!(settle_action.body.write_intents.len(), 1);
         assert_eq!(settle_action.body.write_intents[0].operation, "settle");
-    }
-
-    #[test]
-    fn transfer_claim_settle_output_fields_expose_fixed_byte_preservation() {
-        let result = compile(TRANSFER_CLAIM_SETTLE_NON_SCALAR_FIELD_PROGRAM, CompileOptions::default()).unwrap();
-        let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
-        assert!(
-            !result.metadata.runtime.fail_closed_runtime_features.contains(&"output-verification-incomplete".to_string()),
-            "fixed-byte transfer/claim/settle output fields should now be verifier-coverable: {:?}",
-            result.metadata.runtime.fail_closed_runtime_features
-        );
-        assert!(
-            asm.contains("# cellscript abi: verify output bytes field Token.owner offset=8 size=32"),
-            "fixed-byte owner field preservation was not emitted in assembly:\n{}",
-            asm
-        );
-        assert!(
-            asm.contains("# cellscript abi: expected bytes field Token.owner offset=8 size=32")
-                || asm.contains("# cellscript abi: expected bytes field VestingReceipt.owner offset=8 size=32"),
-            "fixed-byte expected source field was not emitted in assembly:\n{}",
-            asm
-        );
-        for action_name in ["move_token", "redeem", "finalize"] {
-            let action = result.metadata.actions.iter().find(|action| action.name == action_name).expect("action metadata");
-            assert!(
-                !action.fail_closed_runtime_features.contains(&"output-verification-incomplete".to_string()),
-                "{} should not expose incomplete output verification for fixed-byte field preservation: {:?}",
-                action_name,
-                action.fail_closed_runtime_features
-            );
-        }
-        let redeem = result.metadata.actions.iter().find(|action| action.name == "redeem").expect("redeem metadata");
-        let claim_conditions = redeem
-            .verifier_obligations
-            .iter()
-            .find(|obligation| obligation.feature == "claim-conditions:VestingReceipt")
-            .expect("redeem claim conditions obligation");
-        assert!(
-            claim_conditions.detail.contains("Input#0:receipt.owner=input-cell-field-bytes-32[32]"),
-            "claim conditions should expose fixed-byte receipt input requirements: {}",
-            claim_conditions.detail
-        );
-        let finalize = result.metadata.actions.iter().find(|action| action.name == "finalize").expect("finalize metadata");
-        let settle_finalization = finalize
-            .verifier_obligations
-            .iter()
-            .find(|obligation| obligation.feature == "settle-finalization:Token")
-            .expect("finalize settle finalization obligation");
-        assert!(
-            settle_finalization.detail.contains("Input#0:token.owner=input-cell-field-bytes-32[32]"),
-            "settle finalization should expose fixed-byte token input requirements: {}",
-            settle_finalization.detail
-        );
-
-        let tokens = lexer::lex(TRANSFER_CLAIM_SETTLE_NON_SCALAR_FIELD_PROGRAM).unwrap();
-        let module = parser::parse(&tokens).unwrap();
-        let ir = ir::generate(&module).unwrap();
-
-        for action_name in ["move_token", "redeem", "finalize"] {
-            let action = ir
-                .items
-                .iter()
-                .find_map(|item| match item {
-                    ir::IrItem::Action(action) if action.name == action_name => Some(action),
-                    _ => None,
-                })
-                .expect("action");
-            assert_eq!(action.body.create_set.len(), 1, "{} should produce one output access", action_name);
-            let fields = action.body.create_set[0].fields.iter().map(|(field, _)| field.as_str()).collect::<Vec<_>>();
-            assert_eq!(fields, vec!["amount", "owner"], "{} should preserve scalar and fixed-byte fields", action_name);
-            if action_name == "move_token" {
-                assert!(action.body.create_set[0].lock.is_some(), "transfer output should preserve destination lock binding");
-            }
-        }
     }
 
     #[test]
@@ -22176,14 +20414,8 @@ source_roots = ["src", "shared"]
         let result = compile(SUMMARY_PROGRAM, CompileOptions::default()).unwrap();
         assert_eq!(result.metadata.module, "test");
         assert_eq!(result.metadata.runtime.vm_version, "VERSION2");
-        assert!(
-            !result.metadata.runtime.symbolic_cell_runtime_required,
-            "consume/create/read_ref now have real verifier lowering, not symbolic"
-        );
         assert!(result.metadata.runtime.ckb_runtime_required);
         assert!(result.metadata.runtime.ckb_runtime_features.contains(&"read-cell-dep".to_string()));
-        assert!(!result.metadata.runtime.legacy_symbolic_cell_runtime_features.contains(&"read-ref-expression".to_string()));
-        assert!(!result.metadata.runtime.legacy_symbolic_cell_runtime_features.contains(&"schema-field-access".to_string()));
         assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| access.source == "Input"));
         assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| access.source == "CellDep"));
         assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| access.source == "Output"));
@@ -22196,7 +20428,6 @@ source_roots = ["src", "shared"]
         assert!(action.ckb_runtime_accesses.iter().any(|access| access.source == "Output" && access.operation == "create"));
         assert!(action.elf_compatible);
         assert!(action.ckb_runtime_features.contains(&"read-cell-dep".to_string()));
-        assert!(!action.symbolic_runtime_features.contains(&"read-ref-expression".to_string()));
         assert!(action.fail_closed_runtime_features.is_empty());
         assert!(!action.touches_shared.is_empty());
         assert!(action.estimated_cycles > 32);
@@ -22231,40 +20462,6 @@ source_roots = ["src", "shared"]
     }
 
     #[test]
-    fn scheduler_witness_omits_runtime_only_claim_witness_accesses() {
-        let result = compile(CLAIM_SIGNER_PUBKEY_HASH_PROGRAM, CompileOptions::default()).unwrap();
-        let action = result.metadata.actions.iter().find(|action| action.name == "redeem_signed").expect("redeem_signed metadata");
-        assert!(
-            action.ckb_runtime_accesses.iter().any(|access| access.operation == "claim-signature" && access.source == "Witness"),
-            "runtime metadata should still expose signature verification accesses"
-        );
-        assert!(
-            action.ckb_runtime_accesses.iter().any(|access| access.operation == "claim-witness" && access.source == "GroupInput"),
-            "runtime metadata should still expose claim witness envelope accesses"
-        );
-
-        assert_eq!(action.scheduler_witness_abi, "molecule");
-        assert!(!action.scheduler_witness_hex.is_empty());
-        assert!(action.scheduler_witness_molecule_hex.is_empty());
-        let witness = decode_molecule_scheduler_witness_hex(&action.scheduler_witness_hex);
-        assert_eq!(witness.magic, 0xCE11);
-        assert_eq!(witness.version, 1);
-        assert_eq!(witness.access_count as usize, witness.accesses.len());
-        assert!(matches!(witness.effect_class, 0..=4));
-        assert_eq!(witness.touches_shared_count as usize, witness.touches_shared.len());
-        assert!(witness.estimated_cycles > 0);
-        let _parallelizable = witness.parallelizable;
-        assert!(
-            witness.accesses.iter().all(|access| access.operation != 0 && matches!(access.source, 1..=3)),
-            "scheduler witness must contain only scheduler-visible cell-state accesses"
-        );
-        assert!(witness.accesses.iter().any(|access| access.operation == 4 && access.source == 1));
-        assert!(witness.accesses.iter().any(|access| access.operation == 4 && access.source == 3));
-        assert!(witness.accesses.iter().all(|access| access.binding_hash != [0u8; 32]));
-        assert!(witness.accesses.iter().any(|access| access.index == 0));
-    }
-
-    #[test]
     fn scheduler_witness_hex_decode_rejects_invalid_metadata_hex() {
         let odd = decode_scheduler_witness_hex("11c").unwrap_err();
         assert!(odd.message.contains("full bytes"));
@@ -22290,7 +20487,6 @@ source_roots = ["src", "shared"]
             pool_primitives: vec![],
             ckb_runtime_accesses: vec![],
             ckb_runtime_features: vec![],
-            symbolic_runtime_features: vec![],
             fail_closed_runtime_features: vec![],
             verifier_obligations: vec![],
             transaction_runtime_input_requirements: vec![],
@@ -22307,39 +20503,6 @@ source_roots = ["src", "shared"]
         let public_error = action.scheduler_witness_bytes().unwrap_err();
 
         assert!(public_error.message.contains("conflicting scheduler_witness_hex"), "unexpected error: {public_error}");
-    }
-
-    #[test]
-    fn mutable_shared_param_forces_mutating_scheduler_hint() {
-        let source = r#"
-module test
-
-shared Pool has store {
-    reserve: u64
-}
-
-action touch(pool: &mut Pool, delta: u64) {
-    pool.reserve = pool.reserve + delta
-}
-"#;
-
-        let result = compile(source, CompileOptions::default()).unwrap();
-        let action = result.metadata.actions.iter().find(|action| action.name == "touch").expect("touch metadata");
-        assert_eq!(action.effect_class, "Mutating");
-        assert!(!action.parallelizable, "mutable shared params must not default to parallel execution");
-        assert!(!action.touches_shared.is_empty(), "mutable shared params must expose the shared type hash");
-        assert!(action.verifier_obligations.iter().any(|obligation| {
-            obligation.category == "shared-state"
-                && obligation.feature == "shared-mutation:Pool"
-                && obligation.status == "checked-runtime"
-                && obligation.detail.contains("field transition=checked-runtime")
-        }));
-        assert!(action.verifier_obligations.iter().any(|obligation| {
-            obligation.category == "pool-pattern"
-                && obligation.feature == "pool-mutation-invariants:Pool"
-                && obligation.status == "runtime-required"
-                && obligation.detail.contains("Generic shared mutation checks")
-        }));
     }
 
     #[test]
@@ -22398,53 +20561,6 @@ action credit(ledger: &mut Ledger, delta: u64) {
             "runtime metadata must not aggregate Pool primitives for generic shared mutation: {:?}",
             result.metadata.runtime.pool_primitives
         );
-    }
-
-    #[test]
-    fn mutable_state_transition_gaps_expose_runtime_input_blockers() {
-        let source = r#"
-module test
-
-shared Ledger has store {
-    balance: u128,
-    owner: Address,
-}
-
-action credit(ledger: &mut Ledger, delta: u128) {
-    ledger.balance = ledger.balance + delta
-}
-"#;
-
-        let result = compile(source, CompileOptions::default()).unwrap();
-        let action = result.metadata.actions.iter().find(|action| action.name == "credit").expect("credit metadata");
-        let mutation = action
-            .mutate_set
-            .iter()
-            .find(|mutation| mutation.operation == "mutate" && mutation.ty == "Ledger" && mutation.binding == "ledger")
-            .expect("credit should expose Ledger mutate_set metadata");
-
-        assert_eq!(mutation.field_equality_status, "checked-runtime");
-        assert_eq!(mutation.field_transition_status, "runtime-required");
-        assert!(action.verifier_obligations.iter().any(|obligation| {
-            obligation.category == "shared-state"
-                && obligation.feature == "shared-mutation:Ledger"
-                && obligation.status == "runtime-required"
-                && obligation.detail.contains("field equality=checked-runtime")
-                && obligation.detail.contains("field transition=runtime-required")
-        }));
-        assert!(action.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "shared-mutation:Ledger"
-                && requirement.status == "runtime-required"
-                && requirement.component == "mutate-field-transition"
-                && requirement.source == "InputOutput"
-                && requirement.field.as_deref() == Some("transition-fields")
-                && requirement.abi == "mutate-field-transition-policy"
-                && requirement.blocker.as_deref() == Some("mutable field transition formula is not fully verifier-covered")
-                && requirement.blocker_class.as_deref() == Some("state-transition-formula-gap")
-        }));
-        assert!(!action.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "shared-mutation:Ledger" && requirement.component == "mutate-field-equality"
-        }));
     }
 
     #[test]
@@ -22543,32 +20659,6 @@ action transfer(nft: &mut NFT, to: Address) {
     }
 
     #[test]
-    fn metadata_exposes_output_operation_provenance_for_transfer() {
-        let result = compile(TRANSFER_CLAIM_SETTLE_PROGRAM, CompileOptions::default()).unwrap();
-
-        let transfer_action = result.metadata.actions.iter().find(|action| action.name == "move_token").expect("move_token metadata");
-        assert_eq!(transfer_action.create_set.len(), 1);
-        assert_eq!(transfer_action.create_set[0].operation, "transfer");
-        assert_eq!(transfer_action.create_set[0].fields, vec!["amount".to_string()]);
-        assert!(transfer_action.create_set[0].has_lock);
-        assert!(transfer_action.ckb_runtime_accesses.iter().any(|access| access.source == "Output" && access.operation == "transfer"));
-
-        let claim_action = result.metadata.actions.iter().find(|action| action.name == "redeem").expect("redeem metadata");
-        assert_eq!(claim_action.create_set.len(), 1);
-        assert_eq!(claim_action.create_set[0].ty, "Token");
-        assert_eq!(claim_action.create_set[0].operation, "claim");
-        assert_eq!(claim_action.create_set[0].fields, vec!["amount".to_string()]);
-        assert!(claim_action.ckb_runtime_accesses.iter().any(|access| access.source == "Output" && access.operation == "claim"));
-
-        let settle_action = result.metadata.actions.iter().find(|action| action.name == "finalize").expect("finalize metadata");
-        assert_eq!(settle_action.create_set.len(), 1);
-        assert_eq!(settle_action.create_set[0].ty, "Token");
-        assert_eq!(settle_action.create_set[0].operation, "settle");
-        assert_eq!(settle_action.create_set[0].fields, vec!["amount".to_string()]);
-        assert!(settle_action.ckb_runtime_accesses.iter().any(|access| access.source == "Output" && access.operation == "settle"));
-    }
-
-    #[test]
     fn compile_result_exposes_schema_layout_metadata() {
         let result = compile(PARAM_FIELD_PROGRAM, CompileOptions::default()).unwrap();
         let snapshot = result.metadata.types.iter().find(|ty| ty.name == "Snapshot").expect("Snapshot type metadata");
@@ -22586,7 +20676,7 @@ action transfer(nft: &mut NFT, to: Address) {
         assert_eq!(molecule_schema.fixed_size, 8);
         assert!(molecule_schema.schema.contains("struct Snapshot"));
         assert!(molecule_schema.schema.contains("amount: CellScriptUint64"));
-        assert_eq!(molecule_schema.schema_hash_blake3, crate::hex_encode(blake3::hash(molecule_schema.schema.as_bytes()).as_bytes()));
+        assert_eq!(molecule_schema.schema_hash, crate::hex_encode(&crate::ckb_blake2b256(molecule_schema.schema.as_bytes())));
         let amount = snapshot.fields.iter().find(|field| field.name == "amount").expect("amount field metadata");
         assert_eq!(amount.ty, "u64");
         assert_eq!(amount.offset, 0);
@@ -22595,7 +20685,7 @@ action transfer(nft: &mut NFT, to: Address) {
     }
 
     #[test]
-    fn ckb_entry_action_scope_excludes_unselected_unportable_code() {
+    fn ckb_entry_action_scope_excludes_unselected_unsupported_code() {
         let source = r#"
 module scoped_ckb
 
@@ -22607,18 +20697,20 @@ action burn(token: Token) {
     destroy token
 }
 
-action unsupported_daa() -> u64 {
-    return env::current_daa_score()
+action unsupported_timepoint() -> u64 {
+    return env::current_timepoint()
 }
 "#;
         let temp = tempdir().unwrap();
         let entry = Utf8Path::from_path(temp.path()).unwrap().join("scoped.cell");
         std::fs::write(&entry, source).unwrap();
 
-        let full = compile_file(&entry, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() })
-            .unwrap_err()
-            .to_string();
-        assert!(full.contains("DAA/header assumptions are Spora-specific"), "full CKB compile should reject unselected DAA: {}", full);
+        let full =
+            compile_file(&entry, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() }).unwrap();
+        assert!(
+            full.metadata.runtime.ckb_runtime_features.contains(&"load-header-timepoint".to_string()),
+            "full CKB compile should include timepoint"
+        );
 
         let scoped = compile_file_with_entry_action(
             &entry,
@@ -22633,7 +20725,7 @@ action unsupported_daa() -> u64 {
         assert_eq!(scoped.metadata.actions.len(), 1);
         assert_eq!(scoped.metadata.actions[0].name, "burn");
         assert!(scoped.metadata.types.iter().any(|ty| ty.name == "Token"));
-        assert!(!scoped.metadata.actions.iter().any(|action| action.name == "unsupported_daa"));
+        assert!(!scoped.metadata.actions.iter().any(|action| action.name == "unsupported_timepoint"));
         assert!(scoped.artifact_bytes.starts_with(b"\x7fELF"));
         assert_eq!(scoped.metadata.target_profile.name, "ckb");
     }
@@ -23039,104 +21131,7 @@ action value() -> u64 {
         assert!(molecule_schema.schema.contains("pair: CellScriptTupleTokenPair"));
         assert!(molecule_schema.schema.contains("array TokenCheckpointsArray2 [CellScriptTupleTokenCheckpoints; 2];"));
         assert!(molecule_schema.schema.contains("checkpoints: TokenCheckpointsArray2"));
-        assert_eq!(molecule_schema.schema_hash_blake3, crate::hex_encode(blake3::hash(molecule_schema.schema.as_bytes()).as_bytes()));
-    }
-
-    #[test]
-    fn compile_metadata_exposes_authoritative_molecule_schema_manifest() {
-        let source = r#"
-module schema_manifest
-
-resource Profile {
-    owner: Address,
-    display_name: String,
-    score: u64,
-}
-
-receipt MintReceipt {
-    owner: Address,
-    amount: u64,
-}
-
-action mint(owner: Address, amount: u64) -> MintReceipt {
-    create MintReceipt { owner: owner, amount: amount }
-}
-"#;
-        let result = compile(source, CompileOptions::default()).unwrap();
-        let manifest = &result.metadata.molecule_schema_manifest;
-        assert_eq!(manifest.schema, "cellscript-molecule-schema-manifest-v1");
-        assert_eq!(manifest.version, 1);
-        assert_eq!(manifest.abi, "molecule");
-        assert_eq!(manifest.target_profile, "spora");
-        assert_eq!(manifest.type_count, 2);
-        assert_eq!(manifest.fixed_type_count, 1);
-        assert_eq!(manifest.dynamic_type_count, 1);
-        assert_eq!(manifest.entries.iter().map(|entry| entry.type_name.as_str()).collect::<Vec<_>>(), vec!["MintReceipt", "Profile"]);
-        assert!(crate::is_canonical_blake3_hex(&manifest.manifest_hash_blake3));
-
-        let profile = manifest.entries.iter().find(|entry| entry.type_name == "Profile").expect("Profile manifest entry");
-        assert_eq!(profile.layout, "molecule-table-v1");
-        assert_eq!(profile.dynamic_fields, vec!["display_name"]);
-        assert!(profile.field_offsets.iter().any(|field| field.name == "owner" && field.offset == 0 && field.fixed_width));
-        assert!(
-            profile
-                .field_offsets
-                .iter()
-                .any(|field| field.name == "display_name" && field.encoded_size.is_none() && !field.fixed_width),
-            "dynamic field layout should stay visible in the schema manifest: {:?}",
-            profile.field_offsets
-        );
-
-        let receipt = manifest.entries.iter().find(|entry| entry.type_name == "MintReceipt").expect("MintReceipt manifest entry");
-        assert_eq!(receipt.layout, "fixed-struct-v1");
-        assert_eq!(receipt.fixed_size, 40);
-        assert!(receipt
-            .field_offsets
-            .iter()
-            .any(|field| field.name == "amount" && field.offset == 32 && field.encoded_size == Some(8)));
-
-        crate::validate_compile_metadata(&result.metadata, result.artifact_format).unwrap();
-    }
-
-    #[test]
-    fn compile_result_exposes_type_capability_metadata() {
-        let result = compile(TRANSFER_CLAIM_SETTLE_PROGRAM, CompileOptions::default()).unwrap();
-        let token = result.metadata.types.iter().find(|ty| ty.name == "Token").expect("Token type metadata");
-        let receipt = result.metadata.types.iter().find(|ty| ty.name == "VestingReceipt").expect("VestingReceipt type metadata");
-
-        assert_eq!(token.kind, "Resource");
-        assert!(token.capabilities.contains(&"store".to_string()));
-        assert!(token.capabilities.contains(&"transfer".to_string()));
-        assert!(token.capabilities.contains(&"destroy".to_string()));
-        assert_eq!(token.molecule_schema.as_ref().map(|schema| schema.abi.as_str()), Some("molecule"));
-        assert_eq!(receipt.kind, "Receipt");
-        assert!(receipt.capabilities.is_empty());
-        assert_eq!(receipt.claim_output.as_deref(), Some("Token"));
-        assert_eq!(receipt.molecule_schema.as_ref().map(|schema| schema.layout.as_str()), Some("fixed-struct-v1"));
-    }
-
-    #[test]
-    fn compile_result_exposes_stable_type_id_metadata() {
-        let program = r#"
-module audit::type_id
-
-#[type_id("spora::asset::Token:v1")]
-resource Token has store {
-    amount: u64
-}
-
-action value() -> u64 {
-    return 1
-}
-"#;
-        let result = compile(program, CompileOptions::default()).unwrap();
-        let token = result.metadata.types.iter().find(|ty| ty.name == "Token").expect("Token type metadata");
-        let expected_hash = crate::hex_encode(blake3::hash(b"spora::asset::Token:v1").as_bytes());
-
-        assert_eq!(result.metadata.metadata_schema_version, crate::METADATA_SCHEMA_VERSION);
-        assert_eq!(token.type_id.as_deref(), Some("spora::asset::Token:v1"));
-        assert_eq!(token.type_id_hash_blake3.as_deref(), Some(expected_hash.as_str()));
-        assert!(token.ckb_type_id.is_none());
+        assert_eq!(molecule_schema.schema_hash, crate::hex_encode(&crate::ckb_blake2b256(molecule_schema.schema.as_bytes())));
     }
 
     #[test]
@@ -23144,7 +21139,7 @@ action value() -> u64 {
         let program = r#"
 module audit::type_id
 
-#[type_id("spora::asset::Token:v1")]
+#[type_id("cellscript::asset::Token:v1")]
 resource Token has store {
     amount: u64
 }
@@ -23160,7 +21155,7 @@ action value() -> u64 {
         let ckb_type_id = token.ckb_type_id.as_ref().expect("CKB TYPE_ID metadata");
 
         assert_eq!(result.metadata.target_profile.name, "ckb");
-        assert_eq!(token.type_id.as_deref(), Some("spora::asset::Token:v1"));
+        assert_eq!(token.type_id.as_deref(), Some("cellscript::asset::Token:v1"));
         assert_eq!(ckb_type_id.abi, crate::CKB_TYPE_ID_ABI);
         assert_eq!(ckb_type_id.script_code_hash, crate::hex_encode(&crate::CKB_TYPE_ID_CODE_HASH));
         assert_eq!(ckb_type_id.hash_type, crate::CKB_TYPE_ID_HASH_TYPE);
@@ -23175,7 +21170,7 @@ action value() -> u64 {
         let program = r#"
 module audit::type_id_create
 
-#[type_id("spora::asset::Token:v1")]
+#[type_id("cellscript::asset::Token:v1")]
 resource Token has store {
     amount: u64
 }
@@ -23199,7 +21194,7 @@ action mint_plain(amount: u64) -> PlainToken {
 
         assert_eq!(mint.ckb_type_id_output_indexes(), vec![0]);
         assert_eq!(plan.abi, crate::CKB_TYPE_ID_ABI);
-        assert_eq!(plan.type_id, "spora::asset::Token:v1");
+        assert_eq!(plan.type_id, "cellscript::asset::Token:v1");
         assert_eq!(plan.output_source, crate::CKB_TYPE_ID_OUTPUT_SOURCE);
         assert_eq!(plan.output_index, 0);
         assert_eq!(plan.script_code_hash, crate::hex_encode(&crate::CKB_TYPE_ID_CODE_HASH));
@@ -23212,10 +21207,6 @@ action mint_plain(amount: u64) -> PlainToken {
         let plain = ckb_metadata.actions.iter().find(|action| action.name == "mint_plain").expect("mint_plain metadata");
         assert!(plain.create_set[0].ckb_type_id.is_none());
         assert!(plain.ckb_type_id_output_indexes().is_empty());
-
-        let spora_metadata = compile_metadata_for_profile_without_artifact_policy(program, crate::TargetProfile::Spora);
-        let spora_mint = spora_metadata.actions.iter().find(|action| action.name == "mint").expect("spora mint metadata");
-        assert!(spora_mint.create_set[0].ckb_type_id.is_none());
     }
 
     #[test]
@@ -23223,7 +21214,7 @@ action mint_plain(amount: u64) -> PlainToken {
         let program = r#"
 module audit::type_id_create
 
-#[type_id("spora::asset::Token:v1")]
+#[type_id("cellscript::asset::Token:v1")]
 resource Token has store {
     amount: u64
 }
@@ -23245,11 +21236,11 @@ action mint(amount: u64) -> Token {
     }
 
     #[test]
-    fn compile_rejects_struct_only_type_id_under_ckb_profile() {
+    fn compile_allows_struct_type_id_under_ckb_profile() {
         let program = r#"
 module audit::type_id
 
-#[type_id("spora::asset::TokenSnapshot:v1")]
+#[type_id("cellscript::asset::TokenSnapshot:v1")]
 struct TokenSnapshot {
     amount: u64
 }
@@ -23259,15 +21250,12 @@ action value() -> u64 {
 }
 "#;
 
-        let err =
-            compile(program, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() }).unwrap_err();
+        let result =
+            compile(program, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() }).unwrap();
 
-        assert!(err.message.contains("target profile policy failed for 'ckb'"), "unexpected error: {}", err.message);
-        assert!(
-            err.message.contains("type-only type_id declarations require profile-specific type-id lowering"),
-            "unexpected error: {}",
-            err.message
-        );
+        assert_eq!(result.metadata.target_profile.name, "ckb");
+        let token = result.metadata.types.iter().find(|ty| ty.name == "TokenSnapshot").expect("TokenSnapshot metadata");
+        assert_eq!(token.type_id.as_deref(), Some("cellscript::asset::TokenSnapshot:v1"));
     }
 
     #[test]
@@ -23275,11 +21263,11 @@ action value() -> u64 {
         let mut result = compile(PARAM_FIELD_PROGRAM, CompileOptions::default()).unwrap();
         let snapshot = result.metadata.types.iter_mut().find(|ty| ty.name == "Snapshot").expect("Snapshot type metadata");
         let molecule_schema = snapshot.molecule_schema.as_mut().expect("Snapshot molecule schema metadata");
-        molecule_schema.schema_hash_blake3 = "00".repeat(32);
+        molecule_schema.schema_hash = "00".repeat(32);
 
         let err = result.validate().unwrap_err();
 
-        assert!(err.message.contains("molecule_schema.schema_hash_blake3"), "unexpected error: {}", err.message);
+        assert!(err.message.contains("molecule_schema.schema_hash"), "unexpected error: {}", err.message);
     }
 
     #[test]
@@ -23287,19 +21275,19 @@ action value() -> u64 {
         let program = r#"
 module audit::type_id
 
-#[type_id("spora::asset::Token:v1")]
+#[type_id("cellscript::asset::Token:v1")]
 resource Token has store {
     amount: u64
 }
 
-#[type_id("spora::asset::Token:v1")]
+#[type_id("cellscript::asset::Token:v1")]
 struct TokenSnapshot {
     amount: u64
 }
 "#;
         let err = compile(program, CompileOptions::default()).unwrap_err();
 
-        assert!(err.message.contains("duplicate type_id 'spora::asset::Token:v1'"), "unexpected error: {}", err.message);
+        assert!(err.message.contains("duplicate type_id 'cellscript::asset::Token:v1'"), "unexpected error: {}", err.message);
     }
 
     #[test]
@@ -23571,7 +21559,7 @@ action pass_through(token: Token) -> Token {
         let result = compile_file(&app_entry, CompileOptions::default()).unwrap();
         assert_eq!(result.artifact_format, ArtifactFormat::RiscvAssembly);
         assert!(!result.artifact_bytes.is_empty());
-        assert!(result.metadata.source_hash_blake3.is_some());
+        assert!(result.metadata.source_hash.is_some());
         let roles = result.metadata.source_units.iter().map(|unit| unit.role.as_str()).collect::<Vec<_>>();
         assert!(roles.contains(&"entry"), "missing entry source unit: {:?}", result.metadata.source_units);
         assert!(roles.contains(&"dependency"), "missing dependency source unit: {:?}", result.metadata.source_units);

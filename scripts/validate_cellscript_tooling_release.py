@@ -29,8 +29,11 @@ def main() -> int:
     package_json = json.loads(read("editors/vscode-cellscript/package.json"))
 
     require(package_json["name"] == "cellscript-vscode", "VS Code extension package name changed")
-    require(package_json["main"] == "./extension.js", "VS Code extension entrypoint changed")
-    require("vscode-languageclient" in package_json.get("dependencies", {}), "VS Code extension must use vscode-languageclient")
+    require(package_json["main"] == "./dist/extension.js", "VS Code extension entrypoint changed")
+    require("vscode-languageclient" in package_json.get("devDependencies", {}), "VS Code extension must build with vscode-languageclient")
+    require("esbuild" in package_json.get("devDependencies", {}), "VS Code extension must bundle with esbuild")
+    require("build" in package_json.get("scripts", {}), "VS Code extension must expose a build script")
+    require("vscode:prepublish" in package_json.get("scripts", {}), "VS Code extension must build before publish")
     require("package" in package_json.get("scripts", {}), "VS Code extension must expose a package script")
     require("publish:dry-run" in package_json.get("scripts", {}), "VS Code extension must expose a publish dry-run script")
 

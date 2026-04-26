@@ -38,7 +38,7 @@ outside the LSP scope.
 - `cellc metadata` JSON report
 - `cellc constraints` JSON report
 - production report (version + metadata + constraints)
-- target-profile selection (`spora`, `ckb`, `portable-cell`)
+- CKB target-profile arguments for compiler-backed reports
 
 ### Editor basics
 
@@ -65,7 +65,7 @@ open/change event.
 Install `cellc` and make it available on `PATH`, or set
 `cellscript.compilerPath` to the full compiler path.
 
-When developing inside the CellScript or Spora Rust workspace, the extension can
+When developing inside the CellScript Rust workspace, the extension can
 fall back to:
 
 ```bash
@@ -82,7 +82,6 @@ Set `cellscript.useCargoRunFallback` to `false` to disable that fallback.
 | `CellScript: Show Metadata` | Run `cellc metadata` for the active file and show JSON in the CellScript output channel. |
 | `CellScript: Show Constraints` | Run `cellc constraints` for the active file and show JSON in the CellScript output channel. |
 | `CellScript: Show Production Report` | Show compiler version, artifact metadata, constraints, and release audit boundaries for the active file. |
-| `CellScript: Select Target Profile` | Store `spora`, `ckb`, or `portable-cell` in workspace settings. |
 
 Diagnostics, completion, hover, go-to-definition, references, rename,
 formatting, signature help, folding, and code actions are provided
@@ -97,7 +96,6 @@ automatically by the language server — no explicit commands needed.
 | `cellscript.commandTimeoutMs` | `15000` | Timeout for compiler-backed CLI commands. |
 | `cellscript.maxOutputBytes` | `4194304` | Captured stdout/stderr limit. |
 | `cellscript.target` | `riscv64-asm` | Compiler target for compile/metadata/constraints commands. |
-| `cellscript.targetProfile` | `spora` | Target profile for compile/metadata/constraints commands. |
 
 ## Local Validation
 
@@ -130,11 +128,11 @@ check the JSON/prose output for:
 - constraints hash or constraints JSON saved by the build;
 - build provenance and source hash fields;
 - target profile and entry-action/entry-lock scope;
-- CKB capacity/cycle limits or Spora mass estimates;
+- CKB capacity/cycle limits;
 - external audit signatures attached by the release process.
 
 The extension displays compiler evidence. It does not create audit signatures,
-publish packages, deploy code cells, or replace Spora/CKB acceptance gates.
+publish packages, deploy code cells, or replace CKB acceptance gates.
 
 ## Scope
 

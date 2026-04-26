@@ -3,9 +3,9 @@
   "displayName": "CellScript",
   "description": "Production-grade local VS Code tooling for CellScript (.cell) contracts.",
   "version": "0.12.0",
-  "publisher": "spora-foundation",
-  "license": "MIT OR Apache-2.0",
-  "main": "./extension.js",
+  "publisher": "arthurzhang",
+  "license": "MIT",
+  "main": "./dist/extension.js",
   "repository": {
     "type": "git",
     "url": "https://github.com/tsukifune-kosei/CellScript.git"
@@ -22,15 +22,17 @@
     "onCommand:cellscript.compileCurrentFile",
     "onCommand:cellscript.showMetadata",
     "onCommand:cellscript.showConstraints",
-    "onCommand:cellscript.showProductionReport",
-    "onCommand:cellscript.selectTargetProfile"
+    "onCommand:cellscript.showProductionReport"
   ],
   "scripts": {
-    "validate": "node ./scripts/validate.mjs",
-    "package": "npx @vscode/vsce package",
-    "publish:dry-run": "npx @vscode/vsce publish --dry-run"
+    "build": "esbuild extension.js --bundle --platform=node --format=cjs --external:vscode --minify --outfile=dist/extension.js",
+    "validate": "npm run build && node ./scripts/validate.mjs",
+    "vscode:prepublish": "npm run build",
+    "package": "npm run build && npx @vscode/vsce package",
+    "publish:dry-run": "npm run build && npx @vscode/vsce publish --dry-run"
   },
-  "dependencies": {
+  "devDependencies": {
+    "esbuild": "^0.25.3",
     "vscode-languageclient": "^9.0.1"
   },
   "categories": [
@@ -38,7 +40,6 @@
   ],
   "keywords": [
     "cellscript",
-    "spora",
     "ckbvm",
     "smart-contracts",
     "blockchain"
@@ -86,10 +87,6 @@
       {
         "command": "cellscript.showProductionReport",
         "title": "CellScript: Show Production Report"
-      },
-      {
-        "command": "cellscript.selectTargetProfile",
-        "title": "CellScript: Select Target Profile"
       }
     ],
     "menus": {
@@ -131,9 +128,6 @@
         {
           "command": "cellscript.showProductionReport",
           "when": "editorLangId == cellscript"
-        },
-        {
-          "command": "cellscript.selectTargetProfile"
         }
       ]
     },
@@ -170,16 +164,6 @@
           ],
           "default": "riscv64-asm",
           "description": "Compiler target used by compile, metadata, and constraints commands."
-        },
-        "cellscript.targetProfile": {
-          "type": "string",
-          "enum": [
-            "spora",
-            "ckb",
-            "portable-cell"
-          ],
-          "default": "spora",
-          "description": "Target profile used by compile, metadata, and constraints commands."
         }
       }
     }

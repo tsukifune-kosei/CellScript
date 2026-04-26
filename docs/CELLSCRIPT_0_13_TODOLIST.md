@@ -178,6 +178,14 @@ Notes:
 - `HashMap<Hash, Resource<T>>` / cell-backed generic maps.
 - Hidden generic lowering that changes witness layout or schema
   commitments without metadata.
+- First-class signer / witness-sighash authorization syntax. Authority-sensitive
+  examples must expose explicit lock predicates, but full signature binding is
+  deferred to the next authorization hardening milestone.
+- Builder-backed on-chain lock spend and deny-spend matrices. 0.13
+  strict-compiles bundled locks, while action coverage remains the
+  builder-backed CKB production matrix.
+- Fully declarative capacity and since/header policy. 0.13 keeps these as
+  compiler-visible metadata plus builder/runtime release evidence.
 - Treating 0.12 `Vec<Address>` / `Vec<Hash>` schema/ABI support as new 0.13
   work.
 - Mandatory on-chain generic CKB BLAKE2b stdlib implementation.

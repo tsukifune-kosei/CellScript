@@ -7,7 +7,7 @@
 [![CellScript CI](https://github.com/tsukifune-kosei/CellScript/actions/workflows/ci.yml/badge.svg)](https://github.com/tsukifune-kosei/CellScript/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
-[![Target: CKB](https://img.shields.io/badge/target-CKB-2f6f4e.svg)](#target-profiles)
+[![Targets: CKB](https://img.shields.io/badge/targets-CKB-2f6f4e.svg)](#target-profiles)
 [![Package Workflow: Local First](https://img.shields.io/badge/package%20workflow-local%20first-2f6f4e.svg)](#package-workflow)
 [![LSP: Production Tooling](https://img.shields.io/badge/LSP-production%20tooling-2f6f4e.svg)](#editor-support)
 [![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](https://github.com/tsukifune-kosei/CellScript/wiki)
@@ -16,23 +16,23 @@
 
 **Write Cell contracts the way you think about them — not the way the wire format does.**
 
-CellScript is a domain-specific language for Cell-based smart contracts. It
-compiles `.cell` source into ckb-vm RISC-V assembly or ELF
+CellScript is a domain-specific language for Cell-based smart contracts on
+CKB. It compiles `.cell` source into ckb-vm RISC-V assembly or ELF
 artifacts, together with typed metadata for auditing, policy checks, schema
-binding, and verifier tooling.
+binding, and scheduler-aware execution.
 
 The language is intentionally narrow: it is not a new VM, and it is not an
 account-storage contract language. CellScript gives protocol authors a typed
 way to describe assets, shared Cell state, receipts, lifecycle transitions,
 locks, and transaction-shaped effects — while still mapping directly to the
-Cell model.
+Cell model used by CKB.
 
 ---
 
 ## Why CellScript
 
-Cell-oriented execution is powerful, but hand-written scripts force authors to
-work close to the wire format:
+CKB exposes powerful Cell-oriented execution, but hand-written
+scripts force authors to work close to the wire format:
 
 - parse witness bytes manually
 - track inputs, CellDeps, outputs, and output data by index
@@ -61,6 +61,9 @@ Compile your first contract:
 # Just type-check
 cellc examples/token.cell
 
+# Emit a RISC-V ELF for CKB
+cellc examples/token.cell --target riscv64-elf --target-profile ckb
+
 # Emit a RISC-V ELF for CKB, with a specific entry action
 cellc examples/nft.cell --target riscv64-elf --target-profile ckb --entry-action transfer
 ```
@@ -74,10 +77,10 @@ cellc add shared-types --path ../shared-types
 cellc build --target riscv64-elf --target-profile ckb
 ```
 
-Check portability across targets:
+Run a CKB profile check:
 
 ```bash
-cellc check --target-profile portable-cell
+cellc check --target-profile ckb
 ```
 
 > **Next:** Read on for the [language model](#core-model), [full examples](#example),
@@ -87,21 +90,20 @@ cellc check --target-profile portable-cell
 
 ## Target Profiles
 
-CellScript supports target profiles through `--target-profile`:
+CellScript now supports CKB as its only target profile:
 
 | Profile | When to use | What you get |
 |---|---|---|
-| `ckb` | CKB mainnet artifacts | BLAKE2b/Molecule conventions and CKB syscall profile |
-| `portable-cell` | Source portability checks | Validates target-neutral source — no artifacts produced |
+| `ckb` | CKB mainnet artifacts | BLAKE2b/Molecule conventions, CKB syscall profile |
 
 > The `ckb` profile is production-gated for the bundled CellScript suite. It
 > emits raw CKB ckb-vm artifacts, uses CKB syscall
 > and Molecule/BLAKE2b conventions, and rejects unsupported shapes through
-> normal target-profile policy instead of portability shortcuts.
+> normal target-profile policy.
 
 ```bash
 cellc examples/token.cell --target riscv64-elf --target-profile ckb
-cellc check --target-profile portable-cell
+cellc check --target-profile ckb
 ```
 
 ## Core Model
@@ -140,8 +142,8 @@ CellScript programs are written in terms of Cell lifecycle operations:
   state machine, e.g. `Granted -> Claimable -> FullyClaimed`.
 - **Effect inference** — `action` bodies are classified as `Pure`, `ReadOnly`,
   `Mutating`, `Creating`, or `Destroying` based on their Cell operations.
-- **Effect/access metadata** — builds expose access summaries and verifier
-  obligations so tooling can reason about transaction shape.
+- **Scheduler-aware metadata** — CKB-targeted builds expose access summaries
+  and shared touch domains so block builders can reason about independent work.
 - **Typed schema metadata** — Cell data layout, type identity, source hashes,
   runtime accesses, and verifier obligations are emitted as machine-readable
   metadata.
@@ -161,7 +163,7 @@ or `lock`; effects are written with explicit lifecycle operations.
 **Declarations:**
 
 ```cellscript
-module cellscript::example
+module ckb::example
 
 struct Config {
     threshold: u64
@@ -174,7 +176,7 @@ resource Token has store, transfer, destroy {
 
 shared Pool has store {
     token_reserve: u64
-    quote_reserve: u64
+    ckb_reserve: u64
 }
 
 receipt VestingGrant has store, claim {
@@ -209,13 +211,13 @@ action move_token(token: Token, to: Address) -> Token {
 
 The compiler treats `consume`, `create`, `transfer`, `destroy`, `claim`,
 `settle`, and `read_ref` as **Cell effects**, not ordinary function calls. Those
-effects are reflected in metadata so CKB admission policy, schema decoding, and
-artifact verification can audit the generated script.
+effects are reflected in metadata so CKB admission policy,
+schema decoding, and artifact verification can audit the generated script.
 
 **Complete fungible-token example:**
 
 ```cellscript
-module cellscript::fungible_token
+module ckb::fungible_token
 
 resource Token has store, transfer, destroy {
     amount: u64
@@ -280,11 +282,11 @@ chain-specific VM:
 | Linear ownership | Compiler-enforced | No | Yes (abilities) | No general user-defined |
 | Shared state | Explicit `shared` Cells | Implicit contract storage | Shared objects (some chains) | No shared Cell analogue |
 | Reentrancy | No callback-style reentrancy | Common risk surface | Lower by design | Lower predicate risk |
-| Effect/access metadata | Native | None | Chain-specific | Predicate-level |
+| Scheduler metadata | Native for CKB | None | Not GhostDAG-oriented | Predicate-level |
 | CKB compatibility | Production-gated CKB ckb-vm artifact profile for the bundled Cell suite | Requires different VM | Requires different VM | Requires FuelVM |
 
-Compared with hand-written CKB scripts, CellScript keeps the same runtime
-substrate but replaces raw byte and syscall programming with typed Cell
+Compared with hand-written CKB scripts, CellScript keeps the same
+runtime substrate but replaces raw byte and syscall programming with typed Cell
 operations, linear checking, schema metadata, and policy-verifiable artifacts.
 
 ---
@@ -299,24 +301,26 @@ CellScript includes production-grade local language tooling:
   `tower-lsp` JSON-RPC transport over stdio.
 - **VS Code extension** — syntax highlighting, snippets, on-save diagnostics,
   compiler-backed formatting, scratch compilation, metadata/constraints/production
-  reports, target-profile selection, and status-bar feedback. It shells out to
+  reports, CKB target-profile arguments, and status-bar feedback. It shells out to
   `cellc` (or a `cargo run` fallback), so behavior stays identical to CLI and
   CI gates.
 
 - [VS Code extension](https://github.com/tsukifune-kosei/CellScript/tree/main/editors/vscode-cellscript)
-- [Production plan](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md)
-- [Package registry design](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_DUAL_CHAIN_PACKAGE_REGISTRY_DESIGN.md)
 - [Runtime error codes](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_RUNTIME_ERROR_CODES.md)
 - [Entry witness ABI](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_ENTRY_WITNESS_ABI.md)
 - [Collections support matrix](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_COLLECTIONS_SUPPORT_MATRIX.md)
 - [Mutate and replacement outputs](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_MUTATE_AND_REPLACEMENT_OUTPUTS.md)
-- [CKB profile authoring](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_CKB_PROFILE_AUTHORING.md)
+- [CKB target profile tutorial](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/wiki/Tutorial-05-CKB-Target-Profiles.md)
 - [CKB deployment manifest](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_CKB_DEPLOYMENT_MANIFEST.md)
 - [Capacity and builder contract](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_CAPACITY_AND_BUILDER_CONTRACT.md)
 - [Linear ownership](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_LINEAR_OWNERSHIP.md)
 - [Scheduler hints](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_SCHEDULER_HINTS.md)
-- [0.12 migration notes](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_12_MIGRATION_NOTES.md)
-- [0.12 release evidence](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_12_RELEASE_EVIDENCE.md)
+- [Metadata verification and production gates](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/wiki/Tutorial-06-Metadata-Verification-and-Production-Gates.md)
+- [CKB hashing workflow example](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/examples/ckb_hashing.md)
+- [Collections matrix example](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/examples/collections_matrix.md)
+- [Deployment manifest example](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/examples/deployment_manifest.md)
+- [Mutate append example](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/examples/mutate_append.md)
+- [0.13 roadmap](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_13_ROADMAP.md)
 
 ---
 
@@ -375,12 +379,11 @@ statement/expression forms.
 **5. Code generation** (`codegen/`)
 Emits ckb-vm-compatible RISC-V assembly (`.s`) or ELF (`.elf`):
 - Syscall wrappers: `ckb_load_cell_data`, `ckb_load_witness`,
-  `ckb_load_header_by_field`, `ckb_load_input_by_field`, and supported
-  verifier helpers (`secp256k1_verify`, `load_ecdsa_signature_hash`).
+  `ckb_load_header_by_field`, `ckb_load_input_by_field`, and CKB extension
+  syscalls (`secp256k1_verify`, `load_ecdsa_signature_hash`).
 - Cell input/output/dep index mapping, witness ABI frames, runtime scratch
   buffers, and per-entrypoint trampolines.
-- Profile-switched syscall ABI — target profiles can use different syscall
-  number tables and source-flag conventions.
+- CKB syscall ABI with proper syscall number tables and source-flag conventions.
 
 ### Metadata & Policy
 
@@ -392,20 +395,20 @@ policy gates need — without re-parsing source:
 |---|---|---|
 | Schema layout, type IDs, field offsets | `ir/` | Schema decoder, indexer |
 | Effect classification, resource summaries | `types/` | Scheduler, audit tools |
-| Access domains and verifier obligations | `codegen/` | Builders, indexers, audit tools |
-| Source hashes, artifact BLAKE3 | `lib.rs` | `cellc verify-artifact`, CI gates |
+| Scheduler witness ABI & access domains | `codegen/` | CKB block builder, parallel scheduler |
+| Source hashes, artifact CKB Blake2b | `lib.rs` | `cellc verify-artifact`, CI gates |
 | Verifier obligations, pool invariants | `ir/` | On-chain verifier, policy checker |
 | Target-profile policy violations | `lib.rs` | `cellc check`, CI gates |
 
 `cellc constraints` produces a human-readable subset focused on production
 readiness: ABI slot usage, register/stack-spill placement, witness byte bounds,
-and CKB cycle/capacity estimates.
+CKB cycle/capacity estimates.
 
 ### Runtime & Stdlib
 
 | Module | What it does |
 |---|---|
-| **Stdlib** (`stdlib/`) | Built-in functions that lower to ckb-vm syscalls: `syscall_load_tx_hash`, `syscall_load_script_hash`, `syscall_load_cell`, `syscall_load_header`, hash primitives, signature verification stubs. Module-injected, not linked separately. |
+| **Stdlib** (`stdlib/`) | Built-in functions that lower to ckb-vm syscalls and small runtime helpers: `syscall_load_tx_hash`, `syscall_load_script_hash`, `syscall_load_cell`, `syscall_load_header`, cycle/time helpers, and math helpers. Module-injected, not linked separately. |
 | **Collections** (`stdlib/collections.rs`) | Vector-like ops (push, length, get) that lower to Cell output data region writes/reads with bounds checks. |
 
 ### Tooling Surface
@@ -417,7 +420,7 @@ and CKB cycle/capacity estimates.
 | **VS Code** | `editors/vscode-cellscript/` | Shells out to `cellc` for highlighting, diagnostics, reports |
 | **Formatter** | `fmt/` | Idempotent formatter for `cellc fmt` and LSP |
 | **Doc generator** | `docgen/` | HTML/Markdown/JSON docs from AST + metadata |
-| **Simulator** | `simulate.rs` | Symbolic evaluator — emits `TraceEvent` logs without ckb-vm |
+| **Simulator** | `simulate.rs` | Simulated evaluator — emits `TraceEvent` logs without ckb-vm |
 | **REPL** | `repl.rs` | Interactive read-eval-print loop |
 
 ### Package & Build System
@@ -428,9 +431,9 @@ and CKB cycle/capacity estimates.
 | **Incremental compiler** (`incremental/`) | Dependency-graph-aware build cache — skips recompilation when inputs are unchanged. |
 | **Build integration** (`lib.rs`) | Resolves `Cell.toml` → `CellBuildConfig`, merges CLI + manifest options, selects entry scope, runs policy gates, writes artifacts + metadata. |
 
-### Target Profile Switching
+### CKB Target Profile
 
-The compiler is profile-aware from type checking through code generation:
+The compiler applies the CKB profile from type checking through code generation:
 
 ```mermaid
 graph TB
@@ -439,20 +442,12 @@ graph TB
             C1[BLAKE2b]
             C2[Molecule]
             C3[CKB syscall ABI]
-            C4["CKB Source rules"]
-            C5["raw ELF artifact"]
-        end
-        subgraph Portable
-            P1[Check-only]
-            P2[No target syscalls]
+            C4[CKB scheduler witness]
+            C5[CKB ELF artifact]
         end
     end
-    Policy --> CKB
-    Policy["Policy gate rejects incompatible metadata before codegen"] --> Portable
+    Policy["Policy gate rejects incompatible metadata before codegen"] --> CKB
 ```
-
-`portable-cell` is a check-only profile that verifies target-neutral source
-without producing artifacts.
 
 ### Wasm Gate
 
@@ -485,7 +480,6 @@ target_profile = "ckb"
 [policy]
 production = true
 deny_fail_closed = true
-deny_symbolic_runtime = false
 deny_ckb_runtime = false
 deny_runtime_obligations = false
 ```
@@ -533,7 +527,7 @@ registry dependency resolution remain experimental and fail-closed.
 | `cellc constraints` | Emit profile-aware production constraints |
 | `cellc abi` | Explain `_cellscript_entry` witness ABI layout for an action or lock |
 | `cellc entry-witness` | Encode `_cellscript_entry` witness bytes |
-| `cellc scheduler-plan` | Report serial/conflict policy from compiler access hints |
+| `cellc scheduler-plan` | Consume scheduler hints and report serial/conflict policy |
 | `cellc ckb-hash` | Compute CKB default Blake2b-256 hashes for builders and release evidence |
 | `cellc opt-report` | Compare O0..O3 artifact size and constraints status |
 | `cellc verify-artifact` | Verify an artifact against its metadata sidecar |
@@ -554,14 +548,13 @@ registry dependency resolution remain experimental and fail-closed.
 |---|---|
 | `--target riscv64-asm` | Emit RISC-V assembly |
 | `--target riscv64-elf` | Emit a RISC-V ELF artifact |
+
 | `--target-profile ckb` | Use the CKB profile |
-| `--target-profile portable-cell` | Check source portability across Cell profiles |
 | `--entry-action <ACTION>` | Compile a single action as the artifact entrypoint |
 | `--entry-lock <LOCK>` | Compile a single lock as the artifact entrypoint |
 | `--json` | Emit machine-readable summaries where supported |
 | `--production` | Apply production-oriented metadata policy checks |
 | `--deny-fail-closed` | Reject fail-closed runtime features or obligations |
-| `--deny-symbolic-runtime` | Reject symbolic Cell/runtime requirements |
 | `--deny-ckb-runtime` | Reject CKB transaction/syscall runtime requirements |
 | `--deny-runtime-obligations` | Reject runtime-required verifier obligations |
 

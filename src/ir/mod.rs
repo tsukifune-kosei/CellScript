@@ -2874,11 +2874,11 @@ impl IrGenerator {
                 "Hash::zero" if call.args.is_empty() => {
                     Some(LoweredExpr { operand: IrOperand::Const(IrConst::Hash([0; 32])), current: Some(current) })
                 }
-                "env::current_daa_score" if call.args.is_empty() => {
-                    let dest = self.new_var("current_daa_score", IrType::U64);
+                "env::current_timepoint" if call.args.is_empty() => {
+                    let dest = self.new_var("current_timepoint", IrType::U64);
                     self.block_mut(blocks, current).instructions.push(IrInstruction::Call {
                         dest: Some(dest.clone()),
-                        func: "__env_current_daa_score".to_string(),
+                        func: "__env_current_timepoint".to_string(),
                         args: Vec::new(),
                     });
                     Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(current) })
@@ -4179,5 +4179,5 @@ fn binding_pattern_label(pattern: &BindingPattern) -> &str {
 }
 
 pub(crate) fn type_hash_for_name(name: &str) -> [u8; 32] {
-    *blake3::hash(name.as_bytes()).as_bytes()
+    crate::ckb_blake2b256(name.as_bytes())
 }

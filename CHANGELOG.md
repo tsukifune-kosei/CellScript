@@ -9,12 +9,11 @@
 - Add manifest-level CKB `hash_type` and `cell_deps`/DepGroup reporting, plus
   structured timelock and capacity evidence contracts.
 - Add the standalone `tools/ckb-tx-measure` helper for CKB packed transaction
-  size and occupied-capacity evidence, with Spora acceptance building the same
+  size and occupied-capacity evidence, with CKB acceptance building the same
   source through a generated manifest for nested checkouts.
 - Add `cellc abi`, `cellc scheduler-plan`, and `cellc opt-report` for entry
   witness inspection, scheduler-hint consumption, and optimization measurement.
-- Pin the Spora stdlib BLAKE3 helper to the VM `BLAKE3_HASH` syscall number
-  `3001`.
+- Use CKB Blake2b hashes for compiler metadata and release evidence.
 - Expand entry witness tests to cover scalar, fixed-byte, `Vec<Address>`,
   `Vec<Hash>`, opaque nested `Vec<Vec<u8>>`, `Vec<u8>`, missing payload, and
   wrong-width payload cases.
@@ -27,11 +26,13 @@
 
 ## 0.11.0 - 2026-04-23
 
-- Release CellScript 0.11.0 as the standalone dual-chain compiler package.
+- Release CellScript 0.11.0 as the standalone CKB compiler package.
 - Close the current CKB bundled-example production acceptance suite: all seven
-  examples strict-admit, all 43 actions and 15 locks strict-compile, and every
-  bundled business action has an original-scoped on-chain production harness.
-- Keep Spora compatibility intact while documenting the remaining Spora
+  production examples strict-admit, all 43 actions and 16 locks strict-compile,
+  and every bundled business action has an original-scoped on-chain production
+  harness. Lock coverage is scoped compile coverage; `registry.cell` remains a
+  compiler/tooling language example outside this production action matrix.
+- Keep compatibility intact while documenting the remaining
   production hardening track around action builders, malformed matrices, and
   measured mass/cycle constraints.
 - Preserve the production safety gates added in the 2026-04-23 development
@@ -40,25 +41,22 @@
   explicit profile-aware constraints metadata.
 - Promote the VS Code extension to production-grade local tooling with
   compiler-backed validation, formatting, scratch compilation, metadata and
-  constraints reports, target-profile selection, status feedback, and stricter
+  constraints reports, CKB target-profile arguments, status feedback, and stricter
   extension validation.
 
 ## 2026-04-23
 
 - Marked Wasm output as audit-only instead of metadata-only production output.
-- Renamed the legacy always-empty runtime metadata field to
-  `legacy_symbolic_cell_runtime_features` and stopped emitting the old symbolic
-  ELF feature surface.
+- Removed the old ELF feature surface from runtime metadata.
 - Reduced crates.io package contents by excluding GitHub workflow, wiki, and
   VS Code extension packaging files.
 - Cleaned remaining clippy mechanical warnings and documented the intentional
   broad compiler-helper signature allowances so `cargo clippy --locked
   --all-targets -- -D warnings` is a release gate.
-- Removed the remaining placeholder artifact-validation surface by returning a
+- Removed the remaining artifact-validation surface by returning a
   source-free `ValidatedArtifact` for metadata verification instead of building
   a synthetic AST.
-- Removed the private legacy scheduler witness Borsh metadata/test helper and
-  kept scheduler witness metadata Molecule-only.
+- Kept scheduler witness metadata Molecule-only.
 - Marked Wasm report output as audit-only and excluded standalone docs from the
   crates.io package contents.
 - Stripped externally-linked RISC-V ELF artifacts when an external toolchain is
@@ -76,7 +74,7 @@
 - Clarified README CLI docs that `cellc test` is a compiler/policy harness, not
   trusted runtime execution.
 - Removed the old CKB acceptance policy exception path so the CKB target
-  profile now rejects unportable artifacts through the normal production policy
+  profile now rejects unsupported CKB artifacts through the normal production policy
   gate.
 - Removed unresolved-call ELF stub generation; production ELF emission now
   fails when a generated call target has not been lowered.
@@ -86,7 +84,7 @@
 - Tightened launch example regression coverage to ensure imported callees are
   linked without pulling unrelated AMM actions into the artifact.
 - Added `env::current_timepoint()` as a chain-neutral runtime time source:
-  Spora lowers it to DAA score and CKB lowers it to header epoch number.
+  CKB lowers it to header epoch number.
 - Switched bundled `vesting.cell` to the chain-neutral timepoint API, allowing
   original scoped `grant_vesting` artifacts under the CKB target profile.
 - Added original scoped CKB on-chain acceptance for
@@ -103,7 +101,7 @@
 - Increased verifier expression temp slots and added regression coverage for
   the original `launch.cell::simple_launch` eight-recipient remaining-output
   sum.
-- Switched CKB acceptance launch coverage from a standalone portable harness to
+- Switched CKB acceptance launch coverage from a standalone synthetic harness to
   the original scoped `launch.cell::simple_launch` artifact.
 - Fixed dynamic Molecule table create-output checks for fixed/scalar fields so
   original `multisig.cell::create_wallet` verifies table fields through
@@ -148,7 +146,7 @@
 
 - Tightened backend CFG reachability analysis so unreachable-block metrics are rooted at the selected ELF entry label instead of treating every `.global` text symbol as reachable.
 - Added a regression test proving unused global exports are still counted as unreachable from the entry root.
-- Removed obsolete `global_text_labels` parser storage after entry-root reachability replaced global-root reachability.
+- Removed old `global_text_labels` parser storage after entry-root reachability replaced global-root reachability.
 - Rebased bundled-example unreachable-block budgets on the stricter entry-root metric while keeping call-edge and CFG shape budgets enforced.
 - Declared Rust 1.85.0 as the standalone crate MSRV so CI and users run with Cargo support for Edition 2024 dependencies.
 - Updated standalone CI to archive backend-shape reports as release evidence.

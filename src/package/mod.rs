@@ -114,8 +114,6 @@ pub struct PolicyConfig {
     #[serde(default)]
     pub deny_fail_closed: bool,
     #[serde(default)]
-    pub deny_symbolic_runtime: bool,
-    #[serde(default)]
     pub deny_ckb_runtime: bool,
     #[serde(default)]
     pub deny_runtime_obligations: bool,
@@ -124,21 +122,7 @@ pub struct PolicyConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DeployConfig {
     #[serde(default)]
-    pub spora: Option<SporaDeployConfig>,
-    #[serde(default)]
     pub ckb: Option<CkbDeployConfig>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SporaDeployConfig {
-    #[serde(default)]
-    pub artifact_hash: Option<String>,
-    #[serde(default)]
-    pub schema_hash: Option<String>,
-    #[serde(default)]
-    pub abi_hash: Option<String>,
-    #[serde(default)]
-    pub code_cell: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

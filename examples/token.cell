@@ -1,5 +1,5 @@
 
-module spora::fungible_token
+module cellscript::fungible_token
 
 resource Token has store, transfer, destroy {
     amount: u64

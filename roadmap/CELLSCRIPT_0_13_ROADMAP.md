@@ -2,16 +2,15 @@
 
 **Status**: Release-gate draft (review findings integrated)
 **Scope**: Zero-cost Abstractions, Bounded Collection Runtime Gaps, CLI Ergonomics
-**Dependencies**: v0.12 released (dual-chain production closure)
+**Dependencies**: v0.12 released (CKB production closure)
 **Live TODO**: [CELLSCRIPT_0_13_TODOLIST.md](../docs/CELLSCRIPT_0_13_TODOLIST.md)
 
 ---
 
 ## 📊 v0.12 Achievements
 
-v0.12 achieved **production-grade dual-chain support**:
+v0.12 achieved **production-gated CKB support**:
 
-- ✅ Spora production gate: 43/43 actions, 7/7 examples deployed
 - ✅ CKB production gate: 43/43 actions on-chain, 0 expected fail-closed
 - ✅ Molecule ABI: schema manifest complete, metadata schema 29
 - ✅ Backend shape gates: code size/branch/CFG metrics published
@@ -19,7 +18,7 @@ v0.12 achieved **production-grade dual-chain support**:
 - ✅ LSP: JSON-RPC stdio + VS Code LanguageClient integration
 - ✅ Constraints reporting: capacity/cycles/mass/hash_type all exposed
 
-**v0.12 Core Achievement**: **Proved CellScript can run production on both chains.**
+**v0.12 Core Achievement**: **Proved the bundled CellScript suite can run under strict CKB production gates.**
 
 ---
 
@@ -79,7 +78,7 @@ attributes: Vec<(String, String)>,  // ✅ Tuple vector
 
 **Why CellScript Cannot Copy Sway/Move Directly**:
 
-CKB/Spora's core is **NOT** account storage or native object packages. It's:
+CKB's core is **NOT** account storage or native object packages. It's:
 - cell transition / lock-type script / witness / builder / deployment identity
 
 **Generic risks specific to CellScript**:
@@ -103,9 +102,8 @@ CKB/Spora's core is **NOT** account storage or native object packages. It's:
    - 0.12 plan correctly bounded: `Vec<u8>`, `Vec<Address>` schema/ABI dynamic types OK;
      runtime collection helpers NOT fully generic; cell-backed collection ownership must fail-closed
 
-**CKB/Spora Need**:
+**CKB Need**:
 - ✅ **CKB**: Multisig/timelock need `Vec<Address>` schema/ABI support and local helper parity for common value-vector patterns
-- ✅ **Spora**: AMM/Registry/OrderBook need bounded executable collection patterns (`Vec<Hash>`, `Vec<Address>`, fixed-width values, and explicit map-like representations), not full generic `HashMap<K, V>` in 0.13
 - ⚠️ **CKB raw scripts**: Usually rely on Rust -> RISC-V generics; CellScript must expose bounded patterns explicitly instead of inheriting unconstrained Rust generics
 
 **v0.13 Goal**: **Bounded collection runtime / reusable value-vector layer**, NOT full Rust/Sway-style generics.
@@ -564,7 +562,7 @@ the compiler has a static aggregate length. Dynamic loops are not unrolled.
 
 #### 9. Action Transaction Builder MVP ✅
 
-**Source**: Dual-chain plan Phase C.
+**Source**: CKB production tooling plan.
 
 **v0.12 Status**: Not implemented in 0.12 - genuine new feature.
 
@@ -580,16 +578,16 @@ status. It intentionally does not sign or submit transactions.
 
 #### 10. Broader Malformed/Fuzz Testing ✅
 
-**Source**: Dual-chain plan Phase F.
+**Source**: CKB production hardening plan.
 
 **v0.12 Status**: v0.12 has basic malformed matrix (43/43 actions), but not broader fuzzing.
 **This is an enhancement**, not overlap.
 
 **Current branch status**: added a 0.13 adversarial regression matrix covering
 unsupported full generic maps, cell-backed vectors, untyped vector mutation, and
-invalid hash_type DSL. The acceptance scripts still provide the bundled
-dual-chain production matrix; property fuzzing remains a future scale-up beyond
-the 0.13 release gate.
+invalid hash_type DSL. The acceptance scripts still provide the bundled CKB
+production matrix; property fuzzing remains a future scale-up beyond the 0.13
+release gate.
 
 **Risk**: Medium
 
@@ -667,11 +665,10 @@ the 0.13 release gate.
 
 ## 📝 Integration with Existing Plans
 
-### CELLSCRIPT_DUAL_CHAIN_PRODUCTION_PLAN.md
+### CKB Production Boundary
 
-v0.13 **does not change** dual-chain production plan, only enhances it:
+v0.13 **does not reopen** the CKB production boundary, only enhances it:
 
-- ✅ Spora production gate remains 43/43 actions
 - ✅ CKB production gate remains 43/43 actions
 - ✅ 7 bundled examples remain regression test suite
 - ✅ Molecule ABI remains public format

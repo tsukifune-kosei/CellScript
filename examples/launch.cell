@@ -1,9 +1,9 @@
 // launch.cell - Token Launch and Pool Seeding
 
-module spora::launch
+module cellscript::launch
 
-use spora::fungible_token::{Token, MintAuthority}
-use spora::amm::{Pool, LPReceipt, seed_pool}
+use cellscript::fungible_token::{Token, MintAuthority}
+use cellscript::amm::{Pool, LPReceipt, seed_pool}
 
 /// Launch a new token and seed liquidity pool
 action launch_token(

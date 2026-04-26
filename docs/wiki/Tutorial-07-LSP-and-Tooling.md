@@ -62,10 +62,9 @@ Useful settings:
 | `cellscript.compilerPath` | Path to the `cellc` binary used for LSP and CLI-backed commands. |
 | `cellscript.useCargoRunFallback` | Use `cargo run -q -p cellscript --` from a workspace when `cellc` is unavailable. |
 | `cellscript.target` | Compiler target for command-backed reports: `riscv64-asm` or `riscv64-elf`. |
-| `cellscript.targetProfile` | Profile for command-backed reports: `ckb` or `portable-cell`. |
 | `cellscript.commandTimeoutMs` | Timeout for compiler-backed commands. |
 
-The extension contributes commands for compile, metadata, constraints, production report, and target-profile selection. `CellScript: Show Production Report` is useful while editing because it displays compiler version, metadata, constraints, and release-audit boundaries. It does not replace chain acceptance gates.
+The extension contributes commands for compile, metadata, constraints, and production report. `CellScript: Show Production Report` is useful while editing because it displays compiler version, metadata, constraints, and release-audit boundaries. It does not replace chain acceptance gates.
 
 ## Formatting
 
@@ -137,4 +136,4 @@ cellc verify-artifact build/main.elf --expect-target-profile ckb
 
 ## Next
 
-With the tooling loop in place, continue with [Bundled Example Contracts](Tutorial-08-Bundled-Example-Contracts).
+With the tooling loop in place, continue with [Bundled Example Contracts](Tutorial-08-Bundled-Example-Contracts.md).

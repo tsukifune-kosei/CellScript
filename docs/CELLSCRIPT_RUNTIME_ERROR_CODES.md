@@ -10,7 +10,7 @@ The compiler also emits an assembly comment next to generated fail handlers:
 li a0, 14
 ```
 
-Use the symbolic name first when debugging. Numeric codes are retained for VM,
+Use the error name first when debugging. Numeric codes are retained for VM,
 wallet, explorer, and acceptance-script compatibility.
 
 The same table is emitted in metadata schema 30 under

@@ -2,7 +2,7 @@
 
 **Status**: production metadata contract for CellScript 0.12.
 
-CellScript emits scheduler-facing metadata for Spora. These hints are not hidden
+CellScript emits scheduler-facing metadata for CKB. These hints are not hidden
 comments; they are part of action metadata and the Molecule scheduler witness.
 
 ## Exposed Fields
@@ -40,7 +40,7 @@ claimed by the compiler alone.
 Use:
 
 ```bash
-cellc scheduler-plan contract.cell --target-profile spora
+cellc scheduler-plan contract.cell --target-profile ckb
 ```
 
 The report consumes action scheduler hints and emits:

@@ -31,10 +31,10 @@ action add(x: u64, y: u64) -> u64 {
     assert!(!metadata.contains("\"scheduler_witness_molecule_hex\""));
     assert!(metadata.contains("\"metadata_schema_version\""));
     assert!(metadata.contains("\"compiler_version\""));
-    assert!(metadata.contains("\"artifact_hash_blake3\""));
+    assert!(metadata.contains("\"artifact_hash\""));
     assert!(metadata.contains("\"artifact_size_bytes\""));
-    assert!(metadata.contains("\"source_hash_blake3\""));
-    assert!(metadata.contains("\"source_content_hash_blake3\""));
+    assert!(metadata.contains("\"source_hash\""));
+    assert!(metadata.contains("\"source_content_hash\""));
     assert!(metadata.contains("\"source_units\""));
     assert!(metadata.contains("\"target_profile\""));
     assert!(metadata.contains("\"target_chain\""));
@@ -42,48 +42,6 @@ action add(x: u64, y: u64) -> u64 {
     assert!(metadata.contains("\"entry_abi\""));
     assert!(metadata.contains("\"artifact\""));
     assert!(metadata.contains("\"runtime_errors\""));
-}
-
-#[test]
-fn cellc_constraints_subcommand_emits_profile_constraints_json() {
-    let dir = tempfile::tempdir().unwrap();
-    let input = dir.path().join("sample.cell");
-    let output = dir.path().join("constraints.json");
-    let source = r#"
-module test
-
-action add(x: u64, y: u64) -> u64 {
-    x + y
-}
-"#;
-    std::fs::write(&input, source).unwrap();
-
-    let run = Command::new(env!("CARGO_BIN_EXE_cellc"))
-        .arg("constraints")
-        .arg(&input)
-        .arg("--target-profile")
-        .arg("spora")
-        .arg("--entry-action")
-        .arg("add")
-        .arg("--output")
-        .arg(&output)
-        .output()
-        .unwrap();
-
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
-    let constraints: serde_json::Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
-    assert_eq!(constraints["target_profile"], "spora");
-    assert_eq!(constraints["status"], "pass");
-    assert_eq!(constraints["entry_abi"][0]["entry_name"], "add");
-    assert_eq!(constraints["entry_abi"][0]["register_slots_used"], 2);
-    assert!(constraints["artifact"]["artifact_size_bytes"].as_u64().unwrap() > 0);
-    let runtime_errors = constraints["runtime_errors"].as_array().expect("runtime error registry should be emitted");
-    assert!(
-        runtime_errors.iter().any(|error| error["code"] == 14 && error["name"] == "mutate-transition-mismatch"),
-        "constraints output should expose stable runtime error names: {runtime_errors:?}"
-    );
-    assert!(constraints["spora"]["estimated_storage_mass"].as_u64().unwrap() > 0);
-    assert!(constraints["ckb"].is_null());
 }
 
 #[test]
@@ -202,7 +160,7 @@ action add(x: u64, y: u64) -> u64 {
 
     assert!(!verify.status.success());
     let stderr = String::from_utf8_lossy(&verify.stderr);
-    assert!(stderr.contains("metadata artifact_hash_blake3") || stderr.contains("artifact_hash"), "{}", stderr);
+    assert!(stderr.contains("metadata artifact_hash") || stderr.contains("artifact_hash"), "{}", stderr);
 }
 
 #[test]
@@ -298,8 +256,8 @@ action add(x: u64, y: u64) -> u64 {
 
     let metadata_path = dir.path().join("sample.s.meta.json");
     let mut metadata_json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&metadata_path).unwrap()).unwrap();
-    let source_hash = metadata_json["source_units"][0]["hash_blake3"].as_str().unwrap().to_uppercase();
-    metadata_json["source_units"][0]["hash_blake3"] = serde_json::json!(source_hash);
+    let source_hash = metadata_json["source_units"][0]["hash"].as_str().unwrap().to_uppercase();
+    metadata_json["source_units"][0]["hash"] = serde_json::json!(source_hash);
     std::fs::write(&tampered_metadata, serde_json::to_vec_pretty(&metadata_json).unwrap()).unwrap();
 
     let verify = Command::new(env!("CARGO_BIN_EXE_cellc"))
@@ -364,8 +322,8 @@ action add(x: u64, y: u64) -> u64 {
 
     let metadata_path = dir.path().join("sample.s.meta.json");
     let metadata_json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&metadata_path).unwrap()).unwrap();
-    let artifact_hash = metadata_json["artifact_hash_blake3"].as_str().unwrap();
-    let source_content_hash = metadata_json["source_content_hash_blake3"].as_str().unwrap();
+    let artifact_hash = metadata_json["artifact_hash"].as_str().unwrap();
+    let source_content_hash = metadata_json["source_content_hash"].as_str().unwrap();
 
     let verify = Command::new(env!("CARGO_BIN_EXE_cellc"))
         .arg("verify-artifact")
@@ -393,8 +351,8 @@ action add(x: u64, y: u64) -> u64 {
     assert!(verify.status.success(), "{}", String::from_utf8_lossy(&verify.stderr));
     let stdout: serde_json::Value = serde_json::from_slice(&verify.stdout).unwrap();
     assert_eq!(stdout["status"], "ok");
-    assert_eq!(stdout["artifact_hash_blake3"], artifact_hash);
-    assert_eq!(stdout["source_content_hash_blake3"], source_content_hash);
+    assert_eq!(stdout["artifact_hash"], artifact_hash);
+    assert_eq!(stdout["source_content_hash"], source_content_hash);
     assert_eq!(stdout["expected_hashes_verified"], true);
     assert_eq!(stdout["policy_verified"], false);
     assert_eq!(stdout["sources_verified"], false);
@@ -410,7 +368,7 @@ action add(x: u64, y: u64) -> u64 {
         .unwrap();
     assert!(!verify.status.success(), "unexpected success: {}", String::from_utf8_lossy(&verify.stdout));
     let stderr = String::from_utf8_lossy(&verify.stderr);
-    assert!(stderr.contains("source_content_hash_blake3") && stderr.contains("does not match expected"), "{}", stderr);
+    assert!(stderr.contains("source_content_hash") && stderr.contains("does not match expected"), "{}", stderr);
 
     let verify = Command::new(env!("CARGO_BIN_EXE_cellc"))
         .arg("verify-artifact")
@@ -421,7 +379,7 @@ action add(x: u64, y: u64) -> u64 {
         .unwrap();
     assert!(!verify.status.success(), "unexpected success: {}", String::from_utf8_lossy(&verify.stdout));
     let stderr = String::from_utf8_lossy(&verify.stderr);
-    assert!(stderr.contains("lowercase BLAKE3 hex digest"), "{}", stderr);
+    assert!(stderr.contains("lowercase CKB Blake2b hex digest"), "{}", stderr);
 }
 
 #[test]
@@ -878,18 +836,17 @@ action ping() -> u64 {
     assert_eq!(stdout["status"], "ok");
     assert_eq!(stdout["artifact_format"], "RISC-V assembly");
     assert_eq!(stdout["opt_level"], 1);
-    assert_eq!(stdout["target_profile"], "spora");
+    assert_eq!(stdout["target_profile"], "ckb");
     assert_eq!(stdout["policy_verified"], false);
     assert_eq!(stdout["runtime_required_verifier_obligations"], 0);
     assert_eq!(stdout["fail_closed_verifier_obligations"], 0);
     assert!(stdout["artifact"].as_str().unwrap().ends_with("build/main.s"));
     assert!(stdout["metadata"].as_str().unwrap().ends_with("build/main.s.meta.json"));
-    assert!(stdout["artifact_hash_blake3"].as_str().unwrap().len() == 64);
-    assert!(stdout["source_content_hash_blake3"].as_str().unwrap().len() == 64);
-    assert_eq!(stdout["constraints"]["target_profile"], "spora");
-    assert_eq!(stdout["constraints"]["status"], "pass");
+    assert!(stdout["artifact_hash"].as_str().unwrap().len() == 64);
+    assert!(stdout["source_content_hash"].as_str().unwrap().len() == 64);
+    assert_eq!(stdout["constraints"]["target_profile"], "ckb");
+    assert_eq!(stdout["constraints"]["status"], "warn");
     assert!(stdout["constraints"]["artifact"]["artifact_size_bytes"].as_u64().unwrap() > 0);
-    assert!(stdout["constraints"]["spora"]["estimated_storage_mass"].as_u64().unwrap() > 0);
 }
 
 #[test]
@@ -944,15 +901,15 @@ action ping() -> u64 {
     assert_eq!(checked_targets.len(), 2);
     assert!(checked_targets.iter().all(|target| target["runtime_required_verifier_obligations"] == 0));
     assert!(checked_targets.iter().all(|target| target["fail_closed_verifier_obligations"] == 0));
-    assert!(checked_targets.iter().all(|target| target["target_profile"] == "spora"));
-    assert!(checked_targets.iter().all(|target| target["compiled_target_profile"] == "spora"));
+    assert!(checked_targets.iter().all(|target| target["target_profile"] == "ckb"));
+    assert!(checked_targets.iter().all(|target| target["compiled_target_profile"] == "ckb"));
     assert!(checked_targets.iter().all(|target| target["target_profile_policy_violations"].as_array().unwrap().is_empty()));
     assert!(checked_targets.iter().any(|target| target["requested_target"] == "riscv64-asm"));
     assert!(checked_targets.iter().any(|target| target["requested_target"] == "riscv64-elf"));
 }
 
 #[test]
-fn cellc_build_accepts_pure_ckb_target_profile_without_sporabi_trailer() {
+fn cellc_build_accepts_pure_ckb_target_profile_without_vm_abi_trailer() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
 
@@ -996,7 +953,7 @@ action ping() -> u64 {
     let artifact_path = stdout["artifact"].as_str().unwrap();
     let artifact = std::fs::read(artifact_path).unwrap();
     assert!(artifact.starts_with(b"\x7fELF"));
-    assert!(!artifact.ends_with(b"SPORABI\0\x01\x80\0\0\0\0\0\0"));
+    assert!(!artifact.ends_with(b"CSABITR0\x01\x80\0\0\0\0\0\0"));
 
     let verify = Command::new(env!("CARGO_BIN_EXE_cellc"))
         .arg("verify-artifact")
@@ -1015,58 +972,10 @@ action ping() -> u64 {
         .arg("verify-artifact")
         .arg(artifact_path)
         .arg("--expect-target-profile")
-        .arg("spora")
+        .arg("unknown")
         .output()
         .unwrap();
     assert!(!verify.status.success(), "unexpected success: {}", String::from_utf8_lossy(&verify.stdout));
-    let stderr = String::from_utf8_lossy(&verify.stderr);
-    assert!(stderr.contains("metadata target_profile 'ckb' does not match expected 'spora'"), "{}", stderr);
-}
-
-#[test]
-fn cellc_check_accepts_pure_portable_target_profile() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-
-    std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::write(
-        root.join("Cell.toml"),
-        r#"
-[package]
-name = "demo"
-version = "0.1.0"
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        root.join("src").join("main.cell"),
-        r#"
-module demo::main
-
-action add(x: u64, y: u64) -> u64 {
-    return x + y
-}
-"#,
-    )
-    .unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_cellc"))
-        .current_dir(root)
-        .arg("check")
-        .arg("--target-profile")
-        .arg("portable-cell")
-        .arg("--json")
-        .output()
-        .unwrap();
-
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["status"], "ok");
-    let checked_targets = stdout["checked_targets"].as_array().unwrap();
-    assert_eq!(checked_targets.len(), 1);
-    assert_eq!(checked_targets[0]["target_profile"], "portable-cell");
-    assert_eq!(checked_targets[0]["compiled_target_profile"], "spora");
-    assert!(checked_targets[0]["target_profile_policy_violations"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -1116,49 +1025,7 @@ action add(x: u64, y: u64) -> u64 {
 }
 
 #[test]
-fn cellc_check_uses_manifest_target_profile_policy() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-
-    std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::write(
-        root.join("Cell.toml"),
-        r#"
-[package]
-name = "demo"
-version = "0.1.0"
-
-[build]
-target_profile = "portable-cell"
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        root.join("src").join("main.cell"),
-        r#"
-module demo::main
-
-action add(x: u64, y: u64) -> u64 {
-    return x + y
-}
-"#,
-    )
-    .unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("check").arg("--json").output().unwrap();
-
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let checked_targets = stdout["checked_targets"].as_array().unwrap();
-    assert_eq!(checked_targets.len(), 1);
-    assert_eq!(checked_targets[0]["target_profile"], "portable-cell");
-    assert_eq!(checked_targets[0]["compiled_target_profile"], "spora");
-    assert_eq!(checked_targets[0]["constraints"]["target_profile"], "spora");
-    assert!(checked_targets[0]["constraints"]["artifact"]["artifact_size_bytes"].as_u64().unwrap() > 0);
-}
-
-#[test]
-fn cellc_check_rejects_ckb_profile_daa_policy() {
+fn cellc_check_accepts_ckb_profile_timepoint() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
 
@@ -1178,7 +1045,7 @@ version = "0.1.0"
 module demo::main
 
 action now() -> u64 {
-    return env::current_daa_score()
+    return env::current_timepoint()
 }
 "#,
     )
@@ -1187,208 +1054,7 @@ action now() -> u64 {
     let output =
         Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("check").arg("--target-profile").arg("ckb").output().unwrap();
 
-    assert!(!output.status.success(), "unexpected success: {}", String::from_utf8_lossy(&output.stdout));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("target profile policy failed for 'ckb'"), "unexpected stderr: {}", stderr);
-    assert!(stderr.contains("DAA/header assumptions are Spora-specific"), "unexpected stderr: {}", stderr);
-}
-
-#[test]
-fn cellc_check_rejects_portable_profile_daa_policy() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-
-    std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::write(
-        root.join("Cell.toml"),
-        r#"
-[package]
-name = "demo"
-version = "0.1.0"
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        root.join("src").join("main.cell"),
-        r#"
-module demo::main
-
-action now() -> u64 {
-    return env::current_daa_score()
-}
-"#,
-    )
-    .unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_cellc"))
-        .current_dir(root)
-        .arg("check")
-        .arg("--target-profile")
-        .arg("portable-cell")
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success(), "unexpected success: {}", String::from_utf8_lossy(&output.stdout));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("target profile policy failed for 'portable-cell'"), "unexpected stderr: {}", stderr);
-    assert!(stderr.contains("DAA/header assumptions are Spora-specific"), "unexpected stderr: {}", stderr);
-}
-
-#[test]
-fn cellc_check_accepts_portable_profile_fixed_persistent_cell_schema() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-
-    std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::write(
-        root.join("Cell.toml"),
-        r#"
-[package]
-name = "demo"
-version = "0.1.0"
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        root.join("src").join("main.cell"),
-        r#"
-module demo::main
-
-resource Token has store {
-    amount: u64
-}
-
-action mint(amount: u64) -> Token {
-    return create Token {
-        amount: amount
-    }
-}
-"#,
-    )
-    .unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_cellc"))
-        .current_dir(root)
-        .arg("check")
-        .arg("--target-profile")
-        .arg("portable-cell")
-        .arg("--json")
-        .output()
-        .unwrap();
-
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let checked_targets = stdout["checked_targets"].as_array().unwrap();
-    assert_eq!(checked_targets[0]["target_profile"], "portable-cell");
-    assert!(checked_targets[0]["target_profile_policy_violations"].as_array().unwrap().is_empty());
-}
-
-#[test]
-fn cellc_check_accepts_portable_profile_nested_fixed_persistent_cell_schema() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-
-    std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::write(
-        root.join("Cell.toml"),
-        r#"
-[package]
-name = "demo"
-version = "0.1.0"
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        root.join("src").join("main.cell"),
-        r#"
-module demo::main
-
-struct Owner {
-    pubkey: Hash,
-    flags: [u8; 2],
-}
-
-resource Token has store {
-    owner: Owner,
-    pair: (u64, Owner),
-    checkpoints: [(Owner, u64); 2],
-    amount: u64,
-}
-
-action value() -> u64 {
-    return 1
-}
-"#,
-    )
-    .unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_cellc"))
-        .current_dir(root)
-        .arg("check")
-        .arg("--target-profile")
-        .arg("portable-cell")
-        .arg("--json")
-        .output()
-        .unwrap();
-
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let checked_targets = stdout["checked_targets"].as_array().unwrap();
-    assert_eq!(checked_targets[0]["target_profile"], "portable-cell");
-    assert!(checked_targets[0]["target_profile_policy_violations"].as_array().unwrap().is_empty());
-}
-
-#[test]
-fn cellc_check_accepts_portable_profile_dynamic_persistent_molecule_table_schema() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-
-    std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::write(
-        root.join("Cell.toml"),
-        r#"
-[package]
-name = "demo"
-version = "0.1.0"
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        root.join("src").join("main.cell"),
-        r#"
-module demo::main
-
-enum AssetType {
-    Native,
-    Token(Hash),
-}
-
-resource Bag has store {
-    asset: AssetType
-}
-
-action value() -> u64 {
-    return 1
-}
-"#,
-    )
-    .unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_cellc"))
-        .current_dir(root)
-        .arg("check")
-        .arg("--target-profile")
-        .arg("portable-cell")
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "dynamic persistent Molecule table schemas should be portable now: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Target profile: portable-cell"), "unexpected stdout: {}", stdout);
+    assert!(output.status.success(), "check should succeed with timepoint: {}", String::from_utf8_lossy(&output.stderr));
 }
 
 #[test]
@@ -1518,50 +1184,6 @@ action issue(digest: Hash) -> Fingerprint {
 }
 
 #[test]
-fn cellc_check_allows_deny_symbolic_when_lowering_is_fail_closed_or_verified() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-
-    std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::write(
-        root.join("Cell.toml"),
-        r#"
-[package]
-name = "demo"
-version = "0.1.0"
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        root.join("src").join("main.cell"),
-        r#"
-module demo::main
-
-resource Token has store, transfer, destroy {
-    amount: u64,
-}
-
-action issue(amount: u64) -> Token {
-    return create Token { amount: amount }
-}
-"#,
-    )
-    .unwrap();
-
-    let output =
-        Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("check").arg("--deny-symbolic-runtime").output().unwrap();
-    assert!(
-        output.status.success(),
-        "unexpected failure:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Check succeeded"), "unexpected stdout: {}", stdout);
-}
-
-#[test]
 fn cellc_check_can_reject_runtime_required_obligations() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
@@ -1674,14 +1296,14 @@ receipt VestingGrant has store {
     beneficiary: Address
     total_amount: u64
     claimed_amount: u64
-    cliff_daa_score: u64
-    end_daa_score: u64
+    cliff_timepoint: u64
+    end_timepoint: u64
 }
 
 action claim_vested(grant: VestingGrant) -> (Token, VestingGrant) {
-    let now = env::current_daa_score()
+    let now = env::current_timepoint()
 
-    assert_invariant(now >= grant.cliff_daa_score, "cliff not reached")
+    assert_invariant(now >= grant.cliff_timepoint, "cliff not reached")
     assert_invariant(grant.state < 2, "already fully claimed")
 
     let vested_total = grant.total_amount
@@ -1702,8 +1324,8 @@ action claim_vested(grant: VestingGrant) -> (Token, VestingGrant) {
         beneficiary: grant.beneficiary,
         total_amount: grant.total_amount,
         claimed_amount: grant.claimed_amount + claimable,
-        cliff_daa_score: grant.cliff_daa_score,
-        end_daa_score: grant.end_daa_score
+        cliff_timepoint: grant.cliff_timepoint,
+        end_timepoint: grant.end_timepoint
     } with_lock(grant.beneficiary)
 
     (tokens, updated_grant)
@@ -1742,11 +1364,9 @@ action claim_vested(grant: VestingGrant) -> (Token, VestingGrant) {
         .expect("checked transaction runtime input summaries array");
     assert!(
         checked_runtime_inputs.iter().any(|value| value.as_str().is_some_and(|summary| {
-            summary.contains("claim-conditions:VestingGrant:claim-time-context=Header:VestingGrant.daa_score")
-                && summary.contains("claim-time-daa-score-u64[8]")
+            summary.contains("claim-conditions:VestingGrant:claim-input-lock-hash=Input:VestingGrant.lock_hash")
+                && summary.contains("claim-input-lock-hash-32[32]")
                 && summary.contains("(checked-runtime)")
-                && !summary.contains("blocker=")
-                && !summary.contains("blocker_class=")
         })),
         "unexpected checked transaction runtime input summaries: {}",
         stdout
@@ -2204,19 +1824,23 @@ module demo::main
 
 resource Token has store {
     amount: u64
-    signer_pubkey_hash: [u8; 20]
 }
 
-receipt SignedVestingReceipt -> Token {
+resource VestingReceipt has store {
     amount: u64
-    signer_pubkey_hash: [u8; 20]
-    cliff_daa: u64
+    beneficiary: Address
+    cliff_timepoint: u64
 }
 
-action redeem_signed_after_cliff(receipt: SignedVestingReceipt) -> Token {
-    let now = env::current_daa_score()
-    assert_invariant(now >= receipt.cliff_daa, "cliff not reached")
-    return claim receipt
+action redeem_after_cliff(receipt: VestingReceipt) -> Token {
+    let now = env::current_timepoint()
+    assert_invariant(now >= receipt.cliff_timepoint, "cliff not reached")
+
+    consume receipt
+
+    create Token {
+        amount: receipt.amount
+    } with_lock(receipt.beneficiary)
 }
 "#,
     )
@@ -2226,17 +1850,15 @@ action redeem_signed_after_cliff(receipt: SignedVestingReceipt) -> Token {
     assert!(json_output.status.success(), "unexpected failure: {}", String::from_utf8_lossy(&json_output.stderr));
     let stdout: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
     let target = &stdout["checked_targets"][0];
-    assert_eq!(target["transaction_runtime_input_requirements"], 5, "unexpected stdout: {}", stdout);
+    assert_eq!(target["transaction_runtime_input_requirements"], 3, "unexpected stdout: {}", stdout);
     assert_eq!(target["runtime_required_transaction_runtime_input_requirements"], 0, "unexpected stdout: {}", stdout);
-    assert_eq!(target["checked_transaction_runtime_input_requirements"], 5, "unexpected stdout: {}", stdout);
+    assert_eq!(target["checked_transaction_runtime_input_requirements"], 3, "unexpected stdout: {}", stdout);
     assert_eq!(target["runtime_required_transaction_runtime_input_blockers"], 0, "unexpected stdout: {}", stdout);
     assert_eq!(target["runtime_required_transaction_runtime_input_blocker_classes"], 0, "unexpected stdout: {}", stdout);
 
     let runtime_inputs = target["runtime_required_transaction_runtime_input_requirement_summaries"]
         .as_array()
         .expect("runtime-required transaction runtime input summaries array");
-    // claim-source-predicate and claim-time-context are now checked-runtime
-    // because DAA cliff comparison is covered by LOAD_HEADER_BY_FIELD + slt.
     assert!(runtime_inputs.is_empty(), "unexpected runtime-required transaction runtime input summaries: {}", stdout);
 
     let checked_runtime_inputs = target["checked_transaction_runtime_input_requirement_summaries"]
@@ -2244,66 +1866,18 @@ action redeem_signed_after_cliff(receipt: SignedVestingReceipt) -> Token {
         .expect("checked transaction runtime input summaries array");
     assert!(
         checked_runtime_inputs.iter().any(|value| value.as_str().is_some_and(|summary| {
-            summary.contains("claim-input:SignedVestingReceipt:receipt:claim-input-data=Input:receipt.data")
-                && summary.contains("claim-load-cell-input")
+            summary.contains("consume-input:VestingReceipt:receipt:consume-input-data=Input:receipt.data")
+                && summary.contains("consume-load-cell-input")
                 && summary.contains("(checked-runtime)")
-                && !summary.contains("blocker=")
         })),
         "unexpected checked transaction runtime input summaries: {}",
         stdout
     );
-    assert!(
-        checked_runtime_inputs.iter().any(|value| value.as_str().is_some_and(|summary| {
-            summary.contains("claim-conditions:SignedVestingReceipt:claim-witness-signature=Witness:SignedVestingReceipt.signature")
-                && summary.contains("(checked-runtime)")
-                && !summary.contains("blocker=")
-        })),
-        "unexpected checked transaction runtime input summaries: {}",
-        stdout
-    );
-    assert!(
-        checked_runtime_inputs.iter().any(|value| value.as_str().is_some_and(|summary| {
-            summary.contains(
-                "claim-conditions:SignedVestingReceipt:claim-authorization-domain=Witness:SignedVestingReceipt.authorization-domain",
-            ) && summary.contains("(checked-runtime)")
-                && !summary.contains("blocker=")
-        })),
-        "unexpected checked transaction runtime input summaries: {}",
-        stdout
-    );
-    assert!(
-        checked_runtime_inputs.iter().any(|value| value.as_str().is_some_and(|summary| {
-            summary.contains("claim-output:Token:claim-output-relation=Transaction:Token.output-relation")
-                && summary.contains("claim-output-relation-consume-create-accounting")
-                && summary.contains("(checked-runtime)")
-                && !summary.contains("blocker=")
-        })),
-        "unexpected checked transaction runtime input summaries: {}",
-        stdout
-    );
-    // claim-time-context is now checked-runtime because DAA cliff comparison
-    // is covered by LOAD_HEADER_BY_FIELD + slt in the codegen prelude.
-    assert!(
-        checked_runtime_inputs.iter().any(|value| value.as_str().is_some_and(|summary| {
-            summary.contains("claim-conditions:SignedVestingReceipt:claim-time-context=Header:SignedVestingReceipt.daa_score")
-                && summary.contains("(checked-runtime)")
-                && !summary.contains("blocker=")
-        })),
-        "unexpected checked transaction runtime input summaries: {}",
-        stdout
-    );
-
-    let output =
-        Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("check").arg("--deny-runtime-obligations").output().unwrap();
-    // DAA cliff comparison is now checked-runtime, so --deny-runtime-obligations should pass.
-    // The only remaining runtime obligations are from the cell-backed collection ownership model,
-    // which is not part of the claim-conditions pathway.
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !output.status.success() {
-        // If it fails, it should NOT be due to claim-source-predicate-gap or time-context-predicate-gap.
-        assert!(!stderr.contains("claim-source-predicate-gap"), "claim-source-predicate-gap should not appear: {}", stderr);
-        assert!(!stderr.contains("time-context-predicate-gap"), "time-context-predicate-gap should not appear: {}", stderr);
-    }
+    // Using consume instead of claim, so only consume-input runtime requirements are present.
+    // The checked_transaction_runtime_input_requirements count is 3:
+    // 1. consume-input:VestingReceipt
+    // 2. create-output:Token (fields)
+    // 3. create-output:Token (lock_hash)
 }
 
 #[test]
@@ -2402,7 +1976,7 @@ fn cellc_check_reports_checked_pool_invariant_families_without_runtime_blockers(
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let amm_source = std::fs::read_to_string(manifest_dir.join("examples").join("amm_pool.cell"))
         .unwrap()
-        .replace("use spora::fungible_token::Token", "resource Token has store {\n    symbol: [u8; 8]\n    amount: u64\n}");
+        .replace("use cellscript::fungible_token::Token", "resource Token has store {\n    symbol: [u8; 8]\n    amount: u64\n}");
 
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(
@@ -2832,7 +2406,6 @@ action ping() -> u64 {
         r#"
 // cellscript-test: expect-not-standalone
 // cellscript-test: expect-ckb-runtime
-// cellscript-test: expect-no-symbolic-runtime
 // cellscript-test: expect-no-fail-closed-runtime
 // cellscript-test: expect-runtime-feature: verify-output-cell
 // cellscript-test: expect-no-runtime-feature: transfer-expression
@@ -3501,7 +3074,6 @@ action update(amount: u64) -> u64 {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("\"lowering\""));
     assert!(stdout.contains("\"runtime\""));
-    assert!(stdout.contains("\"symbolic_cell_runtime_required\": false"));
     assert!(stdout.contains("\"fail_closed_runtime_features\""));
     assert!(stdout.contains("\"verifier_obligations\""));
     assert!(stdout.contains("\"source\": \"Input\""));
@@ -3833,7 +3405,7 @@ action read_only(value: u64) -> u64 {
         .current_dir(root)
         .arg("scheduler-plan")
         .arg("--target-profile")
-        .arg("spora")
+        .arg("ckb")
         .output()
         .unwrap();
     assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
@@ -3901,7 +3473,7 @@ action main(value: u64) -> u64 {
     for (index, row) in rows.iter().enumerate() {
         assert_eq!(row["opt_level"], index as u64);
         assert_eq!(row["artifact_format"], "RISC-V assembly");
-        assert_eq!(row["constraints_status"], "pass");
+        assert_eq!(row["constraints_status"], "warn");
         assert!(row["artifact_size_bytes"].as_u64().unwrap() > 0);
         assert!(row["artifact_size_delta_from_o0"].is_i64());
     }

@@ -78,7 +78,7 @@ cellc path/to/file.cell
 ```bash
 cellc check
 cellc check --all-targets
-cellc check --target-profile portable-cell
+cellc check --target-profile ckb
 cellc check --production
 cellc check --deny-runtime-obligations
 cellc check --json
@@ -168,4 +168,4 @@ Registry publishing, registry package installation, `login`, `run`, and `repl` r
 
 ## Next
 
-With a repeatable package workflow in place, continue with [CKB Target Profile](Tutorial-05-CKB-Target-Profile).
+With a repeatable package workflow in place, continue with [CKB Target Profiles](Tutorial-05-CKB-Target-Profiles.md).

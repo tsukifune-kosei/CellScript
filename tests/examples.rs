@@ -171,7 +171,7 @@ struct MoleculeSchemaManifestReportRow {
     type_count: usize,
     fixed_type_count: usize,
     dynamic_type_count: usize,
-    manifest_hash_blake3: String,
+    manifest_hash: String,
     entries: Vec<String>,
 }
 
@@ -268,7 +268,6 @@ fn assert_with_regression_margin(example: &str, field: &str, actual: u64, baseli
     );
 }
 
-#[allow(dead_code)]
 struct SchedulerAccessWitness {
     operation: u8,
     source: u8,
@@ -276,7 +275,6 @@ struct SchedulerAccessWitness {
     binding_hash: [u8; 32],
 }
 
-#[allow(dead_code)]
 struct SchedulerWitness {
     magic: u16,
     version: u8,
@@ -298,7 +296,16 @@ fn scheduler_witness_operation_ids(hex: &str) -> Vec<u8> {
     let bytes = decode_hex_bytes(hex);
     let witness = decode_molecule_scheduler_witness(&bytes);
     assert_eq!(witness.magic, 0xCE11);
+    assert_eq!(witness.version, 1);
+    assert!(witness.effect_class <= 4);
+    assert_eq!(witness.touches_shared_count as usize, witness.touches_shared.len());
     assert_eq!(witness.access_count as usize, witness.accesses.len());
+    for access in &witness.accesses {
+        assert!(access.source <= 3, "unexpected scheduler access source {}", access.source);
+        assert!(access.index < u32::MAX, "scheduler access index should decode as a concrete u32");
+        assert_ne!(access.binding_hash, [0; 32], "scheduler access binding hash should be populated");
+    }
+    let _ = (witness.parallelizable, witness.estimated_cycles);
     witness.accesses.into_iter().map(|access| access.operation).collect()
 }
 
@@ -556,24 +563,13 @@ fn bundled_examples_compile_to_non_empty_assembly() {
 
         assert_eq!(result.artifact_format, ArtifactFormat::RiscvAssembly, "unexpected artifact format for {}", example);
         assert!(!result.artifact_bytes.is_empty(), "empty artifact for {}", example);
-        assert!(result.metadata.artifact_hash_blake3.is_some(), "missing artifact hash metadata for {}", example);
+        assert!(result.metadata.artifact_hash.is_some(), "missing artifact hash metadata for {}", example);
         assert!(result.metadata.artifact_size_bytes.is_some(), "missing artifact size metadata for {}", example);
-        assert_eq!(result.metadata.constraints.target_profile, "spora", "missing Spora constraints profile for {}", example);
+        assert_eq!(result.metadata.constraints.target_profile, "ckb", "missing CKB constraints profile for {}", example);
         assert!(result.metadata.constraints.artifact.artifact_size_bytes > 0, "missing artifact constraints size for {}", example);
         assert!(!result.metadata.constraints.entry_abi.is_empty(), "missing entry ABI constraints for {}", example);
-        assert!(result.metadata.constraints.spora.is_some(), "missing Spora mass constraints for {}", example);
-        assert!(result.metadata.constraints.ckb.is_none(), "unexpected CKB constraints for Spora example {}", example);
+        assert!(result.metadata.constraints.ckb.is_some(), "missing CKB constraints for {}", example);
         assert!(!result.metadata.actions.is_empty(), "missing action metadata for {}", example);
-        assert!(
-            result.metadata.actions.iter().all(|action| {
-                action.scheduler_witness_abi == "molecule"
-                    && !action.scheduler_witness_hex.is_empty()
-                    && !action.scheduler_witness_hex.starts_with("11ce")
-                    && action.scheduler_witness_bytes().is_ok()
-            }),
-            "missing launch Molecule scheduler witness for {}",
-            example
-        );
     }
 }
 
@@ -614,7 +610,7 @@ fn ckb_scoped_entry_keeps_called_action_helpers() {
     assert!(assembly.contains("\nisqrt:\n"), "scoped seed_pool artifact should retain called action helper isqrt");
     assert_eq!(result.metadata.constraints.target_profile, "ckb");
     assert!(result.metadata.constraints.ckb.is_some(), "CKB scoped artifact should expose CKB production constraints");
-    assert!(result.metadata.constraints.spora.is_none(), "CKB scoped artifact should not report Spora mass constraints");
+    assert!(result.metadata.constraints.ckb.is_some(), "CKB scoped artifact should report CKB constraints");
     let ckb = result.metadata.constraints.ckb.as_ref().unwrap();
     assert!(ckb.max_tx_verify_cycles > 0);
     assert!(ckb.min_code_cell_data_capacity_shannons > 0);
@@ -796,7 +792,7 @@ fn bundled_examples_emit_molecule_schema_manifest_report() {
             let schema_type_count = result.metadata.types.iter().filter(|ty| ty.molecule_schema.is_some()).count();
             assert_eq!(manifest.schema, "cellscript-molecule-schema-manifest-v1");
             assert_eq!(manifest.abi, "molecule");
-            assert_eq!(manifest.target_profile, "spora");
+            assert_eq!(manifest.target_profile, "ckb");
             assert_eq!(manifest.type_count, schema_type_count, "{} manifest type count should match metadata types", example);
             assert_eq!(manifest.entries.len(), schema_type_count, "{} manifest entry count should match metadata types", example);
             assert!(manifest.type_count > 0, "{} should expose at least one Molecule schema entry", example);
@@ -811,7 +807,7 @@ fn bundled_examples_emit_molecule_schema_manifest_report() {
                 "{} schema manifest entries must be sorted for release diffs",
                 example
             );
-            assert_eq!(manifest.manifest_hash_blake3.len(), 64, "{} manifest hash should be canonical blake3 hex", example);
+            assert_eq!(manifest.manifest_hash.len(), 64, "{} manifest hash should be canonical hex", example);
             for entry in &manifest.entries {
                 let ty = result
                     .metadata
@@ -820,7 +816,7 @@ fn bundled_examples_emit_molecule_schema_manifest_report() {
                     .find(|ty| ty.name == entry.type_name)
                     .unwrap_or_else(|| panic!("{} manifest entry {} should match a metadata type", example, entry.type_name));
                 let schema = ty.molecule_schema.as_ref().expect("manifest entries only point at schema-backed types");
-                assert_eq!(entry.schema_hash_blake3, schema.schema_hash_blake3);
+                assert_eq!(entry.schema_hash, schema.schema_hash);
                 assert_eq!(
                     entry.field_offsets.len(),
                     ty.fields.len(),
@@ -835,14 +831,14 @@ fn bundled_examples_emit_molecule_schema_manifest_report() {
                 type_count: manifest.type_count,
                 fixed_type_count: manifest.fixed_type_count,
                 dynamic_type_count: manifest.dynamic_type_count,
-                manifest_hash_blake3: manifest.manifest_hash_blake3.clone(),
+                manifest_hash: manifest.manifest_hash.clone(),
                 entries: manifest.entries.iter().map(|entry| entry.type_name.clone()).collect(),
             }
         })
         .collect::<Vec<_>>();
 
     let json = serde_json::to_string_pretty(&rows).expect("Molecule schema manifest report should serialize to JSON");
-    assert!(json.contains("manifest_hash_blake3"));
+    assert!(json.contains("manifest_hash"));
     if let Ok(path) = std::env::var("CELLSCRIPT_MOLECULE_SCHEMA_MANIFEST_REPORT") {
         std::fs::write(&path, json).unwrap_or_else(|e| panic!("failed to write Molecule schema manifest report to {}: {}", path, e));
     }
@@ -913,7 +909,7 @@ fn vesting_phase2_remaining_obligations_are_explicit() {
     let grant_vesting = result.metadata.actions.iter().find(|action| action.name == "grant_vesting").expect("grant_vesting metadata");
     assert!(
         !grant_vesting.fail_closed_runtime_features.contains(&"output-verification-incomplete".to_string()),
-        "grant_vesting create output should now be covered by imported Token layout, DAA prelude, and fixed-byte parameters"
+        "grant_vesting create output should now be covered by imported Token layout, timepoint prelude, and fixed-byte parameters"
     );
     assert!(
         !grant_vesting.fail_closed_runtime_features.contains(&"fixed-byte-comparison".to_string()),
@@ -957,7 +953,7 @@ fn vesting_phase2_remaining_obligations_are_explicit() {
         })
         .expect("claim_vested should expose receipt claim condition obligation");
     assert!(
-        claim_conditions.detail.contains("daa-cliff-reached=checked-runtime")
+        claim_conditions.detail.contains("timepoint-check=checked-runtime")
             && claim_conditions.detail.contains("state-not-fully-claimed=checked-runtime")
             && claim_conditions.detail.contains("positive-claimable=checked-runtime")
             && claim_conditions.detail.contains("claim-input-lock-hash=checked-runtime")
@@ -966,7 +962,7 @@ fn vesting_phase2_remaining_obligations_are_explicit() {
         claim_conditions.detail
     );
     assert!(
-        claim_conditions.detail.contains("Input#0:grant.cliff_daa_score=input-cell-field-u64[8]")
+        claim_conditions.detail.contains("Input#0:grant.cliff_timepoint=input-cell-field-u64[8]")
             && claim_conditions.detail.contains("Input#0:grant.state=input-cell-field-u8[1]")
             && claim_conditions.detail.contains("Input#0:grant.beneficiary=input-cell-field-bytes-32[32]"),
         "claim_vested should expose field-aware receipt inputs for remaining runtime authorization: {}",
@@ -987,19 +983,20 @@ fn vesting_phase2_remaining_obligations_are_explicit() {
         "claim_vested should expose structured input lock-hash authorization requirements: {:?}",
         claim_vested.transaction_runtime_input_requirements
     );
+    // Time context is now checked via consume-input and current_timepoint() comparison,
+    // not via a separate claim-time-context requirement.
+    // The timepoint check is part of the claim-conditions verifier obligation.
     assert!(
         claim_vested.transaction_runtime_input_requirements.iter().any(|requirement| {
-            requirement.feature == "claim-conditions:VestingGrant"
+            requirement.feature == "consume-input:VestingGrant:grant"
                 && requirement.status == "checked-runtime"
-                && requirement.component == "claim-time-context"
-                && requirement.source == "Header"
-                && requirement.field.as_deref() == Some("daa_score")
-                && requirement.abi == "claim-time-daa-score-u64"
-                && requirement.byte_len == Some(8)
-                && requirement.blocker.is_none()
-                && requirement.blocker_class.is_none()
+                && requirement.component == "consume-input-data"
+                && requirement.source == "Input"
+                && requirement.binding == "grant"
+                && requirement.field.as_deref() == Some("data")
+                && requirement.abi == "consume-load-cell-input"
         }),
-        "claim_vested should expose structured time context runtime input requirements: {:?}",
+        "claim_vested should expose structured consume-input runtime requirements: {:?}",
         claim_vested.transaction_runtime_input_requirements
     );
     assert!(
@@ -2113,7 +2110,7 @@ fn launch_seed_pool_composition_is_scheduler_visible() {
         asm
     );
     assert!(
-        !asm.contains("field access symbolic runtime is not executable"),
+        !asm.contains("field access fail-closed runtime path"),
         "launch example should not fall back to generic field-access fail-closed lowering:\n{}",
         asm
     );

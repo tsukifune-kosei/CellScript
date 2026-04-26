@@ -30,7 +30,7 @@ repository layout where `ckb/` and `CellScript/` are siblings:
 cargo run --manifest-path tools/ckb-tx-measure/Cargo.toml --locked < tx.json
 ```
 
-When CellScript is used from the nested `Spora/cellscript` checkout, the Spora
+When CellScript is used from the nested checkout, the
 CKB acceptance script builds the same source through a generated temporary
 manifest pointing at its configured `CKB_REPO`.
 
@@ -67,9 +67,9 @@ A production builder must:
 The compiler can give lower bounds and requirements. The builder supplies the
 transaction-specific proof.
 
-## Spora Mass
+## Mass Constraints
 
-For Spora, `constraints.spora` exposes compiler-estimated compute, storage,
+For CKB, `constraints.ckb` exposes compiler-estimated compute, storage,
 transient, code deployment, standard transaction mass, and block mass. The
 devnet/acceptance path remains authoritative for real transaction mass because
 the final mass depends on the full transaction and network policy.

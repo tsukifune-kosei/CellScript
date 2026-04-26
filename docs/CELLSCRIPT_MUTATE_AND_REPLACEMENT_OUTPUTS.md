@@ -3,7 +3,7 @@
 **Status**: production semantics for CellScript 0.12.
 
 CellScript `&mut Shared` does not mean physical in-place mutation on CKB or
-Spora. Cells are immutable. A mutable shared parameter lowers to:
+Cells are immutable. A mutable shared parameter lowers to:
 
 ```text
 Input#N old cell  ->  Output#M replacement cell

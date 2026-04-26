@@ -33,13 +33,12 @@ check_trailing_whitespace() {
         "README.md"
         "README_CH.md"
         "CHANGELOG.md"
-        "docs/CELLSCRIPT_0_12_RELEASE_EVIDENCE.md"
-        "docs/CELLSCRIPT_CKB_PROFILE_AUTHORING.md"
         "docs/CELLSCRIPT_CKB_DEPLOYMENT_MANIFEST.md"
         "docs/CELLSCRIPT_CAPACITY_AND_BUILDER_CONTRACT.md"
         "docs/CELLSCRIPT_ENTRY_WITNESS_ABI.md"
         "docs/CELLSCRIPT_COLLECTIONS_SUPPORT_MATRIX.md"
         "docs/wiki/Home.md"
+        "docs/wiki/Tutorial-05-CKB-Target-Profiles.md"
         "docs/wiki/Tutorial-06-Metadata-Verification-and-Production-Gates.md"
         "docs/wiki/Tutorial-08-Bundled-Example-Contracts.md"
         "editors/vscode-cellscript/extension.js"
@@ -63,20 +62,20 @@ check_trailing_whitespace() {
 }
 
 check_ckb_release_docs() {
-    local release_doc="docs/CELLSCRIPT_0_12_RELEASE_EVIDENCE.md"
+    local release_doc="docs/wiki/Tutorial-06-Metadata-Verification-and-Production-Gates.md"
     local required=(
-        "CKB Acceptance Evidence"
-        "scripts/ckb_cellscript_acceptance.sh --production"
+        "CKB Release Evidence Gate"
+        "./scripts/ckb_cellscript_acceptance.sh --production"
         "scripts/validate_ckb_cellscript_production_evidence.py"
-        "strict original policy status for all bundled examples"
-        "builder-backed action count"
-        "occupied capacity"
-        "final hardening gate"
+        "strict original bundled-example coverage"
+        "builder-backed action runs"
+        "occupied-capacity evidence"
+        "passed final production hardening gate"
     )
     local pattern
     for pattern in "${required[@]}"; do
         if ! rg --quiet --fixed-strings "$pattern" "$release_doc"; then
-            printf '0.12 release evidence doc is missing required CKB boundary: %s\n' "$pattern" >&2
+            printf 'CKB production-gate docs are missing required boundary: %s\n' "$pattern" >&2
             exit 1
         fi
     done

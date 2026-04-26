@@ -16,8 +16,8 @@ const CKB_LOAD_INPUT_BY_FIELD_SYSCALL_NUMBER: u64 = 2083;
 const CKB_LOAD_WITNESS_SYSCALL_NUMBER: u64 = 2074;
 const CKB_LOAD_CELL_BY_FIELD_SYSCALL_NUMBER: u64 = 2081;
 const CKB_LOAD_CELL_DATA_SYSCALL_NUMBER: u64 = 2092;
-const SPORA_SECP256K1_VERIFY_SYSCALL_NUMBER: u64 = 3002;
-const SPORA_LOAD_ECDSA_SIGNATURE_HASH_SYSCALL_NUMBER: u64 = 3004;
+const CLAIM_SECP256K1_VERIFY_SYSCALL_NUMBER: u64 = 3002;
+const CLAIM_LOAD_ECDSA_SIGNATURE_HASH_SYSCALL_NUMBER: u64 = 3004;
 const CKB_HEADER_FIELD_EPOCH_NUMBER: u64 = 0;
 const CKB_HEADER_FIELD_EPOCH_START_BLOCK_NUMBER: u64 = 1;
 const CKB_HEADER_FIELD_EPOCH_LENGTH: u64 = 2;
@@ -67,29 +67,15 @@ struct RuntimeSyscallAbi {
     source_header_dep: u64,
 }
 
-const SPORA_RUNTIME_SYSCALL_ABI: RuntimeSyscallAbi = RuntimeSyscallAbi {
-    load_header_by_field: CKB_LOAD_HEADER_BY_FIELD_SYSCALL_NUMBER,
-    load_input_by_field: CKB_LOAD_INPUT_BY_FIELD_SYSCALL_NUMBER,
-    load_witness: CKB_LOAD_WITNESS_SYSCALL_NUMBER,
-    load_cell_by_field: CKB_LOAD_CELL_BY_FIELD_SYSCALL_NUMBER,
-    load_cell_data: CKB_LOAD_CELL_DATA_SYSCALL_NUMBER,
-    secp256k1_verify: SPORA_SECP256K1_VERIFY_SYSCALL_NUMBER,
-    load_ecdsa_signature_hash: SPORA_LOAD_ECDSA_SIGNATURE_HASH_SYSCALL_NUMBER,
-    source_group_input: CKB_SOURCE_GROUP_INPUT,
-    source_header_dep: CKB_SOURCE_HEADER_DEP,
-};
-
 const CKB_RUNTIME_SYSCALL_ABI: RuntimeSyscallAbi = RuntimeSyscallAbi {
     load_header_by_field: CKB_LOAD_HEADER_BY_FIELD_SYSCALL_NUMBER,
     load_input_by_field: CKB_LOAD_INPUT_BY_FIELD_SYSCALL_NUMBER,
     load_witness: CKB_LOAD_WITNESS_SYSCALL_NUMBER,
     load_cell_by_field: CKB_LOAD_CELL_BY_FIELD_SYSCALL_NUMBER,
     load_cell_data: CKB_LOAD_CELL_DATA_SYSCALL_NUMBER,
-    // These Spora extension syscalls are rejected by CKB profile policy before
-    // codegen. Keep the values here only to avoid silently changing Spora paths
-    // while shared helpers are split into CKB-compatible lock/dependency code.
-    secp256k1_verify: SPORA_SECP256K1_VERIFY_SYSCALL_NUMBER,
-    load_ecdsa_signature_hash: SPORA_LOAD_ECDSA_SIGNATURE_HASH_SYSCALL_NUMBER,
+    // Claim helper syscalls are rejected by CKB profile policy before codegen.
+    secp256k1_verify: CLAIM_SECP256K1_VERIFY_SYSCALL_NUMBER,
+    load_ecdsa_signature_hash: CLAIM_LOAD_ECDSA_SIGNATURE_HASH_SYSCALL_NUMBER,
     source_group_input: CKB_SOURCE_GROUP_FLAG | CKB_SOURCE_INPUT,
     source_header_dep: CKB_SOURCE_HEADER_DEP,
 };
@@ -97,7 +83,6 @@ const CKB_RUNTIME_SYSCALL_ABI: RuntimeSyscallAbi = RuntimeSyscallAbi {
 fn runtime_syscall_abi(profile: TargetProfile) -> RuntimeSyscallAbi {
     match profile {
         TargetProfile::Ckb => CKB_RUNTIME_SYSCALL_ABI,
-        TargetProfile::Spora | TargetProfile::PortableCell => SPORA_RUNTIME_SYSCALL_ABI,
     }
 }
 
@@ -420,14 +405,13 @@ struct EntryWitnessPayloadArg {
 pub struct CodegenOptions {
     pub opt_level: u8,
     pub debug: bool,
-    /// Artifact target profile. Spora remains the default; CKB selects the
-    /// parent CKB syscall/source ABI for the supported pure subset.
+    /// Artifact target profile. CKB selects the CKB syscall/source ABI.
     pub target_profile: TargetProfile,
 }
 
 impl Default for CodegenOptions {
     fn default() -> Self {
-        Self { opt_level: 0, debug: false, target_profile: TargetProfile::Spora }
+        Self { opt_level: 0, debug: false, target_profile: TargetProfile::Ckb }
     }
 }
 
@@ -1909,7 +1893,7 @@ impl CodeGenerator {
             self.generate_read_ref(pattern, index)?;
         }
 
-        // Symbolic transfer/claim/settle output summaries are verified from
+        // Simulated transfer/claim/settle output summaries are verified from
         // the entry prelude. Real `create` expressions are verified at the
         // source instruction so computed field values are already in slots.
         for (index, pattern) in body.create_set.iter().enumerate() {
@@ -6392,7 +6376,7 @@ impl CodeGenerator {
                 return Ok(());
             };
             self.emit("# type_hash");
-            self.emit_symbolic_operand_comment("type_hash source", operand);
+            self.emit_operand_comment("type_hash source", operand);
             self.emit_load_cell_by_field_syscall_to_offsets(
                 "output_type_hash",
                 CKB_SOURCE_OUTPUT,
@@ -6419,7 +6403,7 @@ impl CodeGenerator {
                 return Ok(());
             };
             self.emit("# type_hash");
-            self.emit_symbolic_operand_comment("type_hash source", operand);
+            self.emit_operand_comment("type_hash source", operand);
             self.emit_loaded_schema_exact_size_check(size_offset, 32, "param type hash");
             self.emit_stack_ld("t0", pointer_offset);
             self.emit(format!("sd t0, {}(sp)", dest.id * 8));
@@ -6454,7 +6438,7 @@ impl CodeGenerator {
         let buffer_offset = self.cell_buffer_offsets.get(&dest.id).copied().unwrap_or_else(|| self.runtime_scratch_buffer_offset());
 
         self.emit("# type_hash");
-        self.emit_symbolic_operand_comment("type_hash source", operand);
+        self.emit_operand_comment("type_hash source", operand);
         self.emit_load_cell_by_field_syscall_to_offsets(
             "runtime_type_hash",
             source,
@@ -6487,7 +6471,7 @@ impl CodeGenerator {
         ));
         if let Some(capacity) = capacity {
             self.emit("# cellscript abi: stack collection with_capacity uses fixed backing buffer");
-            self.emit_symbolic_operand_comment("capacity", capacity);
+            self.emit_operand_comment("capacity", capacity);
         }
 
         // Initialize length to 0
@@ -6502,7 +6486,7 @@ impl CodeGenerator {
 
     fn emit_collection_capacity(&mut self, dest: &IrVar, collection: &IrOperand) -> Result<()> {
         self.emit("# collection capacity");
-        self.emit_symbolic_operand_comment("collection", collection);
+        self.emit_operand_comment("collection", collection);
         if self.emit_stack_collection_capacity(dest, collection) {
             return Ok(());
         }
@@ -6537,8 +6521,8 @@ impl CodeGenerator {
 
     fn emit_collection_push(&mut self, collection: &IrOperand, value: &IrOperand) -> Result<()> {
         self.emit("# collection push");
-        self.emit_symbolic_operand_comment("collection", collection);
-        self.emit_symbolic_operand_comment("value", value);
+        self.emit_operand_comment("collection", collection);
+        self.emit_operand_comment("value", value);
         if matches!(value, IrOperand::Var(var) if self.verified_collection_push_values.contains(&var.id)) {
             self.emit("# cellscript abi: collection push is covered by mutate append verifier");
             return Ok(());
@@ -6629,8 +6613,8 @@ impl CodeGenerator {
 
     fn emit_collection_extend(&mut self, collection: &IrOperand, slice: &IrOperand) -> Result<()> {
         self.emit("# collection extend_from_slice");
-        self.emit_symbolic_operand_comment("collection", collection);
-        self.emit_symbolic_operand_comment("slice", slice);
+        self.emit_operand_comment("collection", collection);
+        self.emit_operand_comment("slice", slice);
         if matches!(collection, IrOperand::Var(var) if self.verified_collection_construction_vectors.contains(&var.id)) {
             self.emit("# cellscript abi: collection extend is covered by create-output vector verifier");
             return Ok(());
@@ -6709,7 +6693,7 @@ impl CodeGenerator {
 
     fn emit_collection_clear(&mut self, collection: &IrOperand) -> Result<()> {
         self.emit("# collection clear");
-        self.emit_symbolic_operand_comment("collection", collection);
+        self.emit_operand_comment("collection", collection);
         if matches!(collection, IrOperand::Var(var) if self.verified_collection_construction_vectors.contains(&var.id)) {
             self.emit("# cellscript abi: collection clear is covered by create-output vector verifier");
             return Ok(());
@@ -6738,7 +6722,7 @@ impl CodeGenerator {
 
     fn emit_collection_reverse(&mut self, collection: &IrOperand) -> Result<()> {
         self.emit("# collection reverse");
-        self.emit_symbolic_operand_comment("collection", collection);
+        self.emit_operand_comment("collection", collection);
         if self.emit_stack_collection_reverse(collection) {
             return Ok(());
         }
@@ -6818,8 +6802,8 @@ impl CodeGenerator {
 
     fn emit_collection_truncate(&mut self, collection: &IrOperand, len: &IrOperand) -> Result<()> {
         self.emit("# collection truncate");
-        self.emit_symbolic_operand_comment("collection", collection);
-        self.emit_symbolic_operand_comment("len", len);
+        self.emit_operand_comment("collection", collection);
+        self.emit_operand_comment("len", len);
         if self.emit_stack_collection_truncate(collection, len) {
             return Ok(());
         }
@@ -6850,9 +6834,9 @@ impl CodeGenerator {
 
     fn emit_collection_swap(&mut self, collection: &IrOperand, left: &IrOperand, right: &IrOperand) -> Result<()> {
         self.emit("# collection swap");
-        self.emit_symbolic_operand_comment("collection", collection);
-        self.emit_symbolic_operand_comment("left", left);
-        self.emit_symbolic_operand_comment("right", right);
+        self.emit_operand_comment("collection", collection);
+        self.emit_operand_comment("left", left);
+        self.emit_operand_comment("right", right);
         if self.emit_stack_collection_swap(collection, left, right) {
             return Ok(());
         }
@@ -6920,8 +6904,8 @@ impl CodeGenerator {
 
     fn emit_collection_contains(&mut self, dest: &IrVar, collection: &IrOperand, value: &IrOperand) -> Result<()> {
         self.emit("# collection contains");
-        self.emit_symbolic_operand_comment("collection", collection);
-        self.emit_symbolic_operand_comment("value", value);
+        self.emit_operand_comment("collection", collection);
+        self.emit_operand_comment("value", value);
         if self.emit_stack_collection_contains(dest, collection, value) {
             return Ok(());
         }
@@ -7006,8 +6990,8 @@ impl CodeGenerator {
 
     fn emit_collection_remove(&mut self, dest: &IrVar, collection: &IrOperand, index: &IrOperand) -> Result<()> {
         self.emit("# collection remove");
-        self.emit_symbolic_operand_comment("collection", collection);
-        self.emit_symbolic_operand_comment("index", index);
+        self.emit_operand_comment("collection", collection);
+        self.emit_operand_comment("index", index);
         if self.emit_stack_collection_remove(dest, collection, index) {
             return Ok(());
         }
@@ -7113,7 +7097,7 @@ impl CodeGenerator {
 
     fn emit_collection_pop(&mut self, dest: &IrVar, collection: &IrOperand) -> Result<()> {
         self.emit("# collection pop");
-        self.emit_symbolic_operand_comment("collection", collection);
+        self.emit_operand_comment("collection", collection);
         if self.emit_stack_collection_pop(dest, collection) {
             return Ok(());
         }
@@ -7164,9 +7148,9 @@ impl CodeGenerator {
 
     fn emit_collection_insert(&mut self, collection: &IrOperand, index: &IrOperand, value: &IrOperand) -> Result<()> {
         self.emit("# collection insert");
-        self.emit_symbolic_operand_comment("collection", collection);
-        self.emit_symbolic_operand_comment("index", index);
-        self.emit_symbolic_operand_comment("value", value);
+        self.emit_operand_comment("collection", collection);
+        self.emit_operand_comment("index", index);
+        self.emit_operand_comment("value", value);
         if self.emit_stack_collection_insert(collection, index, value) {
             return Ok(());
         }
@@ -7319,9 +7303,9 @@ impl CodeGenerator {
 
     fn emit_collection_set(&mut self, collection: &IrOperand, index: &IrOperand, value: &IrOperand) -> Result<()> {
         self.emit("# collection set");
-        self.emit_symbolic_operand_comment("collection", collection);
-        self.emit_symbolic_operand_comment("index", index);
-        self.emit_symbolic_operand_comment("value", value);
+        self.emit_operand_comment("collection", collection);
+        self.emit_operand_comment("index", index);
+        self.emit_operand_comment("value", value);
         if self.emit_stack_collection_set(collection, index, value) {
             return Ok(());
         }
@@ -7748,8 +7732,8 @@ impl CodeGenerator {
     /// transfer
     fn emit_transfer(&mut self, dest: &IrVar, operand: &IrOperand, to: &IrOperand) -> Result<()> {
         self.emit("# transfer");
-        self.emit_symbolic_operand_comment("asset", operand);
-        self.emit_symbolic_operand_comment("to", to);
+        self.emit_operand_comment("asset", operand);
+        self.emit_operand_comment("to", to);
         if self.emit_verified_operation_output_handle(dest, "transfer") {
             return Ok(());
         }
@@ -7771,7 +7755,7 @@ impl CodeGenerator {
     fn emit_destroy(&mut self, operand: &IrOperand) -> Result<()> {
         self.emit("# destroy");
         if let IrOperand::Var(_) = operand {
-            self.emit_symbolic_operand_comment("destroyed input retained for verifier field checks", operand);
+            self.emit_operand_comment("destroyed input retained for verifier field checks", operand);
             self.emit("# cellscript abi: destroy consumed input is checked by Output absence scan");
             self.emit("# cellscript abi: retain consumed input pointer for post-destroy output verification");
             return Ok(());
@@ -7782,7 +7766,7 @@ impl CodeGenerator {
         Ok(())
     }
 
-    fn emit_symbolic_operand_comment(&mut self, label: &str, operand: &IrOperand) {
+    fn emit_operand_comment(&mut self, label: &str, operand: &IrOperand) {
         let rendered = match operand {
             IrOperand::Var(var) => format!("{}: {}", label, var.name),
             IrOperand::Const(IrConst::U64(n)) => format!("{}: {}", label, n),
@@ -7814,7 +7798,7 @@ impl CodeGenerator {
     /// claim
     fn emit_claim(&mut self, dest: &IrVar, receipt: &IrOperand) -> Result<()> {
         self.emit("# claim");
-        self.emit_symbolic_operand_comment("receipt", receipt);
+        self.emit_operand_comment("receipt", receipt);
         if self.emit_verified_operation_output_handle(dest, "claim") {
             return Ok(());
         }
@@ -7834,7 +7818,7 @@ impl CodeGenerator {
     /// settle
     fn emit_settle(&mut self, dest: &IrVar, operand: &IrOperand) -> Result<()> {
         self.emit("# settle");
-        self.emit_symbolic_operand_comment("value", operand);
+        self.emit_operand_comment("value", operand);
         if self.emit_verified_operation_output_handle(dest, "settle") {
             return Ok(());
         }
@@ -7868,24 +7852,13 @@ impl CodeGenerator {
         self.emit_runtime_memcmp_fixed();
         self.emit_runtime_memzero_fixed();
         self.emit_runtime_size_guards();
-        self.emit_runtime_header_field_u64(
-            "__env_current_daa_score",
-            "daa_score",
-            0,
-            self.options.target_profile != TargetProfile::Ckb,
-            "env::current_daa_score is rejected by ckb target-profile policy",
-        );
-        let (timepoint_field_name, timepoint_field_id) = if self.options.target_profile == TargetProfile::Ckb {
-            ("ckb_epoch_number", CKB_HEADER_FIELD_EPOCH_NUMBER)
-        } else {
-            ("daa_score", 0)
-        };
+        // Only CKB timepoint is supported via __env_current_timepoint.
         self.emit_runtime_header_field_u64(
             "__env_current_timepoint",
-            timepoint_field_name,
-            timepoint_field_id,
+            "ckb_epoch_number",
+            CKB_HEADER_FIELD_EPOCH_NUMBER,
             true,
-            "env::current_timepoint is unavailable for this target profile",
+            "env::current_timepoint is required for CKB profile",
         );
         self.emit_runtime_header_field_u64(
             "__ckb_header_epoch_number",
@@ -8045,7 +8018,7 @@ impl CodeGenerator {
         match format {
             ArtifactFormat::RiscvAssembly => Ok(assembly_text.into_bytes()),
             ArtifactFormat::RiscvElf => {
-                // All former symbolic runtime operations now have real RISC-V
+                // All former non-executable runtime paths now have real RISC-V
                 // lowerings or fail-closed traps with specific error codes.
                 // ELF emission is always permitted.
                 assemble_elf(&self.assembly)
@@ -8292,6 +8265,9 @@ enum Instruction {
     Neg { rd: u8, rs: u8 },
     Ld { rd: u8, rs1: u8, imm: i64 },
     Lbu { rd: u8, rs1: u8, imm: i64 },
+    Sb { rs2: u8, rs1: u8, imm: i64 },
+    Sh { rs2: u8, rs1: u8, imm: i64 },
+    Sw { rs2: u8, rs1: u8, imm: i64 },
     Sd { rs2: u8, rs1: u8, imm: i64 },
     Slli { rd: u8, rs1: u8, shamt: i64 },
     Li { rd: u8, imm: i64 },
@@ -9257,6 +9233,18 @@ fn parse_instruction(line: &str) -> Result<Instruction> {
             let (imm, rs1) = parse_memory_operand(arg(&args, 1)?)?;
             Ok(Instruction::Lbu { rd: parse_register(arg(&args, 0)?)?, rs1, imm })
         }
+        "sb" => {
+            let (imm, rs1) = parse_memory_operand(arg(&args, 1)?)?;
+            Ok(Instruction::Sb { rs2: parse_register(arg(&args, 0)?)?, rs1, imm })
+        }
+        "sh" => {
+            let (imm, rs1) = parse_memory_operand(arg(&args, 1)?)?;
+            Ok(Instruction::Sh { rs2: parse_register(arg(&args, 0)?)?, rs1, imm })
+        }
+        "sw" => {
+            let (imm, rs1) = parse_memory_operand(arg(&args, 1)?)?;
+            Ok(Instruction::Sw { rs2: parse_register(arg(&args, 0)?)?, rs1, imm })
+        }
         "sd" => {
             let (imm, rs1) = parse_memory_operand(arg(&args, 1)?)?;
             Ok(Instruction::Sd { rs2: parse_register(arg(&args, 0)?)?, rs1, imm })
@@ -9346,6 +9334,9 @@ fn encode_instruction(
         Instruction::Neg { rd, rs } => out.extend_from_slice(&encode_r_type(0x33, *rd, 0b000, 0, *rs, 0b0100000).to_le_bytes()),
         Instruction::Ld { rd, rs1, imm } => out.extend_from_slice(&encode_i_type(0x03, *rd, 0b011, *rs1, *imm)?.to_le_bytes()),
         Instruction::Lbu { rd, rs1, imm } => out.extend_from_slice(&encode_i_type(0x03, *rd, 0b100, *rs1, *imm)?.to_le_bytes()),
+        Instruction::Sb { rs2, rs1, imm } => out.extend_from_slice(&encode_s_type(0x23, 0b000, *rs1, *rs2, *imm)?.to_le_bytes()),
+        Instruction::Sh { rs2, rs1, imm } => out.extend_from_slice(&encode_s_type(0x23, 0b001, *rs1, *rs2, *imm)?.to_le_bytes()),
+        Instruction::Sw { rs2, rs1, imm } => out.extend_from_slice(&encode_s_type(0x23, 0b010, *rs1, *rs2, *imm)?.to_le_bytes()),
         Instruction::Sd { rs2, rs1, imm } => out.extend_from_slice(&encode_s_type(0x23, 0b011, *rs1, *rs2, *imm)?.to_le_bytes()),
         Instruction::Slli { rd, rs1, shamt } => {
             if !(0..=63).contains(shamt) {
@@ -9741,8 +9732,7 @@ fn is_min_call(func: &str) -> bool {
 fn is_runtime_header_u64_call(func: &str) -> bool {
     matches!(
         func,
-        "__env_current_daa_score"
-            | "__env_current_timepoint"
+        "__env_current_timepoint"
             | "__ckb_header_epoch_number"
             | "__ckb_header_epoch_start_block_number"
             | "__ckb_header_epoch_length"

@@ -6,7 +6,7 @@ This chapter takes you from a fresh checkout to one compiled CellScript artifact
 - build the `cellc` compiler;
 - compile the bundled token example to assembly and ELF;
 - verify that the ELF matches its metadata;
-- verify the result with the CKB target profile.
+- repeat the same check with the CKB target profile.
 
 ## Prerequisites
 
@@ -81,15 +81,15 @@ cargo run --locked --bin cellc -- verify-artifact /tmp/token.elf --verify-source
 
 ## CKB Quick Check
 
-The CKB profile emits raw ELF bytes and uses CKB syscall/profile rules.
+When targeting CKB, compile the same source again with the CKB profile. The CKB profile emits raw ELF bytes without the ABI trailer and uses CKB syscall/profile rules.
 
 ```bash
 cargo run --locked --bin cellc -- examples/token.cell --target riscv64-elf --target-profile ckb -o /tmp/token.ckb.elf
 cargo run --locked --bin cellc -- verify-artifact /tmp/token.ckb.elf --expect-target-profile ckb
 ```
 
-If a source uses an unsupported CKB stateful shape, the CKB profile should fail closed with a target-profile policy error.
+If a source uses an unsupported feature or an unsupported CKB stateful shape, the CKB profile should fail closed with a target-profile policy error.
 
 ## Next
 
-Once you can compile and verify one file, continue with [Language Basics](Tutorial-02-Language-Basics).
+Once you can compile and verify one file, continue with [Language Basics](Tutorial-02-Language-Basics.md).

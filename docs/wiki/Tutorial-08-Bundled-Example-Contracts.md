@@ -1,4 +1,6 @@
-The repository includes seven bundled examples. Treat them as guided reading, not just sample files. Each one shows a different part of the CellScript 0.12 language surface and the current production gates.
+The repository includes seven production bundled examples. Treat them as guided
+reading, not just sample files. Each one shows a different part of the
+CellScript language surface and the current production gates.
 
 ## What You Will Learn
 
@@ -16,6 +18,11 @@ The repository includes seven bundled examples. Treat them as guided reading, no
 | `examples/vesting.cell` | Vesting grants, receipts, and claim lifecycle. |
 | `examples/amm_pool.cell` | Shared pool state, swap, and liquidity effects. |
 | `examples/launch.cell` | Launch/pool composition patterns. |
+
+`examples/registry.cell` is intentionally outside this seven-example production
+matrix. It is a 0.13 bounded-collection language example for local
+`Vec<Address>` and `Vec<Hash>` helpers, covered by compiler/tooling tests rather
+than CKB production action acceptance.
 
 ## Compile All Examples
 
@@ -101,7 +108,7 @@ The CKB profile is strict, and the current bundled-example suite is closed for t
 
 - all seven bundled examples strict-admit under the CKB profile;
 - all 43 bundled business actions have scoped CKB production harnesses;
-- all 15 bundled locks strict-compile;
+- all 16 bundled locks strict-compile; this is not an on-chain lock spend matrix;
 - valid CKB transactions are builder-generated and dry-run;
 - malformed transactions are rejected for non-policy/non-capacity reasons;
 - tx-size, cycle, and occupied-capacity evidence is retained;
@@ -120,6 +127,7 @@ cellc check --target-profile ckb --production
 cellc build --target riscv64-elf --target-profile ckb --production
 cellc verify-artifact build/main.elf --verify-sources --expect-target-profile ckb --production
 cellc examples/nft.cell --entry-action transfer --target riscv64-elf --target-profile ckb --production
+# --entry-action selects a single action entry point for targeted inspection
 ```
 
 For release-facing CKB evidence, run the CellScript acceptance gate:

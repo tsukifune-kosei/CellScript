@@ -6,6 +6,7 @@ const root = path.resolve(import.meta.dirname, "..");
 const requiredFiles = [
   "package.json",
   "extension.js",
+  "dist/extension.js",
   "README.md",
   "CHANGELOG.md",
   ".vscodeignore",
@@ -42,7 +43,7 @@ if (!Array.isArray(pkg.contributes?.languages) || pkg.contributes.languages.leng
   throw new Error("package.json must contribute at least one language");
 }
 
-if (pkg.main !== "./extension.js") {
+if (pkg.main !== "./dist/extension.js") {
   throw new Error(`unexpected extension entrypoint: ${pkg.main}`);
 }
 
@@ -51,8 +52,7 @@ for (const command of [
   "cellscript.compileCurrentFile",
   "cellscript.showMetadata",
   "cellscript.showConstraints",
-  "cellscript.showProductionReport",
-  "cellscript.selectTargetProfile"
+  "cellscript.showProductionReport"
 ]) {
   if (!commands.has(command)) {
     throw new Error(`missing command contribution: ${command}`);
@@ -65,8 +65,7 @@ for (const setting of [
   "cellscript.useCargoRunFallback",
   "cellscript.commandTimeoutMs",
   "cellscript.maxOutputBytes",
-  "cellscript.target",
-  "cellscript.targetProfile"
+  "cellscript.target"
 ]) {
   if (!properties[setting]) {
     throw new Error(`missing configuration setting: ${setting}`);
@@ -90,15 +89,15 @@ if (typeof snippets !== "object" || snippets === null || Object.keys(snippets).l
 }
 
 const extensionSource = fs.readFileSync(path.join(root, "extension.js"), "utf8");
+const bundledExtension = fs.readFileSync(path.join(root, "dist/extension.js"), "utf8");
 const vscodeIgnore = fs.readFileSync(path.join(root, ".vscodeignore"), "utf8");
 for (const token of [
   "LanguageClient",
-  "vscode-languageclient",
+  "vscode-languageclient/node",
   "cellscript.compileCurrentFile",
   "cellscript.showMetadata",
   "cellscript.showConstraints",
   "cellscript.showProductionReport",
-  "cellscript.selectTargetProfile",
   "cellc",
   "--lsp",
   "TransportKind.stdio"
@@ -108,8 +107,14 @@ for (const token of [
   }
 }
 
-if (pkg.dependencies?.["vscode-languageclient"] && /^\s*node_modules\/\*\*/m.test(vscodeIgnore)) {
-  throw new Error("packaged extension must include vscode-languageclient runtime dependencies");
+if (!bundledExtension.includes("LanguageClient")) {
+  throw new Error("bundled extension is missing language client runtime");
+}
+
+for (const ignored of ["node_modules/**", "extension.js", "scripts/**"]) {
+  if (!vscodeIgnore.includes(ignored)) {
+    throw new Error(`.vscodeignore must exclude bundled-only input: ${ignored}`);
+  }
 }
 
 if (extensionSource.includes('"--target", "riscv64-asm", ...targetProfileArgs(document)')) {

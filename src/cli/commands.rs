@@ -67,7 +67,6 @@ pub struct BuildArgs {
     pub json: bool,
     pub production: bool,
     pub deny_fail_closed: bool,
-    pub deny_symbolic_runtime: bool,
     pub deny_ckb_runtime: bool,
     pub deny_runtime_obligations: bool,
 }
@@ -153,7 +152,6 @@ pub struct CheckArgs {
     pub json: bool,
     pub production: bool,
     pub deny_fail_closed: bool,
-    pub deny_symbolic_runtime: bool,
     pub deny_ckb_runtime: bool,
     pub deny_runtime_obligations: bool,
 }
@@ -259,7 +257,6 @@ pub struct VerifyArtifactArgs {
     pub expect_source_content_hash: Option<String>,
     pub production: bool,
     pub deny_fail_closed: bool,
-    pub deny_symbolic_runtime: bool,
     pub deny_ckb_runtime: bool,
     pub deny_runtime_obligations: bool,
 }
@@ -359,7 +356,6 @@ impl CommandExecutor {
 
         let policy_verified = policy_args.production
             || policy_args.deny_fail_closed
-            || policy_args.deny_symbolic_runtime
             || policy_args.deny_ckb_runtime
             || policy_args.deny_runtime_obligations;
         if args.json {
@@ -370,15 +366,14 @@ impl CommandExecutor {
                 "artifact_format": result.artifact_format.display_name(),
                 "opt_level": opt_level,
                 "target_profile": result.metadata.target_profile.name.as_str(),
-                "artifact_hash_blake3": result.metadata.artifact_hash_blake3,
+                "artifact_hash": result.metadata.artifact_hash,
                 "artifact_size_bytes": result.artifact_bytes.len(),
-                "source_hash_blake3": result.metadata.source_hash_blake3,
-                "source_content_hash_blake3": result.metadata.source_content_hash_blake3,
+                "source_hash": result.metadata.source_hash,
+                "source_content_hash": result.metadata.source_content_hash,
                 "metadata_schema_version": result.metadata.metadata_schema_version,
                 "compiler_version": result.metadata.compiler_version,
                 "standalone_runner_compatible": result.metadata.runtime.standalone_runner_compatible,
                 "ckb_runtime_required": result.metadata.runtime.ckb_runtime_required,
-                "symbolic_cell_runtime_required": result.metadata.runtime.symbolic_cell_runtime_required,
                 "verifier_obligations": result.metadata.runtime.verifier_obligations.len(),
                 "runtime_required_verifier_obligations": runtime_required_obligation_count(&result.metadata),
                 "fail_closed_verifier_obligations": fail_closed_obligation_count(&result.metadata),
@@ -944,7 +939,6 @@ impl CommandExecutor {
                 "compiler_version": result.metadata.compiler_version,
                 "standalone_runner_compatible": result.metadata.runtime.standalone_runner_compatible,
                 "ckb_runtime_required": result.metadata.runtime.ckb_runtime_required,
-                "symbolic_cell_runtime_required": result.metadata.runtime.symbolic_cell_runtime_required,
                 "fail_closed_runtime_features": result.metadata.runtime.fail_closed_runtime_features,
                 "verifier_obligations": result.metadata.runtime.verifier_obligations.len(),
                 "runtime_required_verifier_obligations": runtime_required_obligation_count(&result.metadata),
@@ -973,7 +967,7 @@ impl CommandExecutor {
             checked_targets.push(target_label);
         }
 
-        let policy_verified = args.production || args.deny_fail_closed || args.deny_symbolic_runtime || args.deny_ckb_runtime;
+        let policy_verified = args.production || args.deny_fail_closed || args.deny_ckb_runtime;
         let policy_verified = policy_verified || args.deny_runtime_obligations;
         if args.json {
             let summary = serde_json::json!({
@@ -984,7 +978,6 @@ impl CommandExecutor {
                 "policy": {
                     "production": args.production,
                     "deny_fail_closed": args.deny_fail_closed,
-                    "deny_symbolic_runtime": args.deny_symbolic_runtime,
                     "deny_ckb_runtime": args.deny_ckb_runtime,
                     "deny_runtime_obligations": args.deny_runtime_obligations,
                 },
@@ -1376,7 +1369,7 @@ impl CommandExecutor {
                 "constraints_status": result.metadata.constraints.status,
                 "constraints_warnings": result.metadata.constraints.warnings.len(),
                 "constraints_failures": result.metadata.constraints.failures.len(),
-                "source_content_hash_blake3": result.metadata.source_content_hash_blake3,
+                "source_content_hash": result.metadata.source_content_hash,
             }));
         }
         let baseline_size = rows.first().and_then(|row| row["artifact_size_bytes"].as_u64()).unwrap_or_default();
@@ -1450,7 +1443,7 @@ impl CommandExecutor {
             "input": input_path.display().to_string(),
             "action": action.name,
             "target_profile": result.metadata.target_profile.name,
-            "artifact_hash_blake3": result.metadata.artifact_hash_blake3,
+            "artifact_hash": result.metadata.artifact_hash,
             "entry_witness_abi": {
                 "required": !action.params.is_empty(),
                 "params": action.params,
@@ -1614,18 +1607,14 @@ impl CommandExecutor {
         }
         validate_expected_target_profile(result.metadata.target_profile.name.as_str(), args.expect_target_profile.as_deref())?;
         validate_expected_metadata_hash(
-            "artifact_hash_blake3",
-            result.metadata.artifact_hash_blake3.as_deref(),
+            "artifact_hash",
+            result.metadata.artifact_hash.as_deref(),
             args.expect_artifact_hash.as_deref(),
         )?;
+        validate_expected_metadata_hash("source_hash", result.metadata.source_hash.as_deref(), args.expect_source_hash.as_deref())?;
         validate_expected_metadata_hash(
-            "source_hash_blake3",
-            result.metadata.source_hash_blake3.as_deref(),
-            args.expect_source_hash.as_deref(),
-        )?;
-        validate_expected_metadata_hash(
-            "source_content_hash_blake3",
-            result.metadata.source_content_hash_blake3.as_deref(),
+            "source_content_hash",
+            result.metadata.source_content_hash.as_deref(),
             args.expect_source_content_hash.as_deref(),
         )?;
         validate_check_policy(
@@ -1633,7 +1622,6 @@ impl CommandExecutor {
             &CheckArgs {
                 production: args.production,
                 deny_fail_closed: args.deny_fail_closed,
-                deny_symbolic_runtime: args.deny_symbolic_runtime,
                 deny_ckb_runtime: args.deny_ckb_runtime,
                 deny_runtime_obligations: args.deny_runtime_obligations,
                 ..CheckArgs::default()
@@ -1643,11 +1631,7 @@ impl CommandExecutor {
         let expected_target_profile_verified = args.expect_target_profile.is_some();
         let expected_hashes_verified =
             args.expect_artifact_hash.is_some() || args.expect_source_hash.is_some() || args.expect_source_content_hash.is_some();
-        let policy_verified = args.production
-            || args.deny_fail_closed
-            || args.deny_symbolic_runtime
-            || args.deny_ckb_runtime
-            || args.deny_runtime_obligations;
+        let policy_verified = args.production || args.deny_fail_closed || args.deny_ckb_runtime || args.deny_runtime_obligations;
 
         if args.json {
             let summary = serde_json::json!({
@@ -1658,10 +1642,10 @@ impl CommandExecutor {
                 "compiler_version": result.metadata.compiler_version,
                 "artifact_format": result.artifact_format.display_name(),
                 "target_profile": result.metadata.target_profile.name.as_str(),
-                "artifact_hash_blake3": result.metadata.artifact_hash_blake3,
+                "artifact_hash": result.metadata.artifact_hash,
                 "artifact_size_bytes": result.artifact_bytes.len(),
-                "source_hash_blake3": result.metadata.source_hash_blake3,
-                "source_content_hash_blake3": result.metadata.source_content_hash_blake3,
+                "source_hash": result.metadata.source_hash,
+                "source_content_hash": result.metadata.source_content_hash,
                 "source_units": result.metadata.source_units.len(),
                 "verifier_obligations": result.metadata.runtime.verifier_obligations.len(),
                 "runtime_required_verifier_obligations": runtime_required_obligation_count(&result.metadata),
@@ -1705,7 +1689,7 @@ impl CommandExecutor {
         println!("  Compiler: {}", result.metadata.compiler_version);
         println!("  Format: {}", result.artifact_format.display_name());
         println!("  Target profile: {}", result.metadata.target_profile.name);
-        println!("  Hash: {}", result.metadata.artifact_hash_blake3.as_deref().unwrap_or("missing"));
+        println!("  Hash: {}", result.metadata.artifact_hash.as_deref().unwrap_or("missing"));
         println!("  Size: {} bytes", result.artifact_bytes.len());
         if expected_target_profile_verified {
             println!("  Expected target profile: verified");
@@ -1790,7 +1774,7 @@ impl CommandExecutor {
             Self::experimental_command(
                 "run",
                 &format!(
-                    "feature-gated VM backend is not enabled (requested {}, {} argument(s)); use --simulate for AST-level symbolic execution or compile with --features vm-runner to execute",
+                    "feature-gated VM backend is not enabled (requested {}, {} argument(s)); use --simulate for AST-level simulation or compile with --features vm-runner to execute",
                     mode,
                     args.args.len()
                 ),
@@ -1835,7 +1819,7 @@ impl CommandExecutor {
         println!("  Entry: action {}", sim_result.entry_name);
         println!("  Steps: {}", sim_result.steps);
         if sim_result.has_cell_ops {
-            println!("  Cell operations: {} (symbolic)", "yes".yellow());
+            println!("  Cell operations: {} (simulated)", "yes".yellow());
         } else {
             println!("  Cell operations: none (pure computation)");
         }
@@ -2144,7 +2128,7 @@ fn effective_check_target_profile(args: &CheckArgs) -> Result<TargetProfile> {
         return Ok(profile);
     }
 
-    Ok(TargetProfile::Spora)
+    Ok(TargetProfile::Ckb)
 }
 
 fn manifest_target_profile() -> Result<Option<TargetProfile>> {
@@ -2167,9 +2151,7 @@ fn manifest_target_profile() -> Result<Option<TargetProfile>> {
 
 fn compile_target_profile_for_check(profile: TargetProfile) -> Option<String> {
     match profile {
-        TargetProfile::Spora => Some(TargetProfile::Spora.name().to_string()),
         TargetProfile::Ckb => Some(TargetProfile::Ckb.name().to_string()),
-        TargetProfile::PortableCell => Some(TargetProfile::Spora.name().to_string()),
     }
 }
 
@@ -2293,7 +2275,6 @@ fn effective_build_check_args(args: &BuildArgs) -> Result<CheckArgs> {
         json: false,
         production: args.production,
         deny_fail_closed: args.deny_fail_closed,
-        deny_symbolic_runtime: args.deny_symbolic_runtime,
         deny_ckb_runtime: args.deny_ckb_runtime,
         deny_runtime_obligations: args.deny_runtime_obligations,
     })
@@ -2302,7 +2283,6 @@ fn effective_build_check_args(args: &BuildArgs) -> Result<CheckArgs> {
 fn merge_check_policy(args: &mut CheckArgs, policy: &PolicyConfig) {
     args.production |= policy.production;
     args.deny_fail_closed |= policy.deny_fail_closed;
-    args.deny_symbolic_runtime |= policy.deny_symbolic_runtime;
     args.deny_ckb_runtime |= policy.deny_ckb_runtime;
     args.deny_runtime_obligations |= policy.deny_runtime_obligations;
 }
@@ -2313,7 +2293,7 @@ fn validate_expected_metadata_hash(field: &str, actual: Option<&str>, expected: 
     };
     if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
         return Err(crate::error::CompileError::without_span(format!(
-            "{} expectation must be a 64-character lowercase BLAKE3 hex digest, got '{}'",
+            "{} expectation must be a 64-character lowercase CKB Blake2b hex digest, got '{}'",
             field, expected
         )));
     }
@@ -2367,25 +2347,6 @@ fn validate_check_policy(metadata: &crate::CompileMetadata, args: &CheckArgs) ->
             .collect::<Vec<_>>();
         if !fail_closed_obligations.is_empty() {
             violations.push(format!("fail-closed verifier obligations: {}", fail_closed_obligations.join(", ")));
-        }
-    }
-
-    if args.deny_symbolic_runtime {
-        if metadata.runtime.symbolic_cell_runtime_required {
-            violations.push(format!(
-                "symbolic Cell/runtime features: {}",
-                metadata.runtime.legacy_symbolic_cell_runtime_features.join(", ")
-            ));
-        }
-        let unsupported_obligations = metadata
-            .runtime
-            .verifier_obligations
-            .iter()
-            .filter(|obligation| obligation.status == "unsupported-standalone")
-            .map(|obligation| format!("{}:{} ({})", obligation.scope, obligation.feature, obligation.category))
-            .collect::<Vec<_>>();
-        if !unsupported_obligations.is_empty() {
-            violations.push(format!("standalone-ELF limitations: {}", unsupported_obligations.join(", ")));
         }
     }
 
@@ -2468,145 +2429,27 @@ fn target_profile_policy_violations(
     profile: TargetProfile,
 ) -> Vec<String> {
     match profile {
-        TargetProfile::Spora => spora_target_profile_policy_violations(metadata),
         TargetProfile::Ckb => ckb_target_profile_policy_violations(metadata, artifact_format),
-        TargetProfile::PortableCell => portable_cell_target_profile_policy_violations(metadata),
     }
-}
-
-fn spora_target_profile_policy_violations(metadata: &crate::CompileMetadata) -> Vec<String> {
-    let mut violations = Vec::new();
-    let ckb_only_features = ckb_only_feature_names(metadata);
-    if !ckb_only_features.is_empty() {
-        violations.push(format!("CKB chain APIs require the 'ckb' target profile: {}", ckb_only_features.join(", ")));
-    }
-    violations
 }
 
 fn ckb_target_profile_policy_violations(metadata: &crate::CompileMetadata, _artifact_format: ArtifactFormat) -> Vec<String> {
-    let mut violations = common_portability_policy_violations(metadata);
+    // CKB is the only target profile; keep these checks focused on CKB-specific unsupported features.
+    let mut violations = Vec::new();
 
-    let spora_only_features = metadata
+    let unsupported_claim_features = metadata
         .runtime
         .ckb_runtime_features
         .iter()
         .filter(|feature| matches!(feature.as_str(), "load-claim-ecdsa-signature-hash" | "verify-claim-secp256k1-signature"))
         .cloned()
         .collect::<Vec<_>>();
-    if !spora_only_features.is_empty() {
-        violations.push(format!("Spora-only claim helper syscall features: {}", spora_only_features.join(", ")));
-    }
-
-    violations
-}
-
-fn portable_cell_target_profile_policy_violations(metadata: &crate::CompileMetadata) -> Vec<String> {
-    let mut violations = common_portability_policy_violations(metadata);
-    let ckb_only_features = ckb_only_feature_names(metadata);
-    if !ckb_only_features.is_empty() {
-        violations.push(format!("CKB chain APIs are target-specific and not portable: {}", ckb_only_features.join(", ")));
-    }
-    violations
-}
-
-fn common_portability_policy_violations(metadata: &crate::CompileMetadata) -> Vec<String> {
-    let mut violations = Vec::new();
-
-    if metadata.runtime.ckb_runtime_features.iter().any(|feature| feature == "load-header-daa-score") {
-        violations.push("DAA/header assumptions are Spora-specific and not portable across target profiles".to_string());
-    }
-
-    if metadata.runtime.symbolic_cell_runtime_required {
-        violations.push(format!(
-            "symbolic Cell/runtime features are not portable: {}",
-            metadata.runtime.legacy_symbolic_cell_runtime_features.join(", ")
-        ));
-    }
-    if !metadata.runtime.fail_closed_runtime_features.is_empty() {
-        violations.push(format!(
-            "fail-closed runtime features are not portable: {}",
-            metadata.runtime.fail_closed_runtime_features.join(", ")
-        ));
-    }
-
-    let runtime_required_obligations = metadata
-        .runtime
-        .verifier_obligations
-        .iter()
-        .filter(|obligation| obligation.status == "runtime-required")
-        .map(|obligation| format!("{}:{} ({})", obligation.scope, obligation.feature, obligation.category))
-        .collect::<Vec<_>>();
-    if !runtime_required_obligations.is_empty() {
+    if !unsupported_claim_features.is_empty() {
         violations
-            .push(format!("runtime-required verifier obligations are not portable: {}", runtime_required_obligations.join(", ")));
-    }
-
-    let runtime_required_inputs = transaction_runtime_input_requirement_summaries_by_status(metadata, "runtime-required");
-    if !runtime_required_inputs.is_empty() {
-        violations.push(format!("runtime-required transaction inputs are not portable: {}", runtime_required_inputs.join(", ")));
-    }
-
-    let persistent_types_without_schema = metadata
-        .types
-        .iter()
-        .filter(|ty| matches!(ty.kind.as_str(), "Resource" | "Shared" | "Receipt"))
-        .filter(|ty| !type_has_public_molecule_schema(ty))
-        .map(|ty| format!("{} ({})", ty.name, ty.kind))
-        .collect::<Vec<_>>();
-    if !persistent_types_without_schema.is_empty() {
-        violations.push(format!(
-            "generated Molecule schemas are required before persistent Cell types can be CKB-portable: {}",
-            persistent_types_without_schema.join(", ")
-        ));
-    }
-
-    let type_only_type_ids = metadata
-        .types
-        .iter()
-        .filter(|ty| ty.type_id.is_some() && ty.ckb_type_id.is_none())
-        .map(|ty| ty.name.clone())
-        .collect::<Vec<_>>();
-    if !type_only_type_ids.is_empty() {
-        violations.push(format!(
-            "type-only type_id declarations require profile-specific type-id lowering before they are portable: {}",
-            type_only_type_ids.join(", ")
-        ));
-    }
-
-    let shared_touch_actions = metadata
-        .actions
-        .iter()
-        .filter(|action| !action.touches_shared.is_empty())
-        .map(|action| action.name.clone())
-        .collect::<Vec<_>>();
-    if !shared_touch_actions.is_empty() {
-        violations.push(format!("Spora shared-state scheduler touch domains are not portable: {}", shared_touch_actions.join(", ")));
-    }
-
-    if !metadata.runtime.pool_primitives.is_empty() {
-        let pool_features = metadata.runtime.pool_primitives.iter().map(|primitive| primitive.feature.clone()).collect::<Vec<_>>();
-        violations.push(format!("Spora pool-pattern scheduler/admission semantics are not portable: {}", pool_features.join(", ")));
+            .push(format!("Claim helper syscall features not supported in CKB profile: {}", unsupported_claim_features.join(", ")));
     }
 
     violations
-}
-
-fn ckb_only_feature_names(metadata: &crate::CompileMetadata) -> Vec<String> {
-    metadata
-        .runtime
-        .ckb_runtime_features
-        .iter()
-        .filter(|feature| feature.starts_with("ckb-header-epoch-") || feature.as_str() == "ckb-input-since")
-        .cloned()
-        .collect()
-}
-
-fn type_has_public_molecule_schema(ty: &crate::TypeMetadata) -> bool {
-    ty.molecule_schema.as_ref().is_some_and(|schema| {
-        schema.abi == "molecule"
-            && matches!(schema.layout.as_str(), "fixed-struct-v1" | "molecule-table-v1")
-            && !schema.schema.is_empty()
-    })
 }
 
 fn runtime_required_obligation_count(metadata: &crate::CompileMetadata) -> usize {
@@ -2831,12 +2674,10 @@ struct CompileTestExpectation {
     target: Option<String>,
     production: bool,
     deny_fail_closed: bool,
-    deny_symbolic_runtime: bool,
     deny_ckb_runtime: bool,
     deny_runtime_obligations: bool,
     expect_standalone: Option<bool>,
     expect_ckb_runtime: Option<bool>,
-    expect_symbolic_runtime: Option<bool>,
     expect_fail_closed: Option<bool>,
     expected_runtime_features: Vec<String>,
     forbidden_runtime_features: Vec<String>,
@@ -2862,7 +2703,6 @@ impl CompileTestExpectation {
             json: false,
             production: self.production,
             deny_fail_closed: self.deny_fail_closed,
-            deny_symbolic_runtime: self.deny_symbolic_runtime,
             deny_ckb_runtime: self.deny_ckb_runtime,
             deny_runtime_obligations: self.deny_runtime_obligations,
         }
@@ -2905,8 +2745,6 @@ fn parse_test_expectation(path: &Path, source: &str) -> Result<CompileTestExpect
             expectation.production = true;
         } else if directive == "deny-fail-closed" {
             expectation.deny_fail_closed = true;
-        } else if directive == "deny-symbolic-runtime" {
-            expectation.deny_symbolic_runtime = true;
         } else if directive == "deny-ckb-runtime" {
             expectation.deny_ckb_runtime = true;
         } else if directive == "deny-runtime-obligations" {
@@ -2919,10 +2757,6 @@ fn parse_test_expectation(path: &Path, source: &str) -> Result<CompileTestExpect
             expectation.expect_ckb_runtime = Some(true);
         } else if directive == "expect-no-ckb-runtime" {
             expectation.expect_ckb_runtime = Some(false);
-        } else if directive == "expect-symbolic-runtime" {
-            expectation.expect_symbolic_runtime = Some(true);
-        } else if directive == "expect-no-symbolic-runtime" {
-            expectation.expect_symbolic_runtime = Some(false);
         } else if directive == "expect-fail-closed-runtime" {
             expectation.expect_fail_closed = Some(true);
         } else if directive == "expect-no-fail-closed-runtime" {
@@ -3086,14 +2920,6 @@ fn validate_compile_test_metadata(
             )));
         }
     }
-    if let Some(expected) = expectation.expect_symbolic_runtime {
-        if metadata.runtime.symbolic_cell_runtime_required != expected {
-            return Err(crate::error::CompileError::without_span(format!(
-                "{}: expected symbolic_cell_runtime_required={}, got {}",
-                path, expected, metadata.runtime.symbolic_cell_runtime_required
-            )));
-        }
-    }
     if let Some(expected) = expectation.expect_fail_closed {
         let actual = !metadata.runtime.fail_closed_runtime_features.is_empty()
             || metadata.runtime.verifier_obligations.iter().any(|obligation| obligation.status == "fail-closed");
@@ -3212,7 +3038,6 @@ fn validate_named_metadata_set(path: &Utf8Path, kind: &str, actual: &[&str], exp
 fn compile_test_runtime_summary(metadata: &crate::CompileMetadata) -> String {
     let mut values = Vec::new();
     values.extend(metadata.runtime.ckb_runtime_features.iter().cloned());
-    values.extend(metadata.runtime.legacy_symbolic_cell_runtime_features.iter().cloned());
     values.extend(metadata.runtime.fail_closed_runtime_features.iter().cloned());
     for access in &metadata.runtime.ckb_runtime_accesses {
         values.push(format!("{}:{}:{}:{}:{}", access.operation, access.syscall, access.source, access.index, access.binding));
@@ -3501,7 +3326,7 @@ impl CliParser {
 
         let matches = ClapCommand::new("cellc")
             .version(crate::VERSION)
-            .about("CellScript compiler for Spora blockchain")
+            .about("CellScript compiler for CKB blockchain")
             .subcommand_required(true)
             .arg_required_else_help(true)
             .subcommand(
@@ -3509,12 +3334,7 @@ impl CliParser {
                     .about("Compile the current package")
                     .arg(Arg::new("release").long("release").short('r').action(ArgAction::SetTrue).help("Build in release mode"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(
-                        Arg::new("target-profile")
-                            .long("target-profile")
-                            .value_name("PROFILE")
-                            .help("Target profile: spora, ckb, or portable-cell"),
-                    )
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
                     .arg(
                         Arg::new("entry-action")
                             .long("entry-action")
@@ -3540,12 +3360,6 @@ impl CliParser {
                         Arg::new("deny-fail-closed").long("deny-fail-closed").action(ArgAction::SetTrue).help(
                             "Reject metadata that contains fail-closed runtime features or obligations before writing artifacts",
                         ),
-                    )
-                    .arg(
-                        Arg::new("deny-symbolic-runtime")
-                            .long("deny-symbolic-runtime")
-                            .action(ArgAction::SetTrue)
-                            .help("Reject symbolic Cell/runtime requirements before writing artifacts"),
                     )
                     .arg(
                         Arg::new("deny-ckb-runtime")
@@ -3652,12 +3466,7 @@ impl CliParser {
                             .action(ArgAction::SetTrue)
                             .help("Also check the current ELF-compatible target path"),
                     )
-                    .arg(
-                        Arg::new("target-profile")
-                            .long("target-profile")
-                            .value_name("PROFILE")
-                            .help("Target profile: spora, ckb, or portable-cell"),
-                    )
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
                     .arg(Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON check summary"))
                     .arg(
                         Arg::new("production")
@@ -3670,12 +3479,6 @@ impl CliParser {
                             .long("deny-fail-closed")
                             .action(ArgAction::SetTrue)
                             .help("Reject metadata that contains fail-closed runtime features or obligations"),
-                    )
-                    .arg(
-                        Arg::new("deny-symbolic-runtime")
-                            .long("deny-symbolic-runtime")
-                            .action(ArgAction::SetTrue)
-                            .help("Reject symbolic Cell/runtime requirements that are not standalone pure-ELF compatible"),
                     )
                     .arg(
                         Arg::new("deny-ckb-runtime")
@@ -3696,12 +3499,7 @@ impl CliParser {
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON metadata to a file"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(
-                        Arg::new("target-profile")
-                            .long("target-profile")
-                            .value_name("PROFILE")
-                            .help("Target profile: spora, ckb, or portable-cell"),
-                    ),
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb")),
             )
             .subcommand(
                 ClapCommand::new("constraints")
@@ -3709,12 +3507,7 @@ impl CliParser {
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON constraints to a file"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(
-                        Arg::new("target-profile")
-                            .long("target-profile")
-                            .value_name("PROFILE")
-                            .help("Target profile: spora, ckb, or portable-cell"),
-                    )
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
                     .arg(
                         Arg::new("entry-action")
                             .long("entry-action")
@@ -3729,27 +3522,17 @@ impl CliParser {
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON ABI report to a file"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(
-                        Arg::new("target-profile")
-                            .long("target-profile")
-                            .value_name("PROFILE")
-                            .help("Target profile: spora, ckb, or portable-cell"),
-                    )
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
                     .arg(Arg::new("action").long("action").value_name("NAME").help("Explain ABI for this action"))
                     .arg(Arg::new("lock").long("lock").value_name("NAME").help("Explain ABI for this lock")),
             )
             .subcommand(
                 ClapCommand::new("scheduler-plan")
-                    .about("Consume scheduler hints and emit a Spora admission/conflict policy report")
+                    .about("Consume scheduler hints and emit a CKB admission/conflict policy report")
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON scheduler plan to a file"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(
-                        Arg::new("target-profile")
-                            .long("target-profile")
-                            .value_name("PROFILE")
-                            .help("Target profile: spora, ckb, or portable-cell"),
-                    ),
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb")),
             )
             .subcommand(
                 ClapCommand::new("ckb-hash")
@@ -3770,12 +3553,7 @@ impl CliParser {
                     .about("Explain checked bounded generic collection instantiations")
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(
-                        Arg::new("target-profile")
-                            .long("target-profile")
-                            .value_name("PROFILE")
-                            .help("Target profile: spora, ckb, or portable-cell"),
-                    )
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
                     .arg(Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON explanation")),
             )
             .subcommand(
@@ -3790,12 +3568,7 @@ impl CliParser {
                             .help("Write JSON optimization report to a file"),
                     )
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(
-                        Arg::new("target-profile")
-                            .long("target-profile")
-                            .value_name("PROFILE")
-                            .help("Target profile: spora, ckb, or portable-cell"),
-                    ),
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb")),
             )
             .subcommand(
                 ClapCommand::new("action").about("Plan and explain action-level transaction builder inputs").subcommand(
@@ -3805,12 +3578,7 @@ impl CliParser {
                         .arg(Arg::new("action").long("action").value_name("NAME").help("Action to plan; defaults to the first action"))
                         .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON builder plan to a file"))
                         .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                        .arg(
-                            Arg::new("target-profile")
-                                .long("target-profile")
-                                .value_name("PROFILE")
-                                .help("Target profile: spora, ckb, or portable-cell"),
-                        )
+                        .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
                         .arg(
                             Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON builder plan"),
                         ),
@@ -3832,12 +3600,7 @@ impl CliParser {
                     )
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write raw witness bytes to a file"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(
-                        Arg::new("target-profile")
-                            .long("target-profile")
-                            .value_name("PROFILE")
-                            .help("Target profile: spora, ckb, or portable-cell"),
-                    )
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
                     .arg(Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON summary")),
             )
             .subcommand(
@@ -3867,25 +3630,25 @@ impl CliParser {
                         Arg::new("expect-target-profile")
                             .long("expect-target-profile")
                             .value_name("PROFILE")
-                            .help("Require metadata target_profile to match this value: spora or ckb"),
+                            .help("Require metadata target_profile to match this value: ckb"),
                     )
                     .arg(
                         Arg::new("expect-artifact-hash")
                             .long("expect-artifact-hash")
-                            .value_name("BLAKE3")
-                            .help("Require metadata artifact_hash_blake3 to match this value"),
+                            .value_name("HASH")
+                            .help("Require metadata artifact_hash to match this value"),
                     )
                     .arg(
                         Arg::new("expect-source-hash")
                             .long("expect-source-hash")
-                            .value_name("BLAKE3")
-                            .help("Require metadata source_hash_blake3 to match this path-bound value"),
+                            .value_name("HASH")
+                            .help("Require metadata source_hash to match this path-bound value"),
                     )
                     .arg(
                         Arg::new("expect-source-content-hash")
                             .long("expect-source-content-hash")
-                            .value_name("BLAKE3")
-                            .help("Require metadata source_content_hash_blake3 to match this path-independent value"),
+                            .value_name("HASH")
+                            .help("Require metadata source_content_hash to match this path-independent value"),
                     )
                     .arg(
                         Arg::new("production")
@@ -3898,12 +3661,6 @@ impl CliParser {
                             .long("deny-fail-closed")
                             .action(ArgAction::SetTrue)
                             .help("Reject metadata that contains fail-closed runtime features or obligations"),
-                    )
-                    .arg(
-                        Arg::new("deny-symbolic-runtime")
-                            .long("deny-symbolic-runtime")
-                            .action(ArgAction::SetTrue)
-                            .help("Reject symbolic Cell/runtime requirements"),
                     )
                     .arg(
                         Arg::new("deny-ckb-runtime")
@@ -3969,7 +3726,6 @@ impl CliParser {
                 json: m.get_flag("json"),
                 production: m.get_flag("production"),
                 deny_fail_closed: m.get_flag("deny-fail-closed"),
-                deny_symbolic_runtime: m.get_flag("deny-symbolic-runtime"),
                 deny_ckb_runtime: m.get_flag("deny-ckb-runtime"),
                 deny_runtime_obligations: m.get_flag("deny-runtime-obligations"),
                 ..Default::default()
@@ -4033,7 +3789,6 @@ impl CliParser {
                 json: m.get_flag("json"),
                 production: m.get_flag("production"),
                 deny_fail_closed: m.get_flag("deny-fail-closed"),
-                deny_symbolic_runtime: m.get_flag("deny-symbolic-runtime"),
                 deny_ckb_runtime: m.get_flag("deny-ckb-runtime"),
                 deny_runtime_obligations: m.get_flag("deny-runtime-obligations"),
                 features: Vec::new(),
@@ -4120,7 +3875,6 @@ impl CliParser {
                 expect_source_content_hash: m.get_one::<String>("expect-source-content-hash").cloned(),
                 production: m.get_flag("production"),
                 deny_fail_closed: m.get_flag("deny-fail-closed"),
-                deny_symbolic_runtime: m.get_flag("deny-symbolic-runtime"),
                 deny_ckb_runtime: m.get_flag("deny-ckb-runtime"),
                 deny_runtime_obligations: m.get_flag("deny-runtime-obligations"),
             }),

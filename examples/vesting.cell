@@ -1,7 +1,7 @@
 
-module spora::vesting
+module cellscript::vesting
 
-use spora::fungible_token::Token
+use cellscript::fungible_token::Token
 
 shared VestingConfig has store {
     admin: Address
@@ -17,9 +17,9 @@ receipt VestingGrant has store {
     beneficiary: Address
     total_amount: u64
     claimed_amount: u64
-    grant_daa_score: u64
-    cliff_daa_score: u64
-    end_daa_score: u64
+    grant_timepoint: u64
+    cliff_timepoint: u64
+    end_timepoint: u64
     token_symbol: [u8; 8]
 }
 
@@ -58,9 +58,9 @@ action grant_vesting(
         beneficiary: beneficiary,
         total_amount: tokens.amount,
         claimed_amount: 0,
-        grant_daa_score: now,
-        cliff_daa_score: now + config.cliff_period,
-        end_daa_score: now + config.total_vesting_period,
+        grant_timepoint: now,
+        cliff_timepoint: now + config.cliff_period,
+        end_timepoint: now + config.total_vesting_period,
         token_symbol: config.token_symbol
     } with_lock(beneficiary)
 }
@@ -68,14 +68,14 @@ action grant_vesting(
 action claim_vested(grant: VestingGrant) -> (Token, VestingGrant) {
     let now = env::current_timepoint()
     
-    assert_invariant(now >= grant.cliff_daa_score, "cliff not reached")
+    assert_invariant(now >= grant.cliff_timepoint, "cliff not reached")
     assert_invariant(grant.state < 2, "already fully claimed")
     
-    let vested_total = if now >= grant.end_daa_score {
+    let vested_total = if now >= grant.end_timepoint {
         grant.total_amount
     } else {
-        let elapsed = now - grant.cliff_daa_score
-        let period = grant.end_daa_score - grant.cliff_daa_score
+        let elapsed = now - grant.cliff_timepoint
+        let period = grant.end_timepoint - grant.cliff_timepoint
         grant.total_amount * elapsed / period
     }
     
@@ -96,9 +96,9 @@ action claim_vested(grant: VestingGrant) -> (Token, VestingGrant) {
         beneficiary: grant.beneficiary,
         total_amount: grant.total_amount,
         claimed_amount: grant.claimed_amount + claimable,
-        grant_daa_score: grant.grant_daa_score,
-        cliff_daa_score: grant.cliff_daa_score,
-        end_daa_score: grant.end_daa_score,
+        grant_timepoint: grant.grant_timepoint,
+        cliff_timepoint: grant.cliff_timepoint,
+        end_timepoint: grant.end_timepoint,
         token_symbol: grant.token_symbol
     } with_lock(grant.beneficiary)
     
@@ -108,19 +108,19 @@ action claim_vested(grant: VestingGrant) -> (Token, VestingGrant) {
 action revoke_grant(
     config: read_ref VestingConfig,
     grant: VestingGrant,
-    admin: Address
+    claimed_admin: Address
 ) -> (Token, Token) {
     assert_invariant(config.revocable, "not revocable")
-    assert_invariant(admin == config.admin, "not admin")
+    assert_invariant(is_vesting_admin(config, claimed_admin), "not admin")
     assert_invariant(grant.state < 2, "already fully claimed")
     
     let now = env::current_timepoint()
     
-    let vested = if now >= grant.end_daa_score {
+    let vested = if now >= grant.end_timepoint {
         grant.total_amount
-    } else if now >= grant.cliff_daa_score {
-        let elapsed = now - grant.cliff_daa_score
-        let period = grant.end_daa_score - grant.cliff_daa_score
+    } else if now >= grant.cliff_timepoint {
+        let elapsed = now - grant.cliff_timepoint
+        let period = grant.end_timepoint - grant.cliff_timepoint
         grant.total_amount * elapsed / period
     } else {
         0
@@ -139,7 +139,15 @@ action revoke_grant(
     let admin_tokens = create Token {
         amount: unvested,
         symbol: grant.token_symbol
-    } with_lock(admin)
+    } with_lock(claimed_admin)
     
     (employee_tokens, admin_tokens)
+}
+
+fn is_vesting_admin(config: &VestingConfig, claimed_admin: Address) -> bool {
+    claimed_admin == config.admin
+}
+
+lock vesting_admin(config: &VestingConfig, claimed_admin: Address) -> bool {
+    is_vesting_admin(config, claimed_admin)
 }

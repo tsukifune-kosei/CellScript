@@ -37,10 +37,10 @@ pub struct AuditDoc {
     pub compiler_version: String,
     pub module: String,
     pub artifact_format: String,
-    pub artifact_hash_blake3: Option<String>,
+    pub artifact_hash: Option<String>,
     pub artifact_size_bytes: Option<usize>,
-    pub source_hash_blake3: Option<String>,
-    pub source_content_hash_blake3: Option<String>,
+    pub source_hash: Option<String>,
+    pub source_content_hash: Option<String>,
     pub source_units: Vec<AuditSourceUnitDoc>,
     pub target_profile: String,
     pub target_chain: String,
@@ -55,7 +55,6 @@ pub struct AuditDoc {
     pub vm_abi_scope: String,
     pub ckb_runtime_required: bool,
     pub standalone_runner_compatible: bool,
-    pub symbolic_cell_runtime_required: bool,
     pub ckb_runtime_features: Vec<String>,
     pub fail_closed_runtime_features: Vec<String>,
     pub verifier_obligations: Vec<AuditObligationDoc>,
@@ -69,7 +68,7 @@ pub struct AuditDoc {
 pub struct AuditSourceUnitDoc {
     pub path: String,
     pub role: String,
-    pub hash_blake3: String,
+    pub hash: String,
     pub size_bytes: usize,
 }
 
@@ -142,17 +141,17 @@ impl DocGenerator {
             compiler_version: metadata.compiler_version.clone(),
             module: metadata.module.clone(),
             artifact_format: metadata.artifact_format.clone(),
-            artifact_hash_blake3: metadata.artifact_hash_blake3.clone(),
+            artifact_hash: metadata.artifact_hash.clone(),
             artifact_size_bytes: metadata.artifact_size_bytes,
-            source_hash_blake3: metadata.source_hash_blake3.clone(),
-            source_content_hash_blake3: metadata.source_content_hash_blake3.clone(),
+            source_hash: metadata.source_hash.clone(),
+            source_content_hash: metadata.source_content_hash.clone(),
             source_units: metadata
                 .source_units
                 .iter()
                 .map(|unit| AuditSourceUnitDoc {
                     path: unit.path.clone(),
                     role: unit.role.clone(),
-                    hash_blake3: unit.hash_blake3.clone(),
+                    hash: unit.hash.clone(),
                     size_bytes: unit.size_bytes,
                 })
                 .collect(),
@@ -169,7 +168,6 @@ impl DocGenerator {
             vm_abi_scope: metadata.runtime.vm_abi.scope.clone(),
             ckb_runtime_required: metadata.runtime.ckb_runtime_required,
             standalone_runner_compatible: metadata.runtime.standalone_runner_compatible,
-            symbolic_cell_runtime_required: metadata.runtime.symbolic_cell_runtime_required,
             ckb_runtime_features: metadata.runtime.ckb_runtime_features.clone(),
             fail_closed_runtime_features: metadata.runtime.fail_closed_runtime_features.clone(),
             verifier_obligations: metadata
@@ -306,37 +304,36 @@ impl AuditDoc {
         out.push_str(&format!("- Target artifact packaging: `{}`\n", self.target_artifact_packaging));
         out.push_str(&format!("- Target header ABI: `{}`\n", self.target_header_abi));
         out.push_str(&format!("- Target scheduler ABI: `{}`\n", self.target_scheduler_abi));
-        if let Some(hash) = &self.artifact_hash_blake3 {
-            out.push_str(&format!("- Artifact hash (BLAKE3): `{}`\n", hash));
+        if let Some(hash) = &self.artifact_hash {
+            out.push_str(&format!("- Artifact hash (CKB Blake2b): `{}`\n", hash));
         }
         if let Some(size) = self.artifact_size_bytes {
             out.push_str(&format!("- Artifact size: `{}` bytes\n", size));
         }
-        if let Some(hash) = &self.source_hash_blake3 {
-            out.push_str(&format!("- Source set hash (BLAKE3): `{}`\n", hash));
+        if let Some(hash) = &self.source_hash {
+            out.push_str(&format!("- Source set hash (CKB Blake2b): `{}`\n", hash));
         }
-        if let Some(hash) = &self.source_content_hash_blake3 {
-            out.push_str(&format!("- Source content hash (BLAKE3): `{}`\n", hash));
+        if let Some(hash) = &self.source_content_hash {
+            out.push_str(&format!("- Source content hash (CKB Blake2b): `{}`\n", hash));
         }
         out.push_str(&format!("- VM ABI: `{}` (`0x{:04x}`)\n", self.vm_abi_format, self.vm_abi_version));
         out.push_str(&format!("- VM ABI embedded in artifact: `{}`\n", self.vm_abi_embedded_in_artifact));
         out.push_str(&format!("- VM ABI scope: `{}`\n", self.vm_abi_scope));
         out.push_str(&format!("- CKB runtime required: `{}`\n", self.ckb_runtime_required));
         out.push_str(&format!("- Standalone runner compatible: `{}`\n", self.standalone_runner_compatible));
-        out.push_str(&format!("- Symbolic Cell/runtime required: `{}`\n", self.symbolic_cell_runtime_required));
         out.push_str(&format!("- CKB runtime features: `{}`\n", comma_or_none(&self.ckb_runtime_features)));
         out.push_str(&format!("- Fail-closed runtime features: `{}`\n\n", comma_or_none(&self.fail_closed_runtime_features)));
 
         if !self.source_units.is_empty() {
             out.push_str("### Source Units\n\n");
-            out.push_str("| Role | Path | BLAKE3 | Size |\n");
+            out.push_str("| Role | Path | Hash | Size |\n");
             out.push_str("|---|---|---|---|\n");
             for unit in &self.source_units {
                 out.push_str(&format!(
                     "| `{}` | `{}` | `{}` | `{}` bytes |\n",
                     escape_markdown_table_cell(&unit.role),
                     escape_markdown_table_cell(&unit.path),
-                    escape_markdown_table_cell(&unit.hash_blake3),
+                    escape_markdown_table_cell(&unit.hash),
                     unit.size_bytes
                 ));
             }
@@ -475,17 +472,17 @@ impl AuditDoc {
         out.push_str(&format!("<li>Target artifact packaging: <code>{}</code></li>", escape_html(&self.target_artifact_packaging)));
         out.push_str(&format!("<li>Target header ABI: <code>{}</code></li>", escape_html(&self.target_header_abi)));
         out.push_str(&format!("<li>Target scheduler ABI: <code>{}</code></li>", escape_html(&self.target_scheduler_abi)));
-        if let Some(hash) = &self.artifact_hash_blake3 {
-            out.push_str(&format!("<li>Artifact hash (BLAKE3): <code>{}</code></li>", escape_html(hash)));
+        if let Some(hash) = &self.artifact_hash {
+            out.push_str(&format!("<li>Artifact hash (CKB Blake2b): <code>{}</code></li>", escape_html(hash)));
         }
         if let Some(size) = self.artifact_size_bytes {
             out.push_str(&format!("<li>Artifact size: <code>{}</code> bytes</li>", size));
         }
-        if let Some(hash) = &self.source_hash_blake3 {
-            out.push_str(&format!("<li>Source set hash (BLAKE3): <code>{}</code></li>", escape_html(hash)));
+        if let Some(hash) = &self.source_hash {
+            out.push_str(&format!("<li>Source set hash (CKB Blake2b): <code>{}</code></li>", escape_html(hash)));
         }
-        if let Some(hash) = &self.source_content_hash_blake3 {
-            out.push_str(&format!("<li>Source content hash (BLAKE3): <code>{}</code></li>", escape_html(hash)));
+        if let Some(hash) = &self.source_content_hash {
+            out.push_str(&format!("<li>Source content hash (CKB Blake2b): <code>{}</code></li>", escape_html(hash)));
         }
         out.push_str(&format!(
             "<li>VM ABI: <code>{}</code> (<code>0x{:04x}</code>)</li>",
@@ -496,7 +493,6 @@ impl AuditDoc {
         out.push_str(&format!("<li>VM ABI scope: <code>{}</code></li>", escape_html(&self.vm_abi_scope)));
         out.push_str(&format!("<li>CKB runtime required: <code>{}</code></li>", self.ckb_runtime_required));
         out.push_str(&format!("<li>Standalone runner compatible: <code>{}</code></li>", self.standalone_runner_compatible));
-        out.push_str(&format!("<li>Symbolic Cell/runtime required: <code>{}</code></li>", self.symbolic_cell_runtime_required));
         out.push_str(&format!(
             "<li>CKB runtime features: <code>{}</code></li>",
             escape_html(&comma_or_none(&self.ckb_runtime_features))
@@ -508,13 +504,13 @@ impl AuditDoc {
         out.push_str("</ul>");
         if !self.source_units.is_empty() {
             out.push_str("<h3>Source Units</h3>");
-            out.push_str("<table><thead><tr><th>Role</th><th>Path</th><th>BLAKE3</th><th>Size</th></tr></thead><tbody>");
+            out.push_str("<table><thead><tr><th>Role</th><th>Path</th><th>Hash</th><th>Size</th></tr></thead><tbody>");
             for unit in &self.source_units {
                 out.push_str(&format!(
                     "<tr><td><code>{}</code></td><td><code>{}</code></td><td><code>{}</code></td><td><code>{}</code> bytes</td></tr>",
                     escape_html(&unit.role),
                     escape_html(&unit.path),
-                    escape_html(&unit.hash_blake3),
+                    escape_html(&unit.hash),
                     unit.size_bytes
                 ));
             }
@@ -1052,25 +1048,24 @@ action add(x: u64, y: u64) -> u64 {
             compiler_version: "test".to_string(),
             module: "demo".to_string(),
             artifact_format: "RISC-V assembly".to_string(),
-            artifact_hash_blake3: None,
+            artifact_hash: None,
             artifact_size_bytes: None,
-            source_hash_blake3: None,
-            source_content_hash_blake3: None,
+            source_hash: None,
+            source_content_hash: None,
             source_units: Vec::new(),
-            target_profile: "spora".to_string(),
-            target_chain: "spora".to_string(),
-            target_hash_domain: "spora-domain-separated-blake3".to_string(),
-            target_syscall_set: "spora-ckb-style-load-syscalls".to_string(),
-            target_artifact_packaging: "spora-asm-sidecar".to_string(),
-            target_header_abi: "spora-dag-header".to_string(),
-            target_scheduler_abi: "spora-scheduler-witness-v1-molecule".to_string(),
+            target_profile: "ckb".to_string(),
+            target_chain: "ckb".to_string(),
+            target_hash_domain: "ckb-packed-molecule-blake2b".to_string(),
+            target_syscall_set: "ckb-mainnet-syscalls".to_string(),
+            target_artifact_packaging: "ckb-asm-sidecar".to_string(),
+            target_header_abi: "ckb-header".to_string(),
+            target_scheduler_abi: "none".to_string(),
             vm_abi_format: "molecule".to_string(),
             vm_abi_version: 0x8001,
             vm_abi_embedded_in_artifact: false,
             vm_abi_scope: "metadata".to_string(),
             ckb_runtime_required: false,
             standalone_runner_compatible: false,
-            symbolic_cell_runtime_required: false,
             ckb_runtime_features: Vec::new(),
             fail_closed_runtime_features: Vec::new(),
             verifier_obligations: Vec::new(),
@@ -1096,7 +1091,7 @@ action add(x: u64, y: u64) -> u64 {
             category: "transaction-invariant".to_string(),
             feature: "claim-conditions:VestingGrant".to_string(),
             status: "runtime-required".to_string(),
-            detail: "Source claim predicates are present as daa-cliff-reached=checked-runtime, state-not-fully-claimed=checked-runtime, positive-claimable=checked-runtime, claim-witness-format=checked-runtime, claim-authorization-domain=checked-runtime; signature verification remains runtime-required".to_string(),
+            detail: "Source claim predicates are present as timepoint-check=checked-runtime, state-not-fully-claimed=checked-runtime, positive-claimable=checked-runtime, claim-witness-format=checked-runtime, claim-authorization-domain=checked-runtime; signature verification remains runtime-required".to_string(),
         };
 
         let mut generator = DocGenerator::new(OutputFormat::Markdown);
@@ -1105,25 +1100,24 @@ action add(x: u64, y: u64) -> u64 {
             compiler_version: "test".to_string(),
             module: "demo".to_string(),
             artifact_format: "RISC-V assembly".to_string(),
-            artifact_hash_blake3: None,
+            artifact_hash: None,
             artifact_size_bytes: None,
-            source_hash_blake3: None,
-            source_content_hash_blake3: None,
+            source_hash: None,
+            source_content_hash: None,
             source_units: Vec::new(),
-            target_profile: "spora".to_string(),
-            target_chain: "spora".to_string(),
-            target_hash_domain: "spora-domain-separated-blake3".to_string(),
-            target_syscall_set: "spora-ckb-style-load-syscalls".to_string(),
-            target_artifact_packaging: "spora-asm-sidecar".to_string(),
-            target_header_abi: "spora-dag-header".to_string(),
-            target_scheduler_abi: "spora-scheduler-witness-v1-molecule".to_string(),
+            target_profile: "ckb".to_string(),
+            target_chain: "ckb".to_string(),
+            target_hash_domain: "ckb-packed-molecule-blake2b".to_string(),
+            target_syscall_set: "ckb-mainnet-syscalls".to_string(),
+            target_artifact_packaging: "ckb-asm-sidecar".to_string(),
+            target_header_abi: "ckb-header".to_string(),
+            target_scheduler_abi: "none".to_string(),
             vm_abi_format: "molecule".to_string(),
             vm_abi_version: 0x8001,
             vm_abi_embedded_in_artifact: false,
             vm_abi_scope: "metadata".to_string(),
             ckb_runtime_required: false,
             standalone_runner_compatible: false,
-            symbolic_cell_runtime_required: false,
             ckb_runtime_features: Vec::new(),
             fail_closed_runtime_features: Vec::new(),
             verifier_obligations: vec![AuditObligationDoc {
@@ -1165,7 +1159,7 @@ action add(x: u64, y: u64) -> u64 {
             "claim lowering checks witness shape but has no verifier-coverable signer key binding or secp256k1 verification call"
         ));
         assert!(docs.contains("witness-verification-gap"));
-        assert!(docs.contains("daa-cliff-reached"));
+        assert!(docs.contains("timepoint-check"));
         assert!(docs.contains("state-not-fully-claimed"));
         assert!(docs.contains("positive-claimable"));
         assert!(docs.contains("claim-witness-format"));

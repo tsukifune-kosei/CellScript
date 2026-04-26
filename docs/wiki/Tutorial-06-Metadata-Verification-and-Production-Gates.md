@@ -66,7 +66,6 @@ Use check mode for CI:
 
 ```bash
 cellc check --all-targets --production
-cellc check --target-profile portable-cell --json
 cellc check --target-profile ckb --json
 ```
 
@@ -76,7 +75,6 @@ Important policy flags:
 |---|---|
 | `--production` | Reject unsafe or incomplete lowering paths. |
 | `--deny-fail-closed` | Reject metadata that contains fail-closed runtime features or obligations. |
-| `--deny-symbolic-runtime` | Reject symbolic Cell/runtime features. |
 | `--deny-ckb-runtime` | Reject CKB runtime features when they are not allowed for the workflow. |
 | `--deny-runtime-obligations` | Reject runtime-required verifier obligations. |
 
@@ -86,10 +84,10 @@ You do not need to memorize the whole sidecar on the first pass. Start with thes
 
 - `target_profile`
 - `artifact_format`
-- `artifact_hash_blake3`
+- `artifact_hash`
 - `artifact_size_bytes`
-- `source_hash_blake3`
-- `source_content_hash_blake3`
+- `source_hash`
+- `source_content_hash`
 - `source_units`
 - `metadata_schema_version`
 - `actions`
@@ -104,14 +102,15 @@ You do not need to memorize the whole sidecar on the first pass. Start with thes
 - `constraints.ckb.capacity_evidence_contract`
 - `constraints.ckb.hash_type_policy`
 - `constraints.ckb.dep_group_manifest`
+- `scheduler`
 
 ## Suggested Compiler CI Gate
 
-For a package that must remain portable, a useful compiler CI gate is:
+For CKB packages, a useful compiler CI gate is:
 
 ```bash
 cellc fmt --check
-cellc check --target-profile portable-cell --all-targets --production
+cellc check --target-profile ckb --all-targets --production
 cellc build --target riscv64-elf --target-profile ckb --production
 cellc verify-artifact build/main.elf --expect-target-profile ckb --verify-sources --production
 ```
@@ -138,10 +137,18 @@ python3 scripts/validate_ckb_cellscript_production_evidence.py \
   target/ckb-cellscript-acceptance/<run>/ckb-cellscript-acceptance-report.json
 ```
 
-The CKB validator requires strict original bundled-example coverage, scoped action and lock compile coverage, builder-backed action runs, valid transaction dry-runs, committed valid transactions, malformed rejection, measured cycles, consensus-serialized tx size, occupied-capacity evidence, no under-capacity outputs, all seven bundled examples deployed, and a passed final production hardening gate.
+The CKB validator requires strict original bundled-example coverage, scoped action
+and scoped lock compile coverage, builder-backed action runs, valid transaction
+dry-runs, committed valid transactions, malformed rejection, measured cycles,
+consensus-serialized tx size, occupied-capacity evidence, no under-capacity
+outputs, all seven production bundled examples deployed, and a passed final production hardening gate.
+Lock coverage is strict-compile coverage; it is not a claim that every lock has
+a builder-backed on-chain spend/deny-spend matrix.
+`examples/registry.cell` is a 0.13 bounded-collection language example covered by
+compiler/tooling tests, not by the seven-example CKB production matrix.
 
 `--compile-only` and bounded diagnostic runs can help development, but they are not external production release evidence.
 
 ## Next
 
-Once the verification boundary is clear, continue with [LSP and Tooling](Tutorial-07-LSP-and-Tooling).
+Once the verification boundary is clear, continue with [LSP and Tooling](Tutorial-07-LSP-and-Tooling.md).

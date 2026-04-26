@@ -1,8 +1,8 @@
 /// Stable runtime verifier error codes emitted by generated CellScript artifacts.
 ///
 /// These codes are part of the debugging and release-reporting surface. They are
-/// intentionally target-profile agnostic: the same generated verifier condition
-/// should return the same numeric code on Spora and CKB.
+/// intentionally stable: the same generated verifier condition should return
+/// the same numeric code across releases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u64)]
 pub enum CellScriptRuntimeError {

@@ -1865,7 +1865,7 @@ resource Token has transfer, destroy {
         let input = r#"
 module test
 
-#[type_id("spora::token::Token:v1")]
+#[type_id("cellscript::token::Token:v1")]
 resource Token has store {
     amount: u64
 }
@@ -1877,7 +1877,7 @@ resource Token has store {
             other => panic!("expected resource item, found {:?}", other),
         };
 
-        assert_eq!(resource.type_id.as_ref().map(|type_id| type_id.value.as_str()), Some("spora::token::Token:v1"));
+        assert_eq!(resource.type_id.as_ref().map(|type_id| type_id.value.as_str()), Some("cellscript::token::Token:v1"));
     }
 
     #[test]
@@ -1885,7 +1885,7 @@ resource Token has store {
         let input = r#"
 module test
 
-#[type_id("spora::action:v1")]
+#[type_id("cellscript::action:v1")]
 action run() -> u64 {
     return 0
 }
@@ -1945,7 +1945,7 @@ action test(x: u64, y: u64) -> u64 {
         let input = r#"
 module test
 
-use spora::fungible_token::{Token, MintAuthority}
+use cellscript::fungible_token::{Token, MintAuthority}
 "#;
         let tokens = lex(input).unwrap();
         let module = parse(&tokens).unwrap();
@@ -1955,7 +1955,7 @@ use spora::fungible_token::{Token, MintAuthority}
             other => panic!("expected use item, found {:?}", other),
         };
 
-        assert_eq!(use_stmt.module_path, vec!["spora".to_string(), "fungible_token".to_string()]);
+        assert_eq!(use_stmt.module_path, vec!["cellscript".to_string(), "fungible_token".to_string()]);
         assert_eq!(use_stmt.imports.len(), 2);
         assert_eq!(use_stmt.imports[0].name, "Token");
         assert_eq!(use_stmt.imports[1].name, "MintAuthority");

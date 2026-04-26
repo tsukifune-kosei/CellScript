@@ -30,7 +30,9 @@ New in 0.13 branch work:
 - Negative type-check coverage for unsupported helper/type combinations.
 - Stable fail-closed metadata names for unsupported collection paths.
 - `examples/registry.cell` documents supported local `Vec<Address>` /
-  `Vec<Hash>` helper usage without implying full `HashMap<K, V>` support.
+  `Vec<Hash>` helper usage without implying full `HashMap<K, V>` support. It is
+  a compiler/tooling language example, not part of the seven-example CKB
+  production action acceptance matrix.
 - Runtime and constraints metadata expose each checked stack-backed
   fixed-width `Vec<T>` instantiation, including scope, element type/width,
   backing capacity, status, and helper set. Constructor helpers now preserve

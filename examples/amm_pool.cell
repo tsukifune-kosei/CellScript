@@ -1,8 +1,8 @@
 // amm_pool.cell - Constant Product AMM Liquidity Pool
 
-module spora::amm
+module cellscript::amm
 
-use spora::fungible_token::Token
+use cellscript::fungible_token::Token
 
 /// LP (Liquidity Provider) receipt
 receipt LPReceipt has store {

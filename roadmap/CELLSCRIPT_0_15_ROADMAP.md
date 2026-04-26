@@ -492,7 +492,7 @@ transition
 
 **Problem**
 
-CellScript uses BLAKE3 over source type names for internal type identity, while CKB TypeHash is BLAKE2b over packed `Script`. Both appear as `type_hash`.
+CellScript uses CKB Blake2b for compiler-facing hashes and CKB TypeHash over packed `Script`; public metadata keeps these hash domains explicit.
 
 **Change**
 

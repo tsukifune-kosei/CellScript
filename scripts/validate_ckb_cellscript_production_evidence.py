@@ -18,8 +18,9 @@ EXPECTED_EXAMPLES = [
     "token.cell",
     "vesting.cell",
 ]
+EXPECTED_NON_PRODUCTION_EXAMPLES = ["registry.cell"]
 EXPECTED_ACTION_COUNT = 43
-EXPECTED_LOCK_COUNT = 15
+EXPECTED_LOCK_COUNT = 16
 EXPECTED_STATUS = "passed"
 EXPECTED_MODE = "production"
 
@@ -143,6 +144,7 @@ def validate_compile_gate(report: dict[str, Any]) -> None:
     require_field(report, "production_ready", True)
     require_field(report, "bundled_examples_count", len(EXPECTED_EXAMPLES))
     require_field(report, "bundled_examples_exact_order", EXPECTED_EXAMPLES)
+    require_field(report, "non_production_examples", EXPECTED_NON_PRODUCTION_EXAMPLES)
     require_field(report, "original_scoped_action_count", EXPECTED_ACTION_COUNT)
     require_field(report, "original_scoped_lock_count", EXPECTED_LOCK_COUNT)
     require_field(report, "original_scoped_action_fail_closed_count", 0)
@@ -156,7 +158,7 @@ def validate_compile_gate(report: dict[str, Any]) -> None:
     require(isinstance(gate, dict), "production_gate must be an object")
     require_field(gate, "status", EXPECTED_STATUS, "production_gate")
     require_empty(gate, "failures", "production_gate")
-    require_field(gate, "requires_no_standalone_or_portable_harnesses", True, "production_gate")
+    require_field(gate, "requires_original_scoped_harnesses", True, "production_gate")
     require_field(gate, "requires_no_expected_fail_closed_entries", True, "production_gate")
     require_field(gate, "requires_all_bundled_examples_strict_original_ckb", True, "production_gate")
 
@@ -170,6 +172,30 @@ def validate_compile_gate(report: dict[str, Any]) -> None:
     require_field(coverage, "expected_fail_closed_lock_count", 0, "ckb_business_coverage")
     missing = coverage.get("missing_ckb_onchain_actions")
     require(missing in ({}, None), f"ckb_business_coverage.missing_ckb_onchain_actions must be empty, got {missing!r}")
+
+    example_scope = report.get("example_scope")
+    require(isinstance(example_scope, dict), "example_scope must be an object")
+    require_field(example_scope, "production_bundled_examples", EXPECTED_EXAMPLES, "example_scope")
+    require_field(example_scope, "non_production_language_examples", EXPECTED_NON_PRODUCTION_EXAMPLES, "example_scope")
+    scope_note = example_scope.get("production_scope_note")
+    require(
+        isinstance(scope_note, str)
+        and "Only production_bundled_examples" in scope_note
+        and "non_production_language_examples" in scope_note,
+        "example_scope.production_scope_note must state the production/non-production example boundary",
+    )
+
+    lock_scope = report.get("lock_acceptance_scope")
+    require(isinstance(lock_scope, dict), "lock_acceptance_scope must be an object")
+    require_field(lock_scope, "strict_compile_only", True, "lock_acceptance_scope")
+    require_field(lock_scope, "onchain_lock_spend_matrix", False, "lock_acceptance_scope")
+    lock_scope_note = lock_scope.get("scope_note")
+    require(
+        isinstance(lock_scope_note, str)
+        and "strict-compiled" in lock_scope_note
+        and "not counted as builder-backed on-chain lock" in lock_scope_note,
+        "lock_acceptance_scope.scope_note must state that lock coverage is strict-compile-only",
+    )
 
 
 def validate_onchain_gate(report: dict[str, Any]) -> None:
