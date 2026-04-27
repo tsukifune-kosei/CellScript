@@ -1,0 +1,14 @@
+module cellscript::language::v0_14_ckb_type_id_create
+
+#[type_id("cellscript::language::v0_14_ckb_type_id_create::IdentityToken:v1")]
+resource IdentityToken has store
+with_default_hash_type(Type)
+{
+    amount: u64,
+}
+
+action mint_identity_token(amount: u64) -> IdentityToken {
+    // CKB TYPE_ID creation remains a builder/verifier contract. Metadata
+    // exposes the output index and TYPE_ID ABI instead of hiding that boundary.
+    create IdentityToken { amount }
+}

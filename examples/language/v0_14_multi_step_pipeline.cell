@@ -1,0 +1,21 @@
+module cellscript::language::v0_14_multi_step_pipeline
+
+action pipe_to_delegate(value: u64) -> u64 {
+    // The pipe endpoints are ordinary CKB Spawn/IPC descriptors. The compiler
+    // requires every descriptor to be closed on all static exit paths.
+    let fds = pipe()
+    let read_fd = fds.0
+    let write_fd = fds.1
+
+    pipe_write(write_fd, value)
+    let pid = spawn("hash_checker")
+    let status = wait()
+    let echoed = pipe_read(read_fd)
+
+    close(read_fd)
+    close(write_fd)
+
+    assert_invariant(pid >= 0, "child process id is visible")
+    assert_invariant(status == 0, "pipeline delegate failed")
+    return echoed
+}

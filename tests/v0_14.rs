@@ -307,3 +307,35 @@ action delegate(target: String) -> u64 {
 
     assert!(err.message.contains("spawn target must be a static script reference"), "unexpected error: {}", err.message);
 }
+
+#[test]
+fn v0_14_language_examples_cover_spawn_pipeline_and_type_id_create() {
+    let pipeline = compile(
+        include_str!("../examples/language/v0_14_multi_step_pipeline.cell"),
+        CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
+    )
+    .unwrap();
+    let pipeline_action =
+        pipeline.metadata.actions.iter().find(|action| action.name == "pipe_to_delegate").expect("pipe_to_delegate metadata");
+    for operation in ["pipe", "pipe-write", "spawn", "wait", "pipe-read", "close-fd"] {
+        assert!(
+            pipeline_action.ckb_runtime_accesses.iter().any(|access| access.operation == operation),
+            "missing {operation}: {:?}",
+            pipeline_action.ckb_runtime_accesses
+        );
+    }
+    assert!(pipeline_action
+        .transaction_runtime_input_requirements
+        .iter()
+        .any(|requirement| { requirement.component == "spawn-target-cell-dep" && requirement.status == "runtime-required" }));
+
+    let type_id = compile(
+        include_str!("../examples/language/v0_14_ckb_type_id_create.cell"),
+        CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
+    )
+    .unwrap();
+    let mint =
+        type_id.metadata.actions.iter().find(|action| action.name == "mint_identity_token").expect("mint_identity_token metadata");
+    assert_eq!(mint.ckb_type_id_output_indexes(), vec![0]);
+    assert!(mint.create_set[0].ckb_type_id.is_some());
+}

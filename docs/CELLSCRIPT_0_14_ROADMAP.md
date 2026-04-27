@@ -28,7 +28,7 @@ CellScript source and metadata.
 | Declarative since/time surface | Implemented | `require_maturity`, `require_time`, `require_epoch_after`, and `require_epoch_relative` are profile-visible runtime checks. |
 | Declarative capacity surface | Implemented | `occupied_capacity("TypeName")` exposes capacity policy through runtime features and metadata. |
 | Dynamic BLAKE2b policy | Implemented as fail-closed | `hash_blake2b` is rejected until a real linked RISC-V implementation is selected; `hash_chain` is metadata-visible. |
-| v0.14 examples | Implemented | Language examples cover delegate verification, witness/source views, and capacity/time policy. |
+| v0.14 examples | Implemented | Language examples cover delegate verification, Spawn/IPC pipelines, witness/source views, TYPE_ID creation, and capacity/time policy. |
 
 ## Boundaries
 
@@ -61,6 +61,8 @@ cargo test --locked -p cellscript --test v0_14 -- --test-threads=1
 cargo run --locked -p cellscript -- explain-profile ckb --json
 cargo run --locked -p cellscript -- constraints examples/language/v0_14_witness_source.cell --target-profile ckb
 cargo run --locked -p cellscript -- examples/language/v0_14_delegate_verify.cell --target-profile ckb
+cargo run --locked -p cellscript -- examples/language/v0_14_multi_step_pipeline.cell --target-profile ckb
 cargo run --locked -p cellscript -- examples/language/v0_14_witness_source.cell --target-profile ckb
+cargo run --locked -p cellscript -- examples/language/v0_14_ckb_type_id_create.cell --target-profile ckb
 cargo run --locked -p cellscript -- examples/language/v0_14_capacity_time.cell --target-profile ckb
 ```
