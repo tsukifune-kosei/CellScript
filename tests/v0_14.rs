@@ -97,6 +97,10 @@ lock output_witness_lock(wallet: protected Wallet, claimed_owner: witness Addres
     assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| access.operation == "spawn"));
     let delegate_verify =
         result.metadata.actions.iter().find(|action| action.name == "delegate_verify").expect("delegate_verify metadata");
+    let delegate_group = delegate_verify.ckb_script_group.as_ref().expect("delegate_verify CKB script group metadata");
+    assert_eq!(delegate_group.entry_kind, "action");
+    assert_eq!(delegate_group.group_kind, "type");
+    assert!(delegate_group.cell_dep_sources.contains(&"CellDep".to_string()));
     assert!(delegate_verify.verifier_obligations.iter().any(|obligation| {
         obligation.category == "spawn-target"
             && obligation.feature == "spawn-target:CellDep#0"
@@ -113,6 +117,18 @@ lock output_witness_lock(wallet: protected Wallet, claimed_owner: witness Addres
             && requirement.abi == "ckb-spawn-cell-dep-script-reference"
             && requirement.blocker_class.as_deref() == Some("spawn-target-cell-dep-gap")
     }));
+    let owner_lock = result.metadata.locks.iter().find(|lock| lock.name == "owner_lock").expect("owner_lock metadata");
+    let owner_group = owner_lock.ckb_script_group.as_ref().expect("owner_lock CKB script group metadata");
+    assert_eq!(owner_group.entry_kind, "lock");
+    assert_eq!(owner_group.group_kind, "lock");
+    assert_eq!(owner_group.active_script_group, "lock-group");
+    assert!(owner_group.input_sources.contains(&"GroupInput".to_string()));
+    assert!(owner_group.group_scoped_sources.contains(&"GroupInput".to_string()));
+    let output_lock =
+        result.metadata.locks.iter().find(|lock| lock.name == "output_witness_lock").expect("output_witness_lock metadata");
+    let output_group = output_lock.ckb_script_group.as_ref().expect("output_witness_lock CKB script group metadata");
+    assert!(output_group.output_sources.contains(&"GroupOutput".to_string()));
+    assert!(output_group.group_scoped_sources.contains(&"GroupOutput".to_string()));
     assert_eq!(result.metadata.target_profile.spawn_ipc_abi, "ckb-vm-v2-spawn-ipc-syscalls-2601-2608");
     assert_eq!(result.metadata.target_profile.source_encoding, "ckb-source-group-high-bit");
     assert_eq!(result.metadata.target_profile.cell_dep_abi, "ckb-cell-dep-outpoint-and-dep-group");
@@ -161,6 +177,9 @@ action mint(amount: u64) -> Token {
     assert_eq!(ckb_type_id.group_rule, "at-most-one-input-and-one-output");
 
     let mint = result.metadata.actions.iter().find(|action| action.name == "mint").expect("mint metadata");
+    let mint_group = mint.ckb_script_group.as_ref().expect("mint CKB script group metadata");
+    assert_eq!(mint_group.group_kind, "type");
+    assert!(mint_group.output_sources.contains(&"Output".to_string()));
     assert_eq!(mint.ckb_type_id_output_indexes(), vec![0]);
     let plan = mint.create_set[0].ckb_type_id.as_ref().expect("TYPE_ID create output plan");
     assert_eq!(plan.abi, "ckb-type-id-v1");

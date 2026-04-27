@@ -56,7 +56,7 @@ fn validate_compile_options(options: &CompileOptions) -> Result<()> {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-pub const METADATA_SCHEMA_VERSION: u32 = 33;
+pub const METADATA_SCHEMA_VERSION: u32 = 34;
 const STACK_COLLECTION_BACKING_BYTES: usize = 256;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
@@ -1883,6 +1883,20 @@ pub struct CkbRuntimeAccessMetadata {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CkbScriptGroupMetadata {
+    pub entry_kind: String,
+    pub group_kind: String,
+    pub active_script_group: String,
+    pub source_encoding: String,
+    pub selected_sources: Vec<String>,
+    pub input_sources: Vec<String>,
+    pub output_sources: Vec<String>,
+    pub cell_dep_sources: Vec<String>,
+    pub header_dep_sources: Vec<String>,
+    pub group_scoped_sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifierObligationMetadata {
     pub scope: String,
     pub category: String,
@@ -2055,6 +2069,8 @@ pub struct ActionMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pool_primitives: Vec<PoolPrimitiveMetadata>,
     pub ckb_runtime_accesses: Vec<CkbRuntimeAccessMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ckb_script_group: Option<CkbScriptGroupMetadata>,
     pub ckb_runtime_features: Vec<String>,
     pub fail_closed_runtime_features: Vec<String>,
     pub verifier_obligations: Vec<VerifierObligationMetadata>,
@@ -2461,6 +2477,8 @@ pub struct LockMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pool_primitives: Vec<PoolPrimitiveMetadata>,
     pub ckb_runtime_accesses: Vec<CkbRuntimeAccessMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ckb_script_group: Option<CkbScriptGroupMetadata>,
     pub ckb_runtime_features: Vec<String>,
     pub fail_closed_runtime_features: Vec<String>,
     pub verifier_obligations: Vec<VerifierObligationMetadata>,
@@ -3444,6 +3462,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                             .collect(),
                         mutate_set: action.body.mutate_set.iter().map(|pattern| mutate_pattern_metadata(pattern, &type_layouts)).collect(),
                         pool_primitives,
+                        ckb_script_group: ckb_script_group_metadata("action", &ckb_runtime_accesses, target_profile),
                         ckb_runtime_accesses,
                         ckb_runtime_features,
                         elf_compatible: true,
@@ -3568,6 +3587,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                             .collect(),
                         mutate_set: lock.body.mutate_set.iter().map(|pattern| mutate_pattern_metadata(pattern, &type_layouts)).collect(),
                         pool_primitives,
+                        ckb_script_group: ckb_script_group_metadata("lock", &ckb_runtime_accesses, target_profile),
                         ckb_runtime_accesses,
                         ckb_runtime_features,
                         elf_compatible: true,
@@ -10980,6 +11000,66 @@ fn scheduler_accesses_from_metadata(accesses: &[CkbRuntimeAccessMetadata]) -> Ve
             binding: access.binding.clone(),
         })
         .collect()
+}
+
+fn ckb_script_group_metadata(
+    entry_kind: &str,
+    ckb_runtime_accesses: &[CkbRuntimeAccessMetadata],
+    target_profile: TargetProfile,
+) -> Option<CkbScriptGroupMetadata> {
+    if target_profile != TargetProfile::Ckb {
+        return None;
+    }
+
+    let group_kind = match entry_kind {
+        "lock" => "lock",
+        _ => "type",
+    };
+    let active_script_group = match group_kind {
+        "lock" => "lock-group",
+        _ => "type-group",
+    };
+    let mut selected_sources = BTreeSet::new();
+    let mut input_sources = BTreeSet::new();
+    let mut output_sources = BTreeSet::new();
+    let mut cell_dep_sources = BTreeSet::new();
+    let mut header_dep_sources = BTreeSet::new();
+    let mut group_scoped_sources = BTreeSet::new();
+
+    for access in ckb_runtime_accesses {
+        selected_sources.insert(access.source.clone());
+        match access.source.as_str() {
+            "Input" | "GroupInput" => {
+                input_sources.insert(access.source.clone());
+            }
+            "Output" | "GroupOutput" => {
+                output_sources.insert(access.source.clone());
+            }
+            "CellDep" | "GroupCellDep" => {
+                cell_dep_sources.insert(access.source.clone());
+            }
+            "HeaderDep" | "GroupHeaderDep" => {
+                header_dep_sources.insert(access.source.clone());
+            }
+            _ => {}
+        }
+        if access.source.starts_with("Group") {
+            group_scoped_sources.insert(access.source.clone());
+        }
+    }
+
+    Some(CkbScriptGroupMetadata {
+        entry_kind: entry_kind.to_string(),
+        group_kind: group_kind.to_string(),
+        active_script_group: active_script_group.to_string(),
+        source_encoding: "ckb-source-group-high-bit".to_string(),
+        selected_sources: selected_sources.into_iter().collect(),
+        input_sources: input_sources.into_iter().collect(),
+        output_sources: output_sources.into_iter().collect(),
+        cell_dep_sources: cell_dep_sources.into_iter().collect(),
+        header_dep_sources: header_dep_sources.into_iter().collect(),
+        group_scoped_sources: group_scoped_sources.into_iter().collect(),
+    })
 }
 
 fn scheduler_access_is_cell_state_access(access: &CkbRuntimeAccessMetadata) -> bool {
@@ -20962,6 +21042,7 @@ source_roots = ["src", "shared"]
             create_set: vec![],
             mutate_set: vec![],
             pool_primitives: vec![],
+            ckb_script_group: None,
             ckb_runtime_accesses: vec![],
             ckb_runtime_features: vec![],
             fail_closed_runtime_features: vec![],

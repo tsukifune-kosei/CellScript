@@ -224,7 +224,7 @@ action prove_type_transition(state: &mut State) {
 
 | Item | Details |
 |------|---------|
-| ScriptGroup metadata | Emit `entry_group_kind`, input/output group index sets, selected Source view, and source-to-group mapping for every CKB entry |
+| ScriptGroup metadata | Emit entry kind, active lock/type group kind, selected Source surfaces, and group-scoped Source usage for every CKB entry |
 | Source conformance tests | Cover `Input`, `Output`, `CellDep`, `HeaderDep`, `GroupInput`, `GroupOutput`, out-of-bounds access, and wrong-profile access |
 | Output data binding | Emit output-data index obligations for every create/mutate output; reject metadata where output data is detached from the output cell index |
 | TYPE_ID metadata validation MVP | For `#[type_id]` under CKB profile, validate output index, first-input args source, one-input/one-output group rule, duplicate output rejection, and missing-plan rejection |
