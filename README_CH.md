@@ -410,21 +410,46 @@ stack-spill 布局、witness byte bounds、CKB cycle/capacity 估算。
 
 ### CKB Target Profile
 
-编译器从类型检查到代码生成都应用 CKB profile：
+CKB profile 不是最后一步的打包开关。它是一层贯穿语义分析、代码生成、
+metadata 输出和发布证据的策略层。目标是在 artifact 被认为可部署之前，把
+CKB 假设暴露出来。
 
 ```mermaid
-graph TB
-    subgraph "Target Profile"
-        subgraph CKB
-            C1[BLAKE2b]
-            C2[Molecule]
-            C3[CKB syscall ABI]
-            C4[CKB scheduler witness]
-            C5[CKB ELF artifact]
-        end
+flowchart TB
+    Source[".cell source + Cell.toml\n--target-profile ckb"] --> Frontend["Lexer + parser\n稳定 source span"]
+    Frontend --> Semantics["Type + lifecycle checks\n线性资源、lock-only require、\nprotected/witness 分类"]
+    Semantics --> Policy["CKB policy gate\n对不支持的 runtime 或状态形状 fail closed"]
+
+    subgraph Rules["CKB profile rules"]
+        R1["CKB syscall ABI\nsource flags + syscall numbers"]
+        R2["Molecule-facing schema\nentry witness ABI"]
+        R3["CKB Blake2b\nartifact + deployment hashes"]
+        R4["hash_type / CellDep / DepGroup policy"]
+        R5["capacity、tx-size、\ncycle evidence requirements"]
     end
-    Policy["Policy gate 在 codegen 前拒绝不兼容 metadata"] --> CKB
+
+    Rules --> Policy
+    Policy --> IR["IR lowering + optimizer\nCell effects、entry ABI、\nverifier obligations"]
+    IR --> Metadata["metadata sidecar\nschema、ABI、runtime errors、\nconstraints、CKB policy"]
+    IR --> Codegen["RISC-V codegen\nCKB syscalls、raw ELF、\nper-entry trampolines"]
+    Codegen --> Artifact["CKB artifact\n.s / .elf"]
+
+    Artifact --> Verify["cellc verify-artifact\nprofile、source hash、\nartifact hash、policy flags"]
+    Metadata --> Verify
+
+    Artifact --> Builder["builder workflow\ninputs、outputs、witness、\ncell_deps、capacity"]
+    Metadata --> Builder
+    Builder --> Acceptance["CKB acceptance gate\ndry-run、commit、cycles、\ntx size、occupied capacity、\nvalid/invalid lock matrix"]
 ```
+
+这里分成三条边界：
+
+- **编译器边界** — parse、type/lifecycle checks、CKB policy rejection、IR、
+  codegen 和 metadata；
+- **artifact 边界** — `cellc verify-artifact` 证明 artifact、sidecar、源码
+  hash、target profile 和选定 policy flags 一致；
+- **链上证据边界** — builder 和 acceptance 脚本证明具体 CKB 交易形状、
+  capacity、cycles、tx size，以及 lock/action 行为。
 
 ### Wasm 门禁
 

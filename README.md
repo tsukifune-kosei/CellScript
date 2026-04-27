@@ -434,21 +434,47 @@ CKB cycle/capacity estimates.
 
 ### CKB Target Profile
 
-The compiler applies the CKB profile from type checking through code generation:
+The CKB profile is not a final packaging switch. It is a policy layer that runs
+from semantic analysis through code generation, metadata emission, and release
+evidence. The goal is to make CKB assumptions visible before an artifact is
+treated as deployable.
 
 ```mermaid
-graph TB
-    subgraph "Target Profile"
-        subgraph CKB
-            C1[BLAKE2b]
-            C2[Molecule]
-            C3[CKB syscall ABI]
-            C4[CKB scheduler witness]
-            C5[CKB ELF artifact]
-        end
+flowchart TB
+    Source[".cell source + Cell.toml\n--target-profile ckb"] --> Frontend["Lexer + parser\nstable source spans"]
+    Frontend --> Semantics["Type + lifecycle checks\nlinear resources, lock-only require,\nprotected/witness classification"]
+    Semantics --> Policy["CKB policy gate\nfail closed on unsupported runtime or state shapes"]
+
+    subgraph Rules["CKB profile rules"]
+        R1["CKB syscall ABI\nsource flags + syscall numbers"]
+        R2["Molecule-facing schema\nentry witness ABI"]
+        R3["CKB Blake2b\nartifact + deployment hashes"]
+        R4["hash_type / CellDep / DepGroup policy"]
+        R5["capacity, tx-size,\ncycle evidence requirements"]
     end
-    Policy["Policy gate rejects incompatible metadata before codegen"] --> CKB
+
+    Rules --> Policy
+    Policy --> IR["IR lowering + optimizer\nCell effects, entry ABI,\nverifier obligations"]
+    IR --> Metadata["metadata sidecar\nschema, ABI, runtime errors,\nconstraints, CKB policy"]
+    IR --> Codegen["RISC-V codegen\nCKB syscalls, raw ELF,\nper-entry trampolines"]
+    Codegen --> Artifact["CKB artifact\n.s / .elf"]
+
+    Artifact --> Verify["cellc verify-artifact\nprofile, source hash,\nartifact hash, policy flags"]
+    Metadata --> Verify
+
+    Artifact --> Builder["builder workflow\ninputs, outputs, witness,\ncell_deps, capacity"]
+    Metadata --> Builder
+    Builder --> Acceptance["CKB acceptance gate\ndry-run, commit, cycles,\ntx size, occupied capacity,\nvalid/invalid lock matrix"]
 ```
+
+This separates three boundaries:
+
+- **compiler boundary** — parse, type/lifecycle checks, CKB policy rejection, IR,
+  codegen, and metadata;
+- **artifact boundary** — `cellc verify-artifact` proves the artifact, sidecar,
+  source hash, target profile, and selected policy flags agree;
+- **chain-evidence boundary** — builders and acceptance scripts prove concrete
+  CKB transaction shape, capacity, cycles, tx size, and lock/action behavior.
 
 ### Wasm Gate
 
