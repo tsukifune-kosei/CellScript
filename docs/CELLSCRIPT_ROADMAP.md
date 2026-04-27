@@ -19,7 +19,7 @@ The current project direction is simple:
 | Area | Current status | Detailed document |
 |---|---|---|
 | 0.13 release scope | Beta released; implementation scope closed. | [0.13 roadmap](CELLSCRIPT_0_13_ROADMAP.md), [0.13 release tracker](CELLSCRIPT_0_13_TODOLIST.md), [0.13 release notes draft](CELLSCRIPT_0_13_RELEASE_NOTES_DRAFT.md) |
-| 0.14 release scope | Active implementation branch for CKB semantic completeness and bounded verifier composition. | [0.14 roadmap](CELLSCRIPT_0_14_ROADMAP.md) |
+| 0.14 release scope | Implementation branch is feature-complete for the current CKB semantic-completeness beta scope. | [0.14 roadmap](CELLSCRIPT_0_14_ROADMAP.md), [0.14 release notes draft](CELLSCRIPT_0_14_RELEASE_NOTES_DRAFT.md) |
 | CKB language fit | CKB-first design is confirmed; remaining gaps are signer binding, continuity policy, capacity policy, and declarative time policy. | [CKB language audit](CELLSCRIPT_CKB_LANGUAGE_AUDIT.md) |
 | Surface syntax | Low-risk syntax pass is implemented; authority-sensitive syntax remains staged. | [Surface elegance RFC](CELLSCRIPT_SURFACE_ELEGANCE_RFC.md) |
 | Collections | Stack-backed fixed-width `Vec<T>` helper surface is implemented; cell-backed and generic map ownership remain fail-closed. | [Collections support matrix](CELLSCRIPT_COLLECTIONS_SUPPORT_MATRIX.md), [0.13 roadmap](CELLSCRIPT_0_13_ROADMAP.md) |
@@ -62,6 +62,7 @@ boundaries:
 Detailed status:
 
 - [0.14 roadmap](CELLSCRIPT_0_14_ROADMAP.md)
+- [0.14 release notes draft](CELLSCRIPT_0_14_RELEASE_NOTES_DRAFT.md)
 
 ### Next Authorization Hardening Track
 
@@ -70,12 +71,11 @@ it becomes ergonomic.
 
 Planned order:
 
-1. typed `lock_args` binding to the executing script args;
-2. explicit sighash verification primitive with digest mode, script group scope,
+1. explicit sighash verification primitive with digest mode, script group scope,
    witness layout, and replay assumptions;
-3. stable metadata and report fields for signature verification obligations;
-4. first-class verified signer values only after explicit primitives are proven;
-5. optional `protects T { self ... }` sugar only after protected-input
+2. stable metadata and report fields for signature verification obligations;
+3. first-class verified signer values only after explicit primitives are proven;
+4. optional `protects T { self ... }` sugar only after protected-input
    selection and lock-group aggregation semantics are exact.
 
 Non-goals:

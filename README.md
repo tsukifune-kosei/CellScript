@@ -265,6 +265,8 @@ CellScript includes production-style local language tooling for early users:
 - [Mutate append example](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/examples/mutate_append.md)
 - [Roadmap overview](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_ROADMAP.md)
 - [0.13 roadmap](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_13_ROADMAP.md)
+- [0.14 roadmap](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_14_ROADMAP.md)
+- [0.14 release notes draft](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_14_RELEASE_NOTES_DRAFT.md)
 
 ## Target Profiles
 

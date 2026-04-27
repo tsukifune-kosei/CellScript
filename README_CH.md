@@ -258,6 +258,8 @@ CellScript 为早期用户提供 production-style 的本地语言工具：
 - [Deployment manifest 示例](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/examples/deployment_manifest.md)
 - [Mutate append 示例](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/examples/mutate_append.md)
 - [0.13 roadmap](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_13_ROADMAP.md)
+- [0.14 roadmap](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_14_ROADMAP.md)
+- [0.14 release notes draft](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_14_RELEASE_NOTES_DRAFT.md)
 
 ## Target Profiles
 
