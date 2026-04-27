@@ -18,7 +18,8 @@ The current project direction is simple:
 
 | Area | Current status | Detailed document |
 |---|---|---|
-| 0.13 release scope | Implementation scope closed and merged to `main`; release-gate evidence remains the active release boundary. | [0.13 roadmap](CELLSCRIPT_0_13_ROADMAP.md), [0.13 release tracker](CELLSCRIPT_0_13_TODOLIST.md), [0.13 release notes draft](CELLSCRIPT_0_13_RELEASE_NOTES_DRAFT.md) |
+| 0.13 release scope | Beta released; implementation scope closed. | [0.13 roadmap](CELLSCRIPT_0_13_ROADMAP.md), [0.13 release tracker](CELLSCRIPT_0_13_TODOLIST.md), [0.13 release notes draft](CELLSCRIPT_0_13_RELEASE_NOTES_DRAFT.md) |
+| 0.14 release scope | Active implementation branch for CKB semantic completeness and bounded verifier composition. | [0.14 roadmap](CELLSCRIPT_0_14_ROADMAP.md) |
 | CKB language fit | CKB-first design is confirmed; remaining gaps are signer binding, continuity policy, capacity policy, and declarative time policy. | [CKB language audit](CELLSCRIPT_CKB_LANGUAGE_AUDIT.md) |
 | Surface syntax | Low-risk syntax pass is implemented; authority-sensitive syntax remains staged. | [Surface elegance RFC](CELLSCRIPT_SURFACE_ELEGANCE_RFC.md) |
 | Collections | Stack-backed fixed-width `Vec<T>` helper surface is implemented; cell-backed and generic map ownership remain fail-closed. | [Collections support matrix](CELLSCRIPT_COLLECTIONS_SUPPORT_MATRIX.md), [0.13 roadmap](CELLSCRIPT_0_13_ROADMAP.md) |
@@ -43,6 +44,22 @@ Detailed status:
 - [0.13 roadmap](CELLSCRIPT_0_13_ROADMAP.md)
 - [0.13 release tracker](CELLSCRIPT_0_13_TODOLIST.md)
 - [0.13 release notes draft](CELLSCRIPT_0_13_RELEASE_NOTES_DRAFT.md)
+
+### 0.14: CKB Semantic Completeness
+
+0.14 exposes more of CKB's concrete execution surface without hiding lock/type
+boundaries:
+
+- Spawn/IPC builtins for bounded verifier reuse;
+- explicit Source views and structured WitnessArgs field access;
+- target profile metadata for witness ABI, Source encoding, Spawn/IPC ABI,
+  since semantics, and tx version;
+- declarative since/time and capacity surfaces;
+- fail-closed dynamic BLAKE2b policy until a real linked implementation exists.
+
+Detailed status:
+
+- [0.14 roadmap](CELLSCRIPT_0_14_ROADMAP.md)
 
 ### Next Authorization Hardening Track
 

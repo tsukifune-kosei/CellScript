@@ -38,6 +38,7 @@ pub enum Command {
     SchedulerPlan(SchedulerPlanArgs),
     CkbHash(CkbHashArgs),
     Explain(ExplainArgs),
+    ExplainProfile(ExplainProfileArgs),
     ExplainGenerics(ExplainGenericsArgs),
     OptReport(OptReportArgs),
     ActionBuild(ActionBuildArgs),
@@ -207,6 +208,12 @@ pub struct ExplainArgs {
 }
 
 #[derive(Debug, Default)]
+pub struct ExplainProfileArgs {
+    pub profile: String,
+    pub json: bool,
+}
+
+#[derive(Debug, Default)]
 pub struct ExplainGenericsArgs {
     pub input: Option<PathBuf>,
     pub target: Option<String>,
@@ -313,6 +320,7 @@ impl CommandExecutor {
             Command::SchedulerPlan(args) => Self::scheduler_plan(args),
             Command::CkbHash(args) => Self::ckb_hash(args),
             Command::Explain(args) => Self::explain(args),
+            Command::ExplainProfile(args) => Self::explain_profile(args),
             Command::ExplainGenerics(args) => Self::explain_generics(args),
             Command::OptReport(args) => Self::opt_report(args),
             Command::ActionBuild(args) => Self::action_build(args),
@@ -1400,6 +1408,49 @@ impl CommandExecutor {
             println!("  Output: {}", output_path.display());
         } else {
             println!("{}", json);
+        }
+        Ok(())
+    }
+
+    fn explain_profile(args: ExplainProfileArgs) -> Result<()> {
+        let profile = TargetProfile::from_name(&args.profile)?;
+        let metadata = profile.metadata(ArtifactFormat::RiscvElf);
+        let summary = serde_json::json!({
+            "profile": metadata.name,
+            "target_chain": metadata.target_chain,
+            "vm_abi": metadata.vm_abi,
+            "hash_domain": metadata.hash_domain,
+            "syscall_set": metadata.syscall_set,
+            "artifact_packaging": metadata.artifact_packaging,
+            "header_abi": metadata.header_abi,
+            "scheduler_abi": metadata.scheduler_abi,
+            "witness_abi": metadata.witness_abi,
+            "source_encoding": metadata.source_encoding,
+            "spawn_ipc_abi": metadata.spawn_ipc_abi,
+            "since_abi": metadata.since_abi,
+            "tx_version": metadata.tx_version,
+            "boundaries": [
+                "WitnessArgs fields are explicit CKB witness surfaces, not implicit signer authority",
+                "Source group views are scoped to the active script group",
+                "Spawn/IPC is bounded verifier reuse and does not make type scripts multi-tenant",
+                "Dynamic hash_blake2b is unavailable until a real linked RISC-V implementation is selected"
+            ],
+        });
+        if args.json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&summary).map_err(|error| {
+                    crate::error::CompileError::without_span(format!("failed to serialize profile explanation: {}", error))
+                })?
+            );
+        } else {
+            println!("Target profile: {}", summary["profile"].as_str().unwrap_or("unknown"));
+            println!("  Target chain: {}", summary["target_chain"].as_str().unwrap_or("unknown"));
+            println!("  VM ABI: {}", summary["vm_abi"].as_str().unwrap_or("unknown"));
+            println!("  Witness ABI: {}", summary["witness_abi"].as_str().unwrap_or("unknown"));
+            println!("  Source encoding: {}", summary["source_encoding"].as_str().unwrap_or("unknown"));
+            println!("  Spawn/IPC ABI: {}", summary["spawn_ipc_abi"].as_str().unwrap_or("unknown"));
+            println!("  Since ABI: {}", summary["since_abi"].as_str().unwrap_or("unknown"));
         }
         Ok(())
     }
@@ -3549,6 +3600,12 @@ impl CliParser {
                     .arg(Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON explanation")),
             )
             .subcommand(
+                ClapCommand::new("explain-profile")
+                    .about("Explain a CellScript target profile semantic contract")
+                    .arg(Arg::new("profile").value_name("PROFILE").required(true).help("Target profile name, e.g. ckb"))
+                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON explanation")),
+            )
+            .subcommand(
                 ClapCommand::new("explain-generics")
                     .about("Explain checked bounded generic collection instantiations")
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
@@ -3829,6 +3886,10 @@ impl CliParser {
             }),
             Some(("explain", m)) => Command::Explain(ExplainArgs {
                 code: m.get_one::<String>("code").cloned().expect("required runtime error code"),
+                json: m.get_flag("json"),
+            }),
+            Some(("explain-profile", m)) => Command::ExplainProfile(ExplainProfileArgs {
+                profile: m.get_one::<String>("profile").cloned().expect("required target profile"),
                 json: m.get_flag("json"),
             }),
             Some(("explain-generics", m)) => Command::ExplainGenerics(ExplainGenericsArgs {

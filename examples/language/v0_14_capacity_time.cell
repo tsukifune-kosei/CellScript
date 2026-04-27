@@ -1,0 +1,18 @@
+module cellscript::language::v0_14_capacity_time
+
+resource TimedToken has store {
+    amount: u64,
+}
+
+action mint_after_maturity(amount: u64) -> TimedToken {
+    // These are CKB-profile since constraints. Portable profiles must not
+    // pretend to emulate CKB epoch or block-number behavior.
+    require_maturity(100)
+    require_time(1714000000)
+    require_epoch_relative(10, 0, 1)
+
+    let floor = occupied_capacity("TimedToken")
+    assert_invariant(floor >= 0, "capacity policy is metadata-visible")
+
+    create TimedToken { amount }
+}

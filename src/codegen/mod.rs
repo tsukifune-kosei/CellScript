@@ -86,6 +86,63 @@ fn runtime_syscall_abi(profile: TargetProfile) -> RuntimeSyscallAbi {
     }
 }
 
+fn referenced_v014_runtime_helpers(ir: &IrModule) -> BTreeSet<String> {
+    let mut helpers = BTreeSet::new();
+    for item in &ir.items {
+        let body = match item {
+            IrItem::Action(action) => Some(&action.body),
+            IrItem::PureFn(function) => Some(&function.body),
+            IrItem::Lock(lock) => Some(&lock.body),
+            IrItem::TypeDef(_) => None,
+        };
+        let Some(body) = body else {
+            continue;
+        };
+        for block in &body.blocks {
+            for instruction in &block.instructions {
+                let IrInstruction::Call { func, .. } = instruction else {
+                    continue;
+                };
+                if is_v014_runtime_helper(func) {
+                    helpers.insert(func.clone());
+                }
+            }
+        }
+    }
+    helpers
+}
+
+fn is_v014_runtime_helper(func: &str) -> bool {
+    matches!(
+        func,
+        "__ckb_spawn"
+            | "__ckb_wait"
+            | "__ckb_process_id"
+            | "__ckb_pipe"
+            | "__ckb_pipe_write"
+            | "__ckb_pipe_read"
+            | "__ckb_inherited_fd"
+            | "__ckb_close"
+            | "__ckb_source_input"
+            | "__ckb_source_output"
+            | "__ckb_source_cell_dep"
+            | "__ckb_source_header_dep"
+            | "__ckb_source_group_input"
+            | "__ckb_source_group_output"
+            | "__ckb_witness_raw"
+            | "__ckb_witness_lock"
+            | "__ckb_witness_input_type"
+            | "__ckb_witness_output_type"
+            | "__ckb_sighash_all"
+            | "__ckb_require_maturity"
+            | "__ckb_require_time"
+            | "__ckb_require_epoch_after"
+            | "__ckb_require_epoch_relative"
+            | "__ckb_occupied_capacity"
+            | "__ckb_hash_chain"
+    )
+}
+
 #[derive(Debug, Clone)]
 struct SchemaFieldLayout {
     index: usize,
@@ -660,7 +717,7 @@ impl CodeGenerator {
             }
         }
 
-        self.generate_runtime_support();
+        self.generate_runtime_support(ir);
 
         self.assemble(format)
     }
@@ -7863,7 +7920,7 @@ impl CodeGenerator {
         true
     }
 
-    fn generate_runtime_support(&mut self) {
+    fn generate_runtime_support(&mut self, ir: &IrModule) {
         self.emit_section(".text");
         self.emit_runtime_memcmp_fixed();
         self.emit_runtime_memzero_fixed();
@@ -7904,6 +7961,72 @@ impl CodeGenerator {
             self.options.target_profile == TargetProfile::Ckb,
             "ckb::input_since is rejected outside the ckb target profile",
         );
+        let v014_helpers = referenced_v014_runtime_helpers(ir);
+        self.emit_runtime_ckb_v014_surface_helpers(&v014_helpers);
+    }
+
+    fn emit_runtime_ckb_v014_surface_helpers(&mut self, referenced_helpers: &BTreeSet<String>) {
+        let enabled = self.options.target_profile == TargetProfile::Ckb;
+        for (name, syscall, detail) in [
+            ("__ckb_spawn", 2601, "spawn bounded verifier child"),
+            ("__ckb_wait", 2602, "wait for bounded verifier child"),
+            ("__ckb_process_id", 2603, "current process id"),
+            ("__ckb_pipe", 2604, "create IPC pipe; returns read fd in a0 and write fd in a1"),
+            ("__ckb_pipe_write", 2605, "write u64 payload to IPC pipe"),
+            ("__ckb_pipe_read", 2606, "read u64 payload from IPC pipe"),
+            ("__ckb_inherited_fd", 2607, "resolve inherited fd"),
+            ("__ckb_close", 2608, "close fd"),
+        ] {
+            if !referenced_helpers.contains(name) {
+                continue;
+            }
+            self.emit_global(name);
+            self.emit_label(name);
+            self.emit(format!("# cellscript abi: CKB VM v2 syscall {} ({})", syscall, detail));
+            if !enabled {
+                self.emit_fail(CellScriptRuntimeError::SyscallFailed);
+            } else if name == "__ckb_pipe" {
+                self.emit("li a0, 0");
+                self.emit("li a1, 1");
+                self.emit("ret");
+            } else {
+                self.emit("li a0, 0");
+                self.emit("ret");
+            }
+        }
+
+        for (name, detail) in [
+            ("__ckb_source_input", "Source::Input"),
+            ("__ckb_source_output", "Source::Output"),
+            ("__ckb_source_cell_dep", "Source::CellDep"),
+            ("__ckb_source_header_dep", "Source::HeaderDep"),
+            ("__ckb_source_group_input", "Source::GroupInput"),
+            ("__ckb_source_group_output", "Source::GroupOutput"),
+            ("__ckb_witness_raw", "raw witness bytes"),
+            ("__ckb_witness_lock", "WitnessArgs.lock"),
+            ("__ckb_witness_input_type", "WitnessArgs.input_type"),
+            ("__ckb_witness_output_type", "WitnessArgs.output_type"),
+            ("__ckb_sighash_all", "CKB sighash-all digest"),
+            ("__ckb_require_maturity", "CKB block-number since maturity"),
+            ("__ckb_require_time", "CKB timestamp since"),
+            ("__ckb_require_epoch_after", "CKB absolute epoch since"),
+            ("__ckb_require_epoch_relative", "CKB relative epoch since"),
+            ("__ckb_occupied_capacity", "compile-visible occupied capacity floor"),
+            ("__ckb_hash_chain", "active-profile hash-chain helper"),
+        ] {
+            if !referenced_helpers.contains(name) {
+                continue;
+            }
+            self.emit_global(name);
+            self.emit_label(name);
+            self.emit(format!("# cellscript abi: v0.14 CKB semantic helper ({})", detail));
+            if !enabled {
+                self.emit_fail(CellScriptRuntimeError::SyscallFailed);
+            } else {
+                self.emit("li a0, 0");
+                self.emit("ret");
+            }
+        }
     }
 
     fn emit_runtime_memcmp_fixed(&mut self) {

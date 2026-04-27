@@ -1769,10 +1769,32 @@ impl<'a> TypeChecker<'a> {
         }
 
         match call.func.as_ref() {
-            Expr::Identifier(name) if name.starts_with("env::") || name.starts_with("ckb::") => Err(CompileError::new(
-                format!("pure function cannot call '{}' runtime builtin; move runtime-dependent logic into an action", name),
-                call.span,
-            )),
+            Expr::Identifier(name)
+                if name.starts_with("env::")
+                    || name.starts_with("ckb::")
+                    || name.starts_with("source::")
+                    || name.starts_with("witness::")
+                    || matches!(
+                        name.as_str(),
+                        "spawn"
+                            | "pipe"
+                            | "pipe_write"
+                            | "pipe_read"
+                            | "wait"
+                            | "process_id"
+                            | "inherited_fd"
+                            | "close"
+                            | "require_maturity"
+                            | "require_time"
+                            | "require_epoch_after"
+                            | "require_epoch_relative"
+                    ) =>
+            {
+                Err(CompileError::new(
+                    format!("pure function cannot call '{}' runtime builtin; move runtime-dependent logic into an action", name),
+                    call.span,
+                ))
+            }
             Expr::FieldAccess(field) if field.field == "type_hash" => Err(CompileError::new(
                 "pure function cannot call 'type_hash' Cell identity builtin; move Cell identity logic into an action",
                 call.span,
@@ -2304,9 +2326,36 @@ impl<'a> TypeChecker<'a> {
                             self.validate_builtin_arity(name, 0, arg_types, call.span)?;
                             Type::U64
                         }
+                        ("env", "sighash_all") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if arg_types[0] != Type::U64 {
+                                return Err(CompileError::new(
+                                    "env::sighash_all expects a source view returned by source::*",
+                                    call.span,
+                                ));
+                            }
+                            Type::Hash
+                        }
                         ("ckb", "header_epoch_number" | "header_epoch_start_block_number" | "header_epoch_length" | "input_since") => {
                             self.validate_builtin_arity(name, 0, arg_types, call.span)?;
                             Type::U64
+                        }
+                        ("source", "input" | "output" | "cell_dep" | "header_dep" | "group_input" | "group_output") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if arg_types[0] != Type::U64 {
+                                return Err(CompileError::new(format!("{} expects a u64 index", name), call.span));
+                            }
+                            Type::U64
+                        }
+                        ("witness", "raw" | "lock" | "input_type" | "output_type") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if arg_types[0] != Type::U64 {
+                                return Err(CompileError::new(
+                                    format!("{} expects a source view returned by source::*", name),
+                                    call.span,
+                                ));
+                            }
+                            Type::Hash
                         }
                         ("Address", "zero") => {
                             self.validate_builtin_arity(name, 0, arg_types, call.span)?;
@@ -2339,6 +2388,75 @@ impl<'a> TypeChecker<'a> {
                 if name == "min" || name == "max" || name == "isqrt" {
                     self.validate_numeric_builtin_call(name, arg_types, call.span)?;
                     return Ok(Type::U64);
+                }
+                match name.as_str() {
+                    "spawn" => {
+                        self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                        if !matches!(arg_types[0], Type::Named(ref ty) if ty == "String") && arg_types[0] != Type::Hash {
+                            return Err(CompileError::new(
+                                "spawn expects a script name string literal or Hash script code hash",
+                                call.span,
+                            ));
+                        }
+                        return Ok(Type::U64);
+                    }
+                    "wait" | "process_id" | "pipe_read" | "inherited_fd" | "close" => {
+                        let expected = if matches!(name.as_str(), "wait" | "process_id") { 0 } else { 1 };
+                        self.validate_builtin_arity(name, expected, arg_types, call.span)?;
+                        if expected == 1 && arg_types[0] != Type::U64 {
+                            return Err(CompileError::new(format!("{} expects a u64 file descriptor or index", name), call.span));
+                        }
+                        return Ok(Type::U64);
+                    }
+                    "pipe" => {
+                        self.validate_builtin_arity(name, 0, arg_types, call.span)?;
+                        return Ok(Type::Tuple(vec![Type::U64, Type::U64]));
+                    }
+                    "pipe_write" => {
+                        self.validate_builtin_arity(name, 2, arg_types, call.span)?;
+                        if arg_types[0] != Type::U64 || arg_types[1] != Type::U64 {
+                            return Err(CompileError::new("pipe_write expects (fd: u64, value: u64)", call.span));
+                        }
+                        return Ok(Type::U64);
+                    }
+                    "require_maturity" | "require_time" => {
+                        self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                        if arg_types[0] != Type::U64 {
+                            return Err(CompileError::new(format!("{} expects a u64 CKB since/time value", name), call.span));
+                        }
+                        return Ok(Type::Unit);
+                    }
+                    "require_epoch_after" | "require_epoch_relative" => {
+                        self.validate_builtin_arity(name, 3, arg_types, call.span)?;
+                        if arg_types.iter().any(|ty| *ty != Type::U64) {
+                            return Err(CompileError::new(
+                                format!("{} expects (number: u64, index: u64, length: u64)", name),
+                                call.span,
+                            ));
+                        }
+                        return Ok(Type::Unit);
+                    }
+                    "occupied_capacity" => {
+                        self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                        if !matches!(arg_types[0], Type::Named(ref ty) if ty == "String") {
+                            return Err(CompileError::new("occupied_capacity expects a type name string literal", call.span));
+                        }
+                        return Ok(Type::U64);
+                    }
+                    "hash_chain" => {
+                        self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                        if arg_types[0] != Type::Hash {
+                            return Err(CompileError::new("hash_chain expects Hash input", call.span));
+                        }
+                        return Ok(Type::Hash);
+                    }
+                    "hash_blake2b" => {
+                        return Err(CompileError::new(
+                            "hash_blake2b is not available in on-chain CellScript until a real CKB-profile RISC-V implementation is linked; use hash_chain or builder-side ckb-hash tooling",
+                            call.span,
+                        ));
+                    }
+                    _ => {}
                 }
                 Err(CompileError::new(format!("unknown function '{}'", name), call.span))
             }

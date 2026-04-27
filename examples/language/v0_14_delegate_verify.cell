@@ -1,0 +1,15 @@
+module cellscript::language::v0_14_delegate_verify
+
+struct Proof {
+    pubkey: Hash,
+    signature: Hash,
+}
+
+action verify_with_delegate(proof: Proof) -> u64 {
+    // Spawn is bounded verifier reuse. It does not add a second type script to
+    // any existing Cell; the child verifier must still be present as a CellDep.
+    let pid = spawn("secp256k1_verifier")
+    let status = wait()
+    assert_invariant(status == 0, "delegate verification failed")
+    return pid
+}

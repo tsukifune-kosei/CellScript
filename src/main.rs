@@ -84,6 +84,7 @@ fn main() {
                     | "scheduler-plan"
                     | "ckb-hash"
                     | "explain"
+                    | "explain-profile"
                     | "explain-generics"
                     | "opt-report"
                     | "action"

@@ -1,0 +1,14 @@
+module cellscript::language::v0_14_witness_source
+
+resource Wallet has store {
+    owner: Address,
+}
+
+lock owner_witness(wallet: protected Wallet, claimed_owner: witness Address) -> bool {
+    // The source value is a CKB group input view. The witness value is decoded
+    // from WitnessArgs.lock; it is not signer authority by itself.
+    let view = source::group_input(0)
+    let sig = witness::lock(view)
+    let sighash = env::sighash_all(view)
+    require sig == sighash
+}

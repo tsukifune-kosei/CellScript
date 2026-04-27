@@ -56,7 +56,7 @@ fn validate_compile_options(options: &CompileOptions) -> Result<()> {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-pub const METADATA_SCHEMA_VERSION: u32 = 30;
+pub const METADATA_SCHEMA_VERSION: u32 = 31;
 const STACK_COLLECTION_BACKING_BYTES: usize = 256;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
@@ -132,6 +132,11 @@ impl TargetProfile {
                 },
                 header_abi: "ckb-header".to_string(),
                 scheduler_abi: "none".to_string(),
+                witness_abi: "ckb-molecule-witness-args+cellscript-entry-witness-v1".to_string(),
+                source_encoding: "ckb-source-group-high-bit".to_string(),
+                spawn_ipc_abi: "ckb-vm-v2-spawn-ipc-syscalls-2601-2608".to_string(),
+                since_abi: "ckb-since-block-timestamp-epoch-number-with-fraction".to_string(),
+                tx_version: 0,
             },
         }
     }
@@ -525,6 +530,16 @@ pub struct TargetProfileMetadata {
     pub artifact_packaging: String,
     pub header_abi: String,
     pub scheduler_abi: String,
+    #[serde(default)]
+    pub witness_abi: String,
+    #[serde(default)]
+    pub source_encoding: String,
+    #[serde(default)]
+    pub spawn_ipc_abi: String,
+    #[serde(default)]
+    pub since_abi: String,
+    #[serde(default)]
+    pub tx_version: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -10521,6 +10536,41 @@ fn body_ckb_runtime_features(
                 ir::IrInstruction::Call { func, .. } if func == "__ckb_input_since" => {
                     features.insert("ckb-input-since".to_string());
                 }
+                ir::IrInstruction::Call { func, .. } if func.starts_with("__ckb_spawn") => {
+                    features.insert("ckb-spawn-ipc".to_string());
+                }
+                ir::IrInstruction::Call { func, .. }
+                    if matches!(
+                        func.as_str(),
+                        "__ckb_wait"
+                            | "__ckb_process_id"
+                            | "__ckb_pipe"
+                            | "__ckb_pipe_write"
+                            | "__ckb_pipe_read"
+                            | "__ckb_inherited_fd"
+                            | "__ckb_close"
+                    ) =>
+                {
+                    features.insert("ckb-spawn-ipc".to_string());
+                }
+                ir::IrInstruction::Call { func, .. } if func.starts_with("__ckb_source_") => {
+                    features.insert("ckb-source-view".to_string());
+                }
+                ir::IrInstruction::Call { func, .. } if func.starts_with("__ckb_witness_") => {
+                    features.insert("ckb-witness-args".to_string());
+                }
+                ir::IrInstruction::Call { func, .. } if func == "__ckb_sighash_all" => {
+                    features.insert("ckb-sighash-all".to_string());
+                }
+                ir::IrInstruction::Call { func, .. } if func.starts_with("__ckb_require_") => {
+                    features.insert("ckb-declarative-since".to_string());
+                }
+                ir::IrInstruction::Call { func, .. } if func == "__ckb_occupied_capacity" => {
+                    features.insert("ckb-declarative-capacity".to_string());
+                }
+                ir::IrInstruction::Call { func, .. } if func == "__ckb_hash_chain" => {
+                    features.insert("profile-hash-chain".to_string());
+                }
                 _ => {}
             }
         }
@@ -10801,9 +10851,57 @@ fn body_ckb_runtime_accesses(
                     binding: "ckb::input_since".to_string(),
                 });
             }
+            if let ir::IrInstruction::Call { func, .. } = instruction {
+                if let Some((operation, syscall, source, binding)) = ckb_v014_runtime_access(func) {
+                    accesses.push(CkbRuntimeAccessMetadata {
+                        operation: operation.to_string(),
+                        syscall: syscall.to_string(),
+                        source: source.to_string(),
+                        index: 0,
+                        binding: binding.to_string(),
+                    });
+                }
+            }
         }
     }
     accesses
+}
+
+fn ckb_v014_runtime_access(func: &str) -> Option<(&'static str, &'static str, &'static str, &'static str)> {
+    match func {
+        "__ckb_spawn" => Some(("spawn", "SPAWN", "CellDep", "spawn")),
+        "__ckb_wait" => Some(("wait", "WAIT", "Process", "wait")),
+        "__ckb_process_id" => Some(("process-id", "PROCESS_ID", "Process", "process_id")),
+        "__ckb_pipe" => Some(("pipe", "PIPE", "Process", "pipe")),
+        "__ckb_pipe_write" => Some(("pipe-write", "PIPE_WRITE", "Process", "pipe_write")),
+        "__ckb_pipe_read" => Some(("pipe-read", "PIPE_READ", "Process", "pipe_read")),
+        "__ckb_inherited_fd" => Some(("inherited-fd", "INHERITED_FD", "Process", "inherited_fd")),
+        "__ckb_close" => Some(("close-fd", "CLOSE", "Process", "close")),
+        "__ckb_source_input" => Some(("source-input", "SOURCE_VIEW", "Input", "source::input")),
+        "__ckb_source_output" => Some(("source-output", "SOURCE_VIEW", "Output", "source::output")),
+        "__ckb_source_cell_dep" => Some(("source-cell-dep", "SOURCE_VIEW", "CellDep", "source::cell_dep")),
+        "__ckb_source_header_dep" => Some(("source-header-dep", "SOURCE_VIEW", "HeaderDep", "source::header_dep")),
+        "__ckb_source_group_input" => Some(("source-group-input", "SOURCE_VIEW", "GroupInput", "source::group_input")),
+        "__ckb_source_group_output" => Some(("source-group-output", "SOURCE_VIEW", "GroupOutput", "source::group_output")),
+        "__ckb_witness_raw" => Some(("witness-raw", "LOAD_WITNESS", "Witness", "witness::raw")),
+        "__ckb_witness_lock" => Some(("witness-lock", "LOAD_WITNESS_ARGS_LOCK", "GroupInput", "witness::lock")),
+        "__ckb_witness_input_type" => {
+            Some(("witness-input-type", "LOAD_WITNESS_ARGS_INPUT_TYPE", "GroupInput", "witness::input_type"))
+        }
+        "__ckb_witness_output_type" => {
+            Some(("witness-output-type", "LOAD_WITNESS_ARGS_OUTPUT_TYPE", "GroupOutput", "witness::output_type"))
+        }
+        "__ckb_sighash_all" => Some(("sighash-all", "CKB_SIGHASH_ALL", "GroupInput", "env::sighash_all")),
+        "__ckb_require_maturity" => Some(("require-maturity", "LOAD_INPUT_BY_FIELD", "GroupInput", "require_maturity")),
+        "__ckb_require_time" => Some(("require-time", "LOAD_INPUT_BY_FIELD", "GroupInput", "require_time")),
+        "__ckb_require_epoch_after" => Some(("require-epoch-after", "LOAD_INPUT_BY_FIELD", "GroupInput", "require_epoch_after")),
+        "__ckb_require_epoch_relative" => {
+            Some(("require-epoch-relative", "LOAD_INPUT_BY_FIELD", "GroupInput", "require_epoch_relative"))
+        }
+        "__ckb_occupied_capacity" => Some(("occupied-capacity", "CAPACITY_POLICY", "Output", "occupied_capacity")),
+        "__ckb_hash_chain" => Some(("hash-chain", "CKB_BLAKE2B", "Profile", "hash_chain")),
+        _ => None,
+    }
 }
 
 fn scheduler_accesses_from_metadata(accesses: &[CkbRuntimeAccessMetadata]) -> Vec<crate::stdlib::SchedulerAccess> {
