@@ -2407,16 +2407,31 @@ fn default_scheduler_witness_abi() -> String {
 
 /// Decode a hex-encoded scheduler witness from compile metadata.
 pub fn decode_scheduler_witness_hex(hex: &str) -> Result<Vec<u8>> {
-    if hex.len() % 2 != 0 {
+    let hex_bytes = hex.as_bytes();
+    if hex_bytes.len() % 2 != 0 {
         return Err(CompileError::without_span("scheduler witness hex string must contain full bytes"));
     }
-    let mut bytes = Vec::with_capacity(hex.len() / 2);
-    for index in (0..hex.len()).step_by(2) {
-        let byte = u8::from_str_radix(&hex[index..index + 2], 16)
-            .map_err(|error| CompileError::without_span(format!("invalid scheduler witness hex byte at offset {index}: {error}")))?;
-        bytes.push(byte);
+    let mut bytes = Vec::with_capacity(hex_bytes.len() / 2);
+    for (pair_index, pair) in hex_bytes.chunks_exact(2).enumerate() {
+        let offset = pair_index * 2;
+        let high = hex_nibble(pair[0]).ok_or_else(|| {
+            CompileError::without_span(format!("invalid scheduler witness hex byte at offset {offset}: invalid digit found in string"))
+        })?;
+        let low = hex_nibble(pair[1]).ok_or_else(|| {
+            CompileError::without_span(format!("invalid scheduler witness hex byte at offset {offset}: invalid digit found in string"))
+        })?;
+        bytes.push((high << 4) | low);
     }
     Ok(bytes)
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

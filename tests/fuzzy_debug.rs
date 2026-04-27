@@ -1,6 +1,7 @@
 use cellscript::lsp::{LspServer, Position, Range, TextDocumentContentChangeEvent};
-use cellscript::{compile, validate_compile_metadata, ArtifactFormat, CompileOptions, EntryWitnessArg};
+use cellscript::{compile, decode_scheduler_witness_hex, validate_compile_metadata, ArtifactFormat, CompileOptions, EntryWitnessArg};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::process::Command;
 
 const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
 
@@ -334,4 +335,53 @@ fn fuzzy_metadata_tampering_never_panics() {
             assert!(!err.message.trim().is_empty());
         }
     }
+}
+
+#[test]
+fn fuzzy_unicode_hex_inputs_are_controlled_errors() {
+    for (index, input) in ["😀", "é0", "0é", "１２", "ab💥"].iter().enumerate() {
+        let outcome = catch_unwind(AssertUnwindSafe(|| decode_scheduler_witness_hex(input)));
+        let result = outcome.unwrap_or_else(|payload| panic!("scheduler hex decoder panicked at case {index}: {payload:?}"));
+        let err = result.expect_err("unicode scheduler witness hex should be rejected");
+        assert!(!err.message.trim().is_empty());
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+name = "fuzzy_cli_hex"
+version = "0.1.0"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src").join("main.cell"),
+        r#"
+module fuzzy_cli_hex::main
+
+action owned(owner: Address) -> u64 {
+    return 0
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("entry-witness")
+        .arg("--action")
+        .arg("owned")
+        .arg("--arg")
+        .arg("😀")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "unicode hex input should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("panicked"), "CLI hex decoder panicked instead of returning a diagnostic: {stderr}");
+    assert!(stderr.contains("invalid hex byte"), "unexpected stderr: {stderr}");
 }

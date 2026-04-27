@@ -3374,15 +3374,15 @@ fn decode_hex_arg(name: &str, value: &str, expected_len: Option<usize>) -> Resul
     if hex.len() % 2 != 0 {
         return Err(crate::error::CompileError::without_span(format!("parameter '{}' hex value must contain full bytes", name)));
     }
-    let bytes = (0..hex.len())
-        .step_by(2)
-        .map(|index| {
-            u8::from_str_radix(&hex[index..index + 2], 16).map_err(|error| {
-                crate::error::CompileError::without_span(format!(
-                    "parameter '{}' has invalid hex byte at offset {}: {}",
-                    name, index, error
-                ))
-            })
+    let bytes = hex
+        .as_bytes()
+        .chunks_exact(2)
+        .enumerate()
+        .map(|(pair_index, pair)| {
+            let offset = pair_index * 2;
+            let high = hex_nibble(pair[0]).ok_or_else(|| invalid_hex_arg_error(name, offset))?;
+            let low = hex_nibble(pair[1]).ok_or_else(|| invalid_hex_arg_error(name, offset))?;
+            Ok((high << 4) | low)
         })
         .collect::<Result<Vec<_>>>()?;
     if let Some(expected_len) = expected_len {
@@ -3396,6 +3396,22 @@ fn decode_hex_arg(name: &str, value: &str, expected_len: Option<usize>) -> Resul
         }
     }
     Ok(bytes)
+}
+
+fn invalid_hex_arg_error(name: &str, offset: usize) -> crate::error::CompileError {
+    crate::error::CompileError::without_span(format!(
+        "parameter '{}' has invalid hex byte at offset {}: invalid digit found in string",
+        name, offset
+    ))
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 pub struct CliParser;
