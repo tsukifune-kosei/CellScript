@@ -1,18 +1,20 @@
-This chapter takes you from a fresh checkout to one compiled CellScript artifact. The goal is not to learn the whole language yet. The goal is to see the compiler, artifact, and metadata sidecar working together.
+This chapter gets you from a fresh checkout to one compiled CellScript artifact.
+Do not worry about learning the whole language yet. The goal is smaller: build
+the compiler, compile one example, and see how the executable artifact and its
+metadata sidecar belong together.
 
-## What You Will Do
+By the end, you should be able to answer three questions:
 
-- clone the repository and run the test suite;
-- build the `cellc` compiler;
-- compile the bundled token example to assembly and ELF;
-- verify that the ELF matches its metadata;
-- repeat the same check with the CKB target profile.
+- did the compiler run;
+- where did the artifact go;
+- how do I check that the artifact matches the metadata I expected?
 
 ## Prerequisites
 
-- Rust toolchain with Cargo support for the repository MSRV.
-- CellScript source checkout.
-- No external RISC-V toolchain is required for the built-in assembler path.
+You need a Rust toolchain with Cargo support for the repository MSRV. You do not
+need an external RISC-V toolchain for the built-in assembler path used here.
+
+Start by cloning the repository and running the test suite:
 
 ```bash
 git clone https://github.com/tsukifune-kosei/CellScript.git
@@ -20,76 +22,96 @@ cd CellScript
 cargo test --locked
 ```
 
-If this fails, fix the local Rust or repository setup before continuing. A broken checkout makes later compiler errors much harder to read.
+If this fails, fix the local Rust or repository setup before continuing. It is
+much easier to understand compiler errors after the checkout itself is known to
+be healthy.
 
 ## Build the Compiler
+
+Build the `cellc` binary:
 
 ```bash
 cargo build --locked --bin cellc
 ```
 
-You can then invoke the compiler through Cargo:
+You can invoke it through Cargo:
 
 ```bash
 cargo run --locked --bin cellc -- --help
 ```
 
-Or through the built binary:
+Or call the built binary directly:
 
 ```bash
 ./target/debug/cellc --help
 ```
 
-## Compile a Single File
+Both forms are useful. `cargo run` is convenient while developing the compiler.
+The direct binary is closer to how users call `cellc` after installation.
 
-Start with `examples/token.cell`. It is small enough to read in one sitting, but it uses the basic ideas you will see throughout the rest of the wiki.
+## Compile One Source File
 
-Compile the token example to RISC-V assembly:
+Start with `examples/token.cell`. It is small, but it already shows the main
+language ideas: a resource, actions, explicit Cell movement, and CKB-compatible
+output.
+
+Compile it to RISC-V assembly:
 
 ```bash
 cargo run --locked --bin cellc -- examples/token.cell --target riscv64-asm --target-profile ckb -o /tmp/token.s
 ```
 
-Compile the same source to ELF:
+Then compile the same source to ELF:
 
 ```bash
 cargo run --locked --bin cellc -- examples/token.cell --target riscv64-elf --target-profile ckb -o /tmp/token.elf
 ```
 
-Compilation writes a metadata sidecar next to the artifact:
+After the ELF build, look for the metadata sidecar:
 
 ```text
 /tmp/token.elf
 /tmp/token.elf.meta.json
 ```
 
-Treat the `.meta.json` file as part of the build output. The ELF is what runs; the metadata explains the source identity, target profile, schema, runtime requirements, and verification obligations that belong to that ELF.
+Treat the `.meta.json` file as part of the build result. The ELF is what runs.
+The metadata explains the source identity, target profile, schema, runtime
+requirements, and verification obligations that belong to that ELF.
 
 ## Verify the Artifact
+
+Now ask a narrow but important question: does this artifact match its metadata
+sidecar and the CKB profile you expected?
 
 ```bash
 cargo run --locked --bin cellc -- verify-artifact /tmp/token.elf --expect-target-profile ckb
 ```
 
-This command answers a narrow but important question: does this artifact match its sidecar and the target profile you expected? It is the first gate before you start thinking about transaction builders or chain acceptance.
-
-Use source verification when you want the metadata sidecar to be checked against files on disk:
+When you want the metadata source hashes checked against files on disk, add
+source verification:
 
 ```bash
 cargo run --locked --bin cellc -- verify-artifact /tmp/token.elf --verify-sources --expect-target-profile ckb
 ```
 
-## CKB Quick Check
+This is still compiler-side evidence. It is not a CKB transaction test. Later
+chapters explain the difference, but this check is the right first habit.
 
-When targeting CKB, compile the same source again with the CKB profile. The CKB profile emits raw ELF bytes without the ABI trailer and uses CKB syscall/profile rules.
+## Use the CKB Profile Consistently
+
+For CKB artifacts, keep the profile explicit:
 
 ```bash
 cargo run --locked --bin cellc -- examples/token.cell --target riscv64-elf --target-profile ckb -o /tmp/token.ckb.elf
 cargo run --locked --bin cellc -- verify-artifact /tmp/token.ckb.elf --expect-target-profile ckb
 ```
 
-If a source uses an unsupported feature or an unsupported CKB stateful shape, the CKB profile should fail closed with a target-profile policy error.
+If a source depends on an unsupported CKB runtime shape, the CKB profile should
+reject it instead of silently producing an artifact with unclear assumptions.
+That fail-closed behavior is intentional.
 
 ## Next
 
-Once you can compile and verify one file, continue with [Language Basics](Tutorial-02-Language-Basics.md).
+Once you can compile and verify one file, continue with
+[Language Basics](Tutorial-02-Language-Basics.md). The next chapter explains
+what you are looking at inside a `.cell` file.

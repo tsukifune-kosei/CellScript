@@ -1,39 +1,56 @@
-The repository includes seven production bundled examples. Treat them as guided
-reading, not just sample files. Each one shows a different part of the
-CellScript language surface and the current production gates.
+The repository includes seven bundled examples. Treat them as guided reading,
+not just files to compile. Each one teaches a different part of the language:
+linear resources, shared state, receipts, locks, proposal flows, time checks,
+and CKB production evidence.
 
-## What You Will Learn
+This chapter helps you choose what to read first and what to learn from each
+example.
 
-- which example to read first;
-- how the token example maps resources to actions;
-- what the bundled suite currently proves for the CKB profile;
-- what extra evidence your own contract still needs.
+## The Examples
 
-| Example | Purpose |
+| Example | What it teaches |
 |---|---|
 | `examples/token.cell` | Minting, transfer, burn, and guarded token merge. |
-| `examples/timelock.cell` | Time-gated state transitions and release flows. |
-| `examples/multisig.cell` | Threshold policy, proposal lifecycle, and lock-boundary predicates. |
-| `examples/nft.cell` | Unique assets, metadata, and owner transitions. |
-| `examples/vesting.cell` | Vesting grants, receipts, and claim lifecycle. |
-| `examples/amm_pool.cell` | Shared pool state, swap, and liquidity effects. |
+| `examples/nft.cell` | Unique assets, metadata, ownership transitions, and owner locks. |
+| `examples/timelock.cell` | Time-gated state transitions, release requests, and approval flow. |
+| `examples/multisig.cell` | Threshold policy, proposals, signatures-as-data, and lock-boundary predicates. |
+| `examples/vesting.cell` | Vesting grants, receipts, claim lifecycle, and admin-boundary comments. |
+| `examples/amm_pool.cell` | Shared pool state, swap logic, liquidity receipts, and settlement effects. |
 | `examples/launch.cell` | Launch/pool composition patterns. |
 
-The top-level `examples/*.cell` files are the canonical business reading
-surface. `examples/business/*.cell` mirrors that clean surface explicitly.
+The top-level `examples/*.cell` files are the clean business reading surface.
+`examples/business/*.cell` mirrors that clean surface explicitly.
 `examples/acceptance/*.cell` carries production/profile metadata such as
 `#[effect(...)]` and `#[scheduler_hint(...)]`; the CKB acceptance script uses
-those profiled copies when generating release evidence. Subdirectory copies use
-`cellscript::business::*` and `cellscript::acceptance::*` module namespaces so
-they can coexist with the top-level examples during module loading.
+those profiled copies when generating release evidence.
 
-`examples/registry.cell` is intentionally outside this seven-example production
-matrix. It is a bounded-collection language example for local `Vec<Address>` and
+Subdirectory copies use `cellscript::business::*` and
+`cellscript::acceptance::*` module namespaces so they can coexist with the
+top-level examples during module loading.
+
+`examples/registry.cell` is intentionally outside the bundled production matrix.
+It is a bounded-collection language example for local `Vec<Address>` and
 `Vec<Hash>` helpers, covered by compiler/tooling tests rather than CKB
 production action acceptance.
 
 For a visual business-flow map of every bundled example, see
 [`CELLSCRIPT_EXAMPLE_BUSINESS_FLOWS.md`](../CELLSCRIPT_EXAMPLE_BUSINESS_FLOWS.md).
+
+## A Good Reading Order
+
+If you are learning the language, read them in this order:
+
+1. `token.cell`: start here. It is the smallest example with a clear resource
+   lifecycle.
+2. `nft.cell`: learn unique assets and ownership-style locks.
+3. `timelock.cell`: learn time guards and replacement state.
+4. `multisig.cell`: learn proposal lifecycle and threshold logic.
+5. `vesting.cell`: learn receipt-style claim flows.
+6. `amm_pool.cell`: learn shared pool state after you understand resources.
+7. `launch.cell`: read this last because it composes multiple patterns.
+
+Do not try to learn everything from the densest example first. The examples are
+more useful when each one adds one new idea.
 
 ## Compile All Examples
 
@@ -46,9 +63,12 @@ for f in examples/*.cell; do
 done
 ```
 
+This is a compile pass, not a full CKB production claim. It is useful while
+learning because it shows that the examples fit the compiler and CKB profile.
+
 ## Token Walkthrough
 
-Start with the token example. It is the smallest bundled contract that still shows the resource lifecycle clearly.
+Start with the token example. It is small enough to keep in your head.
 
 The token example declares two resources:
 
@@ -65,6 +85,9 @@ resource MintAuthority has store {
 }
 ```
 
+`Token` is the asset. `MintAuthority` is the state that limits how much can be
+minted.
+
 `mint` mutates authority state and creates a new token:
 
 ```cellscript
@@ -74,17 +97,23 @@ action mint(auth: &mut MintAuthority, to: Address, amount: u64) -> Token {
     auth.minted = auth.minted + amount
 
     create Token {
-        amount: amount,
+        amount,
         symbol: auth.token_symbol
     } with_lock(to)
 }
 ```
 
-`transfer_token` consumes an input token and creates a replacement output under a new lock:
+Read `auth: &mut MintAuthority` as a replacement-output obligation. The source
+is pleasant to read, but CKB still needs an input state Cell and a replacement
+state Cell.
+
+`transfer_token` consumes an input token and creates a replacement output under
+a new lock:
 
 ```cellscript
 action transfer_token(token: Token, to: Address) -> Token {
     consume token
+
     create Token {
         amount: token.amount,
         symbol: token.symbol
@@ -101,42 +130,54 @@ action burn(token: Token) {
 }
 ```
 
-## What to Learn from Each Example
+These three actions show the basic resource lifecycle: create, replace, destroy.
 
-Read the examples in this order if you are learning the language:
-
-- Start with `token.cell` to learn linear resources and creation.
-- Read `nft.cell` to learn fixed ownership and unique-asset state.
-- Read `timelock.cell` to learn time guards and state replacement.
-- Read `multisig.cell` to learn threshold proposal flow and lock-boundary predicates.
-- Read `vesting.cell` to learn receipt-style claim flows.
-- Read `amm_pool.cell` after you understand `shared`, because pools introduce contention-sensitive state.
-- Read `launch.cell` last; it composes multiple protocol patterns.
-
-## CKB Production Expectations
-
-The CKB profile is strict, and the current bundled-example suite is closed for the current production boundary:
-
-- all seven bundled examples strict-admit under the CKB profile;
-- all 43 bundled business actions have scoped CKB production harnesses;
-- all 16 bundled locks strict-compile and have builder-backed valid-spend and invalid-spend matrices;
-- valid CKB transactions are builder-generated and dry-run;
-- malformed transactions are rejected for non-policy/non-capacity reasons;
-- tx-size, cycle, and occupied-capacity evidence is retained;
-- all seven bundled examples are deployed in the CKB production acceptance report;
-- the final production hardening gate must pass.
+## Locks In The Examples
 
 The bundled locks use `protected` to show the input Cell guarded by the current
 lock invocation and `witness` to show decoded transaction witness data. Those
-markers do not make an `Address` a signer proof. Real signature authorization
-still needs explicit script-args binding, sighash verification, and its own
-positive and negative CKB transaction matrix.
+markers do not make an `Address` a signer proof.
 
-This does not mean arbitrary new contracts are automatically production-ready. Use the examples as patterns, then run your own constraints review, entry ABI review, builder evidence, and chain acceptance evidence.
+When you see a lock like this:
+
+```cellscript
+lock owner_only(asset: protected NFT, claimed_owner: witness Address) -> bool {
+    require asset.owner == claimed_owner
+}
+```
+
+read it carefully:
+
+- `asset` is the protected input Cell view;
+- `claimed_owner` is decoded witness data;
+- `require` fails the script if the comparison is false;
+- the comparison does not prove that `claimed_owner` signed the transaction.
+
+Real signature authorization still needs explicit script-args binding, sighash
+verification, and its own positive and negative CKB transaction matrix.
+
+## CKB Production Expectations
+
+The CKB profile is strict, and the bundled suite has a defined production
+boundary:
+
+- bundled examples strict-admit under the CKB profile;
+- bundled business actions have scoped CKB production harnesses;
+- bundled locks have builder-backed valid-spend and invalid-spend matrices;
+- valid CKB transactions are builder-generated and dry-run;
+- malformed transactions are rejected for non-policy/non-capacity reasons;
+- transaction size, cycles, and occupied-capacity evidence are retained;
+- bundled examples are deployed in the CKB production acceptance report;
+- the final production hardening gate must pass.
+
+This does not mean arbitrary new contracts are automatically production-ready.
+Use the examples as patterns, then run your own constraints review, entry ABI
+review, builder evidence, security review, and chain acceptance evidence.
 
 ## Production Checklist
 
-Before treating an example-derived contract as deployable, run the compiler-side checks:
+Before treating an example-derived contract as deployable, run the compiler-side
+checks:
 
 ```bash
 cellc fmt --check
@@ -151,7 +192,10 @@ For release-facing CKB evidence, run the CellScript acceptance gate:
 
 ```bash
 ./scripts/ckb_cellscript_acceptance.sh --production
-python3 scripts/validate_ckb_cellscript_production_evidence.py target/ckb-cellscript-acceptance/<run>/ckb-cellscript-acceptance-report.json
+python3 scripts/validate_ckb_cellscript_production_evidence.py \
+  target/ckb-cellscript-acceptance/<run>/ckb-cellscript-acceptance-report.json
 ```
 
-Do not use compile-only or bounded diagnostic runs as production release evidence.
+Do not use compile-only or bounded diagnostic runs as production release
+evidence. They are helpful during development, but they do not replace the chain
+acceptance boundary.

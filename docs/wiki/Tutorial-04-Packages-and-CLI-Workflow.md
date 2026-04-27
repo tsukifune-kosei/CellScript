@@ -1,41 +1,45 @@
-Small experiments can be compiled as single `.cell` files. Once a contract has more than one source file, dependency, or release target, use a package.
+Small experiments can be compiled as single `.cell` files. Once a contract has
+more than one source file, a dependency, or a release target, use a package.
 
-CellScript packages are described by `Cell.toml`. The package workflow is
-production-style for local source roots, path dependencies, package
-build/check/doc/fmt flows, lockfile validation, and release policy checks.
-Registry publishing and registry dependency resolution are intentionally
-experimental/fail-closed until a trusted registry path is ready.
+A package gives the compiler a stable place to find the entry file, build
+settings, dependencies, and lockfile. That makes builds repeatable for you, and
+reviewable for someone else.
 
 ## What You Will Learn
 
 - how to create a package;
 - what belongs in `Cell.toml`;
 - how to build, check, format, and document a package;
-- which reports help during audit and release preparation;
+- which reports are useful during review;
 - where the current package workflow intentionally stops.
 
 ## Create a Package
+
+Create an application-style package:
 
 ```bash
 cellc init my_contract
 cd my_contract
 ```
 
-This creates a `Cell.toml` manifest and a source entry. Use this when you want repeatable builds instead of one-off compiler commands.
+This creates a `Cell.toml` manifest and a source entry. Use this form when you
+want a contract package with a concrete entry.
 
-Library package:
+Create a library-style package:
 
 ```bash
 cellc init my_lib --lib
 ```
 
-Machine-readable init summary:
+Ask for a machine-readable summary when scripting:
 
 ```bash
 cellc init my_contract --json
 ```
 
-## Example Manifest
+## Read The Manifest
+
+A minimal manifest looks like this:
 
 ```toml
 [package]
@@ -53,9 +57,21 @@ out_dir = "build"
 my_lib = { path = "../my_lib" }
 ```
 
-The package manager currently supports local path dependencies for production-style workflows. Registry dependencies are fail-closed until the registry path is ready.
+Read the manifest as a build promise:
+
+- `entry` tells the compiler where the package starts;
+- `target` chooses assembly or ELF-style output;
+- `target_profile` chooses the runtime assumptions;
+- `out_dir` chooses where artifacts are written;
+- path dependencies keep local packages explicit.
+
+Registry publishing and registry dependency resolution are intentionally
+experimental/fail-closed until a trusted registry path is ready. Local path
+dependencies are the supported workflow for repeatable local development.
 
 ## Build
+
+Run the package build:
 
 ```bash
 cellc build
@@ -71,13 +87,21 @@ cellc build --production
 cellc build --json
 ```
 
-`build` reads `Cell.toml`, compiles the current package entry, and writes the artifact plus metadata sidecar under the configured output directory. For a one-off source file, use the top-level compiler form instead:
+`build` reads `Cell.toml`, compiles the current package entry, and writes the
+artifact plus metadata sidecar under the configured output directory.
+
+For a one-off source file, use the top-level compiler form instead:
 
 ```bash
 cellc path/to/file.cell
 ```
 
+That form is great for quick experiments. Packages are better when you need
+repeatability.
+
 ## Check Without Writing Artifacts
+
+Use `check` when you want fast feedback:
 
 ```bash
 cellc check
@@ -88,9 +112,12 @@ cellc check --deny-runtime-obligations
 cellc check --json
 ```
 
-Use `check --all-targets` when you want fast feedback across assembly and ELF-compatible paths without producing files.
+`check --all-targets` is useful before committing. It catches source and profile
+problems without producing build artifacts.
 
-## Format
+## Format And Generate Docs
+
+Format the package:
 
 ```bash
 cellc fmt
@@ -98,18 +125,20 @@ cellc fmt --check
 cellc fmt --json
 ```
 
-## Documentation
+Generate package docs:
 
 ```bash
 cellc doc
 cellc doc --json
 ```
 
-Generated docs summarize modules, actions, resources, receipts, locks, lifecycle rules, and lowering metadata.
+Generated docs summarize modules, actions, resources, receipts, locks,
+lifecycle rules, and lowering metadata.
 
-## Audit and Evidence Reports
+## Audit And Evidence Reports
 
-When a package is ready for review, ask the compiler for the facts it already knows. These commands are useful when reviewing a package boundary or preparing release evidence:
+When a package is ready for review, ask the compiler for the facts it already
+knows:
 
 ```bash
 cellc metadata . --target riscv64-elf --target-profile ckb -o build/main.metadata.json
@@ -129,7 +158,16 @@ cellc ckb-hash --file build/main.elf
 cellc verify-artifact build/main.elf --expect-target-profile ckb --verify-sources --production
 ```
 
-`metadata` and `constraints` expose the compiler-side production contract. They do not replace chain acceptance reports, builder-generated transactions, occupied-capacity evidence, or CKB production gates.
+These reports are not busywork. They answer questions reviewers will ask:
+
+- what is the entry ABI;
+- what witness layout is expected;
+- what capacity or runtime obligations remain;
+- what CKB hash policy is being used;
+- whether the artifact still matches the source and metadata.
+
+They do not replace chain acceptance reports, builder-generated transactions,
+occupied-capacity evidence, or CKB production gates.
 
 ## Local Dependencies
 
@@ -139,7 +177,8 @@ Add a local dependency:
 cellc add my_lib --path ../my_lib
 ```
 
-`add --path` records the dependency in `Cell.toml`. To resolve the dependency graph and write `Cell.lock`, run:
+`add --path` records the dependency in `Cell.toml`. To resolve the dependency
+graph and write `Cell.lock`, run:
 
 ```bash
 cellc install
@@ -157,7 +196,8 @@ Remove it:
 cellc remove my_lib
 ```
 
-`install`, `update`, and normal dependency removal refresh the lockfile so direct and transitive local path dependencies stay consistent.
+`install`, `update`, and normal dependency removal refresh the lockfile so
+direct and transitive local path dependencies stay consistent.
 
 ## Package Information
 
@@ -166,10 +206,16 @@ cellc info
 cellc info --json
 ```
 
+Use `info` when you want a quick view of the package boundary before building or
+debugging dependency resolution.
+
 ## Experimental Commands
 
-Registry publishing, registry package installation, `login`, `run`, and `repl` remain experimental/future-facing. Local `install --path` and `update` are supported as lockfile helpers for local path dependency workflows.
+Registry publishing, registry package installation, `login`, `run`, and `repl`
+remain experimental/future-facing. Local `install --path` and `update` are
+supported as lockfile helpers for local path dependency workflows.
 
 ## Next
 
-With a repeatable package workflow in place, continue with [CKB Target Profiles](Tutorial-05-CKB-Target-Profiles.md).
+With a repeatable package workflow in place, continue with
+[CKB Target Profiles](Tutorial-05-CKB-Target-Profiles.md).

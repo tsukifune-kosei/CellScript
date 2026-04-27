@@ -1,75 +1,87 @@
-CellScript is a small language for Cell-based smart contracts on CKB. You describe the Cell state you want to protect, the actions that may change it, and the lock rules that authorize it. The compiler turns that `.cell` source into ckb-vm compatible RISC-V assembly or ELF artifacts and writes metadata that explains what was built.
+CellScript is a small language for writing Cell-based contracts on CKB. You
+describe the Cells your protocol cares about, the actions that move those Cells,
+and the locks that decide whether a Cell may be spent. The compiler then turns
+that `.cell` source into ckb-vm compatible RISC-V assembly or ELF artifacts, and
+writes metadata that explains what was built.
 
 Last updated: 2026-04-27.
 
-This wiki is meant to be read as a guided path. Each chapter introduces one idea, shows the smallest useful commands, and then points to the production checks that matter before deployment.
+This wiki is a guided path. It starts with one compiled example, then slowly
+builds the mental model: source files, Cell effects, packages, the CKB profile,
+metadata, tooling, and finally the bundled examples. You do not need to
+understand every production gate on the first read. The important thing is to
+learn what each layer proves, and what it does not prove yet.
 
 ## How to Read This Wiki
 
-If you are new to CellScript, read the tutorials in order. The early chapters focus on the language itself: modules, resources, actions, locks, and Cell effects. The later chapters focus on packaging, the CKB target profile, metadata, release evidence, editor tooling, and the bundled examples.
+If CellScript is new to you, read the tutorials in order. The first three
+chapters are about the language. They explain how a `.cell` file is shaped, how
+resources move, and why effects such as `consume` and `create` are explicit.
 
-If you already have a contract, jump to the page that matches your current question:
+After that, the wiki moves outward:
 
-- writing source: start with language basics and Cell effects;
-- building a package: use the package workflow chapter;
-- targeting CKB: read the target-profile chapter before compiling;
-- preparing a release: use the metadata and production gates chapter;
-- learning by example: read the bundled examples last, after the core language model is clear.
+- packages make builds repeatable;
+- the CKB profile chooses the chain-facing runtime rules;
+- metadata explains the artifact;
+- production evidence proves more than compiler success;
+- editor tooling shortens the local loop;
+- bundled examples show the style in real contracts.
+
+If you already know what you need, jump directly:
+
+- writing source: start with [Language Basics](Tutorial-02-Language-Basics.md);
+- understanding Cell movement: read [Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects.md);
+- building a package: use [Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow.md);
+- compiling for CKB: read [CKB Target Profiles](Tutorial-05-CKB-Target-Profiles.md);
+- preparing evidence: use [Metadata, Verification, and Production Gates](Tutorial-06-Metadata-Verification-and-Production-Gates.md);
+- working in an editor: read [LSP and Tooling](Tutorial-07-LSP-and-Tooling.md);
+- learning by example: finish with [Bundled Example Contracts](Tutorial-08-Bundled-Example-Contracts.md).
 
 ## Tutorial Path
 
-1. [Getting Started](Tutorial-01-Getting-Started.md): build the compiler, compile one example, and verify the artifact.
-2. [Language Basics](Tutorial-02-Language-Basics.md): learn the shape of a `.cell` file.
-3. [Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects.md): understand how values move through a Cell transaction.
-4. [Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow.md): create a package, build it, check it, and inspect reports.
-5. [CKB Target Profiles](Tutorial-05-CKB-Target-Profiles.md): choose the right runtime assumptions.
-6. [Metadata, Verification, and Production Gates](Tutorial-06-Metadata-Verification-and-Production-Gates.md): know what artifact verification proves and what it does not prove.
-7. [LSP and Tooling](Tutorial-07-LSP-and-Tooling.md): use editor feedback and command-backed reports.
-8. [Bundled Example Contracts](Tutorial-08-Bundled-Example-Contracts.md): study the examples in a useful order.
+1. [Getting Started](Tutorial-01-Getting-Started.md): compile one example and
+   verify its artifact.
+2. [Language Basics](Tutorial-02-Language-Basics.md): learn the shape of a
+   `.cell` file.
+3. [Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects.md):
+   understand how values move through a Cell transaction.
+4. [Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow.md):
+   create a package, build it, check it, and inspect reports.
+5. [CKB Target Profiles](Tutorial-05-CKB-Target-Profiles.md): choose the CKB
+   runtime assumptions before compiling.
+6. [Metadata, Verification, and Production Gates](Tutorial-06-Metadata-Verification-and-Production-Gates.md):
+   learn what artifact verification proves, and what still needs chain
+   evidence.
+7. [LSP and Tooling](Tutorial-07-LSP-and-Tooling.md): use editor feedback and
+   command-backed reports.
+8. [Bundled Example Contracts](Tutorial-08-Bundled-Example-Contracts.md): study
+   the examples in a useful order.
 
-## What CellScript Gives You
+## The Core Idea
 
-CellScript supports:
+CellScript tries to keep the CKB model visible. A contract should not look like
+an account database if it is really spending input Cells and creating output
+Cells.
 
-- `.cell` modules with typed declarations and executable `action` / `lock` entries.
-- Cell-native persistent values through `resource`, `shared`, and `receipt`.
-- Explicit Cell effects: `consume`, `create`, `read_ref`, `transfer`, `destroy`, `claim`, and `settle`.
-- RISC-V assembly and ELF output for ckb-vm compatible execution.
-- CKB target-profile builds.
-- Metadata sidecars and artifact verification.
-- Local package workflows based on `Cell.toml`, local source roots, path dependencies, lockfile checks, build/check/doc/fmt, and production policy flags. Remote registry workflows remain experimental/fail-closed.
-- LSP and VS Code tooling for diagnostics, hover, completion, definitions, references, rename, formatting, signature help, folding, document symbols, and compiler-backed reports.
-- Production-facing constraints and evidence surfaces for runtime error codes, entry witness ABI, CKB capacity/tx-size requirements, CKB `hash_type`/DepGroup policy, and CKB scheduler metadata.
+That is why the language has:
 
-The wiki describes the current compiler, CKB profile, examples, metadata, LSP,
-and package workflow as one coherent working surface. Version-specific release
-notes and roadmaps should stay in repository documentation, not in the tutorial
-path.
+- `resource`, `shared`, and `receipt` for persistent Cell-backed values;
+- explicit effects such as `consume`, `create`, `read_ref`, `transfer`,
+  `destroy`, `claim`, and `settle`;
+- `action` entries for type-script style state transitions;
+- `lock` entries for spend-boundary predicates;
+- `protected`, `witness`, and `require` so lock source data and failure points
+  are visible in source;
+- metadata sidecars that describe schema, ABI, constraints, runtime
+  requirements, and verifier obligations.
 
-## Before You Call It Production
-
-`cellc verify-artifact` proves that an artifact matches its metadata sidecar and selected policy flags. It is not the whole production gate by itself.
-
-For a real release, keep two levels of evidence separate:
-
-- compiler evidence: the source, artifact, metadata, and policy flags agree;
-- CKB chain evidence: the artifact has been built into CKB transactions, dry-run or deployed, measured, and checked by the CKB acceptance report.
-
-Release-facing CKB production evidence comes from the CellScript repository root:
-
-- `scripts/ckb_cellscript_acceptance.sh --production`
-- `scripts/validate_ckb_cellscript_production_evidence.py`
-
-The current bundled example suite is seven contracts: `amm_pool.cell`, `launch.cell`, `multisig.cell`, `nft.cell`, `timelock.cell`, `token.cell`, and `vesting.cell`.
-
-## Reference Examples
-
-- [CKB hashing workflow](../examples/ckb_hashing.md)
-- [Collections matrix](../examples/collections_matrix.md)
-- [Deployment manifest](../examples/deployment_manifest.md)
-- [Mutate append](../examples/mutate_append.md)
+The wiki uses the same rule throughout: if something is only compiler evidence,
+it is described as compiler evidence. If something needs a builder-backed CKB
+transaction, the wiki says so.
 
 ## First Run
+
+The fastest way to get oriented is to compile the token example:
 
 ```bash
 git clone https://github.com/tsukifune-kosei/CellScript.git
@@ -79,11 +91,48 @@ cargo run --locked --bin cellc -- examples/token.cell --target riscv64-elf --tar
 cargo run --locked --bin cellc -- verify-artifact /tmp/token.elf --expect-target-profile ckb
 ```
 
-Use the CKB profile for CKB artifacts:
+The compile step writes two files:
 
-```bash
-cargo run --locked --bin cellc -- examples/token.cell --target riscv64-elf --target-profile ckb -o /tmp/token.ckb.elf
-cargo run --locked --bin cellc -- verify-artifact /tmp/token.ckb.elf --expect-target-profile ckb
+```text
+/tmp/token.elf
+/tmp/token.elf.meta.json
 ```
 
-The bundled examples are covered by the current local production evidence suite. New external contracts still need their own metadata review, builder evidence, and chain acceptance evidence before they should be called production-ready.
+The ELF is the executable artifact. The metadata sidecar is the explanation:
+where the source came from, which profile was used, what schema was produced,
+and which obligations still need review.
+
+## Before You Call It Production
+
+`cellc verify-artifact` is an important first check, but it is not the whole
+story. It proves that an artifact and its metadata agree. It does not prove that
+a concrete CKB transaction can spend the right inputs, serialize the right
+witness, fit capacity rules, pass dry-run, and commit.
+
+Keep two levels separate:
+
+- compiler evidence: source, artifact, metadata, and selected policy flags
+  agree;
+- CKB chain evidence: builder-generated transactions were checked on a local CKB
+  chain with cycles, transaction size, capacity, and positive/negative behavior
+  evidence.
+
+Release-facing CKB evidence comes from the repository root:
+
+```bash
+./scripts/ckb_cellscript_acceptance.sh --production
+python3 scripts/validate_ckb_cellscript_production_evidence.py \
+  target/ckb-cellscript-acceptance/<run>/ckb-cellscript-acceptance-report.json
+```
+
+The bundled examples are covered by the current local production evidence suite.
+New external contracts still need their own metadata review, builder evidence,
+security review, and chain acceptance evidence before they should be called
+production-ready.
+
+## Reference Examples
+
+- [CKB hashing workflow](../examples/ckb_hashing.md)
+- [Collections matrix](../examples/collections_matrix.md)
+- [Deployment manifest](../examples/deployment_manifest.md)
+- [Mutate append](../examples/mutate_append.md)

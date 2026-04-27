@@ -1,33 +1,43 @@
-CellScript source reads best when you think of it as a small Cell story. First you name the module. Then you describe the state that can exist on chain. Finally you write the actions and locks that say how that state may change or be authorized.
+CellScript source reads best when you treat it as a small Cell story. First you
+name the module. Then you describe the state that can exist on chain. Finally
+you write the actions and locks that say how that state may change or be spent.
 
-## What You Will Learn
+This chapter is a map. It does not cover every syntax detail, but it gives you
+the vocabulary you need before reading the bundled examples.
 
-- how a `.cell` file is organized;
-- when to use `struct`, `resource`, `shared`, and `receipt`;
-- what `action` entries do;
-- what `lock` entries do;
-- which type shapes are part of the documented production surface.
+## A Source File At A Glance
 
-A source file normally contains:
+A typical `.cell` file contains:
 
 - one `module` declaration;
 - persistent declarations such as `resource`, `shared`, and `receipt`;
 - optional ordinary `struct`, `enum`, and `const` declarations;
-- executable `action` and `lock` entries.
+- executable `action` entries;
+- executable `lock` entries.
+
+The first split to learn is simple:
+
+- ordinary data helps you calculate;
+- persistent declarations describe Cell-backed state;
+- actions change state;
+- locks guard spending.
 
 ## Module Declaration
+
+Start with a stable module name:
 
 ```cellscript
 module cellscript::demo
 ```
 
-Prefer a stable namespace path for package code because module names are
-included in metadata and source identity. Bundled examples use the
-`cellscript::` namespace:
+Bundled examples use the `cellscript::` namespace:
 
 ```cellscript
 module cellscript::timelock
 ```
+
+Module names are not decoration. They are part of source identity and appear in
+metadata, so use names you are willing to keep stable.
 
 ## Scalar and Fixed Types
 
@@ -45,9 +55,11 @@ Hash
 [u8; 8]
 ```
 
-Use fixed-size byte arrays when a value must be part of a persistent Molecule-compatible schema or a predictable CKB data layout.
+Use fixed-size byte arrays when a value must live in a predictable persistent
+schema or CKB data layout.
 
-`Signature` is not a built-in scalar. Model signatures as a `struct` or byte field when a contract needs to carry them:
+`Signature` is not a built-in scalar. If a contract needs to carry a signature,
+model it explicitly:
 
 ```cellscript
 struct Signature {
@@ -56,11 +68,19 @@ struct Signature {
 }
 ```
 
-For dynamic payloads that cross ABI or persistent schema boundaries, the documented production surface includes targeted `Vec<u8>`, `Vec<Address>`, `Vec<Hash>`, and concrete fixed-width struct-vector paths. Generic collection ownership is intentionally narrower than "all collections are supported"; use the collections support matrix before advertising a collection shape as production-ready.
+That `signer` field is only data until a lock verifies it. Names do not create
+authority.
+
+For dynamic payloads that cross ABI or persistent schema boundaries, the
+documented production surface includes targeted `Vec<u8>`, `Vec<Address>`,
+`Vec<Hash>`, and concrete fixed-width struct-vector paths. Generic collection
+ownership is intentionally narrower than "all collections are supported". Use
+the collections support matrix before presenting a collection shape as
+production-ready.
 
 ## Structs
 
-Use `struct` for ordinary typed data that is not itself a persistent Cell. A struct is a shape; it does not by itself create on-chain storage.
+Use `struct` for ordinary typed data that is not itself a persistent Cell:
 
 ```cellscript
 struct Config {
@@ -68,11 +88,14 @@ struct Config {
 }
 ```
 
-Local struct values are transaction-local unless they are embedded in a persistent `resource`, `shared`, or `receipt`.
+A struct is a shape. It does not create on-chain storage by itself. A local
+`Config` value is transaction-local unless you embed it in a `resource`,
+`shared`, or `receipt`.
 
 ## Resources
 
-Use `resource` for linear Cell-backed assets. If your contract should not be able to duplicate or lose a value silently, it probably belongs in a resource.
+Use `resource` for linear Cell-backed assets. If your protocol should not be
+able to duplicate or silently drop a value, it probably belongs in a resource.
 
 ```cellscript
 resource Token has store, transfer, destroy {
@@ -81,11 +104,14 @@ resource Token has store, transfer, destroy {
 }
 ```
 
-Resources cannot be silently copied or dropped. The compiler tracks them as linear values.
+Resources are linear values. When an action receives one, the action must say
+where it goes: consume it, create a replacement, transfer it, return it, claim
+it, settle it, or destroy it.
 
 ## Shared State
 
-Use `shared` for contention-sensitive state such as pools or registries. Shared state tells tools and schedulers that multiple transactions may care about the same Cell-backed value.
+Use `shared` for contention-sensitive state such as pools, launch state, or
+registries:
 
 ```cellscript
 shared Pool has store {
@@ -94,11 +120,13 @@ shared Pool has store {
 }
 ```
 
-Shared state reads and writes remain visible in metadata so schedulers and policy checks can reason about transaction access.
+Shared state tells tools and schedulers that multiple transactions may care
+about the same Cell-backed value. Reads and writes remain visible in metadata.
 
 ## Receipts
 
-Use `receipt` for single-use proof Cells. A receipt is useful when one action creates a right and another action later consumes that right.
+Use `receipt` for single-use proof Cells. A receipt is useful when one action
+creates a right and another action later consumes that right.
 
 ```cellscript
 receipt VestingGrant has store, claim {
@@ -108,11 +136,13 @@ receipt VestingGrant has store, claim {
 }
 ```
 
-Receipts are useful for deposits, vesting grants, voting records, settlement proofs, and claim flows.
+Receipts are a good fit for deposits, vesting grants, voting records,
+settlement proofs, and claim flows.
 
 ## Actions
 
-Use `action` for type-script style transition logic. An action says what inputs are required, what checks must pass, and what new Cell state is produced.
+Use `action` for type-script style transition logic. An action says what inputs
+are required, what checks must pass, and what output Cell state is produced.
 
 ```cellscript
 action transfer_token(token: Token, to: Address) -> Token {
@@ -126,12 +156,17 @@ action transfer_token(token: Token, to: Address) -> Token {
 }
 ```
 
+Read this as a Cell transition: spend one token input, then create a replacement
+token output under a new lock.
+
 ## Locks
 
-Use `lock` for CKB spend-boundary predicates. Keep locks literal: mark the typed
-input Cell guarded by this lock invocation with `protected`, mark decoded
-transaction witness data with `witness`, and use `require` for conditions that
-should fail the current script validation.
+Use `lock` for CKB spend-boundary predicates. A lock should make its data
+sources obvious:
+
+- `protected` marks the typed input Cell guarded by this lock invocation;
+- `witness` marks decoded transaction witness data;
+- `require` marks a condition that fails the current script validation.
 
 ```cellscript
 shared Wallet has store {
@@ -144,16 +179,13 @@ lock owner_only(wallet: protected Wallet, claimed_owner: witness Address) -> boo
 }
 ```
 
-Locks must return `bool`. `protected Wallet` means a typed view of one selected
-input Cell in the current script group whose spend is guarded by this lock
+Locks return `bool`. `protected Wallet` means a typed view of one selected input
+Cell in the current script group whose spend is guarded by this lock
 invocation. It is not an output Cell, not a transaction-wide scan, and not all
 same-type Cells unless the language explicitly adds such multiplicity syntax.
-`witness Address` means decoded transaction witness data only; it is not a
-signer or ownership proof. Target-profile policy determines which runtime
-helpers are allowed. For example, unsupported helper syscalls are rejected under
-the CKB profile, and CKB signature/witness verification must be represented
-through explicit script-args and sighash verification primitives once those
-primitives are implemented.
+
+`witness Address` means decoded transaction witness data only. It is not a
+signer or ownership proof.
 
 ## Lock Boundary Primitives
 
@@ -171,15 +203,16 @@ Use `require` inside locks. Use `assert_invariant` inside actions for state
 transition checks. This keeps authorization predicates separate from business
 state invariants.
 
+This lock checks equality between protected Cell state and witness data:
+
 ```cellscript
 lock owner_only(wallet: protected Wallet, claimed_owner: witness Address) -> bool {
     require wallet.owner == claimed_owner
 }
 ```
 
-This lock checks equality between protected Cell state and witness data. It does
-not prove that `claimed_owner` signed the transaction. The name of a parameter
-does not create authority:
+That comparison may be useful, but it does not prove that `claimed_owner` signed
+the transaction. A misleading parameter name does not make it safer:
 
 ```cellscript
 // Unsafe as an authorization claim: `signer` is only a witness value here.
@@ -209,13 +242,14 @@ are not cryptographic authorization by themselves.
 
 ## Assertions
 
-Use assertions for verifier conditions. They make the rule visible in source and in compiler metadata.
+Use assertions for action-side verifier conditions:
 
 ```cellscript
 assert_invariant(amount > 0, "amount must be positive")
 ```
 
-Assertions lower into script checks and appear in metadata as part of verifier analysis.
+Assertions make state-transition rules visible in source and metadata. They are
+not a substitute for lock authorization checks.
 
 ## Comments
 
@@ -229,10 +263,11 @@ CellScript supports line comments and nested block comments:
 */
 ```
 
-Use comments sparingly. In examples, comments should explain Cell lifecycle,
-protected/witness scope, or builder obligations rather than restating ordinary
-arithmetic.
+Use comments where they help the reader understand Cell lifecycle, witness
+scope, builder obligations, or a security boundary. Avoid comments that merely
+repeat arithmetic.
 
 ## Next
 
-With the source shape in mind, continue with [Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects.md).
+With the source shape in mind, continue with
+[Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects.md).
