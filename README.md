@@ -9,7 +9,7 @@
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
 [![Targets: CKB](https://img.shields.io/badge/targets-CKB-2f6f4e.svg)](#target-profiles)
 [![Package Workflow: Local First](https://img.shields.io/badge/package%20workflow-local%20first-2f6f4e.svg)](#package-workflow)
-[![LSP: Production Tooling](https://img.shields.io/badge/LSP-production%20tooling-2f6f4e.svg)](#editor-support)
+[![LSP: Local Tooling](https://img.shields.io/badge/LSP-local%20tooling-2f6f4e.svg)](#editor-support)
 [![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](https://github.com/tsukifune-kosei/CellScript/wiki)
 
 [English](README.md) | [Chinese](README_CH.md)
@@ -20,6 +20,10 @@ CellScript is a domain-specific language for Cell-based smart contracts on
 CKB. It compiles `.cell` source into ckb-vm RISC-V assembly or ELF
 artifacts, together with typed metadata for auditing, policy checks, schema
 binding, and scheduler-aware execution.
+
+In this README, metadata means machine-readable semantic facts emitted by the
+compiler: schema layout, Cell effects, access summaries, source hashes,
+verifier obligations, runtime requirements, and target-profile policy flags.
 
 The language is intentionally narrow: it is not a new VM, and it is not an
 account-storage contract language. CellScript gives protocol authors a typed
@@ -45,6 +49,21 @@ CellScript raises that programming model to explicit language constructs:
 `read_ref`, `transfer`, `destroy`, `claim`, and `settle`. These constructs are
 not metaphors — they lower directly to the Cell transaction shape that the
 target chain already executes.
+
+## Current Status
+
+CellScript is currently in a CKB-focused alpha / stabilisation phase.
+
+It is suitable for:
+- experimenting with CKB Cell-contract authoring;
+- compiling and inspecting the bundled examples;
+- exploring typed Cell effects, metadata, constraints, and CKB target-profile
+  checks;
+- trying the local VS Code extension and LSP tooling.
+
+It is not yet recommended for unaudited mainnet deployment without manual
+review. The current focus is developer-readiness, diagnostics, ProofPlan /
+metadata visibility, and CKB target-profile stability.
 
 ## Quick Start
 
@@ -82,6 +101,17 @@ Run a CKB profile check:
 ```bash
 cellc check --target-profile ckb
 ```
+
+Inspect what the compiler can explain about the token example:
+
+```bash
+cellc metadata examples/token.cell --target-profile ckb --json
+cellc constraints examples/token.cell --target-profile ckb
+cellc scheduler-plan examples/token.cell --target-profile ckb
+```
+
+These commands show what the compiler believes the protocol reads, writes,
+creates, consumes, assumes, and exposes to CKB-facing policy tooling.
 
 > **Next:** Read on for the [language model](#core-model), [full examples](#example),
 > or dive into the [architecture](#architecture).
@@ -206,7 +236,7 @@ action burn(token: Token) {
 
 ## Editor Support
 
-CellScript includes production-grade local language tooling:
+CellScript includes production-style local language tooling for early users:
 
 - **In-process LSP** — diagnostics, completions, hover, go-to-definition,
   references, rename, formatting, and metadata-oriented code actions. The
@@ -575,7 +605,6 @@ registry dependency resolution remain experimental and fail-closed.
 |---|---|
 | `--target riscv64-asm` | Emit RISC-V assembly |
 | `--target riscv64-elf` | Emit a RISC-V ELF artifact |
-
 | `--target-profile ckb` | Use the CKB profile |
 | `--entry-action <ACTION>` | Compile a single action as the artifact entrypoint |
 | `--entry-lock <LOCK>` | Compile a single lock as the artifact entrypoint |
