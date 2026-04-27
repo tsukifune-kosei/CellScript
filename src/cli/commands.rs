@@ -1091,8 +1091,9 @@ impl CommandExecutor {
             .params
             .iter()
             .map(|param| {
-                let runtime_bound = selected.runtime_bound_param_names.contains(&param.name);
-                let payload_bound = !param.cell_bound_abi && !param.ty.starts_with('&') && !runtime_bound;
+                let runtime_bound = selected.runtime_bound_param_names.contains(&param.name) || param.lock_args_data_source;
+                let payload_bound =
+                    !param.lock_args_data_source && !param.cell_bound_abi && !param.ty.starts_with('&') && !runtime_bound;
                 let layout = entry_constraints.params.iter().find(|candidate| candidate.name == param.name);
                 serde_json::json!({
                     "name": param.name,
@@ -1117,11 +1118,19 @@ impl CommandExecutor {
             .params
             .iter()
             .filter(|param| {
-                !param.cell_bound_abi && !param.ty.starts_with('&') && !selected.runtime_bound_param_names.contains(&param.name)
+                !param.lock_args_data_source
+                    && !param.cell_bound_abi
+                    && !param.ty.starts_with('&')
+                    && !selected.runtime_bound_param_names.contains(&param.name)
             })
             .map(|param| param.name.as_str())
             .collect::<Vec<_>>();
-        let runtime_bound_params = selected.runtime_bound_param_names.iter().map(|name| name.as_str()).collect::<Vec<_>>();
+        let runtime_bound_params = selected
+            .runtime_bound_param_names
+            .iter()
+            .map(|name| name.as_str())
+            .chain(selected.params.iter().filter(|param| param.lock_args_data_source).map(|param| param.name.as_str()))
+            .collect::<Vec<_>>();
         let summary = serde_json::json!({
             "status": if entry_constraints.unsupported { "fail" } else { "ok" },
             "abi": ENTRY_WITNESS_ABI,
@@ -1425,6 +1434,7 @@ impl CommandExecutor {
             "header_abi": metadata.header_abi,
             "scheduler_abi": metadata.scheduler_abi,
             "witness_abi": metadata.witness_abi,
+            "lock_args_abi": metadata.lock_args_abi,
             "source_encoding": metadata.source_encoding,
             "spawn_ipc_abi": metadata.spawn_ipc_abi,
             "since_abi": metadata.since_abi,
@@ -1436,6 +1446,7 @@ impl CommandExecutor {
             "tx_version": metadata.tx_version,
             "boundaries": [
                 "WitnessArgs fields are explicit CKB witness surfaces, not implicit signer authority",
+                "lock_args parameters are typed script args, not implicit signer authority",
                 "Source group views are scoped to the active script group",
                 "outputs and outputs_data are index-aligned CKB transaction surfaces",
                 "capacity floors are declared in shannons and still require builder measurement",
@@ -1457,6 +1468,7 @@ impl CommandExecutor {
             println!("  Target chain: {}", summary["target_chain"].as_str().unwrap_or("unknown"));
             println!("  VM ABI: {}", summary["vm_abi"].as_str().unwrap_or("unknown"));
             println!("  Witness ABI: {}", summary["witness_abi"].as_str().unwrap_or("unknown"));
+            println!("  Lock args ABI: {}", summary["lock_args_abi"].as_str().unwrap_or("unknown"));
             println!("  Source encoding: {}", summary["source_encoding"].as_str().unwrap_or("unknown"));
             println!("  Spawn/IPC ABI: {}", summary["spawn_ipc_abi"].as_str().unwrap_or("unknown"));
             println!("  Since ABI: {}", summary["since_abi"].as_str().unwrap_or("unknown"));
@@ -1583,7 +1595,10 @@ impl CommandExecutor {
             .params
             .iter()
             .filter(|param| {
-                !param.cell_bound_abi && !param.ty.starts_with('&') && !selected.runtime_bound_param_names.contains(&param.name)
+                !param.lock_args_data_source
+                    && !param.cell_bound_abi
+                    && !param.ty.starts_with('&')
+                    && !selected.runtime_bound_param_names.contains(&param.name)
             })
             .collect::<Vec<_>>();
         if args.args.len() != payload_params.len() {

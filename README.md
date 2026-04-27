@@ -472,12 +472,12 @@ treated as deployable.
 ```mermaid
 flowchart TB
     Source[".cell source + Cell.toml\n--target-profile ckb"] --> Frontend["Lexer + parser\nstable source spans"]
-    Frontend --> Semantics["Type + lifecycle checks\nlinear resources, lock-only require,\nprotected/witness classification"]
+    Frontend --> Semantics["Type + lifecycle checks\nlinear resources, lock-only require,\nprotected/witness/lock_args classification"]
     Semantics --> Policy["CKB policy gate\nfail closed on unsupported runtime or state shapes"]
 
     subgraph Rules["CKB profile rules"]
         R1["CKB syscall ABI\nsource flags + syscall numbers"]
-        R2["Molecule-facing schema\nentry witness ABI"]
+        R2["Molecule-facing schema\nentry witness + lock args ABI"]
         R3["CKB Blake2b\nartifact + deployment hashes"]
         R4["hash_type / CellDep / DepGroup policy"]
         R5["capacity policy\nwith_capacity_floor, occupied_capacity,\ntx-size and cycle evidence"]

@@ -21,7 +21,7 @@ concepts:
 | `lock` | Spend predicate entrypoint compiled to ckb-vm RISC-V. |
 | `protected` | Marks a typed input Cell view guarded by the current lock invocation. |
 | `witness` | Marks typed transaction witness data; it is not signer authority by itself. |
-| `lock_args` | Reserved typed script-args source; currently fail-closed until binding is implemented. |
+| `lock_args` | Typed fixed-width script-args source; this is data-source binding only, not signer authority. |
 | `require` | Fail the current script validation when a lock condition is false. |
 
 The strongest design point is that persistent state is explicit. Ordinary local
@@ -35,8 +35,9 @@ The 2026-04-26 surface pass keeps this alignment intact. Its completed changes
 are presentation-level or classification-level: cleaner example modules,
 DSL-native capability declarations, field shorthand, typed empty `Vec<T>`
 literals, and explicit `protected` / `witness` / `require` lock syntax. It does
-not add implicit signer authority, hidden sighash defaults, or active
-`lock_args` binding.
+not add implicit signer authority or hidden sighash defaults. The 0.14 branch
+adds fixed-width `lock_args` binding as a source classification, not as
+authorization proof.
 
 The 0.13 compiler also exposes CKB-specific evidence instead of hiding it behind
 a generic artifact:
@@ -79,13 +80,13 @@ lock predicates and the bundled lock predicates are exercised with positive and
 negative on-chain spend cases. That still does not make a witness `Address`
 parameter a cryptographic signer proof by itself. In CKB terms, the current
 syntax should be read as a typed view over one guarded input Cell plus decoded
-witness data. It is not an implicit lock-args binding, not a hidden
-`WitnessArgs.lock` convention, and not automatic sighash verification.
+witness data and, where declared, typed script args. It is not a hidden
+`WitnessArgs.lock` convention and not automatic sighash verification.
 
 For 0.13 follow-up, the recommended order is:
 
-1. Add explicit `lock_args` and sighash verification primitives before adding a
-   higher-level verified signer abstraction.
+1. Add explicit sighash verification primitives before adding a higher-level
+   verified signer abstraction.
 2. Make mutable Cell transitions declare continuity requirements explicitly.
 3. Turn common capacity and timelock assumptions from report-only evidence into
    DSL-level policy where the compiler can check them.

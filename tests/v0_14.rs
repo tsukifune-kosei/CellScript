@@ -45,10 +45,11 @@ action capacity_and_time(amount: u64) -> Token {
     create Token { amount }
 }
 
-lock owner_lock(wallet: protected Wallet, claimed_owner: witness Address) -> bool {
+lock owner_lock(wallet: protected Wallet, owner: lock_args Address, claimed_owner: witness Address) -> bool {
     let view = source::group_input(0)
     let sig = witness::lock(view)
     let digest = env::sighash_all(view)
+    require owner == wallet.owner
     require sig == digest
 }
 
@@ -65,6 +66,7 @@ lock output_witness_lock(wallet: protected Wallet, claimed_owner: witness Addres
     let features = &result.metadata.runtime.ckb_runtime_features;
     for expected in [
         "ckb-spawn-ipc",
+        "ckb-lock-args",
         "ckb-source-view",
         "ckb-witness-args",
         "ckb-sighash-all",
@@ -76,6 +78,12 @@ lock output_witness_lock(wallet: protected Wallet, claimed_owner: witness Addres
 
     assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| {
         access.operation == "witness-lock" && access.syscall == "LOAD_WITNESS_ARGS_LOCK" && access.source == "GroupInput"
+    }));
+    assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| {
+        access.operation == "lock-args"
+            && access.syscall == "LOAD_SCRIPT_ARGS"
+            && access.source == "ScriptArgs"
+            && access.binding == "owner"
     }));
     assert!(result
         .metadata
@@ -137,6 +145,7 @@ lock output_witness_lock(wallet: protected Wallet, claimed_owner: witness Addres
     assert!(output_group.output_sources.contains(&"GroupOutput".to_string()));
     assert!(output_group.group_scoped_sources.contains(&"GroupOutput".to_string()));
     assert_eq!(result.metadata.target_profile.spawn_ipc_abi, "ckb-vm-v2-spawn-ipc-syscalls-2601-2608");
+    assert_eq!(result.metadata.target_profile.lock_args_abi, "ckb-script-args-typed-fixed-bytes");
     assert_eq!(result.metadata.target_profile.source_encoding, "ckb-source-group-high-bit");
     assert_eq!(result.metadata.target_profile.cell_dep_abi, "ckb-cell-dep-outpoint-and-dep-group");
     assert_eq!(result.metadata.target_profile.script_ref_abi, "ckb-script-code-hash-hash-type-args");
@@ -146,6 +155,7 @@ lock output_witness_lock(wallet: protected Wallet, claimed_owner: witness Addres
 
     let profile_abi = &result.metadata.constraints.ckb.as_ref().expect("CKB constraints").profile_abi_contract;
     assert_eq!(profile_abi.witness_abi, result.metadata.target_profile.witness_abi);
+    assert_eq!(profile_abi.lock_args_abi, result.metadata.target_profile.lock_args_abi);
     assert_eq!(profile_abi.source_encoding, result.metadata.target_profile.source_encoding);
     assert_eq!(profile_abi.spawn_ipc_abi, result.metadata.target_profile.spawn_ipc_abi);
     assert_eq!(profile_abi.since_abi, result.metadata.target_profile.since_abi);

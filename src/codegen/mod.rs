@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, UnaryOp};
+use crate::ast::{BinaryOp, ParamSource, UnaryOp};
 use crate::error::{CompileError, Result};
 use crate::ir::*;
 use crate::runtime_errors::CellScriptRuntimeError;
@@ -601,7 +601,9 @@ impl CodeGenerator {
     }
 
     fn param_is_runtime_bound(&self, param: &IrParam) -> bool {
-        param.is_ref || named_type_name(&param.ty).is_some_and(|name| self.cell_type_names.contains(name))
+        param.source == ParamSource::LockArgs
+            || param.is_ref
+            || named_type_name(&param.ty).is_some_and(|name| self.cell_type_names.contains(name))
     }
 
     pub fn new(options: CodegenOptions) -> Self {
@@ -812,7 +814,10 @@ impl CodeGenerator {
             self.emit(format!("li t6, {}", ENTRY_WITNESS_HEADER_SIZE));
             for (param_index, param) in params.iter().enumerate() {
                 if runtime_bound_param_indices.contains(&param_index) || matches!(param.ty, IrType::Ref(_) | IrType::MutRef(_)) {
-                    self.emit(format!("# cellscript entry abi: runtime-bound param {} is loaded from transaction cells", param.name));
+                    self.emit(format!(
+                        "# cellscript entry abi: runtime-bound param {} is loaded from transaction context",
+                        param.name
+                    ));
                     self.emit_entry_abi_zero_arg(abi_index);
                     self.emit_entry_abi_zero_arg(abi_index + 1);
                     abi_index += 2;
@@ -931,7 +936,10 @@ impl CodeGenerator {
             let mut payload_cursor = 0usize;
             for (param_index, param) in params.iter().enumerate() {
                 if runtime_bound_param_indices.contains(&param_index) || matches!(param.ty, IrType::Ref(_) | IrType::MutRef(_)) {
-                    self.emit(format!("# cellscript entry abi: runtime-bound param {} is loaded from transaction cells", param.name));
+                    self.emit(format!(
+                        "# cellscript entry abi: runtime-bound param {} is loaded from transaction context",
+                        param.name
+                    ));
                     self.emit_entry_abi_zero_arg(abi_index);
                     self.emit_entry_abi_zero_arg(abi_index + 1);
                     abi_index += 2;

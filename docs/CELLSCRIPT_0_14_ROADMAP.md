@@ -24,8 +24,9 @@ CellScript source and metadata.
 | ScriptGroup metadata | Implemented | CKB actions and locks now expose entry kind, active lock/type group kind, selected Source surfaces, and group-scoped Source usage. |
 | outputs/outputs_data binding | Implemented | Each CKB create output records an index-aligned `outputs[i]` to `outputs_data[i]` binding, and metadata validation rejects missing or mismatched bindings. |
 | Structured witness fields | Implemented | `witness::raw`, `witness::lock`, `witness::input_type`, and `witness::output_type` are typed as explicit CKB witness surfaces. |
+| Lock args source | Implemented | Lock parameters can declare `lock_args` for fixed-width typed CKB `Script.args` data. This is source binding only, not signer authority. |
 | Sighash surface | Implemented | `env::sighash_all(source)` is explicit and metadata-visible; no hidden signer derivation is introduced. |
-| Target profile contract | Implemented | Target metadata and `constraints.ckb.profile_abi_contract` now record witness ABI, Source encoding, Spawn/IPC ABI, since ABI, CellDep ABI, script reference ABI, outputs/outputs_data ABI, capacity floor ABI, TYPE_ID ABI, and tx version; `cellc explain-profile ckb` reports the same contract. Metadata validation rejects mismatched profile ABI fields. |
+| Target profile contract | Implemented | Target metadata and `constraints.ckb.profile_abi_contract` now record witness ABI, lock args ABI, Source encoding, Spawn/IPC ABI, since ABI, CellDep ABI, script reference ABI, outputs/outputs_data ABI, capacity floor ABI, TYPE_ID ABI, and tx version; `cellc explain-profile ckb` reports the same contract. Metadata validation rejects mismatched profile ABI fields. |
 | Script reference table | Implemented | `constraints.ckb.script_references` aggregates TYPE_ID script references, spawn CellDep/DepGroup targets, and read_ref CellDep references for audit tooling. |
 | Declarative since/time surface | Implemented | `require_maturity`, `require_time`, `require_epoch_after`, and `require_epoch_relative` are profile-visible runtime checks. |
 | Declarative capacity surface | Implemented | `with_capacity_floor(shannons)` declares a type-level CKB output capacity floor; `occupied_capacity("TypeName")` remains available for runtime-visible capacity evidence. Builders still have to measure occupied capacity and tx size. |
@@ -40,8 +41,9 @@ CellScript source and metadata.
   must provide the child verifier as a resolvable CellDep or DepGroup script
   reference, and metadata exposes that requirement instead of treating the name
   as authority.
-- `witness::lock` and `env::sighash_all` expose data and digest surfaces. They
-  do not create first-class signer authority by themselves.
+- `lock_args`, `witness::lock`, and `env::sighash_all` expose script-args,
+  witness data, and digest surfaces. They do not create first-class signer
+  authority by themselves.
 - Source group views are scoped to the active script group.
 - `outputs` and `outputs_data` are treated as index-aligned CKB transaction
   surfaces. CellScript metadata exposes that boundary; it does not silently

@@ -196,8 +196,8 @@ of hiding it behind account-style authorization language.
 |---|---|---|
 | `protected T` | Typed view of the Cell state guarded by this lock invocation. | One selected input Cell in the current script group, not an output Cell and not a transaction-wide scan. |
 | `witness T` | Typed value decoded from transaction witness data. | User-supplied witness bytes decoded by the entry ABI. It is not a signer proof. |
+| `lock_args T` | Typed fixed-width value decoded from the executing script args. | CKB `Script.args` data for this lock invocation. It is not a signer proof. |
 | `require expr` | Lock predicate failure point. | If `expr` is false, the current script validation fails. |
-| `lock_args T` | Reserved spelling for typed script args. | Future typed decoding of the executing lock script's args; currently fail-closed until binding is implemented. |
 
 Use `require` inside locks. Use `assert_invariant` inside actions for state
 transition checks. This keeps authorization predicates separate from business
@@ -222,8 +222,8 @@ lock misleading(wallet: protected Wallet, signer: witness Address) -> bool {
 ```
 
 Real CKB authorization needs explicit binding to script args, transaction digest
-scope, witness layout, and signature verification. The intended future shape is
-deliberately explicit:
+scope, witness layout, and signature verification. Script args can now be named
+explicitly, but signature verification is still deliberately not implicit:
 
 ```cellscript
 lock signed_owner(
@@ -231,14 +231,16 @@ lock signed_owner(
     owner: lock_args Address,
     sig: witness Signature
 ) -> bool {
-    require verify_sighash_all(sig, owner)
     require wallet.owner == owner
+    require verify_sighash_all(sig, owner)
 }
 ```
 
-Until those primitives are available, treat `Address` and `witness Address` as
-data only. They are useful for expressing and testing lock predicates, but they
-are not cryptographic authorization by themselves.
+`lock_args Address` tells the reader where the owner value comes from. It still
+does not prove a signature. Until explicit verification primitives are
+available, treat `Address` and `witness Address` as data only. They are useful
+for expressing and testing lock predicates, but they are not cryptographic
+authorization by themselves.
 
 ## Assertions
 

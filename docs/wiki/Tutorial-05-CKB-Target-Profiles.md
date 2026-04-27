@@ -35,7 +35,7 @@ The profile checks and records:
 - CKB source constants;
 - CKB header ABI restrictions;
 - raw ELF packaging without ABI trailer;
-- Molecule-facing schema and entry witness metadata;
+- Molecule-facing schema, entry witness metadata, and typed lock args ABI;
 - CKB Blake2b release/deployment hash helper support;
 - manifest-level `hash_type`, CellDep, and DepGroup reporting;
 - declared capacity floors, occupied-capacity checks, tx-size requirements, and
@@ -94,7 +94,8 @@ from the beginning:
 
 The lock-boundary keywords from the previous chapter also matter here.
 `protected` tells readers which input Cell is guarded. `witness` tells readers
-which values come from witness data. Neither one silently verifies a signature.
+which values come from witness data. `lock_args` tells readers which values come
+from CKB `Script.args`. None of them silently verifies a signature.
 
 Capacity has the same boundary discipline. `with_capacity_floor(...)` is a
 source-level floor, and `occupied_capacity("TypeName")` makes capacity policy

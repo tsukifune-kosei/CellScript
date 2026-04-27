@@ -478,7 +478,7 @@ This list is the living implementation tracker for the RFC.
 | `protected` lock parameter classification | Done | Parses as a read-only typed input Cell view and records `source: "protected"` metadata for the current lock invocation's guarded input. |
 | `witness` parameter classification | Done | Records `source: "witness"` metadata; this is still transaction witness data, never signer authority. |
 | `require` lock assertion form | Done | Lowers false conditions to the same fail-closed script validation failure path while producing `true` on success for bool-returning locks. |
-| `lock_args` data-source binding | Reserved | Parser recognizes the spelling, but type checking rejects it until explicit CKB script-args binding is implemented. |
+| `lock_args` data-source binding | Done | Lock parameters may use fixed-width typed script args such as `Address`, `Hash`, integers, bools, or `[u8; N]`; this is data-source binding only, not signer authority. |
 | Explicit sighash verification primitive | Not started | Must define digest mode, script group scope, witness layout, and replay assumptions. |
 | First-class verified signer abstraction | Deferred | Only after explicit verification primitives are proven and documented. |
 | `protects T { self ... }` sugar | Deferred | Wait until `self` binding and lock-group aggregation semantics are exact. |

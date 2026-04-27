@@ -56,7 +56,7 @@ fn validate_compile_options(options: &CompileOptions) -> Result<()> {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-pub const METADATA_SCHEMA_VERSION: u32 = 38;
+pub const METADATA_SCHEMA_VERSION: u32 = 39;
 const STACK_COLLECTION_BACKING_BYTES: usize = 256;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
@@ -133,6 +133,7 @@ impl TargetProfile {
                 header_abi: "ckb-header".to_string(),
                 scheduler_abi: "none".to_string(),
                 witness_abi: "ckb-molecule-witness-args+cellscript-entry-witness-v1".to_string(),
+                lock_args_abi: "ckb-script-args-typed-fixed-bytes".to_string(),
                 source_encoding: "ckb-source-group-high-bit".to_string(),
                 spawn_ipc_abi: "ckb-vm-v2-spawn-ipc-syscalls-2601-2608".to_string(),
                 since_abi: "ckb-since-block-timestamp-epoch-number-with-fraction".to_string(),
@@ -450,6 +451,7 @@ pub struct CkbScriptReferenceMetadata {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CkbProfileAbiContractMetadata {
     pub witness_abi: String,
+    pub lock_args_abi: String,
     pub source_encoding: String,
     pub spawn_ipc_abi: String,
     pub since_abi: String,
@@ -578,6 +580,8 @@ pub struct TargetProfileMetadata {
     pub scheduler_abi: String,
     #[serde(default)]
     pub witness_abi: String,
+    #[serde(default)]
+    pub lock_args_abi: String,
     #[serde(default)]
     pub source_encoding: String,
     #[serde(default)]
@@ -733,6 +737,7 @@ fn validate_target_profile_metadata(metadata: &CompileMetadata, artifact_format:
         ("header_abi", actual.header_abi.as_str(), expected.header_abi.as_str()),
         ("scheduler_abi", actual.scheduler_abi.as_str(), expected.scheduler_abi.as_str()),
         ("witness_abi", actual.witness_abi.as_str(), expected.witness_abi.as_str()),
+        ("lock_args_abi", actual.lock_args_abi.as_str(), expected.lock_args_abi.as_str()),
         ("source_encoding", actual.source_encoding.as_str(), expected.source_encoding.as_str()),
         ("spawn_ipc_abi", actual.spawn_ipc_abi.as_str(), expected.spawn_ipc_abi.as_str()),
         ("since_abi", actual.since_abi.as_str(), expected.since_abi.as_str()),
@@ -969,7 +974,13 @@ fn entry_abi_constraints(entry_kind: &str, entry_name: &str, params: &[ParamMeta
         let mut unsupported_reason = None;
         let pointer_length_pair;
 
-        if param.schema_pointer_abi || param.schema_length_abi {
+        if param.lock_args_data_source {
+            abi_kind =
+                if param.fixed_byte_len.is_some() { "lock-args-fixed-byte".to_string() } else { "lock-args-scalar".to_string() };
+            abi_slots = if param.fixed_byte_len.is_some() { 2 } else { 1 };
+            witness_bytes = 0;
+            pointer_length_pair = param.fixed_byte_len.is_some();
+        } else if param.schema_pointer_abi || param.schema_length_abi {
             abi_kind = if param.type_hash_pointer_abi || param.type_hash_length_abi {
                 "schema-pointer+type-hash-pointer".to_string()
             } else {
@@ -1082,6 +1093,7 @@ fn ckb_constraints(
         limits_source: ckb_limits_source(),
         profile_abi_contract: CkbProfileAbiContractMetadata {
             witness_abi: metadata.target_profile.witness_abi.clone(),
+            lock_args_abi: metadata.target_profile.lock_args_abi.clone(),
             source_encoding: metadata.target_profile.source_encoding.clone(),
             spawn_ipc_abi: metadata.target_profile.spawn_ipc_abi.clone(),
             since_abi: metadata.target_profile.since_abi.clone(),
@@ -2591,7 +2603,10 @@ fn runtime_bound_param_names(
 }
 
 fn param_consumes_entry_witness_payload(param: &ParamMetadata, runtime_bound_param_names: &BTreeSet<String>) -> bool {
-    !param.cell_bound_abi && !param.ty.starts_with('&') && !runtime_bound_param_names.contains(&param.name)
+    !param.lock_args_data_source
+        && !param.cell_bound_abi
+        && !param.ty.starts_with('&')
+        && !runtime_bound_param_names.contains(&param.name)
 }
 
 fn entry_witness_scalar_param_width(ty: &str) -> Option<usize> {
@@ -3644,8 +3659,10 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         action.return_type.as_ref(),
                         &pure_const_returns,
                     );
-                    let ckb_runtime_features = body_ckb_runtime_features(&action.name, &action.body, &cell_type_kinds, &type_layouts);
-                    let ckb_runtime_accesses = body_ckb_runtime_accesses(&action.name, &action.body, &cell_type_kinds, &type_layouts);
+                    let ckb_runtime_features =
+                        merge_ckb_runtime_features(body_ckb_runtime_features(&action.name, &action.body, &cell_type_kinds, &type_layouts), &action.params);
+                    let ckb_runtime_accesses =
+                        merge_ckb_runtime_accesses(body_ckb_runtime_accesses(&action.name, &action.body, &cell_type_kinds, &type_layouts), &action.params);
                     let verifier_obligations = body_verifier_obligations(
                         "action",
                         &action.name,
@@ -3732,9 +3749,14 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         function.return_type.as_ref(),
                         &pure_const_returns,
                     );
-                    let ckb_runtime_features = body_ckb_runtime_features(&function.name, &function.body, &cell_type_kinds, &type_layouts);
-                    let ckb_runtime_accesses =
-                        body_ckb_runtime_accesses(&function.name, &function.body, &cell_type_kinds, &type_layouts);
+                    let ckb_runtime_features = merge_ckb_runtime_features(
+                        body_ckb_runtime_features(&function.name, &function.body, &cell_type_kinds, &type_layouts),
+                        &function.params,
+                    );
+                    let ckb_runtime_accesses = merge_ckb_runtime_accesses(
+                        body_ckb_runtime_accesses(&function.name, &function.body, &cell_type_kinds, &type_layouts),
+                        &function.params,
+                    );
                     let verifier_obligations = body_verifier_obligations(
                         "fn",
                         &function.name,
@@ -3793,8 +3815,10 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         None,
                         &pure_const_returns,
                     );
-                    let ckb_runtime_features = body_ckb_runtime_features(&lock.name, &lock.body, &cell_type_kinds, &type_layouts);
-                    let ckb_runtime_accesses = body_ckb_runtime_accesses(&lock.name, &lock.body, &cell_type_kinds, &type_layouts);
+                    let ckb_runtime_features =
+                        merge_ckb_runtime_features(body_ckb_runtime_features(&lock.name, &lock.body, &cell_type_kinds, &type_layouts), &lock.params);
+                    let ckb_runtime_accesses =
+                        merge_ckb_runtime_accesses(body_ckb_runtime_accesses(&lock.name, &lock.body, &cell_type_kinds, &type_layouts), &lock.params);
                     let verifier_obligations = body_verifier_obligations(
                         "lock",
                         &lock.name,
@@ -4261,15 +4285,18 @@ fn module_ckb_runtime_accesses(
     let mut accesses = Vec::new();
     for item in &ir.items {
         match item {
-            ir::IrItem::Action(action) => {
-                accesses.extend(body_ckb_runtime_accesses(&action.name, &action.body, cell_type_kinds, type_layouts))
-            }
-            ir::IrItem::PureFn(function) => {
-                accesses.extend(body_ckb_runtime_accesses(&function.name, &function.body, cell_type_kinds, type_layouts))
-            }
-            ir::IrItem::Lock(lock) => {
-                accesses.extend(body_ckb_runtime_accesses(&lock.name, &lock.body, cell_type_kinds, type_layouts))
-            }
+            ir::IrItem::Action(action) => accesses.extend(merge_ckb_runtime_accesses(
+                body_ckb_runtime_accesses(&action.name, &action.body, cell_type_kinds, type_layouts),
+                &action.params,
+            )),
+            ir::IrItem::PureFn(function) => accesses.extend(merge_ckb_runtime_accesses(
+                body_ckb_runtime_accesses(&function.name, &function.body, cell_type_kinds, type_layouts),
+                &function.params,
+            )),
+            ir::IrItem::Lock(lock) => accesses.extend(merge_ckb_runtime_accesses(
+                body_ckb_runtime_accesses(&lock.name, &lock.body, cell_type_kinds, type_layouts),
+                &lock.params,
+            )),
             ir::IrItem::TypeDef(_) => {}
         }
     }
@@ -4284,15 +4311,18 @@ fn module_ckb_runtime_features(
     let mut features = BTreeSet::new();
     for item in &ir.items {
         match item {
-            ir::IrItem::Action(action) => {
-                features.extend(body_ckb_runtime_features(&action.name, &action.body, cell_type_kinds, type_layouts))
-            }
-            ir::IrItem::PureFn(function) => {
-                features.extend(body_ckb_runtime_features(&function.name, &function.body, cell_type_kinds, type_layouts))
-            }
-            ir::IrItem::Lock(lock) => {
-                features.extend(body_ckb_runtime_features(&lock.name, &lock.body, cell_type_kinds, type_layouts))
-            }
+            ir::IrItem::Action(action) => features.extend(merge_ckb_runtime_features(
+                body_ckb_runtime_features(&action.name, &action.body, cell_type_kinds, type_layouts),
+                &action.params,
+            )),
+            ir::IrItem::PureFn(function) => features.extend(merge_ckb_runtime_features(
+                body_ckb_runtime_features(&function.name, &function.body, cell_type_kinds, type_layouts),
+                &function.params,
+            )),
+            ir::IrItem::Lock(lock) => features.extend(merge_ckb_runtime_features(
+                body_ckb_runtime_features(&lock.name, &lock.body, cell_type_kinds, type_layouts),
+                &lock.params,
+            )),
             ir::IrItem::TypeDef(_) => {}
         }
     }
@@ -4320,8 +4350,14 @@ fn module_verifier_obligations(
                     action.return_type.as_ref(),
                     pure_const_returns,
                 );
-                let ckb_runtime_features = body_ckb_runtime_features(&action.name, &action.body, cell_type_kinds, type_layouts);
-                let ckb_runtime_accesses = body_ckb_runtime_accesses(&action.name, &action.body, cell_type_kinds, type_layouts);
+                let ckb_runtime_features = merge_ckb_runtime_features(
+                    body_ckb_runtime_features(&action.name, &action.body, cell_type_kinds, type_layouts),
+                    &action.params,
+                );
+                let ckb_runtime_accesses = merge_ckb_runtime_accesses(
+                    body_ckb_runtime_accesses(&action.name, &action.body, cell_type_kinds, type_layouts),
+                    &action.params,
+                );
                 obligations.extend(body_verifier_obligations(
                     "action",
                     &action.name,
@@ -4348,8 +4384,14 @@ fn module_verifier_obligations(
                     function.return_type.as_ref(),
                     pure_const_returns,
                 );
-                let ckb_runtime_features = body_ckb_runtime_features(&function.name, &function.body, cell_type_kinds, type_layouts);
-                let ckb_runtime_accesses = body_ckb_runtime_accesses(&function.name, &function.body, cell_type_kinds, type_layouts);
+                let ckb_runtime_features = merge_ckb_runtime_features(
+                    body_ckb_runtime_features(&function.name, &function.body, cell_type_kinds, type_layouts),
+                    &function.params,
+                );
+                let ckb_runtime_accesses = merge_ckb_runtime_accesses(
+                    body_ckb_runtime_accesses(&function.name, &function.body, cell_type_kinds, type_layouts),
+                    &function.params,
+                );
                 obligations.extend(body_verifier_obligations(
                     "fn",
                     &function.name,
@@ -4376,8 +4418,14 @@ fn module_verifier_obligations(
                     None,
                     pure_const_returns,
                 );
-                let ckb_runtime_features = body_ckb_runtime_features(&lock.name, &lock.body, cell_type_kinds, type_layouts);
-                let ckb_runtime_accesses = body_ckb_runtime_accesses(&lock.name, &lock.body, cell_type_kinds, type_layouts);
+                let ckb_runtime_features = merge_ckb_runtime_features(
+                    body_ckb_runtime_features(&lock.name, &lock.body, cell_type_kinds, type_layouts),
+                    &lock.params,
+                );
+                let ckb_runtime_accesses = merge_ckb_runtime_accesses(
+                    body_ckb_runtime_accesses(&lock.name, &lock.body, cell_type_kinds, type_layouts),
+                    &lock.params,
+                );
                 obligations.extend(body_verifier_obligations(
                     "lock",
                     &lock.name,
@@ -10904,6 +10952,41 @@ fn body_ckb_runtime_features(
     features.into_iter().collect()
 }
 
+fn param_ckb_runtime_features(params: &[ir::IrParam]) -> Vec<String> {
+    let mut features = BTreeSet::new();
+    if params.iter().any(|param| param.source == ast::ParamSource::LockArgs) {
+        features.insert("ckb-lock-args".to_string());
+    }
+    features.into_iter().collect()
+}
+
+fn merge_ckb_runtime_features(body_features: Vec<String>, params: &[ir::IrParam]) -> Vec<String> {
+    body_features.into_iter().chain(param_ckb_runtime_features(params)).collect::<BTreeSet<_>>().into_iter().collect()
+}
+
+fn param_ckb_runtime_accesses(params: &[ir::IrParam]) -> Vec<CkbRuntimeAccessMetadata> {
+    params
+        .iter()
+        .filter(|param| param.source == ast::ParamSource::LockArgs)
+        .enumerate()
+        .map(|(index, param)| CkbRuntimeAccessMetadata {
+            operation: "lock-args".to_string(),
+            syscall: "LOAD_SCRIPT_ARGS".to_string(),
+            source: "ScriptArgs".to_string(),
+            index,
+            binding: param.name.clone(),
+        })
+        .collect()
+}
+
+fn merge_ckb_runtime_accesses(
+    mut body_accesses: Vec<CkbRuntimeAccessMetadata>,
+    params: &[ir::IrParam],
+) -> Vec<CkbRuntimeAccessMetadata> {
+    body_accesses.extend(param_ckb_runtime_accesses(params));
+    body_accesses
+}
+
 fn is_executable_schema_field_access(
     obj: &ir::IrOperand,
     field: &str,
@@ -13619,7 +13702,8 @@ resource Token {
     owner: Address,
 }
 
-lock owner_guard(token: protected Token, claimed_owner: witness Address) -> bool {
+lock owner_guard(token: protected Token, script_owner: lock_args Address, claimed_owner: witness Address) -> bool {
+    require script_owner == token.owner
     require claimed_owner == token.owner
 }
 "#;
@@ -13645,6 +13729,22 @@ resource Token {
 
 lock bad(token: protected Token, owner: lock_args Address) -> bool {
     require owner == token.owner
+}
+"#;
+
+    const LOCK_ARGS_DYNAMIC_PARAM_PROGRAM: &str = r#"
+module test
+
+resource Token {
+    owner: Address,
+}
+
+struct Owner {
+    address: Address,
+}
+
+lock bad(token: protected Token, owner: lock_args Owner) -> bool {
+    require owner.address == token.owner
 }
 "#;
 
@@ -16719,11 +16819,26 @@ action activate(ticket: Ticket) -> Ticket {
         assert!(lock.params[0].protected_spend_surface);
         assert!(!lock.params[0].witness_data_source);
 
-        assert_eq!(lock.params[1].name, "claimed_owner");
+        assert_eq!(lock.params[1].name, "script_owner");
         assert_eq!(lock.params[1].ty, "Address");
-        assert_eq!(lock.params[1].source, "witness");
-        assert!(lock.params[1].witness_data_source);
+        assert_eq!(lock.params[1].source, "lock_args");
+        assert!(lock.params[1].lock_args_data_source);
         assert!(!lock.params[1].protected_spend_surface);
+        assert!(!lock.params[1].witness_data_source);
+
+        assert_eq!(lock.params[2].name, "claimed_owner");
+        assert_eq!(lock.params[2].ty, "Address");
+        assert_eq!(lock.params[2].source, "witness");
+        assert!(lock.params[2].witness_data_source);
+        assert!(!lock.params[2].protected_spend_surface);
+        assert!(!lock.params[2].lock_args_data_source);
+        assert!(lock.ckb_runtime_features.iter().any(|feature| feature == "ckb-lock-args"));
+        assert!(lock.ckb_runtime_accesses.iter().any(|access| {
+            access.operation == "lock-args"
+                && access.syscall == "LOAD_SCRIPT_ARGS"
+                && access.source == "ScriptArgs"
+                && access.binding == "script_owner"
+        }));
     }
 
     #[test]
@@ -16735,11 +16850,11 @@ action activate(ticket: Ticket) -> Ticket {
             action_err.message
         );
 
-        let lock_args_err = compile(LOCK_ARGS_PARAM_PROGRAM, CompileOptions::default()).unwrap_err();
+        compile(LOCK_ARGS_PARAM_PROGRAM, CompileOptions::default()).unwrap();
+
+        let lock_args_err = compile(LOCK_ARGS_DYNAMIC_PARAM_PROGRAM, CompileOptions::default()).unwrap_err();
         assert!(
-            lock_args_err
-                .message
-                .contains("lock_args parameter 'owner' is reserved until explicit CKB script-args binding is implemented"),
+            lock_args_err.message.contains("lock_args lock parameter 'owner' must use a fixed-width script-args type"),
             "unexpected error: {}",
             lock_args_err.message
         );

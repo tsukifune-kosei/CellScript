@@ -920,17 +920,41 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             ParamSource::LockArgs => {
-                return Err(CompileError::new(
-                    format!(
-                        "lock_args parameter '{}' is reserved until explicit CKB script-args binding is implemented; use ordinary parameters or witness classification for now",
-                        param.name
-                    ),
-                    param.span,
-                ));
+                if param.is_mut || param.is_read_ref || matches!(param.ty, Type::Ref(_) | Type::MutRef(_)) {
+                    return Err(CompileError::new(
+                        format!(
+                            "lock_args lock parameter '{}' must be plain typed script args data, not a Cell reference",
+                            param.name
+                        ),
+                        param.span,
+                    ));
+                }
+                if Self::lock_args_static_width(&param.ty).is_none() {
+                    return Err(CompileError::new(
+                        format!(
+                            "lock_args lock parameter '{}' must use a fixed-width script-args type such as Address, Hash, integer, bool, or [u8; N]",
+                            param.name
+                        ),
+                        param.span,
+                    ));
+                }
             }
             ParamSource::Default => {}
         }
         Ok(())
+    }
+
+    fn lock_args_static_width(ty: &Type) -> Option<usize> {
+        match ty {
+            Type::Bool | Type::U8 => Some(1),
+            Type::U16 => Some(2),
+            Type::U32 => Some(4),
+            Type::U64 => Some(8),
+            Type::U128 => Some(16),
+            Type::Address | Type::Hash => Some(32),
+            Type::Array(inner, size) => Self::lock_args_static_width(inner).map(|width| width * size),
+            _ => None,
+        }
     }
 
     fn validate_callable_param_reference_shape(&self, param: &Param, callable_kind: &str, callable_name: &str) -> Result<()> {

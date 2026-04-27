@@ -450,12 +450,12 @@ CKB 假设暴露出来。
 ```mermaid
 flowchart TB
     Source[".cell source + Cell.toml\n--target-profile ckb"] --> Frontend["Lexer + parser\n稳定 source span"]
-    Frontend --> Semantics["Type + lifecycle checks\n线性资源、lock-only require、\nprotected/witness 分类"]
+    Frontend --> Semantics["Type + lifecycle checks\n线性资源、lock-only require、\nprotected/witness/lock_args 分类"]
     Semantics --> Policy["CKB policy gate\n对不支持的 runtime 或状态形状 fail closed"]
 
     subgraph Rules["CKB profile rules"]
         R1["CKB syscall ABI\nsource flags + syscall numbers"]
-        R2["Molecule-facing schema\nentry witness ABI"]
+        R2["Molecule-facing schema\nentry witness + lock args ABI"]
         R3["CKB Blake2b\nartifact + deployment hashes"]
         R4["hash_type / CellDep / DepGroup policy"]
         R5["capacity policy\nwith_capacity_floor、occupied_capacity、\ntx-size 与 cycle evidence"]

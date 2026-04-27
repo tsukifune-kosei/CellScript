@@ -103,6 +103,7 @@ action main(value: u64) -> u64 {
     assert_eq!(dep["index"], 0);
     assert_eq!(dep["hash_type"], "type");
     assert_eq!(ckb["profile_abi_contract"]["witness_abi"], "ckb-molecule-witness-args+cellscript-entry-witness-v1");
+    assert_eq!(ckb["profile_abi_contract"]["lock_args_abi"], "ckb-script-args-typed-fixed-bytes");
     assert_eq!(ckb["profile_abi_contract"]["source_encoding"], "ckb-source-group-high-bit");
     assert_eq!(ckb["profile_abi_contract"]["cell_dep_abi"], "ckb-cell-dep-outpoint-and-dep-group");
     assert_eq!(ckb["profile_abi_contract"]["script_ref_abi"], "ckb-script-code-hash-hash-type-args");
@@ -2842,6 +2843,7 @@ fn cellc_explain_profile_reports_ckb_v0_14_contract() {
     let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(summary["profile"], "ckb");
     assert_eq!(summary["witness_abi"], "ckb-molecule-witness-args+cellscript-entry-witness-v1");
+    assert_eq!(summary["lock_args_abi"], "ckb-script-args-typed-fixed-bytes");
     assert_eq!(summary["source_encoding"], "ckb-source-group-high-bit");
     assert_eq!(summary["spawn_ipc_abi"], "ckb-vm-v2-spawn-ipc-syscalls-2601-2608");
     assert_eq!(summary["since_abi"], "ckb-since-block-timestamp-epoch-number-with-fraction");
@@ -2854,6 +2856,10 @@ fn cellc_explain_profile_reports_ckb_v0_14_contract() {
     assert!(
         boundaries.iter().any(|boundary| boundary.as_str().unwrap_or_default().contains("outputs and outputs_data are index-aligned")),
         "missing outputs_data boundary: {boundaries:?}"
+    );
+    assert!(
+        boundaries.iter().any(|boundary| boundary.as_str().unwrap_or_default().contains("lock_args parameters are typed script args")),
+        "missing lock_args boundary: {boundaries:?}"
     );
     assert!(
         boundaries.iter().any(|boundary| boundary.as_str().unwrap_or_default().contains("capacity floors are declared")),

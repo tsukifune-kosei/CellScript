@@ -96,9 +96,9 @@ lock bad_owner_check(wallet: protected Wallet, signer: witness Address) -> bool 
 Prefer names such as `claimed_owner` or `provided_owner` until the language has
 explicit script-args and sighash verification primitives.
 
-## Recipe: Reserve Script Args For Future Binding
+## Recipe: Bind A Lock Predicate To Script Args
 
-The intended shape for real signature authorization is explicit:
+Use `lock_args` when a lock predicate depends on the executing script's args:
 
 ```cellscript
 lock signed_owner(
@@ -111,8 +111,9 @@ lock signed_owner(
 }
 ```
 
-This is a teaching shape for the future. `lock_args` is reserved and fail-closed
-until typed CKB script-args binding is implemented.
+This makes the data source visible: `owner` comes from CKB `Script.args`, while
+`sig` comes from witness data. It still does not turn either value into signer
+authority by name. Keep signature verification explicit.
 
 ## Recipe: Use Empty Vec Literals Safely
 
