@@ -64,9 +64,9 @@ signature binding.
 Script args are bytes stored in the executing script. They are often used to
 bind a script to a particular owner, policy, or configuration.
 
-CellScript reserves the spelling `lock_args T` for typed script-args decoding.
-That binding is intentionally fail-closed until the compiler and CKB profile
-define it exactly.
+CellScript supports `lock_args T` for fixed-width typed script-args decoding.
+This tells readers that the value comes from the executing `Script.args`; it
+does not prove a signature and does not create signer authority by itself.
 
 ## Lock Group
 

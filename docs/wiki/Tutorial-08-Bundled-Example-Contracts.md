@@ -155,8 +155,9 @@ read it carefully:
 - `require` fails the script if the comparison is false;
 - the comparison does not prove that `claimed_owner` signed the transaction.
 
-Real signature authorization still needs explicit script-args binding, sighash
-verification, and its own positive and negative CKB transaction matrix.
+Real signature authorization still needs explicit sighash verification and its
+own positive and negative CKB transaction matrix. `lock_args` can expose where
+script-args data comes from, but it does not turn an `Address` into a signer.
 
 ## CKB Production Expectations
 

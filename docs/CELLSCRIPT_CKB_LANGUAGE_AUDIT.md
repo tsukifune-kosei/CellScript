@@ -65,7 +65,7 @@ split across compiler metadata, builders, and production evidence.
 
 | Gap | Current status | Required direction |
 |---|---|---|
-| Signer authorization | `witness Address` parameters can prove equality only inside explicit lock predicates such as `vesting_admin`; they still do not prove witness-sighash ownership by themselves. | Add explicit script-args binding, script-hash policy, sighash verification, and later first-class verified signer binding. |
+| Signer authorization | `witness Address` parameters can prove equality only inside explicit lock predicates such as `vesting_admin`; `lock_args Address` now exposes script-args data, but neither value proves witness-sighash ownership by itself. | Add explicit script-hash policy, sighash verification, and later first-class verified signer binding. |
 | Lock behavior | All 16 bundled locks are strict-compiled and covered by builder-backed local CKB valid-spend and invalid-spend transactions. | Keep the matrix mandatory and extend it when new locks enter the bundled production scope. |
 | `&mut` Cell updates | Metadata exposes mutate input/output access, but syntax can look like in-place account storage. | Add explicit continuity policy for type id, lock, data schema, and capacity. |
 | Capacity policy | Capacity evidence is builder/runtime-required and validated by reports. | Promote common capacity requirements into declarative DSL policy where practical. |
@@ -83,7 +83,7 @@ syntax should be read as a typed view over one guarded input Cell plus decoded
 witness data and, where declared, typed script args. It is not a hidden
 `WitnessArgs.lock` convention and not automatic sighash verification.
 
-For 0.13 follow-up, the recommended order is:
+After the 0.14 source-surface work, the recommended order is:
 
 1. Add explicit sighash verification primitives before adding a higher-level
    verified signer abstraction.

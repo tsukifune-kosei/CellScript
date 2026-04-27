@@ -254,7 +254,7 @@ CKB vocabulary mapping:
 |---|---|
 | `protected T` | Typed view of one selected input Cell in the current script group whose spend is guarded by this lock invocation. |
 | `witness T` | Typed data decoded from the transaction witness surface for the entry. |
-| `lock_args T` | Typed decoding of the executing script args, reserved until binding is implemented. |
+| `lock_args T` | Typed fixed-width decoding of the executing script args; this is data-source binding, not signer authority. |
 | `require condition` | Fail the current script if `condition` is false. |
 
 The older `protects NFT { self ... }` spelling may still be considered later,
