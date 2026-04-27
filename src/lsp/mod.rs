@@ -1519,8 +1519,15 @@ pub struct TextDocumentContentChangeEvent {
 ///
 /// Replaces the text in `range` with `new_text`.
 fn apply_incremental_change(content: &str, range: Range, new_text: &str) -> String {
-    let start_offset = position_to_offset(content, range.start).unwrap_or(0);
-    let end_offset = position_to_offset(content, range.end).unwrap_or(content.len());
+    let Some(start_offset) = position_to_offset(content, range.start) else {
+        return content.to_string();
+    };
+    let Some(end_offset) = position_to_offset(content, range.end) else {
+        return content.to_string();
+    };
+    if start_offset > end_offset {
+        return content.to_string();
+    }
     let mut result = String::with_capacity(content.len() + new_text.len());
     result.push_str(&content[..start_offset]);
     result.push_str(new_text);
@@ -2008,6 +2015,25 @@ mod tests {
         );
 
         assert_eq!(updated, "module demo\n// 😀 done\n");
+    }
+
+    #[test]
+    fn test_incremental_change_ignores_invalid_utf16_ranges() {
+        let source = "module demo\n// 😀 marker\n";
+
+        let invalid_surrogate_middle = apply_incremental_change(
+            source,
+            Range { start: Position { line: 1, character: 4 }, end: Position { line: 1, character: 4 } },
+            "bad",
+        );
+        assert_eq!(invalid_surrogate_middle, source);
+
+        let reversed = apply_incremental_change(
+            source,
+            Range { start: Position { line: 1, character: 12 }, end: Position { line: 1, character: 8 } },
+            "bad",
+        );
+        assert_eq!(reversed, source);
     }
 
     #[test]
