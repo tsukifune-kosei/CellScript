@@ -458,7 +458,7 @@ flowchart TB
         R2["Molecule-facing schema\nentry witness ABI"]
         R3["CKB Blake2b\nartifact + deployment hashes"]
         R4["hash_type / CellDep / DepGroup policy"]
-        R5["capacity、tx-size、\ncycle evidence requirements"]
+        R5["capacity policy\nwith_capacity_floor、occupied_capacity、\ntx-size 与 cycle evidence"]
     end
 
     Rules --> Policy
@@ -470,7 +470,7 @@ flowchart TB
     Artifact --> Verify["cellc verify-artifact\nprofile、source hash、\nartifact hash、policy flags"]
     Metadata --> Verify
 
-    Artifact --> Builder["builder workflow\ninputs、outputs、witness、\ncell_deps、capacity"]
+    Artifact --> Builder["builder workflow\ninputs、outputs、outputs_data、\nwitness、cell_deps、capacity floors"]
     Metadata --> Builder
     Builder --> Acceptance["CKB acceptance gate\ndry-run、commit、cycles、\ntx size、occupied capacity、\nvalid/invalid lock matrix"]
 ```
@@ -483,6 +483,12 @@ flowchart TB
   hash、target profile 和选定 policy flags 一致；
 - **链上证据边界** — builder 和 acceptance 脚本证明具体 CKB 交易形状、
   capacity、cycles、tx size，以及 lock/action 行为。
+
+这个 profile 里的 capacity 分成两层：`with_capacity_floor(shannons)` 声明
+某个类型输出的最低容量，并进入 metadata 和 constraints；
+`occupied_capacity("TypeName")` 继续提供运行时可见的 capacity 检查。二者都
+不替代 builder 证据：最终交易仍然要测量 occupied capacity，确保 output
+capacity 足够，并保留 tx-size evidence。
 
 ### Wasm 门禁
 

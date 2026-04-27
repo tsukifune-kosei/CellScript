@@ -156,6 +156,55 @@ lock output_witness_lock(wallet: protected Wallet, claimed_owner: witness Addres
 }
 
 #[test]
+fn v0_14_exposes_declarative_capacity_floor_metadata() {
+    let source = r#"
+module cellscript::v0_14_capacity_floor
+
+resource Token has store
+with_capacity_floor(6100000000)
+{
+    amount: u64,
+}
+
+action mint(amount: u64) -> Token {
+    create Token { amount }
+}
+"#;
+
+    let result = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() }).unwrap();
+    let token = result.metadata.types.iter().find(|ty| ty.name == "Token").expect("Token metadata");
+    assert_eq!(token.capacity_floor_shannons, Some(6_100_000_000));
+    assert_eq!(token.capacity_floor_source.as_deref(), Some("dsl-with_capacity_floor"));
+    let ckb_constraints = result.metadata.constraints.ckb.as_ref().expect("CKB constraints");
+    assert_eq!(
+        ckb_constraints.capacity_policy_surface,
+        "dsl-declared-capacity-floor; builder/runtime-required-for-change-and-measurement"
+    );
+    assert_eq!(ckb_constraints.declared_capacity_floors.len(), 1);
+    let floor = &ckb_constraints.declared_capacity_floors[0];
+    assert_eq!(floor.type_name, "Token");
+    assert_eq!(floor.shannons, 6_100_000_000);
+    assert_eq!(floor.source, "dsl-with_capacity_floor");
+    assert_eq!(floor.status, "builder-must-preserve-output-capacity-at-or-above-floor");
+    result.validate().unwrap();
+
+    let err = compile(
+        r#"
+module cellscript::bad_capacity_floor
+
+resource Token has store
+with_capacity_floor(0)
+{
+    amount: u64,
+}
+"#,
+        CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
+    )
+    .unwrap_err();
+    assert!(err.message.contains("capacity floor must be greater than zero"), "unexpected error: {}", err.message);
+}
+
+#[test]
 fn v0_14_exposes_type_id_create_output_plan_and_output_data_boundary() {
     let source = r#"
 module cellscript::v0_14_type_id

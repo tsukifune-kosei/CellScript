@@ -16,6 +16,12 @@ struct PendingAttrs {
     scheduler_hint: Option<SchedulerHint>,
 }
 
+#[derive(Debug, Default, Clone)]
+struct TypePolicyDecls {
+    default_hash_type: Option<HashTypeDecl>,
+    capacity_floor: Option<CapacityFloorDecl>,
+}
+
 impl<'a> Parser<'a> {
     pub fn new(tokens: &'a [Token]) -> Self {
         Self { tokens, position: 0 }
@@ -23,6 +29,13 @@ impl<'a> Parser<'a> {
 
     fn current(&self) -> &Token {
         &self.tokens[self.position.min(self.tokens.len() - 1)]
+    }
+
+    fn current_identifier(&self) -> Option<String> {
+        match &self.current().kind {
+            TokenKind::Identifier(name) => Some(name.clone()),
+            _ => None,
+        }
     }
 
     fn peek(&self, offset: usize) -> &Token {
@@ -480,7 +493,7 @@ impl<'a> Parser<'a> {
 
         let capabilities = merge_capabilities(attr_capabilities, self.parse_capabilities()?);
         self.skip_newlines();
-        let default_hash_type = self.parse_default_hash_type_decl()?;
+        let type_policy = self.parse_type_policy_decls()?;
         self.skip_newlines();
 
         let fields = self.parse_fields()?;
@@ -489,7 +502,8 @@ impl<'a> Parser<'a> {
         Ok(ResourceDef {
             name,
             type_id,
-            default_hash_type,
+            default_hash_type: type_policy.default_hash_type,
+            capacity_floor: type_policy.capacity_floor,
             capabilities,
             fields,
             span: Span::new(start_span.start, end_span.end, start_span.line, start_span.column),
@@ -505,7 +519,7 @@ impl<'a> Parser<'a> {
 
         let capabilities = merge_capabilities(attr_capabilities, self.parse_capabilities()?);
         self.skip_newlines();
-        let default_hash_type = self.parse_default_hash_type_decl()?;
+        let type_policy = self.parse_type_policy_decls()?;
         self.skip_newlines();
         let fields = self.parse_fields()?;
 
@@ -513,7 +527,8 @@ impl<'a> Parser<'a> {
         Ok(SharedDef {
             name,
             type_id,
-            default_hash_type,
+            default_hash_type: type_policy.default_hash_type,
+            capacity_floor: type_policy.capacity_floor,
             capabilities,
             fields,
             span: Span::new(start_span.start, end_span.end, start_span.line, start_span.column),
@@ -548,7 +563,7 @@ impl<'a> Parser<'a> {
 
         let capabilities = merge_capabilities(attr_capabilities, self.parse_capabilities()?);
         self.skip_newlines();
-        let default_hash_type = self.parse_default_hash_type_decl()?;
+        let type_policy = self.parse_type_policy_decls()?;
         self.skip_newlines();
         let fields = self.parse_fields()?;
 
@@ -556,7 +571,8 @@ impl<'a> Parser<'a> {
         Ok(ReceiptDef {
             name,
             type_id,
-            default_hash_type,
+            default_hash_type: type_policy.default_hash_type,
+            capacity_floor: type_policy.capacity_floor,
             claim_output,
             lifecycle,
             capabilities,
@@ -597,7 +613,7 @@ impl<'a> Parser<'a> {
         self.reject_generic_type_params(&name)?;
 
         self.skip_newlines();
-        let default_hash_type = self.parse_default_hash_type_decl()?;
+        let type_policy = self.parse_type_policy_decls()?;
         self.skip_newlines();
         let fields = self.parse_fields()?;
 
@@ -605,16 +621,43 @@ impl<'a> Parser<'a> {
         Ok(StructDef {
             name,
             type_id,
-            default_hash_type,
+            default_hash_type: type_policy.default_hash_type,
+            capacity_floor: type_policy.capacity_floor,
             fields,
             span: Span::new(start_span.start, end_span.end, start_span.line, start_span.column),
         })
     }
 
-    fn parse_default_hash_type_decl(&mut self) -> Result<Option<HashTypeDecl>> {
-        if !matches!(&self.current().kind, TokenKind::Identifier(name) if name == "with_default_hash_type") {
-            return Ok(None);
+    fn parse_type_policy_decls(&mut self) -> Result<TypePolicyDecls> {
+        let mut policy = TypePolicyDecls::default();
+        loop {
+            self.skip_newlines();
+            let Some(name) = self.current_identifier() else {
+                break;
+            };
+            match name.as_str() {
+                "with_default_hash_type" => {
+                    if policy.default_hash_type.is_some() {
+                        return Err(crate::error::CompileError::new(
+                            "duplicate with_default_hash_type declaration",
+                            self.current().span,
+                        ));
+                    }
+                    policy.default_hash_type = Some(self.parse_default_hash_type_decl()?);
+                }
+                "with_capacity_floor" => {
+                    if policy.capacity_floor.is_some() {
+                        return Err(crate::error::CompileError::new("duplicate with_capacity_floor declaration", self.current().span));
+                    }
+                    policy.capacity_floor = Some(self.parse_capacity_floor_decl()?);
+                }
+                _ => break,
+            }
         }
+        Ok(policy)
+    }
+
+    fn parse_default_hash_type_decl(&mut self) -> Result<HashTypeDecl> {
         let start_span = self.current().span;
         self.advance();
         self.expect(TokenKind::LParen)?;
@@ -626,7 +669,31 @@ impl<'a> Parser<'a> {
                 start_span,
             )
         })?;
-        Ok(Some(HashTypeDecl { value: normalized, span: start_span }))
+        Ok(HashTypeDecl { value: normalized, span: start_span })
+    }
+
+    fn parse_capacity_floor_decl(&mut self) -> Result<CapacityFloorDecl> {
+        let start_span = self.current().span;
+        self.advance();
+        self.expect(TokenKind::LParen)?;
+        let shannons = match &self.current().kind {
+            TokenKind::Integer(value) => {
+                let value = *value;
+                self.advance();
+                value
+            }
+            _ => {
+                return Err(crate::error::CompileError::new(
+                    "expected integer shannon value in with_capacity_floor(...)",
+                    self.current().span,
+                ));
+            }
+        };
+        self.expect(TokenKind::RParen)?;
+        if shannons == 0 {
+            return Err(crate::error::CompileError::new("capacity floor must be greater than zero shannons", start_span));
+        }
+        Ok(CapacityFloorDecl { shannons, span: start_span })
     }
 
     fn parse_const(&mut self) -> Result<ConstDef> {

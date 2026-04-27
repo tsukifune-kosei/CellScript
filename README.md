@@ -480,7 +480,7 @@ flowchart TB
         R2["Molecule-facing schema\nentry witness ABI"]
         R3["CKB Blake2b\nartifact + deployment hashes"]
         R4["hash_type / CellDep / DepGroup policy"]
-        R5["capacity, tx-size,\ncycle evidence requirements"]
+        R5["capacity policy\nwith_capacity_floor, occupied_capacity,\ntx-size and cycle evidence"]
     end
 
     Rules --> Policy
@@ -492,7 +492,7 @@ flowchart TB
     Artifact --> Verify["cellc verify-artifact\nprofile, source hash,\nartifact hash, policy flags"]
     Metadata --> Verify
 
-    Artifact --> Builder["builder workflow\ninputs, outputs, witness,\ncell_deps, capacity"]
+    Artifact --> Builder["builder workflow\ninputs, outputs, outputs_data,\nwitness, cell_deps, capacity floors"]
     Metadata --> Builder
     Builder --> Acceptance["CKB acceptance gate\ndry-run, commit, cycles,\ntx size, occupied capacity,\nvalid/invalid lock matrix"]
 ```
@@ -505,6 +505,12 @@ This separates three boundaries:
   source hash, target profile, and selected policy flags agree;
 - **chain-evidence boundary** — builders and acceptance scripts prove concrete
   CKB transaction shape, capacity, cycles, tx size, and lock/action behavior.
+
+Capacity in this profile has two layers. `with_capacity_floor(shannons)`
+declares a type-level output floor that is visible in metadata and constraints.
+`occupied_capacity("TypeName")` keeps runtime-visible capacity checks available.
+Neither replaces builder evidence: the final transaction still has to measure
+occupied capacity, provide enough output capacity, and record tx-size evidence.
 
 ### Wasm Gate
 

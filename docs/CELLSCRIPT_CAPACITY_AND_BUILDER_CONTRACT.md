@@ -1,11 +1,31 @@
 # CellScript Capacity And Builder Contract
 
-**Status**: production builder contract for CellScript 0.12.
+**Status**: CKB builder contract.
 
 CellScript exposes capacity requirements, but it does not claim to statically
 prove every CKB transaction's occupied capacity. Capacity is a transaction-level
 fact because it depends on concrete lock/type scripts, output data, fees, and
 builder-selected cell layout.
+
+## Source-Level Capacity Declarations
+
+CellScript supports a conservative type-level floor:
+
+```cell
+resource TimedToken has store
+with_capacity_floor(6100000000)
+{
+    amount: u64,
+}
+```
+
+`with_capacity_floor(...)` records a minimum output capacity in shannons for
+that typed cell. The compiler carries it into `TypeMetadata` and
+`constraints.ckb.declared_capacity_floors`.
+
+This is not full capacity proof. It gives builders and auditors a declared
+floor to preserve while the builder still computes the real occupied capacity
+for the final `CellOutput` and output data.
 
 ## Compiler Output
 
@@ -13,6 +33,7 @@ For CKB artifacts, `constraints.ckb.capacity_evidence_contract` includes:
 
 - code cell lower-bound capacity
 - recommended code cell capacity margin
+- declared type-level capacity floors, when present
 - whether occupied-capacity evidence is required
 - whether consensus transaction-size evidence is required
 - measured occupied capacity, when supplied by acceptance/builder tooling
@@ -56,6 +77,7 @@ not use a local approximation and rejects transactions whose `outputs` and
 
 A production builder must:
 
+- preserve any `constraints.ckb.declared_capacity_floors` on matching outputs
 - compute occupied capacity for every output
 - reject under-capacity outputs before submission
 - retain measured occupied-capacity evidence in release reports

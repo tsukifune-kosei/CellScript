@@ -56,7 +56,7 @@ fn validate_compile_options(options: &CompileOptions) -> Result<()> {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-pub const METADATA_SCHEMA_VERSION: u32 = 36;
+pub const METADATA_SCHEMA_VERSION: u32 = 37;
 const STACK_COLLECTION_BACKING_BYTES: usize = 256;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
@@ -419,8 +419,18 @@ pub struct CkbConstraintsMetadata {
     pub mutated_output_count: usize,
     pub capacity_planning_required: bool,
     pub capacity_policy_surface: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub declared_capacity_floors: Vec<CkbCapacityFloorMetadata>,
     #[serde(default)]
     pub capacity_evidence_contract: CkbCapacityEvidenceContractMetadata,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CkbCapacityFloorMetadata {
+    pub type_name: String,
+    pub shannons: u64,
+    pub source: String,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -695,6 +705,7 @@ pub fn validate_compile_metadata(metadata: &CompileMetadata, artifact_format: Ar
         ));
     }
     validate_type_identity_metadata(metadata)?;
+    validate_capacity_floor_metadata(metadata)?;
     validate_ckb_output_data_binding_metadata(metadata)?;
     validate_ckb_type_id_output_metadata(metadata)?;
     validate_molecule_schema_metadata(metadata)?;
@@ -1032,6 +1043,19 @@ fn ckb_constraints(
         .chain(metadata.locks.iter().map(|lock| lock.mutate_set.len()))
         .sum();
     let capacity_planning_required = created_output_count > 0 || mutated_output_count > 0;
+    let declared_capacity_floors = metadata
+        .types
+        .iter()
+        .filter_map(|ty| {
+            ty.capacity_floor_shannons.map(|shannons| CkbCapacityFloorMetadata {
+                type_name: ty.name.clone(),
+                shannons,
+                source: ty.capacity_floor_source.clone().unwrap_or_else(|| "dsl-with_capacity_floor".to_string()),
+                status: "builder-must-preserve-output-capacity-at-or-above-floor".to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let has_declared_capacity_floors = !declared_capacity_floors.is_empty();
     CkbConstraintsMetadata {
         limits_source: ckb_limits_source(),
         profile_abi_contract: CkbProfileAbiContractMetadata {
@@ -1121,11 +1145,14 @@ fn ckb_constraints(
         created_output_count,
         mutated_output_count,
         capacity_planning_required,
-        capacity_policy_surface: if capacity_planning_required {
+        capacity_policy_surface: if has_declared_capacity_floors {
+            "dsl-declared-capacity-floor; builder/runtime-required-for-change-and-measurement".to_string()
+        } else if capacity_planning_required {
             "builder/runtime-required; declarative-dsl-capacity-not-yet-first-class".to_string()
         } else {
             "not-applicable".to_string()
         },
+        declared_capacity_floors,
         capacity_evidence_contract: CkbCapacityEvidenceContractMetadata {
             required: true,
             code_cell_lower_bound_shannons: min_code_cell_data_capacity_shannons,
@@ -1535,6 +1562,37 @@ fn validate_type_identity_metadata(metadata: &CompileMetadata) -> Result<()> {
 
         if let Some(ckb_type_id) = &ty.ckb_type_id {
             validate_ckb_type_id_metadata(metadata, ty, ckb_type_id)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_capacity_floor_metadata(metadata: &CompileMetadata) -> Result<()> {
+    for ty in &metadata.types {
+        match (ty.capacity_floor_shannons, ty.capacity_floor_source.as_deref()) {
+            (Some(0), _) => {
+                return Err(CompileError::without_span(format!("metadata type '{}' has zero capacity_floor_shannons", ty.name)));
+            }
+            (Some(_), Some("dsl-with_capacity_floor")) => {}
+            (Some(_), Some(source)) => {
+                return Err(CompileError::without_span(format!(
+                    "metadata type '{}' has unsupported capacity_floor_source '{}'",
+                    ty.name, source
+                )));
+            }
+            (Some(_), None) => {
+                return Err(CompileError::without_span(format!(
+                    "metadata type '{}' has capacity_floor_shannons but is missing capacity_floor_source",
+                    ty.name
+                )));
+            }
+            (None, Some(source)) => {
+                return Err(CompileError::without_span(format!(
+                    "metadata type '{}' has capacity_floor_source '{}' but no capacity_floor_shannons",
+                    ty.name, source
+                )));
+            }
+            (None, None) => {}
         }
     }
     Ok(())
@@ -2137,6 +2195,10 @@ pub struct TypeMetadata {
     pub default_hash_type: Option<String>,
     #[serde(default)]
     pub hash_type_source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_floor_shannons: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_floor_source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub type_id_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -11336,6 +11398,8 @@ fn type_metadata(
         } else {
             "target-default".to_string()
         },
+        capacity_floor_shannons: type_def.capacity_floor_shannons,
+        capacity_floor_source: type_def.capacity_floor_shannons.map(|_| "dsl-with_capacity_floor".to_string()),
         type_id_hash,
         ckb_type_id,
         kind: format!("{:?}", type_def.kind),

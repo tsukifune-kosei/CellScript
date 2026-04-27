@@ -38,7 +38,8 @@ The profile checks and records:
 - Molecule-facing schema and entry witness metadata;
 - CKB Blake2b release/deployment hash helper support;
 - manifest-level `hash_type`, CellDep, and DepGroup reporting;
-- capacity, tx-size, and builder-evidence requirements in constraints;
+- declared capacity floors, occupied-capacity checks, tx-size requirements, and
+  builder-evidence requirements in constraints;
 - CKB policy checks for unsupported runtime or stateful shapes.
 
 The point is not to make compilation harder. The point is to avoid producing an
@@ -82,6 +83,8 @@ from the beginning:
 - prefer fixed-size persistent schema fields;
 - keep action entry parameters explicit;
 - use `env::current_timepoint()` for time-aware checks;
+- use `with_capacity_floor(shannons)` when a typed output has a known minimum
+  capacity requirement;
 - record CKB `hash_type`, CellDeps, and DepGroups in `Cell.toml`;
 - inspect `cellc constraints --target-profile ckb --json` before deployment;
 - inspect witness layout with `cellc abi` or `cellc entry-witness`;
@@ -92,6 +95,11 @@ from the beginning:
 The lock-boundary keywords from the previous chapter also matter here.
 `protected` tells readers which input Cell is guarded. `witness` tells readers
 which values come from witness data. Neither one silently verifies a signature.
+
+Capacity has the same boundary discipline. `with_capacity_floor(...)` is a
+source-level floor, and `occupied_capacity("TypeName")` makes capacity policy
+visible to reports. The final transaction still needs builder-side occupied
+capacity measurement, enough output capacity, and tx-size evidence.
 
 ## Evidence Beyond Compilation
 

@@ -26,6 +26,7 @@ pub struct ResourceDef {
     pub name: String,
     pub type_id: Option<TypeIdentity>,
     pub default_hash_type: Option<HashTypeDecl>,
+    pub capacity_floor: Option<CapacityFloorDecl>,
     pub capabilities: Vec<Capability>,
     pub fields: Vec<Field>,
     pub span: Span,
@@ -36,6 +37,7 @@ pub struct SharedDef {
     pub name: String,
     pub type_id: Option<TypeIdentity>,
     pub default_hash_type: Option<HashTypeDecl>,
+    pub capacity_floor: Option<CapacityFloorDecl>,
     pub capabilities: Vec<Capability>,
     pub fields: Vec<Field>,
     pub span: Span,
@@ -46,6 +48,7 @@ pub struct ReceiptDef {
     pub name: String,
     pub type_id: Option<TypeIdentity>,
     pub default_hash_type: Option<HashTypeDecl>,
+    pub capacity_floor: Option<CapacityFloorDecl>,
     pub claim_output: Option<Type>,
     pub lifecycle: Option<Lifecycle>,
     pub capabilities: Vec<Capability>,
@@ -58,6 +61,7 @@ pub struct StructDef {
     pub name: String,
     pub type_id: Option<TypeIdentity>,
     pub default_hash_type: Option<HashTypeDecl>,
+    pub capacity_floor: Option<CapacityFloorDecl>,
     pub fields: Vec<Field>,
     pub span: Span,
 }
@@ -71,6 +75,12 @@ pub struct TypeIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HashTypeDecl {
     pub value: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapacityFloorDecl {
+    pub shannons: u64,
     pub span: Span,
 }
 

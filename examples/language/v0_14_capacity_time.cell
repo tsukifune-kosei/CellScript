@@ -1,6 +1,8 @@
 module cellscript::language::v0_14_capacity_time
 
-resource TimedToken has store {
+resource TimedToken has store
+with_capacity_floor(6100000000)
+{
     amount: u64,
 }
 

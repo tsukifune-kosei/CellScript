@@ -28,7 +28,7 @@ CellScript source and metadata.
 | Target profile contract | Implemented | Target metadata and `constraints.ckb.profile_abi_contract` now record witness ABI, Source encoding, Spawn/IPC ABI, since ABI, CellDep ABI, script reference ABI, outputs/outputs_data ABI, TYPE_ID ABI, and tx version; `cellc explain-profile ckb` reports the same contract. |
 | Script reference table | Implemented | `constraints.ckb.script_references` aggregates TYPE_ID script references, spawn CellDep/DepGroup targets, and read_ref CellDep references for audit tooling. |
 | Declarative since/time surface | Implemented | `require_maturity`, `require_time`, `require_epoch_after`, and `require_epoch_relative` are profile-visible runtime checks. |
-| Declarative capacity surface | Implemented | `occupied_capacity("TypeName")` exposes capacity policy through runtime features and metadata. |
+| Declarative capacity surface | Implemented | `with_capacity_floor(shannons)` declares a type-level CKB output capacity floor; `occupied_capacity("TypeName")` remains available for runtime-visible capacity evidence. Builders still have to measure occupied capacity and tx size. |
 | Dynamic BLAKE2b policy | Implemented as fail-closed | `hash_blake2b` is rejected until a real linked RISC-V implementation is selected; `hash_chain` is metadata-visible. |
 | v0.14 examples | Implemented | Language examples cover delegate verification, Spawn/IPC pipelines, witness/source views, TYPE_ID creation, and capacity/time policy. |
 
@@ -48,6 +48,9 @@ CellScript source and metadata.
   remap output data between cells.
 - Script references keep `code_hash`, `hash_type`, and `args` visible through
   the target profile and deployment metadata.
+- `with_capacity_floor(...)` is a declared output-capacity floor, not full
+  capacity evidence. Builders still need to fund outputs, measure occupied
+  capacity, and attach tx-size evidence.
 - TYPE_ID support uses the CKB TYPE_ID ABI and remains tied to explicit
   builder/deployment evidence.
 - Dynamic in-script BLAKE2b remains fail-closed until linked implementation,

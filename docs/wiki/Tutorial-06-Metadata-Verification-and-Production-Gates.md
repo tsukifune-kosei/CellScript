@@ -116,6 +116,7 @@ You do not need to memorize the whole sidecar. Start with these fields:
 - `constraints.artifact`
 - `constraints.entry_abi`
 - `constraints.ckb.capacity_evidence_contract`
+- `constraints.ckb.declared_capacity_floors`
 - `constraints.ckb.hash_type_policy`
 - `constraints.ckb.dep_group_manifest`
 - `scheduler`
