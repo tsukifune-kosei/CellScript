@@ -276,6 +276,13 @@ pub struct TypeChecker<'a> {
     current_return_type: Option<Option<Type>>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct SpawnIpcFdState {
+    aliases: HashMap<String, String>,
+    closed: HashSet<String>,
+    pipe_tuples: HashMap<String, (String, String)>,
+}
+
 fn function_def_kind(function: &FunctionDef) -> CallableKind {
     match function {
         FunctionDef::Action(_) => CallableKind::Action,
@@ -614,6 +621,7 @@ impl<'a> TypeChecker<'a> {
             }
             let return_env = env.clone();
             self.check_no_unreachable_stmts(&action.body)?;
+            self.validate_spawn_ipc_fd_usage(&action.body)?;
 
             let tail = self.check_body_statements(&mut env, &action.body)?;
 
@@ -681,6 +689,7 @@ impl<'a> TypeChecker<'a> {
 
             self.bind_callable_params(&mut env, &lock.params, "lock", &lock.name)?;
             self.check_no_unreachable_stmts(&lock.body)?;
+            self.validate_spawn_ipc_fd_usage(&lock.body)?;
 
             let tail = self.check_body_statements(&mut env, &lock.body)?;
 
@@ -1022,6 +1031,215 @@ impl<'a> TypeChecker<'a> {
         let tail_base = env.clone();
         self.check_stmt(env, last)?;
         Ok(Some((tail_base, last)))
+    }
+
+    fn validate_spawn_ipc_fd_usage(&self, body: &[Stmt]) -> Result<()> {
+        let mut state = SpawnIpcFdState::default();
+        self.validate_spawn_ipc_fd_usage_statements(body, &mut state)
+    }
+
+    fn validate_spawn_ipc_fd_usage_statements(&self, body: &[Stmt], state: &mut SpawnIpcFdState) -> Result<()> {
+        for stmt in body {
+            self.validate_spawn_ipc_fd_usage_stmt(stmt, state)?;
+        }
+        Ok(())
+    }
+
+    fn validate_spawn_ipc_fd_usage_stmt(&self, stmt: &Stmt, state: &mut SpawnIpcFdState) -> Result<()> {
+        match stmt {
+            Stmt::Let(let_stmt) => {
+                self.validate_spawn_ipc_fd_usage_expr(&let_stmt.value, state)?;
+                self.bind_spawn_ipc_fd_pattern(let_stmt, state);
+            }
+            Stmt::Expr(expr) | Stmt::Return(Some(expr)) => {
+                self.validate_spawn_ipc_fd_usage_expr(expr, state)?;
+            }
+            Stmt::Return(None) => {}
+            Stmt::If(if_stmt) => {
+                self.validate_spawn_ipc_fd_usage_expr(&if_stmt.condition, state)?;
+                let mut then_state = state.clone();
+                self.validate_spawn_ipc_fd_usage_statements(&if_stmt.then_branch, &mut then_state)?;
+                if let Some(else_branch) = &if_stmt.else_branch {
+                    let mut else_state = state.clone();
+                    self.validate_spawn_ipc_fd_usage_statements(else_branch, &mut else_state)?;
+                }
+            }
+            Stmt::For(for_stmt) => {
+                self.validate_spawn_ipc_fd_usage_expr(&for_stmt.iterable, state)?;
+                let mut loop_state = state.clone();
+                self.validate_spawn_ipc_fd_usage_statements(&for_stmt.body, &mut loop_state)?;
+            }
+            Stmt::While(while_stmt) => {
+                self.validate_spawn_ipc_fd_usage_expr(&while_stmt.condition, state)?;
+                let mut loop_state = state.clone();
+                self.validate_spawn_ipc_fd_usage_statements(&while_stmt.body, &mut loop_state)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_spawn_ipc_fd_usage_expr(&self, expr: &Expr, state: &mut SpawnIpcFdState) -> Result<()> {
+        match expr {
+            Expr::Call(call) => {
+                for arg in &call.args {
+                    self.validate_spawn_ipc_fd_usage_expr(arg, state)?;
+                }
+                if let Some(name) = direct_call_name(call) {
+                    match name {
+                        "pipe_read" => self.require_open_spawn_ipc_fd(call.args.first(), state, "pipe_read", call.span)?,
+                        "pipe_write" => self.require_open_spawn_ipc_fd(call.args.first(), state, "pipe_write", call.span)?,
+                        "close" => {
+                            let Some(fd_key) = call.args.first().and_then(|arg| self.spawn_ipc_fd_key(arg, state)) else {
+                                return Ok(());
+                            };
+                            if state.closed.contains(&fd_key) {
+                                return Err(CompileError::new(
+                                    "close uses a Spawn/IPC file descriptor after it was already closed",
+                                    call.span,
+                                ));
+                            }
+                            state.closed.insert(fd_key);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Expr::Assign(assign) => {
+                self.validate_spawn_ipc_fd_usage_expr(&assign.target, state)?;
+                self.validate_spawn_ipc_fd_usage_expr(&assign.value, state)?;
+            }
+            Expr::Binary(binary) => {
+                self.validate_spawn_ipc_fd_usage_expr(&binary.left, state)?;
+                self.validate_spawn_ipc_fd_usage_expr(&binary.right, state)?;
+            }
+            Expr::Unary(unary) => self.validate_spawn_ipc_fd_usage_expr(&unary.expr, state)?,
+            Expr::FieldAccess(field) => self.validate_spawn_ipc_fd_usage_expr(&field.expr, state)?,
+            Expr::Index(index) => {
+                self.validate_spawn_ipc_fd_usage_expr(&index.expr, state)?;
+                self.validate_spawn_ipc_fd_usage_expr(&index.index, state)?;
+            }
+            Expr::Create(create) => {
+                for (_, value) in &create.fields {
+                    self.validate_spawn_ipc_fd_usage_expr(value, state)?;
+                }
+                if let Some(lock) = &create.lock {
+                    self.validate_spawn_ipc_fd_usage_expr(lock, state)?;
+                }
+            }
+            Expr::Consume(consume) => self.validate_spawn_ipc_fd_usage_expr(&consume.expr, state)?,
+            Expr::Transfer(transfer) => {
+                self.validate_spawn_ipc_fd_usage_expr(&transfer.expr, state)?;
+                self.validate_spawn_ipc_fd_usage_expr(&transfer.to, state)?;
+            }
+            Expr::Destroy(destroy) => self.validate_spawn_ipc_fd_usage_expr(&destroy.expr, state)?,
+            Expr::Claim(claim) => self.validate_spawn_ipc_fd_usage_expr(&claim.receipt, state)?,
+            Expr::Settle(settle) => self.validate_spawn_ipc_fd_usage_expr(&settle.expr, state)?,
+            Expr::Assert(assert_expr) => {
+                self.validate_spawn_ipc_fd_usage_expr(&assert_expr.condition, state)?;
+                self.validate_spawn_ipc_fd_usage_expr(&assert_expr.message, state)?;
+            }
+            Expr::Require(require_expr) => self.validate_spawn_ipc_fd_usage_expr(&require_expr.condition, state)?,
+            Expr::Block(stmts) => {
+                let mut block_state = state.clone();
+                self.validate_spawn_ipc_fd_usage_statements(stmts, &mut block_state)?;
+            }
+            Expr::Tuple(items) | Expr::Array(items) => {
+                for item in items {
+                    self.validate_spawn_ipc_fd_usage_expr(item, state)?;
+                }
+            }
+            Expr::If(if_expr) => {
+                self.validate_spawn_ipc_fd_usage_expr(&if_expr.condition, state)?;
+                let mut then_state = state.clone();
+                self.validate_spawn_ipc_fd_usage_expr(&if_expr.then_branch, &mut then_state)?;
+                let mut else_state = state.clone();
+                self.validate_spawn_ipc_fd_usage_expr(&if_expr.else_branch, &mut else_state)?;
+            }
+            Expr::Cast(cast) => self.validate_spawn_ipc_fd_usage_expr(&cast.expr, state)?,
+            Expr::Range(range) => {
+                self.validate_spawn_ipc_fd_usage_expr(&range.start, state)?;
+                self.validate_spawn_ipc_fd_usage_expr(&range.end, state)?;
+            }
+            Expr::StructInit(init) => {
+                for (_, value) in &init.fields {
+                    self.validate_spawn_ipc_fd_usage_expr(value, state)?;
+                }
+            }
+            Expr::Match(match_expr) => {
+                self.validate_spawn_ipc_fd_usage_expr(&match_expr.expr, state)?;
+                for arm in &match_expr.arms {
+                    let mut arm_state = state.clone();
+                    self.validate_spawn_ipc_fd_usage_expr(&arm.value, &mut arm_state)?;
+                }
+            }
+            Expr::Integer(_) | Expr::Bool(_) | Expr::String(_) | Expr::ByteString(_) | Expr::Identifier(_) | Expr::ReadRef(_) => {}
+        }
+        Ok(())
+    }
+
+    fn bind_spawn_ipc_fd_pattern(&self, let_stmt: &LetStmt, state: &mut SpawnIpcFdState) {
+        if is_direct_call(&let_stmt.value, "pipe") {
+            match &let_stmt.pattern {
+                BindingPattern::Name(name) => {
+                    state.pipe_tuples.insert(name.clone(), (format!("{}.0", name), format!("{}.1", name)));
+                }
+                BindingPattern::Tuple(items) if items.len() == 2 => {
+                    if let Some(read_name) = binding_pattern_name(&items[0]) {
+                        self.register_spawn_ipc_fd_alias(read_name, read_name.to_string(), state);
+                    }
+                    if let Some(write_name) = binding_pattern_name(&items[1]) {
+                        self.register_spawn_ipc_fd_alias(write_name, write_name.to_string(), state);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        if is_direct_call(&let_stmt.value, "inherited_fd") {
+            if let BindingPattern::Name(name) = &let_stmt.pattern {
+                self.register_spawn_ipc_fd_alias(name, name.clone(), state);
+            }
+            return;
+        }
+
+        if let BindingPattern::Name(name) = &let_stmt.pattern {
+            if let Some(fd_key) = self.spawn_ipc_fd_key(&let_stmt.value, state) {
+                self.register_spawn_ipc_fd_alias(name, fd_key, state);
+            }
+        }
+    }
+
+    fn register_spawn_ipc_fd_alias(&self, name: &str, fd_key: String, state: &mut SpawnIpcFdState) {
+        state.aliases.insert(name.to_string(), fd_key);
+    }
+
+    fn require_open_spawn_ipc_fd(&self, arg: Option<&Expr>, state: &SpawnIpcFdState, operation: &str, span: Span) -> Result<()> {
+        let Some(fd_key) = arg.and_then(|expr| self.spawn_ipc_fd_key(expr, state)) else {
+            return Ok(());
+        };
+        if state.closed.contains(&fd_key) {
+            return Err(CompileError::new(format!("{} uses a Spawn/IPC file descriptor after close", operation), span));
+        }
+        Ok(())
+    }
+
+    fn spawn_ipc_fd_key(&self, expr: &Expr, state: &SpawnIpcFdState) -> Option<String> {
+        match expr {
+            Expr::Identifier(name) => state.aliases.get(name).cloned(),
+            Expr::FieldAccess(field) => {
+                let Expr::Identifier(base) = field.expr.as_ref() else {
+                    return None;
+                };
+                let (read_fd, write_fd) = state.pipe_tuples.get(base)?;
+                match field.field.as_str() {
+                    "0" => Some(read_fd.clone()),
+                    "1" => Some(write_fd.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     fn check_stmt(&mut self, env: &mut TypeEnv, stmt: &Stmt) -> Result<()> {
@@ -3189,6 +3407,24 @@ fn assignment_root_name(expr: &Expr) -> Option<&str> {
         Expr::FieldAccess(field) => assignment_root_name(&field.expr),
         Expr::Index(index) => assignment_root_name(&index.expr),
         _ => None,
+    }
+}
+
+fn direct_call_name(call: &CallExpr) -> Option<&str> {
+    match call.func.as_ref() {
+        Expr::Identifier(name) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+fn is_direct_call(expr: &Expr, expected: &str) -> bool {
+    matches!(expr, Expr::Call(call) if direct_call_name(call) == Some(expected))
+}
+
+fn binding_pattern_name(pattern: &BindingPattern) -> Option<&str> {
+    match pattern {
+        BindingPattern::Name(name) => Some(name.as_str()),
+        BindingPattern::Tuple(_) | BindingPattern::Wildcard => None,
     }
 }
 

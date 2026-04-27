@@ -178,3 +178,42 @@ action bad(input: Hash) -> Hash {
 
     assert!(err.message.contains("hash_blake2b is not available"), "unexpected error: {}", err.message);
 }
+
+#[test]
+fn v0_14_rejects_spawn_ipc_fd_use_after_close() {
+    let err = compile(
+        r#"
+module cellscript::bad_fd
+
+action bad(value: u64) -> u64 {
+    let (read_fd, write_fd) = pipe()
+    close(read_fd)
+    pipe_read(read_fd)
+}
+"#,
+        CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
+    )
+    .unwrap_err();
+
+    assert!(err.message.contains("pipe_read uses a Spawn/IPC file descriptor after close"), "unexpected error: {}", err.message);
+}
+
+#[test]
+fn v0_14_rejects_spawn_ipc_fd_double_close() {
+    let err = compile(
+        r#"
+module cellscript::bad_fd
+
+action bad() -> u64 {
+    let fds = pipe()
+    let read_fd = fds.0
+    close(read_fd)
+    close(read_fd)
+}
+"#,
+        CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
+    )
+    .unwrap_err();
+
+    assert!(err.message.contains("already closed"), "unexpected error: {}", err.message);
+}
