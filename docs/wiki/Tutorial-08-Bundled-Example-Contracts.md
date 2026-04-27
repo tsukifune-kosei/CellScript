@@ -35,6 +35,8 @@ production action acceptance.
 
 For a visual business-flow map of every bundled example, see
 [`CELLSCRIPT_EXAMPLE_BUSINESS_FLOWS.md`](../CELLSCRIPT_EXAMPLE_BUSINESS_FLOWS.md).
+For small reusable patterns drawn from the same ideas, see
+[Cookbook Recipes](Cookbook-Recipes.md).
 
 ## A Good Reading Order
 

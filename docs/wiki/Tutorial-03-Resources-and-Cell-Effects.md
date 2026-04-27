@@ -157,4 +157,5 @@ closed.
 ## Next
 
 After you know how values move, continue with
-[Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow.md).
+[Cookbook Recipes](Cookbook-Recipes.md) for small copyable patterns, then move
+on to [Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow.md).

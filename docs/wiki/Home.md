@@ -31,6 +31,8 @@ If you already know what you need, jump directly:
 
 - writing source: start with [Language Basics](Tutorial-02-Language-Basics.md);
 - understanding Cell movement: read [Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects.md);
+- copying a known pattern: use [Cookbook Recipes](Cookbook-Recipes.md);
+- checking CKB terms: keep [CKB Glossary](CKB-Glossary.md) nearby;
 - building a package: use [Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow.md);
 - compiling for CKB: read [CKB Target Profiles](Tutorial-05-CKB-Target-Profiles.md);
 - preparing evidence: use [Metadata, Verification, and Production Gates](Tutorial-06-Metadata-Verification-and-Production-Gates.md);
@@ -45,16 +47,18 @@ If you already know what you need, jump directly:
    `.cell` file.
 3. [Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects.md):
    understand how values move through a Cell transaction.
-4. [Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow.md):
+4. [Cookbook Recipes](Cookbook-Recipes.md): copy small patterns once the basic
+   vocabulary is familiar.
+5. [Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow.md):
    create a package, build it, check it, and inspect reports.
-5. [CKB Target Profiles](Tutorial-05-CKB-Target-Profiles.md): choose the CKB
+6. [CKB Target Profiles](Tutorial-05-CKB-Target-Profiles.md): choose the CKB
    runtime assumptions before compiling.
-6. [Metadata, Verification, and Production Gates](Tutorial-06-Metadata-Verification-and-Production-Gates.md):
+7. [Metadata, Verification, and Production Gates](Tutorial-06-Metadata-Verification-and-Production-Gates.md):
    learn what artifact verification proves, and what still needs chain
    evidence.
-7. [LSP and Tooling](Tutorial-07-LSP-and-Tooling.md): use editor feedback and
+8. [LSP and Tooling](Tutorial-07-LSP-and-Tooling.md): use editor feedback and
    command-backed reports.
-8. [Bundled Example Contracts](Tutorial-08-Bundled-Example-Contracts.md): study
+9. [Bundled Example Contracts](Tutorial-08-Bundled-Example-Contracts.md): study
    the examples in a useful order.
 
 ## The Core Idea
