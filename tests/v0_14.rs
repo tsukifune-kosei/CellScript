@@ -180,6 +180,12 @@ action mint(amount: u64) -> Token {
     let mint_group = mint.ckb_script_group.as_ref().expect("mint CKB script group metadata");
     assert_eq!(mint_group.group_kind, "type");
     assert!(mint_group.output_sources.contains(&"Output".to_string()));
+    let output_data = mint.create_set[0].ckb_output_data.as_ref().expect("CKB output data binding");
+    assert_eq!(output_data.output_source, "Output");
+    assert_eq!(output_data.output_index, 0);
+    assert_eq!(output_data.output_data_source, "outputs_data");
+    assert_eq!(output_data.output_data_index, 0);
+    assert_eq!(output_data.relation, "same-index");
     assert_eq!(mint.ckb_type_id_output_indexes(), vec![0]);
     let plan = mint.create_set[0].ckb_type_id.as_ref().expect("TYPE_ID create output plan");
     assert_eq!(plan.abi, "ckb-type-id-v1");

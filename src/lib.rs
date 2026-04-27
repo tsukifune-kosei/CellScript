@@ -56,7 +56,7 @@ fn validate_compile_options(options: &CompileOptions) -> Result<()> {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-pub const METADATA_SCHEMA_VERSION: u32 = 34;
+pub const METADATA_SCHEMA_VERSION: u32 = 35;
 const STACK_COLLECTION_BACKING_BYTES: usize = 256;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
@@ -680,6 +680,7 @@ pub fn validate_compile_metadata(metadata: &CompileMetadata, artifact_format: Ar
         ));
     }
     validate_type_identity_metadata(metadata)?;
+    validate_ckb_output_data_binding_metadata(metadata)?;
     validate_ckb_type_id_output_metadata(metadata)?;
     validate_molecule_schema_metadata(metadata)?;
     validate_molecule_schema_manifest_metadata(metadata)?;
@@ -1497,6 +1498,70 @@ fn validate_ckb_type_id_output_metadata(metadata: &CompileMetadata) -> Result<()
     }
     for lock in &metadata.locks {
         validate_ckb_type_id_create_set_metadata("lock", &lock.name, &lock.create_set, &types_by_name, profile_is_ckb)?;
+    }
+
+    Ok(())
+}
+
+fn validate_ckb_output_data_binding_metadata(metadata: &CompileMetadata) -> Result<()> {
+    let profile_is_ckb = metadata.target_profile.name == TargetProfile::Ckb.name();
+
+    for action in &metadata.actions {
+        validate_ckb_output_data_create_set_metadata("action", &action.name, &action.create_set, profile_is_ckb)?;
+    }
+    for lock in &metadata.locks {
+        validate_ckb_output_data_create_set_metadata("lock", &lock.name, &lock.create_set, profile_is_ckb)?;
+    }
+
+    Ok(())
+}
+
+fn validate_ckb_output_data_create_set_metadata(
+    scope: &str,
+    name: &str,
+    create_set: &[CreatePatternMetadata],
+    profile_is_ckb: bool,
+) -> Result<()> {
+    for (index, pattern) in create_set.iter().enumerate() {
+        if let Some(binding) = &pattern.ckb_output_data {
+            if !profile_is_ckb {
+                return Err(CompileError::without_span(format!(
+                    "metadata {} '{}' create_set[{}] has ckb_output_data outside the ckb target profile",
+                    scope, name, index
+                )));
+            }
+            let mismatches = [
+                ("abi", binding.abi.as_str(), "ckb-outputs-and-outputs-data-index-aligned"),
+                ("output_source", binding.output_source.as_str(), "Output"),
+                ("output_data_source", binding.output_data_source.as_str(), "outputs_data"),
+                ("relation", binding.relation.as_str(), "same-index"),
+            ];
+            for (field, actual, expected) in mismatches {
+                if actual != expected {
+                    return Err(CompileError::without_span(format!(
+                        "metadata {} '{}' create_set[{}].ckb_output_data.{} '{}' does not match expected '{}'",
+                        scope, name, index, field, actual, expected
+                    )));
+                }
+            }
+            if binding.output_index != index {
+                return Err(CompileError::without_span(format!(
+                    "metadata {} '{}' create_set[{}].ckb_output_data.output_index {} does not match create_set index",
+                    scope, name, index, binding.output_index
+                )));
+            }
+            if binding.output_data_index != index {
+                return Err(CompileError::without_span(format!(
+                    "metadata {} '{}' create_set[{}].ckb_output_data.output_data_index {} does not match output index",
+                    scope, name, index, binding.output_data_index
+                )));
+            }
+        } else if profile_is_ckb && pattern.operation == "create" {
+            return Err(CompileError::without_span(format!(
+                "metadata {} '{}' create_set[{}] creates output '{}' but is missing ckb_output_data index binding",
+                scope, name, index, pattern.binding
+            )));
+        }
     }
 
     Ok(())
@@ -2543,7 +2608,19 @@ pub struct CreatePatternMetadata {
     pub fields: Vec<String>,
     pub has_lock: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ckb_output_data: Option<CkbOutputDataBindingMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ckb_type_id: Option<CkbTypeIdOutputMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CkbOutputDataBindingMetadata {
+    pub abi: String,
+    pub output_source: String,
+    pub output_index: usize,
+    pub output_data_source: String,
+    pub output_data_index: usize,
+    pub relation: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12015,8 +12092,28 @@ fn create_pattern_metadata(
         binding: pattern.binding.clone(),
         fields: pattern.fields.iter().map(|(field, _)| field.clone()).collect(),
         has_lock: pattern.lock.is_some(),
+        ckb_output_data: ckb_output_data_binding_metadata(pattern, output_index, target_profile),
         ckb_type_id: ckb_type_id_output_metadata(pattern, output_index, type_defs, target_profile),
     }
+}
+
+fn ckb_output_data_binding_metadata(
+    pattern: &ir::CreatePattern,
+    output_index: usize,
+    target_profile: TargetProfile,
+) -> Option<CkbOutputDataBindingMetadata> {
+    if target_profile != TargetProfile::Ckb || pattern.operation != "create" {
+        return None;
+    }
+
+    Some(CkbOutputDataBindingMetadata {
+        abi: "ckb-outputs-and-outputs-data-index-aligned".to_string(),
+        output_source: "Output".to_string(),
+        output_index,
+        output_data_source: "outputs_data".to_string(),
+        output_data_index: output_index,
+        relation: "same-index".to_string(),
+    })
 }
 
 fn ckb_type_id_output_metadata(
@@ -21823,6 +21920,31 @@ action mint(amount: u64) -> Token {
         metadata.actions[0].create_set[0].ckb_type_id = None;
         let err = crate::validate_compile_metadata(&metadata, ArtifactFormat::RiscvAssembly).unwrap_err();
         assert!(err.message.contains("missing ckb_type_id output plan"), "unexpected error: {}", err.message);
+    }
+
+    #[test]
+    fn compile_result_validation_rejects_mismatched_ckb_output_data_binding() {
+        let program = r#"
+module audit::output_data
+
+resource Token has store {
+    amount: u64
+}
+
+action mint(amount: u64) -> Token {
+    return create Token { amount: amount }
+}
+"#;
+
+        let mut metadata = compile_metadata_for_profile_without_artifact_policy(program, crate::TargetProfile::Ckb);
+        metadata.actions[0].create_set[0].ckb_output_data.as_mut().expect("CKB output data binding").output_data_index = 1;
+
+        let err = crate::validate_compile_metadata(&metadata, ArtifactFormat::RiscvAssembly).unwrap_err();
+        assert!(err.message.contains("ckb_output_data.output_data_index"), "unexpected error: {}", err.message);
+
+        metadata.actions[0].create_set[0].ckb_output_data = None;
+        let err = crate::validate_compile_metadata(&metadata, ArtifactFormat::RiscvAssembly).unwrap_err();
+        assert!(err.message.contains("missing ckb_output_data index binding"), "unexpected error: {}", err.message);
     }
 
     #[test]

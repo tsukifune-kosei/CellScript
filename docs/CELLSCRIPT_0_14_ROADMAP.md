@@ -22,6 +22,7 @@ CellScript source and metadata.
 | Spawn/IPC fd safety | Implemented | The type checker rejects statically visible use-after-close, double-close, and unclosed fd paths for values produced by `pipe()` or `inherited_fd(...)`. |
 | Source views | Implemented | `source::input`, `source::output`, `source::cell_dep`, `source::header_dep`, `source::group_input`, and `source::group_output` are typed and metadata-visible. |
 | ScriptGroup metadata | Implemented | CKB actions and locks now expose entry kind, active lock/type group kind, selected Source surfaces, and group-scoped Source usage. |
+| outputs/outputs_data binding | Implemented | Each CKB create output records an index-aligned `outputs[i]` to `outputs_data[i]` binding, and metadata validation rejects missing or mismatched bindings. |
 | Structured witness fields | Implemented | `witness::raw`, `witness::lock`, `witness::input_type`, and `witness::output_type` are typed as explicit CKB witness surfaces. |
 | Sighash surface | Implemented | `env::sighash_all(source)` is explicit and metadata-visible; no hidden signer derivation is introduced. |
 | Target profile contract | Implemented | Target metadata and `constraints.ckb.profile_abi_contract` now record witness ABI, Source encoding, Spawn/IPC ABI, since ABI, CellDep ABI, script reference ABI, outputs/outputs_data ABI, TYPE_ID ABI, and tx version; `cellc explain-profile ckb` reports the same contract. |
