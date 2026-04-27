@@ -51,6 +51,14 @@ lock owner_lock(wallet: protected Wallet, claimed_owner: witness Address) -> boo
     let digest = env::sighash_all(view)
     require sig == digest
 }
+
+lock output_witness_lock(wallet: protected Wallet, claimed_owner: witness Address) -> bool {
+    let input = source::input(0)
+    let output = source::group_output(0)
+    let input_type = witness::input_type(input)
+    let output_type = witness::output_type(output)
+    require input_type == output_type
+}
 "#;
 
     let result = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() }).unwrap();
@@ -69,6 +77,23 @@ lock owner_lock(wallet: protected Wallet, claimed_owner: witness Address) -> boo
     assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| {
         access.operation == "witness-lock" && access.syscall == "LOAD_WITNESS_ARGS_LOCK" && access.source == "GroupInput"
     }));
+    assert!(result
+        .metadata
+        .runtime
+        .ckb_runtime_accesses
+        .iter()
+        .any(|access| { access.operation == "source-input" && access.syscall == "SOURCE_VIEW" && access.source == "Input" }));
+    assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| {
+        access.operation == "source-group-output" && access.syscall == "SOURCE_VIEW" && access.source == "GroupOutput"
+    }));
+    assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| {
+        access.operation == "witness-input-type" && access.syscall == "LOAD_WITNESS_ARGS_INPUT_TYPE" && access.source == "GroupInput"
+    }));
+    assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| {
+        access.operation == "witness-output-type"
+            && access.syscall == "LOAD_WITNESS_ARGS_OUTPUT_TYPE"
+            && access.source == "GroupOutput"
+    }));
     assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| access.operation == "spawn"));
     assert_eq!(result.metadata.target_profile.spawn_ipc_abi, "ckb-vm-v2-spawn-ipc-syscalls-2601-2608");
     assert_eq!(result.metadata.target_profile.source_encoding, "ckb-source-group-high-bit");
@@ -76,6 +101,54 @@ lock owner_lock(wallet: protected Wallet, claimed_owner: witness Address) -> boo
     assert_eq!(result.metadata.target_profile.script_ref_abi, "ckb-script-code-hash-hash-type-args");
     assert_eq!(result.metadata.target_profile.output_data_abi, "ckb-outputs-and-outputs-data-index-aligned");
     assert_eq!(result.metadata.target_profile.type_id_abi, "ckb-type-id-v1");
+}
+
+#[test]
+fn v0_14_exposes_type_id_create_output_plan_and_output_data_boundary() {
+    let source = r#"
+module cellscript::v0_14_type_id
+
+#[type_id("cellscript::v0_14_type_id::Token:v1")]
+resource Token has store
+with_default_hash_type(Type)
+{
+    amount: u64,
+}
+
+action mint(amount: u64) -> Token {
+    create Token { amount }
+}
+"#;
+
+    let result = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() }).unwrap();
+    let token = result.metadata.types.iter().find(|ty| ty.name == "Token").expect("Token metadata");
+    assert_eq!(token.type_id.as_deref(), Some("cellscript::v0_14_type_id::Token:v1"));
+    assert_eq!(token.default_hash_type.as_deref(), Some("type"));
+    assert_eq!(token.hash_type_source, "dsl-with_default_hash_type");
+    let ckb_type_id = token.ckb_type_id.as_ref().expect("CKB TYPE_ID contract metadata");
+    assert_eq!(ckb_type_id.abi, "ckb-type-id-v1");
+    assert_eq!(ckb_type_id.hash_type, "type");
+    assert_eq!(ckb_type_id.args_source, "first-input-output-index");
+    assert_eq!(ckb_type_id.group_rule, "at-most-one-input-and-one-output");
+
+    let mint = result.metadata.actions.iter().find(|action| action.name == "mint").expect("mint metadata");
+    assert_eq!(mint.ckb_type_id_output_indexes(), vec![0]);
+    let plan = mint.create_set[0].ckb_type_id.as_ref().expect("TYPE_ID create output plan");
+    assert_eq!(plan.abi, "ckb-type-id-v1");
+    assert_eq!(plan.output_source, "Output");
+    assert_eq!(plan.output_index, 0);
+    assert_eq!(plan.generator_setting, "ckb_type_id_output_indexes");
+    assert_eq!(plan.wasm_setting, "ckbTypeIdOutputs");
+
+    let create_access = result
+        .metadata
+        .runtime
+        .ckb_runtime_accesses
+        .iter()
+        .find(|access| access.operation == "create" && access.source == "Output" && access.index == 0)
+        .expect("create output runtime access");
+    assert_eq!(create_access.syscall, "LOAD_CELL");
+    assert_eq!(result.metadata.target_profile.output_data_abi, "ckb-outputs-and-outputs-data-index-aligned");
 }
 
 #[test]
