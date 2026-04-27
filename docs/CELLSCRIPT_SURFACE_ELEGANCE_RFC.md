@@ -86,8 +86,8 @@ authorization semantics:
 
 The security-sensitive boundary remains deliberately narrow:
 
-- `lock_args` is reserved and fail-closed until typed CKB script-args binding is
-  implemented.
+- 0.13 kept `lock_args` reserved and fail-closed. 0.14 implements fixed-width
+  typed script-args binding as a data-source classification only.
 - Explicit sighash verification primitives are not part of 0.13.
 - First-class verified signer values are deferred.
 - `protects T { self ... }` sugar is deferred until protected-input selection
@@ -438,13 +438,13 @@ with the canonical top-level modules during compiler module loading.
 
 ## Canonical Style Example
 
-A future `examples/canonical_style.cell` should demonstrate:
+`examples/canonical_style.cell` demonstrates:
 
 - namespace module declaration;
 - resource, shared, and receipt declarations;
 - create/consume/destroy flows;
-- `&mut` replacement semantics with a short lifecycle comment;
-- a lock boundary;
+- `&mut` replacement semantics;
+- `protected`, `lock_args`, `witness`, and `require` lock-boundary syntax;
 - field shorthand;
 - bounded collection literals;
 - minimal comments.

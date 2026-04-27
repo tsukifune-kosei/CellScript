@@ -392,7 +392,7 @@ action delegate(target: String) -> u64 {
 }
 
 #[test]
-fn v0_14_language_examples_cover_spawn_pipeline_and_type_id_create() {
+fn v0_14_language_examples_cover_spawn_pipeline_type_id_and_canonical_style() {
     let pipeline = compile(
         include_str!("../examples/language/v0_14_multi_step_pipeline.cell"),
         CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
@@ -421,4 +421,15 @@ fn v0_14_language_examples_cover_spawn_pipeline_and_type_id_create() {
         type_id.metadata.actions.iter().find(|action| action.name == "mint_identity_token").expect("mint_identity_token metadata");
     assert_eq!(mint.ckb_type_id_output_indexes(), vec![0]);
     assert!(mint.create_set[0].ckb_type_id.is_some());
+
+    let canonical = compile(
+        include_str!("../examples/canonical_style.cell"),
+        CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
+    )
+    .unwrap();
+    let vault_owner = canonical.metadata.locks.iter().find(|lock| lock.name == "vault_owner").expect("vault_owner metadata");
+    assert!(vault_owner.params.iter().any(|param| param.source == "protected"));
+    assert!(vault_owner.params.iter().any(|param| param.source == "lock_args"));
+    assert!(vault_owner.params.iter().any(|param| param.source == "witness"));
+    assert!(vault_owner.ckb_runtime_accesses.iter().any(|access| access.operation == "sighash-all"));
 }
