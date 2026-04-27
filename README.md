@@ -320,6 +320,7 @@ CellScript includes production-grade local language tooling:
 - [Collections matrix example](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/examples/collections_matrix.md)
 - [Deployment manifest example](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/examples/deployment_manifest.md)
 - [Mutate append example](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/examples/mutate_append.md)
+- [Roadmap overview](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_ROADMAP.md)
 - [0.13 roadmap](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_13_ROADMAP.md)
 
 ---

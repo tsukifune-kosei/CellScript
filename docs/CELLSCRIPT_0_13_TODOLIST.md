@@ -7,7 +7,9 @@
 **Status**: Implementation scope closed for the current 0.13 release gate
 
 This file records the implemented 0.13 scope and the explicit deferred work.
-The roadmap remains the broader design context.
+For the broader planning context, see
+[CellScript Roadmap](CELLSCRIPT_ROADMAP.md) and
+[CellScript 0.13 Roadmap](CELLSCRIPT_0_13_ROADMAP.md).
 
 ---
 
