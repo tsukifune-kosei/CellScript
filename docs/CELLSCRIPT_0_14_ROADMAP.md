@@ -22,7 +22,7 @@ CellScript source and metadata.
 | Source views | Implemented | `source::input`, `source::output`, `source::cell_dep`, `source::header_dep`, `source::group_input`, and `source::group_output` are typed and metadata-visible. |
 | Structured witness fields | Implemented | `witness::raw`, `witness::lock`, `witness::input_type`, and `witness::output_type` are typed as explicit CKB witness surfaces. |
 | Sighash surface | Implemented | `env::sighash_all(source)` is explicit and metadata-visible; no hidden signer derivation is introduced. |
-| Target profile contract | Implemented | Target metadata now records witness ABI, Source encoding, Spawn/IPC ABI, since ABI, CellDep ABI, script reference ABI, outputs/outputs_data ABI, TYPE_ID ABI, and tx version; `cellc explain-profile ckb` reports the contract. |
+| Target profile contract | Implemented | Target metadata and `constraints.ckb.profile_abi_contract` now record witness ABI, Source encoding, Spawn/IPC ABI, since ABI, CellDep ABI, script reference ABI, outputs/outputs_data ABI, TYPE_ID ABI, and tx version; `cellc explain-profile ckb` reports the same contract. |
 | Declarative since/time surface | Implemented | `require_maturity`, `require_time`, `require_epoch_after`, and `require_epoch_relative` are profile-visible runtime checks. |
 | Declarative capacity surface | Implemented | `occupied_capacity("TypeName")` exposes capacity policy through runtime features and metadata. |
 | Dynamic BLAKE2b policy | Implemented as fail-closed | `hash_blake2b` is rejected until a real linked RISC-V implementation is selected; `hash_chain` is metadata-visible. |
@@ -53,6 +53,7 @@ Targeted 0.14 gate:
 ```bash
 cargo test --locked -p cellscript --test v0_14 -- --test-threads=1
 cargo run --locked -p cellscript -- explain-profile ckb --json
+cargo run --locked -p cellscript -- constraints examples/language/v0_14_witness_source.cell --target-profile ckb
 cargo run --locked -p cellscript -- examples/language/v0_14_delegate_verify.cell --target-profile ckb
 cargo run --locked -p cellscript -- examples/language/v0_14_witness_source.cell --target-profile ckb
 cargo run --locked -p cellscript -- examples/language/v0_14_capacity_time.cell --target-profile ckb

@@ -102,6 +102,12 @@ action main(value: u64) -> u64 {
     assert_eq!(dep["tx_hash"], "0x1111111111111111111111111111111111111111111111111111111111111111");
     assert_eq!(dep["index"], 0);
     assert_eq!(dep["hash_type"], "type");
+    assert_eq!(ckb["profile_abi_contract"]["witness_abi"], "ckb-molecule-witness-args+cellscript-entry-witness-v1");
+    assert_eq!(ckb["profile_abi_contract"]["source_encoding"], "ckb-source-group-high-bit");
+    assert_eq!(ckb["profile_abi_contract"]["cell_dep_abi"], "ckb-cell-dep-outpoint-and-dep-group");
+    assert_eq!(ckb["profile_abi_contract"]["script_ref_abi"], "ckb-script-code-hash-hash-type-args");
+    assert_eq!(ckb["profile_abi_contract"]["output_data_abi"], "ckb-outputs-and-outputs-data-index-aligned");
+    assert_eq!(ckb["profile_abi_contract"]["type_id_abi"], "ckb-type-id-v1");
     assert_eq!(ckb["capacity_evidence_contract"]["tx_size_measurement_required"], true);
 }
 

@@ -56,7 +56,7 @@ fn validate_compile_options(options: &CompileOptions) -> Result<()> {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-pub const METADATA_SCHEMA_VERSION: u32 = 32;
+pub const METADATA_SCHEMA_VERSION: u32 = 33;
 const STACK_COLLECTION_BACKING_BYTES: usize = 256;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
@@ -368,6 +368,8 @@ pub struct ArtifactConstraintsMetadata {
 pub struct CkbConstraintsMetadata {
     pub limits_source: String,
     #[serde(default)]
+    pub profile_abi_contract: CkbProfileAbiContractMetadata,
+    #[serde(default)]
     pub hash_domain: String,
     #[serde(default)]
     pub script_hash_algorithm: String,
@@ -417,6 +419,19 @@ pub struct CkbConstraintsMetadata {
     pub capacity_policy_surface: String,
     #[serde(default)]
     pub capacity_evidence_contract: CkbCapacityEvidenceContractMetadata,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CkbProfileAbiContractMetadata {
+    pub witness_abi: String,
+    pub source_encoding: String,
+    pub spawn_ipc_abi: String,
+    pub since_abi: String,
+    pub cell_dep_abi: String,
+    pub script_ref_abi: String,
+    pub output_data_abi: String,
+    pub type_id_abi: String,
+    pub tx_version: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1003,6 +1018,17 @@ fn ckb_constraints(
     let capacity_planning_required = created_output_count > 0 || mutated_output_count > 0;
     CkbConstraintsMetadata {
         limits_source: ckb_limits_source(),
+        profile_abi_contract: CkbProfileAbiContractMetadata {
+            witness_abi: metadata.target_profile.witness_abi.clone(),
+            source_encoding: metadata.target_profile.source_encoding.clone(),
+            spawn_ipc_abi: metadata.target_profile.spawn_ipc_abi.clone(),
+            since_abi: metadata.target_profile.since_abi.clone(),
+            cell_dep_abi: metadata.target_profile.cell_dep_abi.clone(),
+            script_ref_abi: metadata.target_profile.script_ref_abi.clone(),
+            output_data_abi: metadata.target_profile.output_data_abi.clone(),
+            type_id_abi: metadata.target_profile.type_id_abi.clone(),
+            tx_version: metadata.target_profile.tx_version,
+        },
         hash_domain: "ckb-packed-molecule-blake2b".to_string(),
         script_hash_algorithm: "blake2b-256(personal=ckb-default-hash) over packed Script".to_string(),
         transaction_hash_algorithm: "blake2b-256(personal=ckb-default-hash) over packed RawTransaction".to_string(),
