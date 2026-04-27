@@ -270,6 +270,7 @@ pub struct TypeChecker<'a> {
     type_capabilities: HashMap<String, HashSet<Capability>>,
     receipt_claim_outputs: HashMap<String, Option<Type>>,
     lifecycle_receipts: HashSet<String>,
+    constants: HashMap<String, ConstDef>,
     resolver: Option<&'a ModuleResolver>,
     current_module: Option<String>,
     current_callable: Option<CallableKind>,
@@ -370,6 +371,7 @@ impl<'a> TypeChecker<'a> {
             type_capabilities: HashMap::new(),
             receipt_claim_outputs: HashMap::new(),
             lifecycle_receipts: HashSet::new(),
+            constants: HashMap::new(),
             resolver: None,
             current_module: None,
             current_callable: None,
@@ -400,6 +402,7 @@ impl<'a> TypeChecker<'a> {
                 Item::Const(const_def) => {
                     self.validate_type(&const_def.ty)?;
                     self.env.insert(const_def.name.clone(), const_def.ty.clone(), false, false);
+                    self.constants.insert(const_def.name.clone(), const_def.clone());
                 }
                 Item::Resource(resource) => {
                     register_type_id(&mut seen_type_ids, &resource.name, resource.type_id.as_ref())?;
@@ -2659,12 +2662,10 @@ impl<'a> TypeChecker<'a> {
                 match name.as_str() {
                     "spawn" => {
                         self.validate_builtin_arity(name, 1, arg_types, call.span)?;
-                        if !matches!(arg_types[0], Type::Named(ref ty) if ty == "String") && arg_types[0] != Type::Hash {
-                            return Err(CompileError::new(
-                                "spawn expects a script name string literal or Hash script code hash",
-                                call.span,
-                            ));
+                        if !matches!(arg_types[0], Type::Named(ref ty) if ty == "String") {
+                            return Err(CompileError::new("spawn expects a static script name String", call.span));
                         }
+                        self.validate_static_spawn_target_expr(&call.args[0], call.span)?;
                         return Ok(Type::U64);
                     }
                     "wait" | "process_id" | "pipe_read" | "inherited_fd" | "close" => {
@@ -3092,6 +3093,24 @@ impl<'a> TypeChecker<'a> {
             }
         }
         Ok(())
+    }
+
+    fn validate_static_spawn_target_expr(&self, expr: &Expr, span: Span) -> Result<()> {
+        match expr {
+            Expr::String(_) => Ok(()),
+            Expr::Identifier(name) if self.is_string_constant(name) => {
+                Ok(())
+            }
+            _ => Err(CompileError::new(
+                "spawn target must be a static script reference: use a string literal or String const, not runtime witness/action data",
+                span,
+            )),
+        }
+    }
+
+    fn is_string_constant(&self, name: &str) -> bool {
+        self.constants.get(name).is_some_and(|constant| matches!(constant.ty, Type::Named(ref ty) if ty == "String"))
+            || self.resolve_constant(name).is_some_and(|constant| matches!(constant.ty, Type::Named(ref ty) if ty == "String"))
     }
 
     fn reject_forbidden_consensus_call(&self, call: &CallExpr) -> Result<()> {

@@ -3131,6 +3131,19 @@ impl IrGenerator {
                     let dest = self.new_var("spawn_result", IrType::U64);
                     let target = match &call.args[0] {
                         Expr::String(value) => IrOperand::Const(IrConst::U64(stable_u64_tag(value))),
+                        Expr::Identifier(name) => match self.constants.get(name) {
+                            Some(Expr::String(value)) => IrOperand::Const(IrConst::U64(stable_u64_tag(value))),
+                            _ => {
+                                let lowered = self.lower_expr(&call.args[0], current, blocks, vars);
+                                let active = lowered.current?;
+                                self.block_mut(blocks, active).instructions.push(IrInstruction::Call {
+                                    dest: Some(dest.clone()),
+                                    func: "__ckb_spawn".to_string(),
+                                    args: vec![lowered.operand],
+                                });
+                                return Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) });
+                            }
+                        },
                         other => {
                             let lowered = self.lower_expr(other, current, blocks, vars);
                             let active = lowered.current?;

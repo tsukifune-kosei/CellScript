@@ -256,3 +256,35 @@ action bad(value: u64) -> u64 {
 
     assert!(err.message.contains("is not closed before callable exit"), "unexpected error: {}", err.message);
 }
+
+#[test]
+fn v0_14_spawn_target_must_be_static() {
+    let ok = compile(
+        r#"
+module cellscript::static_spawn
+
+const VERIFY_TARGET: String = "secp256k1_verifier";
+
+action delegate() -> u64 {
+    return spawn(VERIFY_TARGET)
+}
+"#,
+        CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
+    )
+    .unwrap();
+    assert!(ok.metadata.runtime.ckb_runtime_accesses.iter().any(|access| access.operation == "spawn"));
+
+    let err = compile(
+        r#"
+module cellscript::dynamic_spawn
+
+action delegate(target: String) -> u64 {
+    return spawn(target)
+}
+"#,
+        CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
+    )
+    .unwrap_err();
+
+    assert!(err.message.contains("spawn target must be a static script reference"), "unexpected error: {}", err.message);
+}
