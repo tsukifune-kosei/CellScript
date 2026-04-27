@@ -116,7 +116,7 @@ action multi_step_verify(data: VerifyData) {
 **Safety Constraints**:
 - Max VM spawn depth enforced at compile time (configurable, default 4)
 - Cycle budget allocation: shared budget model (parent + children share a total cycle limit, matching CKB's existing semantics)
-- File descriptor lifetime tracking: compiler warns on leaked fds
+- File descriptor lifetime tracking: compiler rejects use-after-close, double-close, and statically visible leaked fds
 - Spawn target resolution: must reference a known script (dep cell or inline)
 
 **Risk**: **MEDIUM** — Syscalls are stable; complexity is in DSL ergonomics and fd tracking

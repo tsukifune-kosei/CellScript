@@ -235,3 +235,24 @@ action bad() -> u64 {
 
     assert!(err.message.contains("already closed"), "unexpected error: {}", err.message);
 }
+
+#[test]
+fn v0_14_rejects_spawn_ipc_fd_leak() {
+    let err = compile(
+        r#"
+module cellscript::bad_fd
+
+action bad(value: u64) -> u64 {
+    let fds = pipe()
+    let read_fd = fds.0
+    let write_fd = fds.1
+    pipe_write(write_fd, value)
+    return pipe_read(read_fd)
+}
+"#,
+        CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
+    )
+    .unwrap_err();
+
+    assert!(err.message.contains("is not closed before callable exit"), "unexpected error: {}", err.message);
+}

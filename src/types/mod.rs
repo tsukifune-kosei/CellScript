@@ -1035,7 +1035,8 @@ impl<'a> TypeChecker<'a> {
 
     fn validate_spawn_ipc_fd_usage(&self, body: &[Stmt]) -> Result<()> {
         let mut state = SpawnIpcFdState::default();
-        self.validate_spawn_ipc_fd_usage_statements(body, &mut state)
+        self.validate_spawn_ipc_fd_usage_statements(body, &mut state)?;
+        self.reject_unclosed_spawn_ipc_fds(&state)
     }
 
     fn validate_spawn_ipc_fd_usage_statements(&self, body: &[Stmt], state: &mut SpawnIpcFdState) -> Result<()> {
@@ -1062,6 +1063,13 @@ impl<'a> TypeChecker<'a> {
                 if let Some(else_branch) = &if_stmt.else_branch {
                     let mut else_state = state.clone();
                     self.validate_spawn_ipc_fd_usage_statements(else_branch, &mut else_state)?;
+                    let closed_on_both_paths: Vec<String> = then_state
+                        .closed
+                        .intersection(&else_state.closed)
+                        .filter(|fd_key| !state.closed.contains(*fd_key))
+                        .cloned()
+                        .collect();
+                    state.closed.extend(closed_on_both_paths);
                 }
             }
             Stmt::For(for_stmt) => {
@@ -1142,6 +1150,7 @@ impl<'a> TypeChecker<'a> {
             Expr::Block(stmts) => {
                 let mut block_state = state.clone();
                 self.validate_spawn_ipc_fd_usage_statements(stmts, &mut block_state)?;
+                *state = block_state;
             }
             Expr::Tuple(items) | Expr::Array(items) => {
                 for item in items {
@@ -1154,6 +1163,13 @@ impl<'a> TypeChecker<'a> {
                 self.validate_spawn_ipc_fd_usage_expr(&if_expr.then_branch, &mut then_state)?;
                 let mut else_state = state.clone();
                 self.validate_spawn_ipc_fd_usage_expr(&if_expr.else_branch, &mut else_state)?;
+                let closed_on_both_paths: Vec<String> = then_state
+                    .closed
+                    .intersection(&else_state.closed)
+                    .filter(|fd_key| !state.closed.contains(*fd_key))
+                    .cloned()
+                    .collect();
+                state.closed.extend(closed_on_both_paths);
             }
             Expr::Cast(cast) => self.validate_spawn_ipc_fd_usage_expr(&cast.expr, state)?,
             Expr::Range(range) => {
@@ -1167,9 +1183,19 @@ impl<'a> TypeChecker<'a> {
             }
             Expr::Match(match_expr) => {
                 self.validate_spawn_ipc_fd_usage_expr(&match_expr.expr, state)?;
+                let mut shared_closed: Option<HashSet<String>> = None;
                 for arm in &match_expr.arms {
                     let mut arm_state = state.clone();
                     self.validate_spawn_ipc_fd_usage_expr(&arm.value, &mut arm_state)?;
+                    shared_closed = Some(match shared_closed {
+                        Some(previous) => previous.intersection(&arm_state.closed).cloned().collect(),
+                        None => arm_state.closed,
+                    });
+                }
+                if let Some(shared_closed) = shared_closed {
+                    let closed_on_all_arms: Vec<String> =
+                        shared_closed.into_iter().filter(|fd_key| !state.closed.contains(fd_key)).collect();
+                    state.closed.extend(closed_on_all_arms);
                 }
             }
             Expr::Integer(_) | Expr::Bool(_) | Expr::String(_) | Expr::ByteString(_) | Expr::Identifier(_) | Expr::ReadRef(_) => {}
@@ -1240,6 +1266,29 @@ impl<'a> TypeChecker<'a> {
             }
             _ => None,
         }
+    }
+
+    fn reject_unclosed_spawn_ipc_fds(&self, state: &SpawnIpcFdState) -> Result<()> {
+        let mut open_fds: Vec<String> = state
+            .aliases
+            .values()
+            .chain(state.pipe_tuples.values().flat_map(|(read_fd, write_fd)| [read_fd, write_fd]))
+            .filter(|fd_key| !state.closed.contains(*fd_key))
+            .cloned()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        open_fds.sort();
+        if let Some(fd_key) = open_fds.first() {
+            return Err(CompileError::new(
+                format!(
+                    "Spawn/IPC file descriptor '{}' is not closed before callable exit; close every pipe or inherited fd on all static paths",
+                    fd_key
+                ),
+                Span::default(),
+            ));
+        }
+        Ok(())
     }
 
     fn check_stmt(&mut self, env: &mut TypeEnv, stmt: &Stmt) -> Result<()> {

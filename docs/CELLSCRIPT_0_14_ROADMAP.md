@@ -19,7 +19,7 @@ CellScript source and metadata.
 | Track | Status | Notes |
 |---|---|---|
 | Spawn/IPC surface | Implemented | `spawn`, `wait`, `process_id`, `pipe`, `pipe_write`, `pipe_read`, `inherited_fd`, and `close` lower to CKB VM v2 syscall stubs and metadata. Spawn targets also produce runtime-required CellDep/DepGroup script-reference obligations. |
-| Spawn/IPC fd safety | Implemented | The type checker rejects statically visible use-after-close and double-close patterns for fd values produced by `pipe()` or `inherited_fd(...)`. |
+| Spawn/IPC fd safety | Implemented | The type checker rejects statically visible use-after-close, double-close, and unclosed fd paths for values produced by `pipe()` or `inherited_fd(...)`. |
 | Source views | Implemented | `source::input`, `source::output`, `source::cell_dep`, `source::header_dep`, `source::group_input`, and `source::group_output` are typed and metadata-visible. |
 | Structured witness fields | Implemented | `witness::raw`, `witness::lock`, `witness::input_type`, and `witness::output_type` are typed as explicit CKB witness surfaces. |
 | Sighash surface | Implemented | `env::sighash_all(source)` is explicit and metadata-visible; no hidden signer derivation is introduced. |
