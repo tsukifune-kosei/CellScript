@@ -423,7 +423,7 @@ fn v0_14_language_examples_cover_spawn_pipeline_type_id_and_canonical_style() {
     assert!(mint.create_set[0].ckb_type_id.is_some());
 
     let canonical = compile(
-        include_str!("../examples/canonical_style.cell"),
+        include_str!("../examples/language/canonical_style.cell"),
         CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
     )
     .unwrap();

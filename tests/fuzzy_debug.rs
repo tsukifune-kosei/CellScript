@@ -151,7 +151,7 @@ lock owner(wallet: protected Wallet, owner: lock_args Address, claimed_owner: wi
     require witness_lock == digest
 }
 "#,
-        include_str!("../examples/canonical_style.cell"),
+        include_str!("../examples/language/canonical_style.cell"),
         include_str!("../examples/language/v0_14_multi_step_pipeline.cell"),
     ];
 
@@ -174,7 +174,7 @@ fn fuzzy_lsp_incremental_edits_never_panic() {
     let uri = "file:///fuzzy.cell".to_string();
     let mut server = LspServer::new();
     let mut rng = Rng64::new(0x15F_0014_C0DE);
-    let mut content = include_str!("../examples/canonical_style.cell").to_string();
+    let mut content = include_str!("../examples/language/canonical_style.cell").to_string();
     server.open_document(uri.clone(), content.clone());
 
     for index in 0..120 {

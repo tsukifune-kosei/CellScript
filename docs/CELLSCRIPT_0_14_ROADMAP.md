@@ -72,5 +72,5 @@ cargo run --locked -p cellscript -- examples/language/v0_14_multi_step_pipeline.
 cargo run --locked -p cellscript -- examples/language/v0_14_witness_source.cell --target-profile ckb
 cargo run --locked -p cellscript -- examples/language/v0_14_ckb_type_id_create.cell --target-profile ckb
 cargo run --locked -p cellscript -- examples/language/v0_14_capacity_time.cell --target-profile ckb
-cargo run --locked -p cellscript -- examples/canonical_style.cell --target-profile ckb
+cargo run --locked -p cellscript -- examples/language/canonical_style.cell --target-profile ckb
 ```

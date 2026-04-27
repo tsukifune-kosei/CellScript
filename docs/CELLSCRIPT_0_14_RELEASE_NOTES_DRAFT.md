@@ -131,6 +131,22 @@ LSP and the VS Code extension now cover the 0.14 surface with completions,
 snippets, and highlighting for `lock_args`, CKB Source views, WitnessArgs
 helpers, `ckb::*`, and `env::sighash_all`.
 
+### Bug Fixes And Hardening
+
+0.14 also includes a focused fuzzy-debugging pass:
+
+- Unicode and malformed hex inputs now fail with controlled diagnostics instead
+  of panicking in metadata, scheduler, and CLI decoding paths.
+- Invalid or reversed LSP incremental edit ranges are ignored safely instead of
+  corrupting document state.
+- Oversized static metadata widths and entry-witness width calculations now
+  fail closed instead of overflowing internal size arithmetic.
+- Malformed numeric package versions are rejected instead of being treated as
+  compatible.
+- The canonical style example was moved into `examples/language/` so the flat
+  production bundled example set remains exactly the seven CKB acceptance
+  contracts.
+
 ## Intentional Boundaries
 
 0.14 does not include:
@@ -168,7 +184,7 @@ cargo run --locked -p cellscript -- examples/language/v0_14_multi_step_pipeline.
 cargo run --locked -p cellscript -- examples/language/v0_14_witness_source.cell --target-profile ckb
 cargo run --locked -p cellscript -- examples/language/v0_14_ckb_type_id_create.cell --target-profile ckb
 cargo run --locked -p cellscript -- examples/language/v0_14_capacity_time.cell --target-profile ckb
-cargo run --locked -p cellscript -- examples/canonical_style.cell --target-profile ckb
+cargo run --locked -p cellscript -- examples/language/canonical_style.cell --target-profile ckb
 ```
 
 ## Summary

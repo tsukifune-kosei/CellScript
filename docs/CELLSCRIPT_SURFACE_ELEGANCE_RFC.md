@@ -438,7 +438,7 @@ with the canonical top-level modules during compiler module loading.
 
 ## Canonical Style Example
 
-`examples/canonical_style.cell` demonstrates:
+`examples/language/canonical_style.cell` demonstrates:
 
 - namespace module declaration;
 - resource, shared, and receipt declarations;
@@ -485,7 +485,7 @@ This list is the living implementation tracker for the RFC.
 | Hidden sighash defaults | Rejected | Digest mode and signature scope must be visible. |
 | Implicit `Address` as signer | Rejected | Address values do not become authorization proofs by name. |
 | Business/language/acceptance example directory split | Done | `examples/business` holds clean canonical examples, `examples/acceptance` holds production/profiled examples, and `examples/language` holds `registry.cell`. Flat `examples/*.cell` remains a compatibility mirror for existing commands. |
-| `examples/canonical_style.cell` | Done | Provides a compact idiomatic reference for module style, capabilities, field shorthand, `[]`, `&mut` replacement, and lock-boundary classification. |
+| `examples/language/canonical_style.cell` | Done | Provides a compact idiomatic reference for module style, capabilities, field shorthand, `[]`, `&mut` replacement, and lock-boundary classification. |
 | Action production acceptance | Done | Existing bundled action acceptance remains builder-backed. |
 | Lock valid-spend and invalid-spend matrix | Done | Existing bundled locks are exercised through builder-backed local CKB transactions. |
 
