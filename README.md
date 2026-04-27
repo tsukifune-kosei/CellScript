@@ -9,7 +9,7 @@
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
 [![Targets: CKB](https://img.shields.io/badge/targets-CKB-2f6f4e.svg)](#target-profiles)
 [![Package Workflow: Local First](https://img.shields.io/badge/package%20workflow-local%20first-2f6f4e.svg)](#package-workflow)
-[![LSP: Production Tooling](https://img.shields.io/badge/LSP-production%20tooling-2f6f4e.svg)](#editor-support)
+[![LSP: Local Tooling](https://img.shields.io/badge/LSP-local%20tooling-2f6f4e.svg)](#editor-support)
 [![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](https://github.com/tsukifune-kosei/CellScript/wiki)
 
 [English](README.md) | [Chinese](README_CH.md)
@@ -20,6 +20,10 @@ CellScript is a domain-specific language for Cell-based smart contracts on
 CKB. It compiles `.cell` source into ckb-vm RISC-V assembly or ELF
 artifacts, together with typed metadata for auditing, policy checks, schema
 binding, and scheduler-aware execution.
+
+In this README, metadata means machine-readable semantic facts emitted by the
+compiler: schema layout, Cell effects, access summaries, source hashes,
+verifier obligations, runtime requirements, and target-profile policy flags.
 
 The language is intentionally narrow: it is not a new VM, and it is not an
 account-storage contract language. CellScript gives protocol authors a typed
@@ -45,6 +49,21 @@ CellScript raises that programming model to explicit language constructs:
 `read_ref`, `transfer`, `destroy`, `claim`, and `settle`. These constructs are
 not metaphors — they lower directly to the Cell transaction shape that the
 target chain already executes.
+
+## Current Status
+
+CellScript is currently in a CKB-focused alpha / stabilisation phase.
+
+It is suitable for:
+- experimenting with CKB Cell-contract authoring;
+- compiling and inspecting the bundled examples;
+- exploring typed Cell effects, metadata, constraints, and CKB target-profile
+  checks;
+- trying the local VS Code extension and LSP tooling.
+
+It is not yet recommended for unaudited mainnet deployment without manual
+review. The current focus is developer-readiness, diagnostics, ProofPlan /
+metadata visibility, and CKB target-profile stability.
 
 ## Quick Start
 
@@ -83,76 +102,21 @@ Run a CKB profile check:
 cellc check --target-profile ckb
 ```
 
+Inspect what the compiler can explain about the token example:
+
+```bash
+cellc metadata examples/token.cell --target-profile ckb --json
+cellc constraints examples/token.cell --target-profile ckb
+cellc scheduler-plan examples/token.cell --target-profile ckb
+```
+
+These commands show what the compiler believes the protocol reads, writes,
+creates, consumes, assumes, and exposes to CKB-facing policy tooling.
+
 > **Next:** Read on for the [language model](#core-model), [full examples](#example),
 > or dive into the [architecture](#architecture).
 
 ---
-
-## Target Profiles
-
-CellScript now supports CKB as its only target profile:
-
-| Profile | When to use | What you get |
-|---|---|---|
-| `ckb` | CKB mainnet artifacts | BLAKE2b/Molecule conventions, CKB syscall profile |
-
-> The `ckb` profile is production-gated for the bundled CellScript suite. It
-> emits raw CKB ckb-vm artifacts, uses CKB syscall
-> and Molecule/BLAKE2b conventions, and rejects unsupported shapes through
-> normal target-profile policy.
-
-```bash
-cellc examples/token.cell --target riscv64-elf --target-profile ckb
-cellc check --target-profile ckb
-```
-
-## Core Model
-
-CellScript programs are written in terms of Cell lifecycle operations:
-
-| Concept | What it compiles to |
-|---|---|
-| `resource T { ... }` | A linear Cell-backed asset (`CellOutput` + `outputs_data[i]`) |
-| `shared T { ... }` | Shared state Cell, read via `CellDep` or updated by consume + create |
-| `receipt T { ... }` | A single-use proof Cell (deposits, vesting, votes, liquidity) |
-| `consume value` | Spend a transaction input |
-| `create T { ... }` | Create a new output Cell with typed data |
-| `read_ref T` | Load a read-only CellDep-backed value |
-| `action` | Type-script transition logic → compiled to RISC-V |
-| `lock` | Lock-script authorization logic → compiled to RISC-V |
-| Local `let` values | Transaction-local computation; never persistent storage |
-
-> **Key rule:** only `create` materializes persistent state. Ordinary local
-> values do not become Cells unless explicitly created as `resource`,
-> `shared`, or `receipt`.
-
-## Language Features
-
-- **Cell-native resources** — `resource` values are linear. They cannot be
-  copied, silently dropped, or hidden inside ordinary values. Every resource
-  must be consumed, transferred, returned, claimed, settled, or destroyed.
-- **Explicit shared state** — `shared` marks contention-sensitive protocol
-  state (pools, registries, configuration Cells). Reads and writes stay
-  visible to metadata and tooling.
-- **Receipts as stateful proofs** — `receipt` is a single-use Cell that proves
-  an operation happened and can later be claimed or settled.
-- **Capability gates** — `has store, transfer, destroy` makes asset permissions
-  explicit instead of implicit.
-- **Lifecycle rules** — `#[lifecycle(...)]` lets a Cell-backed value describe a
-  state machine, e.g. `Granted -> Claimable -> FullyClaimed`.
-- **Effect inference** — `action` bodies are classified as `Pure`, `ReadOnly`,
-  `Mutating`, `Creating`, or `Destroying` based on their Cell operations.
-- **Scheduler-aware metadata** — CKB-targeted builds expose access summaries
-  and shared touch domains so block builders can reason about independent work.
-- **Typed schema metadata** — Cell data layout, type identity, source hashes,
-  runtime accesses, and verifier obligations are emitted as machine-readable
-  metadata.
-- **RISC-V output** — the executable target is ckb-vm-compatible RISC-V
-  assembly or ELF. CellScript does not introduce a separate VM.
-- **Package-aware compilation** — packages use `Cell.toml`, local modules,
-  source roots, and local path dependencies.
-- **Policy gates** — build, check, metadata, and artifact verification can
-  reject outputs that violate the selected target or deployment policy.
 
 ## Example
 
@@ -268,32 +232,11 @@ action burn(token: Token) {
 | `examples/amm_pool.cell` | Shared pool state, swap/liquidity effects |
 | `examples/launch.cell` | Launch/pool composition patterns |
 
-## Comparison
-
-Why CellScript is shaped around typed Cells, linear resources, explicit
-transaction effects, and ckb-vm artifacts — instead of account storage or a
-chain-specific VM:
-
-| Dimension | CellScript | Solidity | Move | Sway |
-|---|---|---|---|---|
-| Execution target | RISC-V ELF / asm on ckb-vm | EVM bytecode | Move bytecode | FuelVM bytecode |
-| State model | Typed Cells, explicit inputs/deps/outputs | Account storage slots | Resources in global storage | UTXO + native assets |
-| Asset model | Native `resource`, lifecycle, receipts, shared Cells | Manual token contracts | Native resources | Native assets |
-| Linear ownership | Compiler-enforced | No | Yes (abilities) | No general user-defined |
-| Shared state | Explicit `shared` Cells | Implicit contract storage | Shared objects (some chains) | No shared Cell analogue |
-| Reentrancy | No callback-style reentrancy | Common risk surface | Lower by design | Lower predicate risk |
-| Scheduler metadata | Native for CKB | None | Not GhostDAG-oriented | Predicate-level |
-| CKB compatibility | Production-gated CKB ckb-vm artifact profile for the bundled Cell suite | Requires different VM | Requires different VM | Requires FuelVM |
-
-Compared with hand-written CKB scripts, CellScript keeps the same
-runtime substrate but replaces raw byte and syscall programming with typed Cell
-operations, linear checking, schema metadata, and policy-verifiable artifacts.
-
 ---
 
 ## Editor Support
 
-CellScript includes production-grade local language tooling:
+CellScript includes production-style local language tooling for early users:
 
 - **In-process LSP** — diagnostics, completions, hover, go-to-definition,
   references, rename, formatting, and metadata-oriented code actions. The
@@ -322,6 +265,95 @@ CellScript includes production-grade local language tooling:
 - [Mutate append example](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/examples/mutate_append.md)
 - [Roadmap overview](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_ROADMAP.md)
 - [0.13 roadmap](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_13_ROADMAP.md)
+- [0.14 roadmap](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_14_ROADMAP.md)
+- [0.14 release notes draft](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_14_RELEASE_NOTES_DRAFT.md)
+
+## Target Profiles
+
+CellScript now supports CKB as its only target profile:
+
+| Profile | When to use | What you get |
+|---|---|---|
+| `ckb` | CKB mainnet artifacts | BLAKE2b/Molecule conventions, CKB syscall profile |
+
+> The `ckb` profile is production-gated for the bundled CellScript suite. It
+> emits raw CKB ckb-vm artifacts, uses CKB syscall
+> and Molecule/BLAKE2b conventions, and rejects unsupported shapes through
+> normal target-profile policy.
+
+```bash
+cellc examples/token.cell --target riscv64-elf --target-profile ckb
+cellc check --target-profile ckb
+```
+
+## Core Model
+
+CellScript programs are written in terms of Cell lifecycle operations:
+
+| Concept | What it compiles to |
+|---|---|
+| `resource T { ... }` | A linear Cell-backed asset (`CellOutput` + `outputs_data[i]`) |
+| `shared T { ... }` | Shared state Cell, read via `CellDep` or updated by consume + create |
+| `receipt T { ... }` | A single-use proof Cell (deposits, vesting, votes, liquidity) |
+| `consume value` | Spend a transaction input |
+| `create T { ... }` | Create a new output Cell with typed data |
+| `read_ref T` | Load a read-only CellDep-backed value |
+| `action` | Type-script transition logic → compiled to RISC-V |
+| `lock` | Lock-script authorization logic → compiled to RISC-V |
+| Local `let` values | Transaction-local computation; never persistent storage |
+
+> **Key rule:** only `create` materializes persistent state. Ordinary local
+> values do not become Cells unless explicitly created as `resource`,
+> `shared`, or `receipt`.
+
+## Language Features
+
+- **Cell-native resources** — `resource` values are linear. They cannot be
+  copied, silently dropped, or hidden inside ordinary values. Every resource
+  must be consumed, transferred, returned, claimed, settled, or destroyed.
+- **Explicit shared state** — `shared` marks contention-sensitive protocol
+  state (pools, registries, configuration Cells). Reads and writes stay
+  visible to metadata and tooling.
+- **Receipts as stateful proofs** — `receipt` is a single-use Cell that proves
+  an operation happened and can later be claimed or settled.
+- **Capability gates** — `has store, transfer, destroy` makes asset permissions
+  explicit instead of implicit.
+- **Lifecycle rules** — `#[lifecycle(...)]` lets a Cell-backed value describe a
+  state machine, e.g. `Granted -> Claimable -> FullyClaimed`.
+- **Effect inference** — `action` bodies are classified as `Pure`, `ReadOnly`,
+  `Mutating`, `Creating`, or `Destroying` based on their Cell operations.
+- **Scheduler-aware metadata** — CKB-targeted builds expose access summaries
+  and shared touch domains so block builders can reason about independent work.
+- **Typed schema metadata** — Cell data layout, type identity, source hashes,
+  runtime accesses, and verifier obligations are emitted as machine-readable
+  metadata.
+- **RISC-V output** — the executable target is ckb-vm-compatible RISC-V
+  assembly or ELF. CellScript does not introduce a separate VM.
+- **Package-aware compilation** — packages use `Cell.toml`, local modules,
+  source roots, and local path dependencies.
+- **Policy gates** — build, check, metadata, and artifact verification can
+  reject outputs that violate the selected target or deployment policy.
+
+## Comparison
+
+Why CellScript is shaped around typed Cells, linear resources, explicit
+transaction effects, and ckb-vm artifacts — instead of account storage or a
+chain-specific VM:
+
+| Dimension | CellScript | Solidity | Move | Sway |
+|---|---|---|---|---|
+| Execution target | RISC-V ELF / asm on ckb-vm | EVM bytecode | Move bytecode | FuelVM bytecode |
+| State model | Typed Cells, explicit inputs/deps/outputs | Account storage slots | Resources in global storage | UTXO + native assets |
+| Asset model | Native `resource`, lifecycle, receipts, shared Cells | Manual token contracts | Native resources | Native assets |
+| Linear ownership | Compiler-enforced | No | Yes (abilities) | No general user-defined |
+| Shared state | Explicit `shared` Cells | Implicit contract storage | Shared objects (some chains) | No shared Cell analogue |
+| Reentrancy | No callback-style reentrancy | Common risk surface | Lower by design | Lower predicate risk |
+| Scheduler metadata | Native for CKB | None | Not GhostDAG-oriented | Predicate-level |
+| CKB compatibility | Production-gated CKB ckb-vm artifact profile for the bundled Cell suite | Requires different VM | Requires different VM | Requires FuelVM |
+
+Compared with hand-written CKB scripts, CellScript keeps the same
+runtime substrate but replaces raw byte and syscall programming with typed Cell
+operations, linear checking, schema metadata, and policy-verifiable artifacts.
 
 ---
 
@@ -442,15 +474,15 @@ treated as deployable.
 ```mermaid
 flowchart TB
     Source[".cell source + Cell.toml\n--target-profile ckb"] --> Frontend["Lexer + parser\nstable source spans"]
-    Frontend --> Semantics["Type + lifecycle checks\nlinear resources, lock-only require,\nprotected/witness classification"]
+    Frontend --> Semantics["Type + lifecycle checks\nlinear resources, lock-only require,\nprotected/witness/lock_args classification"]
     Semantics --> Policy["CKB policy gate\nfail closed on unsupported runtime or state shapes"]
 
     subgraph Rules["CKB profile rules"]
         R1["CKB syscall ABI\nsource flags + syscall numbers"]
-        R2["Molecule-facing schema\nentry witness ABI"]
+        R2["Molecule-facing schema\nentry witness + lock args ABI"]
         R3["CKB Blake2b\nartifact + deployment hashes"]
         R4["hash_type / CellDep / DepGroup policy"]
-        R5["capacity, tx-size,\ncycle evidence requirements"]
+        R5["capacity policy\nwith_capacity_floor, occupied_capacity,\ntx-size and cycle evidence"]
     end
 
     Rules --> Policy
@@ -462,7 +494,7 @@ flowchart TB
     Artifact --> Verify["cellc verify-artifact\nprofile, source hash,\nartifact hash, policy flags"]
     Metadata --> Verify
 
-    Artifact --> Builder["builder workflow\ninputs, outputs, witness,\ncell_deps, capacity"]
+    Artifact --> Builder["builder workflow\ninputs, outputs, outputs_data,\nwitness, cell_deps, capacity floors"]
     Metadata --> Builder
     Builder --> Acceptance["CKB acceptance gate\ndry-run, commit, cycles,\ntx size, occupied capacity,\nvalid/invalid lock matrix"]
 ```
@@ -475,6 +507,12 @@ This separates three boundaries:
   source hash, target profile, and selected policy flags agree;
 - **chain-evidence boundary** — builders and acceptance scripts prove concrete
   CKB transaction shape, capacity, cycles, tx size, and lock/action behavior.
+
+Capacity in this profile has two layers. `with_capacity_floor(shannons)`
+declares a type-level output floor that is visible in metadata and constraints.
+`occupied_capacity("TypeName")` keeps runtime-visible capacity checks available.
+Neither replaces builder evidence: the final transaction still has to measure
+occupied capacity, provide enough output capacity, and record tx-size evidence.
 
 ### Wasm Gate
 
@@ -575,7 +613,6 @@ registry dependency resolution remain experimental and fail-closed.
 |---|---|
 | `--target riscv64-asm` | Emit RISC-V assembly |
 | `--target riscv64-elf` | Emit a RISC-V ELF artifact |
-
 | `--target-profile ckb` | Use the CKB profile |
 | `--entry-action <ACTION>` | Compile a single action as the artifact entrypoint |
 | `--entry-lock <LOCK>` | Compile a single lock as the artifact entrypoint |

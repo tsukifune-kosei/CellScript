@@ -9,7 +9,7 @@
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
 [![Targets: CKB](https://img.shields.io/badge/targets-CKB-2f6f4e.svg)](#target-profiles)
 [![Package Workflow: Local First](https://img.shields.io/badge/package%20workflow-local%20first-2f6f4e.svg)](#包工作流)
-[![LSP: Production Tooling](https://img.shields.io/badge/LSP-production%20tooling-2f6f4e.svg)](#编辑器支持)
+[![LSP: Local Tooling](https://img.shields.io/badge/LSP-local%20tooling-2f6f4e.svg)](#编辑器支持)
 [![Wiki Tutorials](https://img.shields.io/badge/wiki-tutorials-6f42c1.svg)](https://github.com/tsukifune-kosei/CellScript/wiki)
 
 [English](README.md) | [中文](README_CH.md)
@@ -19,6 +19,10 @@
 CellScript 是面向 CKB 的 Cell 模型智能合约 DSL。它把 `.cell`
 源码编译为 ckb-vm RISC-V assembly 或 ELF 产物，并同时输出可用于审计、
 策略检查、schema 绑定和调度感知执行的类型化 metadata。
+
+在这份 README 中，metadata 指编译器输出的机器可读语义事实：schema layout、
+Cell effects、access summaries、source hashes、verifier obligations、
+runtime requirements 和 target-profile policy flags。
 
 CellScript 是刻意收窄的语言：它不是新的 VM，也不是账户存储合约语言。
 它为协议作者提供一种类型化方式来描述资产、共享 Cell 状态、receipt、
@@ -43,6 +47,21 @@ CellScript 把这些工作提升为显式语言构造：`resource`、`shared`、
 `transfer`、`destroy`、`claim` 和 `settle`。这些构造不是隐喻——它们会
 直接 lower 到目标链已经执行的 Cell 交易形状。
 
+## 当前状态
+
+CellScript 目前处于 CKB-focused alpha / stabilization 阶段。
+
+它适合用于：
+- 试验 CKB Cell-contract authoring；
+- 编译并检查内置示例；
+- 探索类型化 Cell effects、metadata、constraints 和 CKB target-profile
+  checks；
+- 试用本地 VS Code 扩展和 LSP tooling。
+
+它尚不建议在没有人工审查和审计的情况下直接用于 mainnet 部署。当前重点是
+developer-readiness、diagnostics、ProofPlan / metadata visibility，以及
+CKB target-profile stability。
+
 ## 快速开始
 
 从仓库安装：
@@ -57,6 +76,9 @@ cargo install --path .
 ```bash
 # 仅做类型检查
 cellc examples/token.cell
+
+# 输出 CKB 的 RISC-V ELF
+cellc examples/token.cell --target riscv64-elf --target-profile ckb
 
 # 输出 CKB 的 RISC-V ELF，指定入口 action
 cellc examples/nft.cell --target riscv64-elf --target-profile ckb --entry-action transfer
@@ -77,70 +99,20 @@ cellc build --target riscv64-elf --target-profile ckb
 cellc check --target-profile ckb
 ```
 
+检查编译器能解释的 token 示例信息：
+
+```bash
+cellc metadata examples/token.cell --target-profile ckb --json
+cellc constraints examples/token.cell --target-profile ckb
+cellc scheduler-plan examples/token.cell --target-profile ckb
+```
+
+这些命令展示编译器认为协议会 read、write、create、consume、assume 什么，
+以及它向 CKB-facing policy tooling 暴露了什么。
+
 > **下一步：** 阅读[语言模型](#核心模型)、[完整示例](#示例)，或深入了解[架构](#架构)。
 
 ---
-
-## Target Profiles
-
-CellScript 现在只支持 CKB 这一个 target profile：
-
-| Profile | 何时使用 | 你得到什么 |
-|---|---|---|
-| `ckb` | CKB mainnet 产物 | BLAKE2b/Molecule 约定、CKB syscall profile |
-
-> `ckb` profile 已按 bundled CellScript suite 进入 production-gated 状态。
-> 它输出原生 CKB ckb-vm artifact，使用 CKB syscall
-> 与 Molecule/BLAKE2b 约定，并通过正常 target-profile policy 拒绝未支持形状。
-
-```bash
-cellc examples/token.cell --target riscv64-elf --target-profile ckb
-cellc check --target-profile ckb
-```
-
-## 核心模型
-
-CellScript 程序围绕 Cell 生命周期操作书写：
-
-| 概念 | 编译到什么 |
-|---|---|
-| `resource T { ... }` | 线性的 Cell-backed 资产（`CellOutput` + `outputs_data[i]`） |
-| `shared T { ... }` | 共享状态 Cell，通过 `CellDep` 读取，或通过 consume + create 更新 |
-| `receipt T { ... }` | 一次性证明 Cell（deposit、vesting、vote、liquidity） |
-| `consume value` | 花费一个 transaction input |
-| `create T { ... }` | 创建新的 output Cell 和类型化数据 |
-| `read_ref T` | 加载只读 CellDep-backed 值 |
-| `action` | Type-script 状态转换逻辑 → 编译为 RISC-V |
-| `lock` | Lock-script 授权逻辑 → 编译为 RISC-V |
-| 本地 `let` 值 | 交易局部计算；不会成为持久存储 |
-
-> **关键规则：** 只有 `create` 会物化持久状态。普通本地值不会变成 Cell，
-> 除非被显式创建为 `resource`、`shared` 或 `receipt`。
-
-## 语言特性
-
-- **Cell 原生资源** — `resource` 值是线性的，不能复制、静默丢弃或藏进
-  普通值。每个 resource 都必须被 consume、transfer、return、claim、
-  settle 或 destroy。
-- **显式共享状态** — `shared` 标记池、注册表、配置 Cell 等争用敏感协议
-  状态。读写保持对 metadata 和工具可见。
-- **Receipt 作为有状态证明** — `receipt` 是一次性 Cell，证明某个操作已经
-  发生，并可在之后被 claim 或 settle。
-- **Capability 守门** — `has store, transfer, destroy` 让资产权限显式化。
-- **生命周期规则** — `#[lifecycle(...)]` 让 Cell-backed 值描述状态机，
-  例如 `Granted -> Claimable -> FullyClaimed`。
-- **Effect 推断** — `action` 会根据 Cell 操作被分类为 `Pure`、`ReadOnly`、
-  `Mutating`、`Creating` 或 `Destroying`。
-- **调度感知 metadata** — CKB target 可以暴露 access summary 和 shared
-  touch domain，让区块构建器判断哪些工作可以独立处理。
-- **类型化 schema metadata** — Cell data layout、type identity、source hash、
-  runtime access 和 verifier obligation 都会作为机器可读 metadata 输出。
-- **RISC-V 输出** — 可执行目标是 ckb-vm 兼容 RISC-V assembly 或 ELF。
-  CellScript 不引入独立 VM。
-- **包感知编译** — 支持 `Cell.toml`、本地模块、source roots 和本地 path
-  dependencies。
-- **策略门禁** — build、check、metadata 和 artifact verification 命令可以按
-  目标 profile 或部署策略拒绝不合规产物。
 
 ## 示例
 
@@ -256,31 +228,11 @@ action burn(token: Token) {
 | `examples/amm_pool.cell` | Shared pool state、swap/liquidity effects |
 | `examples/launch.cell` | Launch/pool composition patterns |
 
-## 对比
-
-CellScript 为什么围绕 typed Cells、线性资源、显式交易 effect 和 ckb-vm
-artifact 设计——而不是围绕账户存储或单链专用 VM：
-
-| 维度 | CellScript | Solidity | Move | Sway |
-|---|---|---|---|---|
-| 执行目标 | ckb-vm 上 RISC-V ELF/asm | EVM bytecode | Move bytecode | FuelVM bytecode |
-| 状态模型 | 类型化 Cells，显式 inputs/deps/outputs | 账户存储槽 | 全局存储中的 resources | UTXO + 原生资产 |
-| 资产模型 | 原生 `resource`、生命周期、receipt、shared Cells | 手写 token contracts | 原生 resources | 原生资产 |
-| 线性所有权 | 编译器强制 | 无 | 通过 abilities | 无通用用户定义 |
-| 共享状态 | 显式 `shared` Cells | 隐式 contract storage | 部分 Move 链的 shared objects | 无 shared Cell 对应物 |
-| 重入 | 无 callback 风格重入 | 常见风险面 | 设计上较低 | predicate 风险较低 |
-| 调度 metadata | CKB 原生支持 | 无 | 非 GhostDAG 导向 | predicate 级 |
-| CKB 兼容性 | 面向 bundled Cell suite 的 production-gated CKB ckb-vm artifact profile | 需要不同 VM | 需要不同 VM | 需要 FuelVM |
-
-与手写 CKB 脚本相比，CellScript 保留同一个 runtime substrate，
-但用类型化 Cell 操作、线性检查、schema metadata 和可被策略验证的产物取代
-原始 byte/syscall 编程。
-
 ---
 
 ## 编辑器支持
 
-CellScript 包含生产级本地语言工具：
+CellScript 为早期用户提供 production-style 的本地语言工具：
 
 - **In-process LSP** — 诊断、补全、hover、go-to-definition、引用、重命名、
   格式化和 metadata-oriented code actions。编译器 crate 暴露 `LspServer`；
@@ -306,6 +258,89 @@ CellScript 包含生产级本地语言工具：
 - [Deployment manifest 示例](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/examples/deployment_manifest.md)
 - [Mutate append 示例](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/examples/mutate_append.md)
 - [0.13 roadmap](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_13_ROADMAP.md)
+- [0.14 roadmap](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_14_ROADMAP.md)
+- [0.14 release notes draft](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_14_RELEASE_NOTES_DRAFT.md)
+
+## Target Profiles
+
+CellScript 现在只支持 CKB 这一个 target profile：
+
+| Profile | 何时使用 | 你得到什么 |
+|---|---|---|
+| `ckb` | CKB mainnet 产物 | BLAKE2b/Molecule 约定、CKB syscall profile |
+
+> `ckb` profile 已按 bundled CellScript suite 进入 production-gated 状态。
+> 它输出原生 CKB ckb-vm artifact，使用 CKB syscall
+> 与 Molecule/BLAKE2b 约定，并通过正常 target-profile policy 拒绝未支持形状。
+
+```bash
+cellc examples/token.cell --target riscv64-elf --target-profile ckb
+cellc check --target-profile ckb
+```
+
+## 核心模型
+
+CellScript 程序围绕 Cell 生命周期操作书写：
+
+| 概念 | 编译到什么 |
+|---|---|
+| `resource T { ... }` | 线性的 Cell-backed 资产（`CellOutput` + `outputs_data[i]`） |
+| `shared T { ... }` | 共享状态 Cell，通过 `CellDep` 读取，或通过 consume + create 更新 |
+| `receipt T { ... }` | 一次性证明 Cell（deposit、vesting、vote、liquidity） |
+| `consume value` | 花费一个 transaction input |
+| `create T { ... }` | 创建新的 output Cell 和类型化数据 |
+| `read_ref T` | 加载只读 CellDep-backed 值 |
+| `action` | Type-script 状态转换逻辑 → 编译为 RISC-V |
+| `lock` | Lock-script 授权逻辑 → 编译为 RISC-V |
+| 本地 `let` 值 | 交易局部计算；不会成为持久存储 |
+
+> **关键规则：** 只有 `create` 会物化持久状态。普通本地值不会变成 Cell，
+> 除非被显式创建为 `resource`、`shared` 或 `receipt`。
+
+## 语言特性
+
+- **Cell 原生资源** — `resource` 值是线性的，不能复制、静默丢弃或藏进
+  普通值。每个 resource 都必须被 consume、transfer、return、claim、
+  settle 或 destroy。
+- **显式共享状态** — `shared` 标记池、注册表、配置 Cell 等争用敏感协议
+  状态。读写保持对 metadata 和工具可见。
+- **Receipt 作为有状态证明** — `receipt` 是一次性 Cell，证明某个操作已经
+  发生，并可在之后被 claim 或 settle。
+- **Capability 守门** — `has store, transfer, destroy` 让资产权限显式化。
+- **生命周期规则** — `#[lifecycle(...)]` 让 Cell-backed 值描述状态机，
+  例如 `Granted -> Claimable -> FullyClaimed`。
+- **Effect 推断** — `action` 会根据 Cell 操作被分类为 `Pure`、`ReadOnly`、
+  `Mutating`、`Creating` 或 `Destroying`。
+- **调度感知 metadata** — CKB target 可以暴露 access summary 和 shared
+  touch domain，让区块构建器判断哪些工作可以独立处理。
+- **类型化 schema metadata** — Cell data layout、type identity、source hash、
+  runtime access 和 verifier obligation 都会作为机器可读 metadata 输出。
+- **RISC-V 输出** — 可执行目标是 ckb-vm 兼容 RISC-V assembly 或 ELF。
+  CellScript 不引入独立 VM。
+- **包感知编译** — 支持 `Cell.toml`、本地模块、source roots 和本地 path
+  dependencies。
+- **策略门禁** — build、check、metadata 和 artifact verification 命令可以按
+  目标 profile 或部署策略拒绝不合规产物。
+
+## 对比
+
+CellScript 为什么围绕 typed Cells、线性资源、显式交易 effect 和 ckb-vm
+artifact 设计——而不是围绕账户存储或单链专用 VM：
+
+| 维度 | CellScript | Solidity | Move | Sway |
+|---|---|---|---|---|
+| 执行目标 | ckb-vm 上 RISC-V ELF/asm | EVM bytecode | Move bytecode | FuelVM bytecode |
+| 状态模型 | 类型化 Cells，显式 inputs/deps/outputs | 账户存储槽 | 全局存储中的 resources | UTXO + 原生资产 |
+| 资产模型 | 原生 `resource`、生命周期、receipt、shared Cells | 手写 token contracts | 原生 resources | 原生资产 |
+| 线性所有权 | 编译器强制 | 无 | 通过 abilities | 无通用用户定义 |
+| 共享状态 | 显式 `shared` Cells | 隐式 contract storage | 部分 Move 链的 shared objects | 无 shared Cell 对应物 |
+| 重入 | 无 callback 风格重入 | 常见风险面 | 设计上较低 | predicate 风险较低 |
+| 调度 metadata | CKB 原生支持 | 无 | 非 GhostDAG 导向 | predicate 级 |
+| CKB 兼容性 | 面向 bundled Cell suite 的 production-gated CKB ckb-vm artifact profile | 需要不同 VM | 需要不同 VM | 需要 FuelVM |
+
+与手写 CKB 脚本相比，CellScript 保留同一个 runtime substrate，
+但用类型化 Cell 操作、线性检查、schema metadata 和可被策略验证的产物取代
+原始 byte/syscall 编程。
 
 ---
 
@@ -417,15 +452,15 @@ CKB 假设暴露出来。
 ```mermaid
 flowchart TB
     Source[".cell source + Cell.toml\n--target-profile ckb"] --> Frontend["Lexer + parser\n稳定 source span"]
-    Frontend --> Semantics["Type + lifecycle checks\n线性资源、lock-only require、\nprotected/witness 分类"]
+    Frontend --> Semantics["Type + lifecycle checks\n线性资源、lock-only require、\nprotected/witness/lock_args 分类"]
     Semantics --> Policy["CKB policy gate\n对不支持的 runtime 或状态形状 fail closed"]
 
     subgraph Rules["CKB profile rules"]
         R1["CKB syscall ABI\nsource flags + syscall numbers"]
-        R2["Molecule-facing schema\nentry witness ABI"]
+        R2["Molecule-facing schema\nentry witness + lock args ABI"]
         R3["CKB Blake2b\nartifact + deployment hashes"]
         R4["hash_type / CellDep / DepGroup policy"]
-        R5["capacity、tx-size、\ncycle evidence requirements"]
+        R5["capacity policy\nwith_capacity_floor、occupied_capacity、\ntx-size 与 cycle evidence"]
     end
 
     Rules --> Policy
@@ -437,7 +472,7 @@ flowchart TB
     Artifact --> Verify["cellc verify-artifact\nprofile、source hash、\nartifact hash、policy flags"]
     Metadata --> Verify
 
-    Artifact --> Builder["builder workflow\ninputs、outputs、witness、\ncell_deps、capacity"]
+    Artifact --> Builder["builder workflow\ninputs、outputs、outputs_data、\nwitness、cell_deps、capacity floors"]
     Metadata --> Builder
     Builder --> Acceptance["CKB acceptance gate\ndry-run、commit、cycles、\ntx size、occupied capacity、\nvalid/invalid lock matrix"]
 ```
@@ -450,6 +485,12 @@ flowchart TB
   hash、target profile 和选定 policy flags 一致；
 - **链上证据边界** — builder 和 acceptance 脚本证明具体 CKB 交易形状、
   capacity、cycles、tx size，以及 lock/action 行为。
+
+这个 profile 里的 capacity 分成两层：`with_capacity_floor(shannons)` 声明
+某个类型输出的最低容量，并进入 metadata 和 constraints；
+`occupied_capacity("TypeName")` 继续提供运行时可见的 capacity 检查。二者都
+不替代 builder 证据：最终交易仍然要测量 occupied capacity，确保 output
+capacity 足够，并保留 tx-size evidence。
 
 ### Wasm 门禁
 
@@ -547,7 +588,6 @@ path dependencies、lockfile 刷新，以及 package build/check/doc/fmt 流程
 |---|---|
 | `--target riscv64-asm` | 输出 RISC-V assembly |
 | `--target riscv64-elf` | 输出 RISC-V ELF artifact |
-
 | `--target-profile ckb` | 使用 CKB profile |
 | `--entry-action <ACTION>` | 将单个 action 编译为 artifact entrypoint |
 | `--entry-lock <LOCK>` | 将单个 lock 编译为 artifact entrypoint |
