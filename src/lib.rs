@@ -2464,7 +2464,10 @@ pub fn encode_entry_witness_args_for_params_with_runtime_bound(
     runtime_bound_param_names: &BTreeSet<String>,
 ) -> Result<Vec<u8>> {
     let payload_len = entry_witness_metadata_payload_len_with_runtime_bound(params, runtime_bound_param_names)?;
-    let mut witness = Vec::with_capacity(ENTRY_WITNESS_ABI_MAGIC.len() + payload_len);
+    let capacity = ENTRY_WITNESS_ABI_MAGIC.len().checked_add(payload_len).ok_or_else(|| {
+        CompileError::without_span(format!("entry witness payload length exceeds addressable memory for {}", ENTRY_WITNESS_ABI))
+    })?;
+    let mut witness = Vec::with_capacity(capacity);
     witness.extend_from_slice(ENTRY_WITNESS_ABI_MAGIC);
 
     let mut arg_index = 0usize;
@@ -2524,14 +2527,23 @@ fn entry_witness_metadata_payload_len_with_runtime_bound(
         if !param_consumes_entry_witness_payload(param, runtime_bound_param_names) {
             Ok(acc)
         } else if param.schema_pointer_abi || param.schema_length_abi {
-            Ok(acc + 4)
+            entry_witness_checked_payload_len_add(acc, 4, param)
         } else if let Some(width) = param.fixed_byte_len {
-            Ok(acc + width)
+            entry_witness_checked_payload_len_add(acc, width, param)
         } else if let Some(width) = entry_witness_scalar_param_width(&param.ty) {
-            Ok(acc + width)
+            entry_witness_checked_payload_len_add(acc, width, param)
         } else {
             Err(CompileError::without_span(format!("entry witness parameter '{}' has unsupported type '{}'", param.name, param.ty)))
         }
+    })
+}
+
+fn entry_witness_checked_payload_len_add(acc: usize, width: usize, param: &ParamMetadata) -> Result<usize> {
+    acc.checked_add(width).ok_or_else(|| {
+        CompileError::without_span(format!(
+            "entry witness parameter '{}' makes payload length exceed addressable memory for {}",
+            param.name, ENTRY_WITNESS_ABI
+        ))
     })
 }
 
@@ -2660,7 +2672,7 @@ pub(crate) fn entry_witness_static_type_len(ty: &str) -> Option<usize> {
     if let Some(body) = ty.strip_prefix('[').and_then(|value| value.strip_suffix(']')) {
         let (inner, len) = split_top_level_once(body, ';')?;
         let len = len.trim().parse::<usize>().ok()?;
-        return entry_witness_static_type_len(inner).map(|inner_len| inner_len * len);
+        return entry_witness_static_type_len(inner).and_then(|inner_len| inner_len.checked_mul(len));
     }
 
     if let Some(body) = ty.strip_prefix('(').and_then(|value| value.strip_suffix(')')) {
@@ -2669,7 +2681,7 @@ pub(crate) fn entry_witness_static_type_len(ty: &str) -> Option<usize> {
         }
         return split_top_level_commas(body)
             .iter()
-            .try_fold(0usize, |acc, item| entry_witness_static_type_len(item).map(|len| acc + len));
+            .try_fold(0usize, |acc, item| entry_witness_static_type_len(item).and_then(|len| acc.checked_add(len)));
     }
 
     None
@@ -9347,7 +9359,7 @@ fn metadata_can_verify_lifecycle_transition(
 }
 
 fn metadata_type_encoded_size_from_layouts(layouts: &HashMap<String, MetadataFieldLayout>) -> Option<usize> {
-    layouts.values().try_fold(0usize, |acc, layout| layout.fixed_size.map(|size| acc + size))
+    layouts.values().try_fold(0usize, |acc, layout| layout.fixed_size.and_then(|size| acc.checked_add(size)))
 }
 
 fn body_consumed_named_types(body: &ir::IrBody) -> BTreeSet<String> {
@@ -10791,7 +10803,9 @@ fn metadata_inline_type_fixed_width(ty: &str, type_layouts: &MetadataTypeLayouts
         "u128" => Some(16),
         "Address" | "Hash" => Some(32),
         other => type_layouts.get(other).and_then(|fields| {
-            fields.values().try_fold(0usize, |acc, layout| metadata_layout_fixed_byte_width(layout).map(|width| acc + width))
+            fields
+                .values()
+                .try_fold(0usize, |acc, layout| metadata_layout_fixed_byte_width(layout).and_then(|width| acc.checked_add(width)))
         }),
     }
 }
@@ -10808,7 +10822,10 @@ fn metadata_aggregate_field_layout(ty: &ir::IrType, field: &str) -> Option<Metad
         ir::IrType::Tuple(items) => {
             let index = field.parse::<usize>().ok()?;
             let field_ty = items.get(index)?.clone();
-            let offset = items.iter().take(index).try_fold(0usize, |acc, item| type_static_length(item).map(|size| acc + size))?;
+            let offset = items
+                .iter()
+                .take(index)
+                .try_fold(0usize, |acc, item| type_static_length(item).and_then(|size| acc.checked_add(size)))?;
             let fixed_size = type_static_length(&field_ty);
             Some(MetadataFieldLayout { ty: field_ty, offset, fixed_size, fixed_enum_size: None })
         }
@@ -11994,7 +12011,7 @@ fn field_metadata(field: &ir::IrField, type_defs: &BTreeMap<String, &ir::IrTypeD
 
 fn type_encoded_size(type_def: &ir::IrTypeDef, type_defs: &BTreeMap<String, &ir::IrTypeDef>) -> Option<usize> {
     type_def.fields.iter().try_fold(0usize, |acc, field| {
-        ir_type_encoded_size(&field.ty, type_defs, &mut BTreeSet::new()).or(field.fixed_size).map(|size| acc + size)
+        ir_type_encoded_size(&field.ty, type_defs, &mut BTreeSet::new()).or(field.fixed_size).and_then(|size| acc.checked_add(size))
     })
 }
 
@@ -12010,10 +12027,12 @@ fn ir_type_encoded_size(
         ir::IrType::U64 => Some(8),
         ir::IrType::U128 => Some(16),
         ir::IrType::Address | ir::IrType::Hash => Some(32),
-        ir::IrType::Array(inner, len) => ir_type_encoded_size(inner, type_defs, visiting).map(|inner_size| inner_size * len),
-        ir::IrType::Tuple(items) => {
-            items.iter().try_fold(0usize, |acc, item| ir_type_encoded_size(item, type_defs, visiting).map(|item_size| acc + item_size))
+        ir::IrType::Array(inner, len) => {
+            ir_type_encoded_size(inner, type_defs, visiting).and_then(|inner_size| inner_size.checked_mul(*len))
         }
+        ir::IrType::Tuple(items) => items.iter().try_fold(0usize, |acc, item| {
+            ir_type_encoded_size(item, type_defs, visiting).and_then(|item_size| acc.checked_add(item_size))
+        }),
         ir::IrType::Unit => Some(0),
         ir::IrType::Named(name) => {
             if !visiting.insert(name.clone()) {
@@ -12021,7 +12040,9 @@ fn ir_type_encoded_size(
             }
             let size = type_defs.get(name.as_str()).and_then(|type_def| {
                 type_def.fields.iter().try_fold(0usize, |acc, field| {
-                    ir_type_encoded_size(&field.ty, type_defs, visiting).or(field.fixed_size).map(|field_size| acc + field_size)
+                    ir_type_encoded_size(&field.ty, type_defs, visiting)
+                        .or(field.fixed_size)
+                        .and_then(|field_size| acc.checked_add(field_size))
                 })
             });
             visiting.remove(name);
@@ -12259,8 +12280,10 @@ fn type_static_length(ty: &ir::IrType) -> Option<usize> {
         ir::IrType::U64 => Some(8),
         ir::IrType::U128 => Some(16),
         ir::IrType::Address | ir::IrType::Hash => Some(32),
-        ir::IrType::Array(inner, size) => type_static_length(inner).map(|inner_size| inner_size * size),
-        ir::IrType::Tuple(items) => items.iter().try_fold(0usize, |acc, item| type_static_length(item).map(|size| acc + size)),
+        ir::IrType::Array(inner, size) => type_static_length(inner).and_then(|inner_size| inner_size.checked_mul(*size)),
+        ir::IrType::Tuple(items) => {
+            items.iter().try_fold(0usize, |acc, item| type_static_length(item).and_then(|size| acc.checked_add(size)))
+        }
         ir::IrType::Unit => Some(0),
         ir::IrType::Ref(inner) | ir::IrType::MutRef(inner) => type_static_length(inner),
         ir::IrType::Named(_) => None,

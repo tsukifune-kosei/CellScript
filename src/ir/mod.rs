@@ -643,7 +643,7 @@ impl IrGenerator {
                 let ty = Self::convert_type(&field.ty);
                 let fixed_size = self.fixed_encoded_size(&ty);
                 let offset = next_offset.unwrap_or(0);
-                next_offset = next_offset.and_then(|current| fixed_size.map(|size| current + size));
+                next_offset = next_offset.and_then(|current| fixed_size.and_then(|size| current.checked_add(size)));
                 IrField { name: field.name.clone(), ty, offset, fixed_size }
             })
             .collect()
@@ -661,10 +661,12 @@ impl IrGenerator {
             IrType::U64 => Some(8),
             IrType::U128 => Some(16),
             IrType::Address | IrType::Hash => Some(32),
-            IrType::Array(inner, len) => self.fixed_encoded_size_with_seen(inner, seen).map(|inner_size| inner_size * len),
-            IrType::Tuple(items) => {
-                items.iter().try_fold(0usize, |acc, item| self.fixed_encoded_size_with_seen(item, seen).map(|size| acc + size))
+            IrType::Array(inner, len) => {
+                self.fixed_encoded_size_with_seen(inner, seen).and_then(|inner_size| inner_size.checked_mul(*len))
             }
+            IrType::Tuple(items) => items
+                .iter()
+                .try_fold(0usize, |acc, item| self.fixed_encoded_size_with_seen(item, seen).and_then(|size| acc.checked_add(size))),
             IrType::Unit => Some(0),
             IrType::Named(name) => {
                 let base_name = name.split('<').next().unwrap_or(name.as_str());
@@ -4452,7 +4454,7 @@ fn layout_resolver_fields(fields: &[Field]) -> Vec<IrField> {
             let ty = ast_type_to_ir_type(&field.ty);
             let fixed_size = fixed_encoded_size_for_ir_type(&ty);
             let offset = next_offset.unwrap_or(0);
-            next_offset = next_offset.and_then(|current| fixed_size.map(|size| current + size));
+            next_offset = next_offset.and_then(|current| fixed_size.and_then(|size| current.checked_add(size)));
             IrField { name: field.name.clone(), ty, offset, fixed_size }
         })
         .collect()
@@ -4466,8 +4468,10 @@ fn fixed_encoded_size_for_ir_type(ty: &IrType) -> Option<usize> {
         IrType::U64 => Some(8),
         IrType::U128 => Some(16),
         IrType::Address | IrType::Hash => Some(32),
-        IrType::Array(inner, len) => fixed_encoded_size_for_ir_type(inner).map(|inner_size| inner_size * len),
-        IrType::Tuple(items) => items.iter().try_fold(0usize, |acc, item| fixed_encoded_size_for_ir_type(item).map(|size| acc + size)),
+        IrType::Array(inner, len) => fixed_encoded_size_for_ir_type(inner).and_then(|inner_size| inner_size.checked_mul(*len)),
+        IrType::Tuple(items) => {
+            items.iter().try_fold(0usize, |acc, item| fixed_encoded_size_for_ir_type(item).and_then(|size| acc.checked_add(size)))
+        }
         IrType::Unit => Some(0),
         IrType::Named(_) | IrType::Ref(_) | IrType::MutRef(_) => None,
     }

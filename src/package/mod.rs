@@ -905,12 +905,12 @@ pub mod version {
     }
 
     fn is_compatible(version: &str, base: &str) -> bool {
-        let v_parts: Vec<u32> = version.split('.').filter_map(|p| p.parse().ok()).collect();
-        let b_parts: Vec<u32> = base.split('.').filter_map(|p| p.parse().ok()).collect();
-
-        if v_parts.is_empty() || b_parts.is_empty() {
+        let Some(v_parts) = parse_numeric_version(version) else {
             return false;
-        }
+        };
+        let Some(b_parts) = parse_numeric_version(base) else {
+            return false;
+        };
 
         if v_parts[0] != b_parts[0] {
             return false;
@@ -1050,6 +1050,9 @@ mod tests {
         assert!(version::satisfies("1.2.3", &VersionReq::Range(">=1.0.0, <2.0.0".to_string())));
         assert!(!version::satisfies("2.0.0", &VersionReq::Range(">=1.0.0, <2.0.0".to_string())));
         assert!(!version::satisfies("1.2.3", &VersionReq::Range(">=1.3.0".to_string())));
+        assert!(!version::satisfies("1.bad", &VersionReq::Compatible("1.0.0".to_string())));
+        assert!(!version::satisfies("1.2.3", &VersionReq::Compatible("1.bad".to_string())));
+        assert!(!version::satisfies("1.bad", &VersionReq::Range(">=1.0.0".to_string())));
     }
 
     #[test]

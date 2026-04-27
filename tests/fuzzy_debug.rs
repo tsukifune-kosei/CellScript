@@ -1,5 +1,8 @@
 use cellscript::lsp::{LspServer, Position, Range, TextDocumentContentChangeEvent};
-use cellscript::{compile, decode_scheduler_witness_hex, validate_compile_metadata, ArtifactFormat, CompileOptions, EntryWitnessArg};
+use cellscript::{
+    compile, decode_scheduler_witness_hex, encode_entry_witness_args_for_params, validate_compile_metadata, ArtifactFormat,
+    CompileOptions, EntryWitnessArg, ParamMetadata,
+};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::process::Command;
 
@@ -384,4 +387,45 @@ action owned(owner: Address) -> u64 {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("panicked"), "CLI hex decoder panicked instead of returning a diagnostic: {stderr}");
     assert!(stderr.contains("invalid hex byte"), "unexpected stderr: {stderr}");
+}
+
+#[test]
+fn fuzzy_oversized_static_widths_are_controlled_errors() {
+    let oversized = ParamMetadata {
+        name: "oversized".to_string(),
+        ty: "[u8; huge]".to_string(),
+        is_mut: false,
+        is_ref: false,
+        source: "default".to_string(),
+        protected_spend_surface: false,
+        witness_data_source: false,
+        lock_args_data_source: false,
+        cell_bound_abi: false,
+        schema_pointer_abi: false,
+        schema_length_abi: false,
+        fixed_byte_pointer_abi: false,
+        fixed_byte_length_abi: false,
+        fixed_byte_len: Some(usize::MAX),
+        type_hash_pointer_abi: false,
+        type_hash_length_abi: false,
+        type_hash_len: None,
+    };
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| encode_entry_witness_args_for_params(&[oversized], &[])));
+    let result = outcome.unwrap_or_else(|payload| panic!("oversized entry witness metadata panicked: {payload:?}"));
+    let err = result.expect_err("oversized entry witness metadata should be rejected");
+    assert!(err.message.contains("payload length"), "unexpected error: {}", err.message);
+
+    let huge_array_source = r#"
+module cellscript::huge_width_fuzz
+
+struct Huge {
+    data: [u8; 18446744073709551615],
+}
+
+action inspect(value: Huge) -> u64 {
+    return 0
+}
+"#;
+    assert_compile_is_controlled(huge_array_source, CompileOptions::default(), "huge-static-array-width");
 }
