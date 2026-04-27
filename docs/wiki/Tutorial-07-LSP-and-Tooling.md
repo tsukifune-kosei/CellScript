@@ -165,4 +165,4 @@ current build explicitly reports them as completed and supported.
 ## Next
 
 With the tooling loop in place, continue with
-[Bundled Example Contracts](Tutorial-08-Bundled-Example-Contracts.md).
+[Bundled Example Contracts](https://github.com/tsukifune-kosei/CellScript/wiki/Tutorial-08-Bundled-Example-Contracts).

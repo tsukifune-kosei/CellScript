@@ -270,5 +270,5 @@ repeat arithmetic.
 ## Next
 
 With the source shape in mind, continue with
-[Resources and Cell Effects](Tutorial-03-Resources-and-Cell-Effects.md). If a
-CKB term is unclear, use the [CKB Glossary](CKB-Glossary.md).
+[Resources and Cell Effects](https://github.com/tsukifune-kosei/CellScript/wiki/Tutorial-03-Resources-and-Cell-Effects). If a
+CKB term is unclear, use the [CKB Glossary](https://github.com/tsukifune-kosei/CellScript/wiki/CKB-Glossary).

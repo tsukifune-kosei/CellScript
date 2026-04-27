@@ -157,5 +157,5 @@ closed.
 ## Next
 
 After you know how values move, continue with
-[Cookbook Recipes](Cookbook-Recipes.md) for small copyable patterns, then move
-on to [Packages and CLI Workflow](Tutorial-04-Packages-and-CLI-Workflow.md).
+[Cookbook Recipes](https://github.com/tsukifune-kosei/CellScript/wiki/Cookbook-Recipes) for small copyable patterns, then move
+on to [Packages and CLI Workflow](https://github.com/tsukifune-kosei/CellScript/wiki/Tutorial-04-Packages-and-CLI-Workflow).

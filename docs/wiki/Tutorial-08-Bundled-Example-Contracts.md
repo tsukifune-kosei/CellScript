@@ -34,9 +34,9 @@ It is a bounded-collection language example for local `Vec<Address>` and
 production action acceptance.
 
 For a visual business-flow map of every bundled example, see
-[`CELLSCRIPT_EXAMPLE_BUSINESS_FLOWS.md`](../CELLSCRIPT_EXAMPLE_BUSINESS_FLOWS.md).
+[`CELLSCRIPT_EXAMPLE_BUSINESS_FLOWS.md`](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_EXAMPLE_BUSINESS_FLOWS.md).
 For small reusable patterns drawn from the same ideas, see
-[Cookbook Recipes](Cookbook-Recipes.md).
+[Cookbook Recipes](https://github.com/tsukifune-kosei/CellScript/wiki/Cookbook-Recipes).
 
 ## A Good Reading Order
 

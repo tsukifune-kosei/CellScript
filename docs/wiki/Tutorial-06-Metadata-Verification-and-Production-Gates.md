@@ -187,4 +187,4 @@ not external production release evidence.
 ## Next
 
 Once the verification boundary is clear, continue with
-[LSP and Tooling](Tutorial-07-LSP-and-Tooling.md).
+[LSP and Tooling](https://github.com/tsukifune-kosei/CellScript/wiki/Tutorial-07-LSP-and-Tooling).

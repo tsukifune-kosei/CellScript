@@ -113,5 +113,5 @@ That fail-closed behavior is intentional.
 ## Next
 
 Once you can compile and verify one file, continue with
-[Language Basics](Tutorial-02-Language-Basics.md). The next chapter explains
+[Language Basics](https://github.com/tsukifune-kosei/CellScript/wiki/Tutorial-02-Language-Basics). The next chapter explains
 what you are looking at inside a `.cell` file.
