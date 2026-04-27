@@ -1,0 +1,78 @@
+module cellscript::canonical_style
+
+resource Vault has store, transfer {
+    owner: Address
+    asset_symbol: [u8; 8]
+    balance: u64
+}
+
+shared Market has store {
+    total_locked: u64
+}
+
+receipt DepositReceipt has store, destroy {
+    vault_hash: Hash
+    amount: u64
+    participant: Address
+    approvals: Vec<Address>
+}
+
+action open_vault(owner: Address, asset_symbol: [u8; 8], balance: u64) -> Vault {
+    assert_invariant(balance > 0, "empty vault")
+
+    create Vault {
+        owner,
+        asset_symbol,
+        balance
+    } with_lock(owner)
+}
+
+action deposit(
+    market: &mut Market,
+    vault: &mut Vault,
+    amount: u64,
+    participant: Address
+) -> DepositReceipt {
+    assert_invariant(amount > 0, "zero deposit")
+    assert_invariant(participant == vault.owner, "wrong participant")
+
+    market.total_locked = market.total_locked + amount
+    vault.balance = vault.balance + amount
+
+    create DepositReceipt {
+        vault_hash: vault.type_hash(),
+        amount,
+        participant,
+        approvals: []
+    } with_lock(participant)
+}
+
+action settle_deposit(
+    market: &mut Market,
+    vault: &mut Vault,
+    receipt: DepositReceipt,
+    recipient: Address
+) {
+    assert_invariant(receipt.vault_hash == vault.type_hash(), "wrong vault")
+    assert_invariant(recipient == receipt.participant, "wrong recipient")
+
+    consume receipt
+    market.total_locked = market.total_locked - receipt.amount
+    vault.balance = vault.balance - receipt.amount
+}
+
+action discard_empty_receipt(receipt: DepositReceipt) {
+    assert_invariant(receipt.amount == 0, "non-empty receipt")
+    destroy receipt
+}
+
+lock vault_owner(vault: protected Vault, owner: lock_args Address, claimed_owner: witness Address) -> bool {
+    // CKB boundary surfaces: protected input cell, script args, witness field,
+    // and an explicit sighash digest. This still is not first-class signer auth.
+    let input = source::group_input(0)
+    let witness_lock = witness::lock(input)
+    let digest = env::sighash_all(input)
+    require owner == vault.owner
+    require claimed_owner == owner
+    require witness_lock == digest
+}

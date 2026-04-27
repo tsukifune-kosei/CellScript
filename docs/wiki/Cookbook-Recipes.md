@@ -94,26 +94,31 @@ lock bad_owner_check(wallet: protected Wallet, signer: witness Address) -> bool 
 ```
 
 Prefer names such as `claimed_owner` or `provided_owner` until the language has
-explicit script-args and sighash verification primitives.
+explicit signer verification primitives.
 
 ## Recipe: Bind A Lock Predicate To Script Args
 
 Use `lock_args` when a lock predicate depends on the executing script's args:
 
 ```cellscript
-lock signed_owner(
+lock owner_boundary(
     wallet: protected Wallet,
     owner: lock_args Address,
-    sig: witness Signature
+    claimed_owner: witness Address
 ) -> bool {
-    require verify_sighash_all(sig, owner)
+    let input = source::group_input(0)
+    let witness_lock = witness::lock(input)
+    let digest = env::sighash_all(input)
     require wallet.owner == owner
+    require claimed_owner == owner
+    require witness_lock == digest
 }
 ```
 
 This makes the data source visible: `owner` comes from CKB `Script.args`, while
-`sig` comes from witness data. It still does not turn either value into signer
-authority by name. Keep signature verification explicit.
+`claimed_owner` and `witness_lock` come from witness data. It still does not
+turn either value into signer authority by name. Keep signature verification
+explicit when that primitive lands; do not treat `Address` as a signature proof.
 
 ## Recipe: Use Empty Vec Literals Safely
 

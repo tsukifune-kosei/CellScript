@@ -226,21 +226,26 @@ scope, witness layout, and signature verification. Script args can now be named
 explicitly, but signature verification is still deliberately not implicit:
 
 ```cellscript
-lock signed_owner(
+lock owner_boundary(
     wallet: protected Wallet,
     owner: lock_args Address,
-    sig: witness Signature
+    claimed_owner: witness Address
 ) -> bool {
+    let input = source::group_input(0)
+    let witness_lock = witness::lock(input)
+    let digest = env::sighash_all(input)
     require wallet.owner == owner
-    require verify_sighash_all(sig, owner)
+    require claimed_owner == owner
+    require witness_lock == digest
 }
 ```
 
 `lock_args Address` tells the reader where the owner value comes from. It still
-does not prove a signature. Until explicit verification primitives are
-available, treat `Address` and `witness Address` as data only. They are useful
-for expressing and testing lock predicates, but they are not cryptographic
-authorization by themselves.
+does not prove a signature. `env::sighash_all(input)` makes the digest surface
+visible, and `witness::lock(input)` makes the witness field visible, but the
+example above is still a boundary-classification example. Until explicit
+signature verification primitives are available, treat `Address`,
+`lock_args Address`, and `witness Address` as data only.
 
 ## Assertions
 
