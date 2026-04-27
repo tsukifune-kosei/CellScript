@@ -18,7 +18,7 @@ CellScript source and metadata.
 
 | Track | Status | Notes |
 |---|---|---|
-| Spawn/IPC surface | Implemented | `spawn`, `wait`, `process_id`, `pipe`, `pipe_write`, `pipe_read`, `inherited_fd`, and `close` lower to CKB VM v2 syscall stubs and metadata. |
+| Spawn/IPC surface | Implemented | `spawn`, `wait`, `process_id`, `pipe`, `pipe_write`, `pipe_read`, `inherited_fd`, and `close` lower to CKB VM v2 syscall stubs and metadata. Spawn targets also produce runtime-required CellDep/DepGroup script-reference obligations. |
 | Spawn/IPC fd safety | Implemented | The type checker rejects statically visible use-after-close and double-close patterns for fd values produced by `pipe()` or `inherited_fd(...)`. |
 | Source views | Implemented | `source::input`, `source::output`, `source::cell_dep`, `source::header_dep`, `source::group_input`, and `source::group_output` are typed and metadata-visible. |
 | Structured witness fields | Implemented | `witness::raw`, `witness::lock`, `witness::input_type`, and `witness::output_type` are typed as explicit CKB witness surfaces. |
@@ -33,6 +33,10 @@ CellScript source and metadata.
 
 - Spawn/IPC is bounded verifier reuse. It does not make a CKB Cell's type script
   slot multi-tenant.
+- `spawn("target")` is not an inline script reference. The transaction builder
+  must provide the child verifier as a resolvable CellDep or DepGroup script
+  reference, and metadata exposes that requirement instead of treating the name
+  as authority.
 - `witness::lock` and `env::sighash_all` expose data and digest surfaces. They
   do not create first-class signer authority by themselves.
 - Source group views are scoped to the active script group.

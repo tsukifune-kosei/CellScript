@@ -4655,6 +4655,17 @@ fn body_verifier_obligations(
             "ckb-runtime",
             &format!("{} {} from {}#{} bound to {}", access.syscall, access.operation, access.source, access.index, access.binding),
         );
+        if access.operation == "spawn" {
+            push_verifier_obligation(
+                &mut obligations,
+                &mut seen,
+                &scope,
+                "spawn-target",
+                &format!("spawn-target:{}#{}", access.source, access.index),
+                "runtime-required",
+                "Spawn target must resolve to a transaction CellDep or DepGroup script reference; DSL spawn syntax does not inline or authenticate the child script",
+            );
+        }
     }
 
     for check in body_static_resource_operation_checks(body) {
@@ -5769,6 +5780,22 @@ fn transaction_runtime_input_requirements_from_obligations(
         .collect::<BTreeSet<_>>();
     let mut requirements = Vec::new();
     for obligation in obligations {
+        if obligation.category == "spawn-target" && obligation.status == "runtime-required" {
+            requirements.push(transaction_runtime_input_requirement(
+                obligation,
+                "spawn-target-cell-dep",
+                "runtime-required",
+                Some("spawn target script reference must be supplied by the transaction builder as a resolvable CellDep or DepGroup entry"),
+                Some("spawn-target-cell-dep-gap"),
+                "CellDep",
+                "spawn-target",
+                Some("script"),
+                "ckb-spawn-cell-dep-script-reference",
+                None,
+            ));
+            continue;
+        }
+
         if let Some(binding) = mutable_state_obligation_binding(obligation) {
             if obligation.status == "runtime-required" {
                 let field_equality_status = obligation_detail_status(obligation, "field equality");

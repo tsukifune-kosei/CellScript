@@ -95,6 +95,24 @@ lock output_witness_lock(wallet: protected Wallet, claimed_owner: witness Addres
             && access.source == "GroupOutput"
     }));
     assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| access.operation == "spawn"));
+    let delegate_verify =
+        result.metadata.actions.iter().find(|action| action.name == "delegate_verify").expect("delegate_verify metadata");
+    assert!(delegate_verify.verifier_obligations.iter().any(|obligation| {
+        obligation.category == "spawn-target"
+            && obligation.feature == "spawn-target:CellDep#0"
+            && obligation.status == "runtime-required"
+            && obligation.detail.contains("CellDep or DepGroup")
+    }));
+    assert!(delegate_verify.transaction_runtime_input_requirements.iter().any(|requirement| {
+        requirement.feature == "spawn-target:CellDep#0"
+            && requirement.component == "spawn-target-cell-dep"
+            && requirement.status == "runtime-required"
+            && requirement.source == "CellDep"
+            && requirement.binding == "spawn-target"
+            && requirement.field.as_deref() == Some("script")
+            && requirement.abi == "ckb-spawn-cell-dep-script-reference"
+            && requirement.blocker_class.as_deref() == Some("spawn-target-cell-dep-gap")
+    }));
     assert_eq!(result.metadata.target_profile.spawn_ipc_abi, "ckb-vm-v2-spawn-ipc-syscalls-2601-2608");
     assert_eq!(result.metadata.target_profile.source_encoding, "ckb-source-group-high-bit");
     assert_eq!(result.metadata.target_profile.cell_dep_abi, "ckb-cell-dep-outpoint-and-dep-group");
