@@ -2041,6 +2041,10 @@ report.update({
 })
 report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
+  if [[ "$ACCEPTANCE_MODE" == "production" ]]; then
+    python3 "$REPO_ROOT/scripts/validate_ckb_cellscript_production_evidence.py" "$REPORT_JSON" --compile-only
+    echo "CKB compile-only production evidence is not sufficient for external release; run without --compile-only for final hardening." >&2
+  fi
   echo "CKB CellScript $ACCEPTANCE_MODE compile-only acceptance passed: $REPORT_JSON"
   exit 0
 fi

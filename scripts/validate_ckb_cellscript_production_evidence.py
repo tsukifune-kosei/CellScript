@@ -149,10 +149,13 @@ def all_action_runs(report: dict[str, Any]) -> list[dict[str, Any]]:
     return runs
 
 
-def validate_compile_gate(report: dict[str, Any]) -> None:
+def validate_compile_gate(report: dict[str, Any], *, compile_only: bool = False) -> None:
     require_field(report, "acceptance_mode", EXPECTED_MODE)
     require_field(report, "status", EXPECTED_STATUS)
-    require_field(report, "production_ready", True)
+    if compile_only:
+        require_field(report, "production_ready", False)
+    else:
+        require_field(report, "production_ready", True)
     require_field(report, "bundled_examples_count", len(EXPECTED_EXAMPLES))
     require_field(report, "bundled_examples_exact_order", EXPECTED_EXAMPLES)
     require_field(report, "non_production_examples", EXPECTED_NON_PRODUCTION_EXAMPLES)
@@ -175,14 +178,23 @@ def validate_compile_gate(report: dict[str, Any]) -> None:
 
     coverage = report.get("ckb_business_coverage")
     require(isinstance(coverage, dict), "ckb_business_coverage must be an object")
-    require_field(coverage, "status", "complete", "ckb_business_coverage")
     require_field(coverage, "strict_compile_coverage_complete", True, "ckb_business_coverage")
-    require_field(coverage, "onchain_action_coverage_complete", True, "ckb_business_coverage")
-    require_field(coverage, "ckb_onchain_action_count", EXPECTED_ACTION_COUNT, "ckb_business_coverage")
     require_field(coverage, "expected_fail_closed_action_count", 0, "ckb_business_coverage")
     require_field(coverage, "expected_fail_closed_lock_count", 0, "ckb_business_coverage")
-    missing = coverage.get("missing_ckb_onchain_actions")
-    require(missing in ({}, None), f"ckb_business_coverage.missing_ckb_onchain_actions must be empty, got {missing!r}")
+    if compile_only:
+        require_field(coverage, "status", "incomplete", "ckb_business_coverage")
+        require_field(coverage, "onchain_action_coverage_complete", False, "ckb_business_coverage")
+        require_field(coverage, "ckb_onchain_action_count", 0, "ckb_business_coverage")
+        onchain = report.get("onchain")
+        require(isinstance(onchain, dict), "onchain section must be present")
+        require_field(onchain, "status", "skipped", "onchain")
+        require_field(onchain, "reason", "compile-only", "onchain")
+    else:
+        require_field(coverage, "status", "complete", "ckb_business_coverage")
+        require_field(coverage, "onchain_action_coverage_complete", True, "ckb_business_coverage")
+        require_field(coverage, "ckb_onchain_action_count", EXPECTED_ACTION_COUNT, "ckb_business_coverage")
+        missing = coverage.get("missing_ckb_onchain_actions")
+        require(missing in ({}, None), f"ckb_business_coverage.missing_ckb_onchain_actions must be empty, got {missing!r}")
 
     example_scope = report.get("example_scope")
     require(isinstance(example_scope, dict), "example_scope must be an object")
@@ -447,7 +459,7 @@ def main() -> int:
 
     report_path = args.report.resolve()
     report = load_json(report_path)
-    validate_compile_gate(report)
+    validate_compile_gate(report, compile_only=args.compile_only)
     if not args.compile_only:
         validate_onchain_gate(report)
 
