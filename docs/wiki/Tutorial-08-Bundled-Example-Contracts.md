@@ -28,9 +28,9 @@ those profiled copies when generating release evidence. Subdirectory copies use
 they can coexist with the top-level examples during module loading.
 
 `examples/registry.cell` is intentionally outside this seven-example production
-matrix. It is a 0.13 bounded-collection language example for local
-`Vec<Address>` and `Vec<Hash>` helpers, covered by compiler/tooling tests rather
-than CKB production action acceptance.
+matrix. It is a bounded-collection language example for local `Vec<Address>` and
+`Vec<Hash>` helpers, covered by compiler/tooling tests rather than CKB
+production action acceptance.
 
 For a visual business-flow map of every bundled example, see
 [`CELLSCRIPT_EXAMPLE_BUSINESS_FLOWS.md`](../CELLSCRIPT_EXAMPLE_BUSINESS_FLOWS.md).

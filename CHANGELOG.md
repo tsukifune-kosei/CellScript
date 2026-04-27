@@ -7,8 +7,9 @@
   flows.
 - Fix lock predicate lowering so tail-expression lock results are preserved and
   `false` exits with a stable non-zero CKB script error.
-- Start the CellScript surface elegance pass: canonicalize bundled example
-  module names and capability declarations, and document the staged syntax RFC.
+- Complete the low-risk CellScript surface pass: canonicalize bundled example
+  module names, capability declarations, field shorthand, typed `Vec<T>`
+  literals, and the staged syntax RFC boundaries.
 - Add create/struct field shorthand (`field` as `field: field`) and format
   redundant field initializers into shorthand form.
 - Add contextual bounded `Vec<T>` literals for typed local bindings and
@@ -17,6 +18,9 @@
 - Add lock-boundary surface syntax for `protected` Cell parameters, `witness`
   data parameters, and `require` fail-closed predicates; reserve `lock_args`
   until explicit CKB script-args binding is implemented.
+- Keep signer authority out of the 0.13 syntax surface: no implicit `Address`
+  signer semantics, no hidden sighash defaults, and no first-class signer values
+  before explicit CKB signature verification primitives.
 - Split bundled examples into clean business examples and profiled acceptance
   examples, so scheduler/effect hints stay in release evidence without
   crowding the canonical teaching surface.

@@ -1,6 +1,9 @@
 # CellScript 0.13 Release Notes Draft
 
-**Status**: Release-gate draft for the `codex/cellscript-0.13` implementation branch.
+**Status**: Release-gate draft for the 0.13 implementation now merged to
+`main`.
+
+**Updated**: 2026-04-27.
 
 ## Collections Scope
 
@@ -16,7 +19,7 @@ Already present before 0.13:
 - Read-oriented dynamic Molecule vector support where the runtime has schema
   metadata and witness/cell bytes.
 
-New in 0.13 branch work:
+New in 0.13:
 
 - Stack-backed local `Vec<u64>` helpers.
 - Stack-backed local fixed-byte helpers for `Vec<Address>` and `Vec<Hash>`
@@ -36,8 +39,8 @@ New in 0.13 branch work:
 - The canonical business examples are now mirrored under `examples/business/`,
   while production/profile metadata lives under `examples/acceptance/`. The CKB
   acceptance script compiles the profiled copies when present, keeping
-  `#[effect(...)]` and `#[scheduler_hint(...)]` out of beginner-facing files
-  without dropping release evidence. Subdirectory copies use scoped module
+  `#[effect(...)]` and `#[scheduler_hint(...)]` out of reader-facing business
+  files without dropping release evidence. Subdirectory copies use scoped module
   namespaces so they can coexist with the canonical top-level examples during
   module loading.
 - Runtime and constraints metadata expose each checked stack-backed
@@ -53,17 +56,54 @@ Important boundaries:
 - `Vec::capacity()` reports the fixed stack backing capacity
   (`256 / element_width`), not the requested `Vec::with_capacity(n)` value.
 - Full generic `HashMap<K, V>` / `HashSet<T>` runtime support is not part of
-  this 0.13 branch.
+  0.13.
 - `Vec<Cell<T>>`, `Vec<Resource<T>>`, and other cell-backed / linear ownership
   collections remain fail-closed until an executable ownership model exists.
 - `Option<T>` is still reserved for a future explicit error/optional-value
-  model and is not implemented in this 0.13 branch.
+  model and is not implemented in 0.13.
 - 0.13 must not re-count 0.12 `Vec<Address>` / `Vec<Hash>` schema and ABI
   support as new work.
 
+## Surface Syntax And Example Canonicalization
+
+The 2026-04-26 surface pass is a syntax and example-organization pass, not an
+authorization redesign. It makes the canonical examples shorter and makes CKB
+lock data sources more visible while keeping authority-sensitive features
+explicit or fail-closed.
+
+Completed in 0.13:
+
+- Bundled examples use namespace-style `module cellscript::...` declarations
+  and DSL-native `has` capability declarations.
+- `create` and ordinary struct literals support field shorthand; examples use
+  it where the field name and source binding are identical.
+- Typed empty `Vec<T>` literals such as `let mut keys: Vec<Hash> = []` and
+  contextual field literals such as `data: []` lower through the existing
+  `Vec::new()` path when the expected `Vec<T>` type is known.
+- Bundled locks use `protected`, `witness`, and `require` to distinguish the
+  guarded input Cell view, transaction witness data, and script failure
+  predicate.
+- Clean business examples are separated from profiled acceptance examples, while
+  the flat `examples/*.cell` files remain compatibility mirrors.
+- LSP completions plus VS Code grammar and snippets are refreshed for the new
+  lock-boundary syntax.
+
+Important boundaries:
+
+- `lock_args` is reserved and fail-closed until typed CKB script-args binding is
+  implemented.
+- 0.13 does not introduce first-class signer values, implicit `Address` signer
+  semantics, or hidden sighash defaults.
+- `witness Address` means decoded witness data only; it is not a cryptographic
+  authorization proof.
+- `protects T { self ... }` remains deferred until protected-input selection and
+  lock-group aggregation semantics are exact.
+- Acceptance/profiled copies still carry scheduler and effect metadata because
+  they are part of release evidence.
+
 ## Verification
 
-Current release-gate commands for this branch:
+Current release-gate commands:
 
 ```bash
 cargo fmt --all
@@ -74,7 +114,7 @@ git diff --check
 
 ## CLI Ergonomics
 
-New in 0.13 branch work:
+New in 0.13:
 
 - `cellc build` uses O1 for non-release builds and still uses O3 for
   `--release`.
@@ -92,7 +132,7 @@ New in 0.13 branch work:
 
 ## Lock Boundary Surface
 
-New in 0.13 branch work:
+New in 0.13:
 
 - Lock parameters can classify CKB data sources with `protected` and `witness`.
   `protected T` is a typed view of one selected input Cell in the current script
@@ -117,7 +157,8 @@ Important boundaries:
 
 ## Backend Shape Baseline
 
-The current branch still passes the bundled example backend-shape budget test.
+The current 0.13 implementation still passes the bundled example backend-shape
+budget test.
 Snapshot from `bundled_examples_backend_shape_report_serializes`:
 
 | Example | Assembly lines | Text bytes | Machine blocks | CFG edges | Call edges |

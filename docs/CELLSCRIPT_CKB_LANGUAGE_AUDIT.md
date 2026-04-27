@@ -31,6 +31,13 @@ returned. This is a good fit for CKB because it keeps the transaction input,
 output, data, witness, and dependency shape visible to the compiler and release
 evidence.
 
+The 2026-04-26 surface pass keeps this alignment intact. Its completed changes
+are presentation-level or classification-level: cleaner example modules,
+DSL-native capability declarations, field shorthand, typed empty `Vec<T>`
+literals, and explicit `protected` / `witness` / `require` lock syntax. It does
+not add implicit signer authority, hidden sighash defaults, or active
+`lock_args` binding.
+
 The 0.13 compiler also exposes CKB-specific evidence instead of hiding it behind
 a generic artifact:
 

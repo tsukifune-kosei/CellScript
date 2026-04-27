@@ -1,6 +1,10 @@
 Small experiments can be compiled as single `.cell` files. Once a contract has more than one source file, dependency, or release target, use a package.
 
-CellScript packages are described by `Cell.toml`. The 0.12 workflow is production-style for local source roots, path dependencies, package build/check/doc/fmt flows, lockfile validation, and release policy checks. Registry publishing and registry dependency resolution are intentionally experimental/fail-closed until a trusted registry path is ready.
+CellScript packages are described by `Cell.toml`. The package workflow is
+production-style for local source roots, path dependencies, package
+build/check/doc/fmt flows, lockfile validation, and release policy checks.
+Registry publishing and registry dependency resolution are intentionally
+experimental/fail-closed until a trusted registry path is ready.
 
 ## What You Will Learn
 

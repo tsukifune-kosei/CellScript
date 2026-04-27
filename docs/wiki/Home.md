@@ -1,5 +1,7 @@
 CellScript is a small language for Cell-based smart contracts on CKB. You describe the Cell state you want to protect, the actions that may change it, and the lock rules that authorize it. The compiler turns that `.cell` source into ckb-vm compatible RISC-V assembly or ELF artifacts and writes metadata that explains what was built.
 
+Last updated: 2026-04-27.
+
 This wiki is meant to be read as a guided path. Each chapter introduces one idea, shows the smallest useful commands, and then points to the production checks that matter before deployment.
 
 ## How to Read This Wiki
@@ -25,9 +27,9 @@ If you already have a contract, jump to the page that matches your current quest
 7. [LSP and Tooling](Tutorial-07-LSP-and-Tooling.md): use editor feedback and command-backed reports.
 8. [Bundled Example Contracts](Tutorial-08-Bundled-Example-Contracts.md): study the examples in a useful order.
 
-## What 0.12 Gives You
+## What CellScript Gives You
 
-CellScript 0.12 supports:
+CellScript supports:
 
 - `.cell` modules with typed declarations and executable `action` / `lock` entries.
 - Cell-native persistent values through `resource`, `shared`, and `receipt`.
@@ -39,7 +41,10 @@ CellScript 0.12 supports:
 - LSP and VS Code tooling for diagnostics, hover, completion, definitions, references, rename, formatting, signature help, folding, document symbols, and compiler-backed reports.
 - Production-facing constraints and evidence surfaces for runtime error codes, entry witness ABI, CKB capacity/tx-size requirements, CKB `hash_type`/DepGroup policy, and CKB scheduler metadata.
 
-CellScript 0.12 is also the first release aimed at an initial stable foundation. That does not mean every future language feature is frozen. It means the current compiler, CKB profile, examples, metadata, LSP, and package workflow are being documented and tested as a coherent base.
+The wiki describes the current compiler, CKB profile, examples, metadata, LSP,
+and package workflow as one coherent working surface. Version-specific release
+notes and roadmaps should stay in repository documentation, not in the tutorial
+path.
 
 ## Before You Call It Production
 
@@ -63,7 +68,6 @@ The current bundled example suite is seven contracts: `amm_pool.cell`, `launch.c
 - [Collections matrix](../examples/collections_matrix.md)
 - [Deployment manifest](../examples/deployment_manifest.md)
 - [Mutate append](../examples/mutate_append.md)
-- [0.13 roadmap](../CELLSCRIPT_0_13_ROADMAP.md)
 
 ## First Run
 

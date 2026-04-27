@@ -1,15 +1,17 @@
-# CellScript v0.13 TODO List
+# CellScript 0.13 Release Tracker
 
-**Date**: 2026-04-25  
-**Branch**: `codex/cellscript-0.13`  
-**Status**: Release-gate tracker for `codex/cellscript-0.13`
+**Updated**: 2026-04-27
 
-This file tracks the actual 0.13 branch progress. Use it as the working TODO
-list for implementation status. The roadmap remains the broader design context.
+**Branch**: `main` after merging the 0.13 implementation branch
+
+**Status**: Implementation scope closed for the current 0.13 release gate
+
+This file records the implemented 0.13 scope and the explicit deferred work.
+The roadmap remains the broader design context.
 
 ---
 
-## ✅ Completed
+## Completed
 
 ### Roadmap audit cleanup
 
@@ -56,7 +58,7 @@ by existing fixed-width machinery):
 - [x] Metadata fail-closed checks for supported stack-backed helper paths.
 - [x] Cell-backed / linear collection paths remain metadata-visible and
   fail-closed.
-- [x] Latest branch verification has passed:
+- [x] Latest release-gate verification has passed:
   - `cargo fmt --all`
   - targeted helper tests for each new helper
   - `cargo clippy --locked -p cellscript --all-targets -- -D warnings`
@@ -65,7 +67,35 @@ by existing fixed-width machinery):
 
 ---
 
-## ✅ Release-Gate Status
+### Surface syntax and example canonicalization
+
+- [x] Completed the low-risk syntax pass from 2026-04-26 without widening
+  authorization semantics.
+- [x] Canonicalized bundled examples around namespace-style module declarations
+  and DSL-native `has` capability declarations.
+- [x] Added create/struct field shorthand and updated examples to use it where
+  the field name and source binding are identical.
+- [x] Added typed/contextual `Vec<T>` literals for empty and populated local
+  stack vectors. Empty `[]` lowers through the existing `Vec::new()` path when
+  the expected `Vec<T>` type is known.
+- [x] Applied `protected`, `witness`, and `require` to bundled lock examples so
+  the guarded input Cell view, witness data, and lock failure predicate are
+  visible in source.
+- [x] Split examples by audience: clean business examples live in
+  `examples/business` and flat `examples/*.cell`; profiled production
+  acceptance copies live in `examples/acceptance`; `registry.cell` is mirrored
+  under `examples/language`.
+- [x] Refreshed LSP completions and the VS Code grammar/snippets for the
+  lock-boundary syntax.
+- [x] Kept `lock_args` reserved/fail-closed until typed CKB script-args binding
+  is implemented.
+- [x] Deferred first-class signer values, implicit `Address` signer semantics,
+  hidden sighash defaults, explicit sighash verification primitives, and
+  `protects T { self ... }` sugar.
+
+---
+
+## Release-Gate Status
 
 - [x] Add a compact support matrix for each `Vec<T>` helper.
 
@@ -73,11 +103,11 @@ by existing fixed-width machinery):
 
 | Source / element category | `new` / `with_capacity` / `capacity` | `push` / `extend_from_slice` / `set` / `clear` | `len` / `is_empty` / index / `first` / `last` | `contains` | `remove` / `pop` / `insert` | `reverse` / `truncate` / `swap` | Status |
 |---|---:|---:|---:|---:|---:|---:|---|
-| Stack-backed `Vec<u64>` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | implemented and tested |
-| Stack-backed fixed bytes / `Address` / `Hash` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | implemented and tested |
-| Stack-backed fixed-width schema values | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | implemented where fixed-width layout is known; release-gate coverage includes `Vec<Snapshot>` helper matrix |
-| Molecule dynamic fields / entry-witness vectors | ❌ local construction | ❌ local mutation | ✅ read-oriented paths | 🟡 read/compare paths only | ❌ local mutation | ❌ local mutation | 0.12 foundation, not new 0.13 generic runtime |
-| Cell-backed / linear vectors | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | fail-closed until ownership proof exists |
+| Stack-backed `Vec<u64>` | Yes | Yes | Yes | Yes | Yes | Yes | implemented and tested |
+| Stack-backed fixed bytes / `Address` / `Hash` | Yes | Yes | Yes | Yes | Yes | Yes | implemented and tested |
+| Stack-backed fixed-width schema values | Yes | Yes | Yes | Yes | Yes | Yes | implemented where fixed-width layout is known; release-gate coverage includes `Vec<Snapshot>` helper matrix |
+| Molecule dynamic fields / entry-witness vectors | No local construction | No local mutation | Yes, read-oriented paths | Read/compare paths only | No local mutation | No local mutation | 0.12 foundation, not new 0.13 generic runtime |
+| Cell-backed / linear vectors | No | No | No | No | No | No | fail-closed until ownership proof exists |
 
 Notes:
 
@@ -110,7 +140,7 @@ Notes:
 
 ---
 
-## ✅ Closed / Deferred Scope
+## Closed / Deferred Scope
 
 - [x] Improve docs for bounded collection runtime behavior.
   - `docs/examples/collections_matrix.md` now separates stack-backed
@@ -130,7 +160,7 @@ Notes:
   - `cellc explain-generics` exposes the same checked instantiation set in text
     and JSON form for local audit.
 - [x] Investigate a bounded `Option<T: FixedWidth>` representation.
-  - Deferred out of this 0.13 branch. There is no source-level `Option<T>`
+  - Deferred out of 0.13. There is no source-level `Option<T>`
     constructor/lowering surface in the current parser/type/IR pipeline, and
     adding it would introduce a new optional-value ABI rather than merely
     hardening collections. Release notes keep `Option<T>` reserved for a future
@@ -178,7 +208,7 @@ Notes:
 
 ---
 
-## ❌ Explicit Non-Goals For v0.13
+## Explicit Non-Goals For 0.13
 
 - Full generic `HashMap<K, V>` runtime support.
 - `Vec<Cell<T>>` ownership semantics.

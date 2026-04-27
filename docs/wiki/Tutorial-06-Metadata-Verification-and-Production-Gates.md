@@ -150,7 +150,7 @@ reading surface.
 Lock behavior coverage is machine-readable through
 `lock_acceptance_scope.onchain_lock_spend_matrix_scope`; each listed lock must
 have both valid-spend and invalid-spend evidence.
-`examples/registry.cell` is a 0.13 bounded-collection language example covered by
+`examples/registry.cell` is a bounded-collection language example covered by
 compiler/tooling tests, not by the seven-example CKB production matrix.
 
 `--compile-only` and bounded diagnostic runs can help development, but they are not external production release evidence.

@@ -2,7 +2,10 @@
 
 ## Status
 
-Draft for the 0.13 surface pass.
+0.13 low-risk surface pass implemented. Authority-sensitive binding remains
+deferred.
+
+Updated: 2026-04-27.
 
 This RFC is intentionally split into low-risk canonical style work, syntax sugar,
 and security-boundary syntax. The goal is to make bundled examples read like a
@@ -38,7 +41,7 @@ are.
 - Prefer CellScript-native syntax over compiler-looking metadata.
 - Do not hide CKB security boundaries.
 - Separate business readability from acceptance stress coverage.
-- Treat examples as canonical style, not loose demos.
+- Treat examples as canonical language references, not informal demonstrations.
 - Names do not grant authority. Only verified bindings do.
 - Authorization syntax should be explicit before it is ergonomic.
 - Hidden sighash defaults are rejected; signature scope must be visible.
@@ -65,6 +68,33 @@ args, and eventually verified signature-derived identities. The early form
 deliberately avoids treating Address as a signer.
 ```
 
+## 0.13 Progress Snapshot
+
+The 2026-04-26 pass completed the parts of this RFC that do not change CKB
+authorization semantics:
+
+- namespace-style module declarations and DSL-native capability declarations in
+  bundled examples;
+- create/struct field shorthand where `field` is equivalent to `field: field`;
+- contextual `Vec<T>` literals for typed local bindings and struct/create field
+  initializers, including empty `[]` as the existing `Vec::new()` path when the
+  expected `Vec<T>` type is known;
+- the `protected`, `witness`, and `require` lock-boundary classification syntax;
+- business/language/acceptance example directories, with profiled metadata kept
+  in acceptance examples;
+- LSP and VS Code grammar/snippet updates for the new syntax.
+
+The security-sensitive boundary remains deliberately narrow:
+
+- `lock_args` is reserved and fail-closed until typed CKB script-args binding is
+  implemented.
+- Explicit sighash verification primitives are not part of 0.13.
+- First-class verified signer values are deferred.
+- `protects T { self ... }` sugar is deferred until protected-input selection
+  and lock-group aggregation semantics are exact.
+- An `Address` value, including `witness Address`, is not a signer proof.
+- Hidden sighash defaults remain rejected.
+
 ## Phase 1: Canonical Style
 
 Phase 1 is source-compatible and should not change execution semantics.
@@ -84,8 +114,8 @@ module cellscript::launch
 module cellscript::registry
 ```
 
-This makes the examples look like one language ecosystem instead of isolated
-sample contracts.
+This makes the examples look like one language ecosystem instead of unrelated
+example contracts.
 
 ### Capabilities
 
@@ -401,7 +431,7 @@ examples/acceptance/
 The flat `examples/*.cell` files remain as compatibility mirrors of the
 canonical business examples. CKB production acceptance compiles
 `examples/acceptance/*.cell` when that directory is present, so scheduler and
-effect-profile metadata can stay out of beginner-facing business files.
+effect-profile metadata can stay out of reader-facing business files.
 Subdirectory copies use scoped module namespaces (`cellscript::business::*`,
 `cellscript::acceptance::*`, and `cellscript::language::*`) so they can coexist
 with the canonical top-level modules during compiler module loading.
@@ -419,7 +449,7 @@ A future `examples/canonical_style.cell` should demonstrate:
 - bounded collection literals;
 - minimal comments.
 
-It should be the idiomatic reference for documentation, vibe-coding prompts, and
+It should be the idiomatic reference for documentation, generated examples, and
 future regression tests.
 
 ## Acceptance Criteria
