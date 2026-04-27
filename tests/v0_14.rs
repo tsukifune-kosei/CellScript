@@ -117,6 +117,13 @@ lock output_witness_lock(wallet: protected Wallet, claimed_owner: witness Addres
             && requirement.abi == "ckb-spawn-cell-dep-script-reference"
             && requirement.blocker_class.as_deref() == Some("spawn-target-cell-dep-gap")
     }));
+    let ckb_constraints = result.metadata.constraints.ckb.as_ref().expect("CKB constraints");
+    assert!(ckb_constraints.script_references.iter().any(|reference| {
+        reference.scope == "action:delegate_verify"
+            && reference.purpose == "spawn-target"
+            && reference.dep_source == "CellDep-or-DepGroup"
+            && reference.status == "runtime-required-builder-resolved"
+    }));
     let owner_lock = result.metadata.locks.iter().find(|lock| lock.name == "owner_lock").expect("owner_lock metadata");
     let owner_group = owner_lock.ckb_script_group.as_ref().expect("owner_lock CKB script group metadata");
     assert_eq!(owner_group.entry_kind, "lock");
@@ -193,6 +200,15 @@ action mint(amount: u64) -> Token {
     assert_eq!(plan.output_index, 0);
     assert_eq!(plan.generator_setting, "ckb_type_id_output_indexes");
     assert_eq!(plan.wasm_setting, "ckbTypeIdOutputs");
+    let ckb_constraints = result.metadata.constraints.ckb.as_ref().expect("CKB constraints");
+    assert!(ckb_constraints.script_references.iter().any(|reference| {
+        reference.scope == "action:mint"
+            && reference.purpose == "type-id-create-output"
+            && reference.name == "Token"
+            && reference.code_hash.as_deref() == Some(plan.script_code_hash.as_str())
+            && reference.hash_type.as_deref() == Some("type")
+            && reference.args.as_deref() == Some("first-input-output-index")
+    }));
 
     let create_access = result
         .metadata

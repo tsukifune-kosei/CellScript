@@ -56,7 +56,7 @@ fn validate_compile_options(options: &CompileOptions) -> Result<()> {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-pub const METADATA_SCHEMA_VERSION: u32 = 35;
+pub const METADATA_SCHEMA_VERSION: u32 = 36;
 const STACK_COLLECTION_BACKING_BYTES: usize = 256;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
@@ -387,6 +387,8 @@ pub struct CkbConstraintsMetadata {
     pub hash_type_policy: CkbHashTypePolicyMetadata,
     #[serde(default)]
     pub dep_group_manifest: CkbDepGroupManifestMetadata,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub script_references: Vec<CkbScriptReferenceMetadata>,
     pub max_tx_verify_cycles: u64,
     pub max_block_cycles: u64,
     pub max_block_bytes: u64,
@@ -419,6 +421,19 @@ pub struct CkbConstraintsMetadata {
     pub capacity_policy_surface: String,
     #[serde(default)]
     pub capacity_evidence_contract: CkbCapacityEvidenceContractMetadata,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CkbScriptReferenceMetadata {
+    pub scope: String,
+    pub purpose: String,
+    pub name: String,
+    pub code_hash: Option<String>,
+    pub hash_type: Option<String>,
+    pub args: Option<String>,
+    pub dep_source: String,
+    pub profile: String,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1054,6 +1069,7 @@ fn ckb_constraints(
             status: "no-cell-deps-declared".to_string(),
             warnings: Vec::new(),
         },
+        script_references: ckb_script_reference_metadata(metadata),
         max_tx_verify_cycles,
         max_block_cycles,
         max_block_bytes,
@@ -1129,6 +1145,69 @@ fn ckb_constraints(
 
 fn ckb_supported_hash_types() -> Vec<String> {
     vec!["data".to_string(), "type".to_string(), "data1".to_string(), "data2".to_string()]
+}
+
+fn ckb_script_reference_metadata(metadata: &CompileMetadata) -> Vec<CkbScriptReferenceMetadata> {
+    let mut refs = Vec::new();
+    for action in &metadata.actions {
+        collect_ckb_entry_script_references("action", &action.name, &action.create_set, &action.ckb_runtime_accesses, &mut refs);
+    }
+    for lock in &metadata.locks {
+        collect_ckb_entry_script_references("lock", &lock.name, &lock.create_set, &lock.ckb_runtime_accesses, &mut refs);
+    }
+    refs
+}
+
+fn collect_ckb_entry_script_references(
+    entry_kind: &str,
+    entry_name: &str,
+    create_set: &[CreatePatternMetadata],
+    accesses: &[CkbRuntimeAccessMetadata],
+    refs: &mut Vec<CkbScriptReferenceMetadata>,
+) {
+    let scope = format!("{}:{}", entry_kind, entry_name);
+    for pattern in create_set {
+        if let Some(type_id) = &pattern.ckb_type_id {
+            refs.push(CkbScriptReferenceMetadata {
+                scope: scope.clone(),
+                purpose: "type-id-create-output".to_string(),
+                name: pattern.ty.clone(),
+                code_hash: Some(type_id.script_code_hash.clone()),
+                hash_type: Some(type_id.hash_type.clone()),
+                args: Some(type_id.args_source.clone()),
+                dep_source: type_id.output_source.clone(),
+                profile: "ckb".to_string(),
+                status: "builder-must-install-type-id-script".to_string(),
+            });
+        }
+    }
+    for access in accesses {
+        match access.operation.as_str() {
+            "spawn" => refs.push(CkbScriptReferenceMetadata {
+                scope: scope.clone(),
+                purpose: "spawn-target".to_string(),
+                name: access.binding.clone(),
+                code_hash: None,
+                hash_type: None,
+                args: None,
+                dep_source: "CellDep-or-DepGroup".to_string(),
+                profile: "ckb".to_string(),
+                status: "runtime-required-builder-resolved".to_string(),
+            }),
+            "read_ref" => refs.push(CkbScriptReferenceMetadata {
+                scope: scope.clone(),
+                purpose: "read-ref-cell-dep".to_string(),
+                name: access.binding.clone(),
+                code_hash: None,
+                hash_type: None,
+                args: None,
+                dep_source: format!("CellDep#{}", access.index),
+                profile: "ckb".to_string(),
+                status: "checked-runtime-load-cell-dep".to_string(),
+            }),
+            _ => {}
+        }
+    }
 }
 
 fn apply_manifest_deploy_metadata(metadata: &mut CompileMetadata, manifest: &CellManifest) -> Result<()> {
