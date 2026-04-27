@@ -47,6 +47,8 @@ outside the LSP scope.
 - comment, bracket, auto-close, and folding configuration
 - snippets for resources, shared state, receipts, actions, locks, effects,
   and `create ... with_lock`
+- 0.14 lock-boundary snippets and highlighting for `protected`, `lock_args`,
+  `witness`, `require`, `source::*`, `witness::*`, and `env::sighash_all`
 - status bar state indicator
 
 ## Architecture

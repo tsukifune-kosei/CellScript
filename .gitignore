@@ -1,4 +1,5 @@
 /target/
+editors/vscode-cellscript/dist/
 
 .DS_Store
 .vscode/

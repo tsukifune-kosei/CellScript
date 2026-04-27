@@ -215,7 +215,7 @@
         },
         {
           "name": "support.function.namespace.cellscript",
-          "match": "\\b(?:Address|Hash|Vec|env)::[A-Za-z_][A-Za-z0-9_]*\\b"
+          "match": "\\b(?:Address|Hash|Vec|env|source|witness|ckb)::[A-Za-z_][A-Za-z0-9_]*\\b"
         }
       ]
     },

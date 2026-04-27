@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Updated lock snippets for the 0.14 lock-boundary surface:
+  `protected`, `lock_args`, `witness`, and `require`.
+- Added LSP completions for `lock_args`, CKB source views, witness fields,
+  `env::sighash_all`, and CKB epoch/since helpers.
+- Extended syntax highlighting for `source::`, `witness::`, and `ckb::`
+  namespace builtins.
+
 ## 0.12.0
 
 - Replaced direct CLI diagnostics with a full LSP language server integration
