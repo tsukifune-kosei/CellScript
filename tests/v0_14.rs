@@ -72,6 +72,10 @@ lock owner_lock(wallet: protected Wallet, claimed_owner: witness Address) -> boo
     assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| access.operation == "spawn"));
     assert_eq!(result.metadata.target_profile.spawn_ipc_abi, "ckb-vm-v2-spawn-ipc-syscalls-2601-2608");
     assert_eq!(result.metadata.target_profile.source_encoding, "ckb-source-group-high-bit");
+    assert_eq!(result.metadata.target_profile.cell_dep_abi, "ckb-cell-dep-outpoint-and-dep-group");
+    assert_eq!(result.metadata.target_profile.script_ref_abi, "ckb-script-code-hash-hash-type-args");
+    assert_eq!(result.metadata.target_profile.output_data_abi, "ckb-outputs-and-outputs-data-index-aligned");
+    assert_eq!(result.metadata.target_profile.type_id_abi, "ckb-type-id-v1");
 }
 
 #[test]

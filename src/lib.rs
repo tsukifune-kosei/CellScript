@@ -56,7 +56,7 @@ fn validate_compile_options(options: &CompileOptions) -> Result<()> {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-pub const METADATA_SCHEMA_VERSION: u32 = 31;
+pub const METADATA_SCHEMA_VERSION: u32 = 32;
 const STACK_COLLECTION_BACKING_BYTES: usize = 256;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
@@ -136,6 +136,10 @@ impl TargetProfile {
                 source_encoding: "ckb-source-group-high-bit".to_string(),
                 spawn_ipc_abi: "ckb-vm-v2-spawn-ipc-syscalls-2601-2608".to_string(),
                 since_abi: "ckb-since-block-timestamp-epoch-number-with-fraction".to_string(),
+                cell_dep_abi: "ckb-cell-dep-outpoint-and-dep-group".to_string(),
+                script_ref_abi: "ckb-script-code-hash-hash-type-args".to_string(),
+                output_data_abi: "ckb-outputs-and-outputs-data-index-aligned".to_string(),
+                type_id_abi: CKB_TYPE_ID_ABI.to_string(),
                 tx_version: 0,
             },
         }
@@ -538,6 +542,14 @@ pub struct TargetProfileMetadata {
     pub spawn_ipc_abi: String,
     #[serde(default)]
     pub since_abi: String,
+    #[serde(default)]
+    pub cell_dep_abi: String,
+    #[serde(default)]
+    pub script_ref_abi: String,
+    #[serde(default)]
+    pub output_data_abi: String,
+    #[serde(default)]
+    pub type_id_abi: String,
     #[serde(default)]
     pub tx_version: u32,
 }

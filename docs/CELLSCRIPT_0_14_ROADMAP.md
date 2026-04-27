@@ -22,7 +22,7 @@ CellScript source and metadata.
 | Source views | Implemented | `source::input`, `source::output`, `source::cell_dep`, `source::header_dep`, `source::group_input`, and `source::group_output` are typed and metadata-visible. |
 | Structured witness fields | Implemented | `witness::raw`, `witness::lock`, `witness::input_type`, and `witness::output_type` are typed as explicit CKB witness surfaces. |
 | Sighash surface | Implemented | `env::sighash_all(source)` is explicit and metadata-visible; no hidden signer derivation is introduced. |
-| Target profile contract | Implemented | Target metadata now records witness ABI, source encoding, Spawn/IPC ABI, since ABI, and tx version; `cellc explain-profile ckb` reports the contract. |
+| Target profile contract | Implemented | Target metadata now records witness ABI, Source encoding, Spawn/IPC ABI, since ABI, CellDep ABI, script reference ABI, outputs/outputs_data ABI, TYPE_ID ABI, and tx version; `cellc explain-profile ckb` reports the contract. |
 | Declarative since/time surface | Implemented | `require_maturity`, `require_time`, `require_epoch_after`, and `require_epoch_relative` are profile-visible runtime checks. |
 | Declarative capacity surface | Implemented | `occupied_capacity("TypeName")` exposes capacity policy through runtime features and metadata. |
 | Dynamic BLAKE2b policy | Implemented as fail-closed | `hash_blake2b` is rejected until a real linked RISC-V implementation is selected; `hash_chain` is metadata-visible. |
@@ -35,6 +35,13 @@ CellScript source and metadata.
 - `witness::lock` and `env::sighash_all` expose data and digest surfaces. They
   do not create first-class signer authority by themselves.
 - Source group views are scoped to the active script group.
+- `outputs` and `outputs_data` are treated as index-aligned CKB transaction
+  surfaces. CellScript metadata exposes that boundary; it does not silently
+  remap output data between cells.
+- Script references keep `code_hash`, `hash_type`, and `args` visible through
+  the target profile and deployment metadata.
+- TYPE_ID support uses the CKB TYPE_ID ABI and remains tied to explicit
+  builder/deployment evidence.
 - Dynamic in-script BLAKE2b remains fail-closed until linked implementation,
   test vectors, cycles, and profile policy are all present.
 - Higher-level trigger/scope/coverage ProofPlan work remains 0.15 scope.
@@ -50,4 +57,3 @@ cargo run --locked -p cellscript -- examples/language/v0_14_delegate_verify.cell
 cargo run --locked -p cellscript -- examples/language/v0_14_witness_source.cell --target-profile ckb
 cargo run --locked -p cellscript -- examples/language/v0_14_capacity_time.cell --target-profile ckb
 ```
-

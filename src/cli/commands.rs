@@ -1428,10 +1428,17 @@ impl CommandExecutor {
             "source_encoding": metadata.source_encoding,
             "spawn_ipc_abi": metadata.spawn_ipc_abi,
             "since_abi": metadata.since_abi,
+            "cell_dep_abi": metadata.cell_dep_abi,
+            "script_ref_abi": metadata.script_ref_abi,
+            "output_data_abi": metadata.output_data_abi,
+            "type_id_abi": metadata.type_id_abi,
             "tx_version": metadata.tx_version,
             "boundaries": [
                 "WitnessArgs fields are explicit CKB witness surfaces, not implicit signer authority",
                 "Source group views are scoped to the active script group",
+                "outputs and outputs_data are index-aligned CKB transaction surfaces",
+                "script references keep code_hash, hash_type, and args visible",
+                "TYPE_ID metadata uses the CKB TYPE_ID ABI and does not hide builder obligations",
                 "Spawn/IPC is bounded verifier reuse and does not make type scripts multi-tenant",
                 "Dynamic hash_blake2b is unavailable until a real linked RISC-V implementation is selected"
             ],
@@ -1451,6 +1458,10 @@ impl CommandExecutor {
             println!("  Source encoding: {}", summary["source_encoding"].as_str().unwrap_or("unknown"));
             println!("  Spawn/IPC ABI: {}", summary["spawn_ipc_abi"].as_str().unwrap_or("unknown"));
             println!("  Since ABI: {}", summary["since_abi"].as_str().unwrap_or("unknown"));
+            println!("  CellDep ABI: {}", summary["cell_dep_abi"].as_str().unwrap_or("unknown"));
+            println!("  Script ref ABI: {}", summary["script_ref_abi"].as_str().unwrap_or("unknown"));
+            println!("  Output data ABI: {}", summary["output_data_abi"].as_str().unwrap_or("unknown"));
+            println!("  TYPE_ID ABI: {}", summary["type_id_abi"].as_str().unwrap_or("unknown"));
         }
         Ok(())
     }

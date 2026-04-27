@@ -2828,6 +2828,28 @@ fn cellc_explain_subcommand_reports_runtime_error() {
 }
 
 #[test]
+fn cellc_explain_profile_reports_ckb_v0_14_contract() {
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc")).arg("explain-profile").arg("ckb").arg("--json").output().unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["profile"], "ckb");
+    assert_eq!(summary["witness_abi"], "ckb-molecule-witness-args+cellscript-entry-witness-v1");
+    assert_eq!(summary["source_encoding"], "ckb-source-group-high-bit");
+    assert_eq!(summary["spawn_ipc_abi"], "ckb-vm-v2-spawn-ipc-syscalls-2601-2608");
+    assert_eq!(summary["since_abi"], "ckb-since-block-timestamp-epoch-number-with-fraction");
+    assert_eq!(summary["cell_dep_abi"], "ckb-cell-dep-outpoint-and-dep-group");
+    assert_eq!(summary["script_ref_abi"], "ckb-script-code-hash-hash-type-args");
+    assert_eq!(summary["output_data_abi"], "ckb-outputs-and-outputs-data-index-aligned");
+    assert_eq!(summary["type_id_abi"], "ckb-type-id-v1");
+    let boundaries = summary["boundaries"].as_array().unwrap();
+    assert!(
+        boundaries.iter().any(|boundary| boundary.as_str().unwrap_or_default().contains("outputs and outputs_data are index-aligned")),
+        "missing outputs_data boundary: {boundaries:?}"
+    );
+}
+
+#[test]
 fn cellc_clean_subcommand_supports_json_summary() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
