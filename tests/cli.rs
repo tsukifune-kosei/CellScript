@@ -107,6 +107,7 @@ action main(value: u64) -> u64 {
     assert_eq!(ckb["profile_abi_contract"]["cell_dep_abi"], "ckb-cell-dep-outpoint-and-dep-group");
     assert_eq!(ckb["profile_abi_contract"]["script_ref_abi"], "ckb-script-code-hash-hash-type-args");
     assert_eq!(ckb["profile_abi_contract"]["output_data_abi"], "ckb-outputs-and-outputs-data-index-aligned");
+    assert_eq!(ckb["profile_abi_contract"]["capacity_floor_abi"], "ckb-output-capacity-floor-shannons");
     assert_eq!(ckb["profile_abi_contract"]["type_id_abi"], "ckb-type-id-v1");
     assert_eq!(ckb["capacity_evidence_contract"]["tx_size_measurement_required"], true);
 }
@@ -2847,11 +2848,16 @@ fn cellc_explain_profile_reports_ckb_v0_14_contract() {
     assert_eq!(summary["cell_dep_abi"], "ckb-cell-dep-outpoint-and-dep-group");
     assert_eq!(summary["script_ref_abi"], "ckb-script-code-hash-hash-type-args");
     assert_eq!(summary["output_data_abi"], "ckb-outputs-and-outputs-data-index-aligned");
+    assert_eq!(summary["capacity_floor_abi"], "ckb-output-capacity-floor-shannons");
     assert_eq!(summary["type_id_abi"], "ckb-type-id-v1");
     let boundaries = summary["boundaries"].as_array().unwrap();
     assert!(
         boundaries.iter().any(|boundary| boundary.as_str().unwrap_or_default().contains("outputs and outputs_data are index-aligned")),
         "missing outputs_data boundary: {boundaries:?}"
+    );
+    assert!(
+        boundaries.iter().any(|boundary| boundary.as_str().unwrap_or_default().contains("capacity floors are declared")),
+        "missing capacity floor boundary: {boundaries:?}"
     );
 }
 

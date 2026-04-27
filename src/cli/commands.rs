@@ -1431,12 +1431,14 @@ impl CommandExecutor {
             "cell_dep_abi": metadata.cell_dep_abi,
             "script_ref_abi": metadata.script_ref_abi,
             "output_data_abi": metadata.output_data_abi,
+            "capacity_floor_abi": metadata.capacity_floor_abi,
             "type_id_abi": metadata.type_id_abi,
             "tx_version": metadata.tx_version,
             "boundaries": [
                 "WitnessArgs fields are explicit CKB witness surfaces, not implicit signer authority",
                 "Source group views are scoped to the active script group",
                 "outputs and outputs_data are index-aligned CKB transaction surfaces",
+                "capacity floors are declared in shannons and still require builder measurement",
                 "script references keep code_hash, hash_type, and args visible",
                 "TYPE_ID metadata uses the CKB TYPE_ID ABI and does not hide builder obligations",
                 "Spawn/IPC is bounded verifier reuse and does not make type scripts multi-tenant",
@@ -1461,6 +1463,7 @@ impl CommandExecutor {
             println!("  CellDep ABI: {}", summary["cell_dep_abi"].as_str().unwrap_or("unknown"));
             println!("  Script ref ABI: {}", summary["script_ref_abi"].as_str().unwrap_or("unknown"));
             println!("  Output data ABI: {}", summary["output_data_abi"].as_str().unwrap_or("unknown"));
+            println!("  Capacity floor ABI: {}", summary["capacity_floor_abi"].as_str().unwrap_or("unknown"));
             println!("  TYPE_ID ABI: {}", summary["type_id_abi"].as_str().unwrap_or("unknown"));
         }
         Ok(())

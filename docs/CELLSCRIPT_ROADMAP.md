@@ -54,7 +54,7 @@ boundaries:
 - explicit Source views and structured WitnessArgs field access;
 - target profile metadata for witness ABI, Source encoding, Spawn/IPC ABI,
   since semantics, CellDep ABI, script reference ABI, outputs/outputs_data ABI,
-  TYPE_ID ABI, and tx version;
+  capacity floor ABI, TYPE_ID ABI, and tx version;
 - declarative since/time and capacity surfaces;
 - fail-closed dynamic BLAKE2b policy until a real linked implementation exists.
 

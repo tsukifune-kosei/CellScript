@@ -56,7 +56,7 @@ fn validate_compile_options(options: &CompileOptions) -> Result<()> {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-pub const METADATA_SCHEMA_VERSION: u32 = 37;
+pub const METADATA_SCHEMA_VERSION: u32 = 38;
 const STACK_COLLECTION_BACKING_BYTES: usize = 256;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
@@ -139,6 +139,7 @@ impl TargetProfile {
                 cell_dep_abi: "ckb-cell-dep-outpoint-and-dep-group".to_string(),
                 script_ref_abi: "ckb-script-code-hash-hash-type-args".to_string(),
                 output_data_abi: "ckb-outputs-and-outputs-data-index-aligned".to_string(),
+                capacity_floor_abi: "ckb-output-capacity-floor-shannons".to_string(),
                 type_id_abi: CKB_TYPE_ID_ABI.to_string(),
                 tx_version: 0,
             },
@@ -455,6 +456,7 @@ pub struct CkbProfileAbiContractMetadata {
     pub cell_dep_abi: String,
     pub script_ref_abi: String,
     pub output_data_abi: String,
+    pub capacity_floor_abi: String,
     pub type_id_abi: String,
     pub tx_version: u32,
 }
@@ -588,6 +590,8 @@ pub struct TargetProfileMetadata {
     pub script_ref_abi: String,
     #[serde(default)]
     pub output_data_abi: String,
+    #[serde(default)]
+    pub capacity_floor_abi: String,
     #[serde(default)]
     pub type_id_abi: String,
     #[serde(default)]
@@ -728,6 +732,15 @@ fn validate_target_profile_metadata(metadata: &CompileMetadata, artifact_format:
         ("artifact_packaging", actual.artifact_packaging.as_str(), expected.artifact_packaging.as_str()),
         ("header_abi", actual.header_abi.as_str(), expected.header_abi.as_str()),
         ("scheduler_abi", actual.scheduler_abi.as_str(), expected.scheduler_abi.as_str()),
+        ("witness_abi", actual.witness_abi.as_str(), expected.witness_abi.as_str()),
+        ("source_encoding", actual.source_encoding.as_str(), expected.source_encoding.as_str()),
+        ("spawn_ipc_abi", actual.spawn_ipc_abi.as_str(), expected.spawn_ipc_abi.as_str()),
+        ("since_abi", actual.since_abi.as_str(), expected.since_abi.as_str()),
+        ("cell_dep_abi", actual.cell_dep_abi.as_str(), expected.cell_dep_abi.as_str()),
+        ("script_ref_abi", actual.script_ref_abi.as_str(), expected.script_ref_abi.as_str()),
+        ("output_data_abi", actual.output_data_abi.as_str(), expected.output_data_abi.as_str()),
+        ("capacity_floor_abi", actual.capacity_floor_abi.as_str(), expected.capacity_floor_abi.as_str()),
+        ("type_id_abi", actual.type_id_abi.as_str(), expected.type_id_abi.as_str()),
     ];
     for (field, actual, expected) in mismatches {
         if actual != expected {
@@ -740,6 +753,15 @@ fn validate_target_profile_metadata(metadata: &CompileMetadata, artifact_format:
                 artifact_format.display_name()
             )));
         }
+    }
+    if actual.tx_version != expected.tx_version {
+        return Err(CompileError::without_span(format!(
+            "metadata target_profile.tx_version '{}' does not match expected '{}' for profile '{}' and {} artifact",
+            actual.tx_version,
+            expected.tx_version,
+            profile.name(),
+            artifact_format.display_name()
+        )));
     }
 
     Ok(())
@@ -1066,6 +1088,7 @@ fn ckb_constraints(
             cell_dep_abi: metadata.target_profile.cell_dep_abi.clone(),
             script_ref_abi: metadata.target_profile.script_ref_abi.clone(),
             output_data_abi: metadata.target_profile.output_data_abi.clone(),
+            capacity_floor_abi: metadata.target_profile.capacity_floor_abi.clone(),
             type_id_abi: metadata.target_profile.type_id_abi.clone(),
             tx_version: metadata.target_profile.tx_version,
         },
@@ -20155,6 +20178,16 @@ action main() -> u64 {
         let err = result.validate().unwrap_err();
 
         assert!(err.message.contains("metadata target_profile.artifact_packaging"), "unexpected error: {}", err.message);
+    }
+
+    #[test]
+    fn compile_result_validation_rejects_metadata_target_profile_v0_14_abi_mismatch() {
+        let mut result = compile(SIMPLE_PROGRAM, CompileOptions::default()).unwrap();
+        result.metadata.target_profile.capacity_floor_abi = "missing-capacity-floor-contract".to_string();
+
+        let err = result.validate().unwrap_err();
+
+        assert!(err.message.contains("metadata target_profile.capacity_floor_abi"), "unexpected error: {}", err.message);
     }
 
     #[test]

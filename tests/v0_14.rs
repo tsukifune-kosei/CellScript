@@ -141,6 +141,7 @@ lock output_witness_lock(wallet: protected Wallet, claimed_owner: witness Addres
     assert_eq!(result.metadata.target_profile.cell_dep_abi, "ckb-cell-dep-outpoint-and-dep-group");
     assert_eq!(result.metadata.target_profile.script_ref_abi, "ckb-script-code-hash-hash-type-args");
     assert_eq!(result.metadata.target_profile.output_data_abi, "ckb-outputs-and-outputs-data-index-aligned");
+    assert_eq!(result.metadata.target_profile.capacity_floor_abi, "ckb-output-capacity-floor-shannons");
     assert_eq!(result.metadata.target_profile.type_id_abi, "ckb-type-id-v1");
 
     let profile_abi = &result.metadata.constraints.ckb.as_ref().expect("CKB constraints").profile_abi_contract;
@@ -151,6 +152,7 @@ lock output_witness_lock(wallet: protected Wallet, claimed_owner: witness Addres
     assert_eq!(profile_abi.cell_dep_abi, result.metadata.target_profile.cell_dep_abi);
     assert_eq!(profile_abi.script_ref_abi, result.metadata.target_profile.script_ref_abi);
     assert_eq!(profile_abi.output_data_abi, result.metadata.target_profile.output_data_abi);
+    assert_eq!(profile_abi.capacity_floor_abi, result.metadata.target_profile.capacity_floor_abi);
     assert_eq!(profile_abi.type_id_abi, result.metadata.target_profile.type_id_abi);
     assert_eq!(profile_abi.tx_version, result.metadata.target_profile.tx_version);
 }
