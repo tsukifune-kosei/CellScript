@@ -85,6 +85,7 @@ fn main() {
                     | "ckb-hash"
                     | "explain"
                     | "explain-profile"
+                    | "explain-proof"
                     | "explain-generics"
                     | "opt-report"
                     | "action"

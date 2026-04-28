@@ -307,6 +307,10 @@ impl LspServer {
             ("shared", "shared ${1:Name} {\n    $0\n}"),
             ("receipt", "receipt ${1:Name} {\n    $0\n}"),
             ("struct", "struct ${1:Name} {\n    $0\n}"),
+            (
+                "invariant",
+                "invariant ${1:name} {\n    trigger: ${2:type_group}\n    scope: ${3:group}\n    reads: ${4:group_inputs<Token>.amount}, ${5:group_outputs<Token>.amount}\n    assert_conserved(${6:Token.amount}, scope = ${7:group})\n}",
+            ),
             ("action", "action ${1:name}($2) {\n    $0\n}"),
             (
                 "lock",
@@ -617,6 +621,15 @@ impl LspServer {
                         detail: Some(format!("struct {}", s.name)),
                         documentation: None,
                         insert_text: Some(s.name.clone()),
+                    });
+                }
+                Item::Invariant(i) => {
+                    items.push(CompletionItem {
+                        label: i.name.clone(),
+                        kind: CompletionItemKind::Keyword,
+                        detail: Some(format!("invariant {}", i.name)),
+                        documentation: None,
+                        insert_text: Some(i.name.clone()),
                     });
                 }
                 Item::Action(a) => {
@@ -941,6 +954,7 @@ impl LspServer {
                 range: Some(range),
             }),
             Item::Lock(l) => Some(Hover { contents: format!("```cellscript\nlock {}\n```", l.name), range: Some(range) }),
+            Item::Invariant(i) => Some(Hover { contents: format!("```cellscript\ninvariant {}\n```", i.name), range: Some(range) }),
             _ => None,
         }
     }
@@ -1013,6 +1027,12 @@ impl LspServer {
                 name: l.name.clone(),
                 kind: SymbolKind::Function,
                 location: Location { uri: uri.to_string(), range: span_to_range(source, l.span) },
+                container_name: None,
+            }),
+            Item::Invariant(i) => Some(SymbolInformation {
+                name: i.name.clone(),
+                kind: SymbolKind::Event,
+                location: Location { uri: uri.to_string(), range: span_to_range(source, i.span) },
                 container_name: None,
             }),
             _ => None,
@@ -1636,6 +1656,7 @@ fn item_name(item: &Item) -> Option<&str> {
         Item::Struct(s) => Some(&s.name),
         Item::Const(c) => Some(&c.name),
         Item::Enum(e) => Some(&e.name),
+        Item::Invariant(i) => Some(&i.name),
         Item::Action(a) => Some(&a.name),
         Item::Function(f) => Some(&f.name),
         Item::Lock(l) => Some(&l.name),
@@ -1651,6 +1672,7 @@ fn item_span(item: &Item) -> Span {
         Item::Struct(s) => s.span,
         Item::Const(c) => c.span,
         Item::Enum(e) => e.span,
+        Item::Invariant(i) => i.span,
         Item::Action(a) => a.span,
         Item::Function(f) => f.span,
         Item::Lock(l) => l.span,

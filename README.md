@@ -178,6 +178,26 @@ The compiler treats `consume`, `create`, `transfer`, `destroy`, `claim`,
 effects are reflected in metadata so CKB admission policy,
 schema decoding, and artifact verification can audit the generated script.
 
+**Scoped invariants and ProofPlan metadata:**
+
+```cellscript
+invariant token_conservation {
+    trigger: type_group
+    scope: group
+    reads: group_inputs<Token>.amount, group_outputs<Token>.amount
+
+    assert_conserved(Token.amount, scope = group)
+}
+```
+
+Declared invariants must state their CKB trigger and scope explicitly. In v0.15
+they are emitted into Covenant ProofPlan metadata with trigger/scope/read
+coverage, aggregate primitive relation checks, and a `gap:metadata-only` status
+until executable verifier lowering is available. ProofPlan records also carry
+macro expansion provenance for selected protocol flows and warnings for risky
+coverage assumptions such as `lock_group` verifiers that scan transaction-wide
+views.
+
 **Complete fungible-token example:**
 
 ```cellscript
@@ -266,6 +286,7 @@ CellScript includes production-style local language tooling for early users:
 - [Roadmap overview](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_ROADMAP.md)
 - [0.13 roadmap](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_13_ROADMAP.md)
 - [0.14 roadmap](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_14_ROADMAP.md)
+- [0.15 roadmap](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_15_ROADMAP.md)
 - [0.14 release notes draft](https://github.com/tsukifune-kosei/CellScript/blob/main/docs/CELLSCRIPT_0_14_RELEASE_NOTES_DRAFT.md)
 
 ## Target Profiles
@@ -431,6 +452,7 @@ policy gates need — without re-parsing source:
 | Scheduler witness ABI & access domains | `codegen/` | CKB block builder, parallel scheduler |
 | Source hashes, artifact CKB Blake2b | `lib.rs` | `cellc verify-artifact`, CI gates |
 | Verifier obligations, pool invariants | `ir/` | On-chain verifier, policy checker |
+| Covenant ProofPlan trigger/scope/read coverage, risk diagnostics, macro provenance | `proof_plan/` | `cellc explain-proof`, auditors |
 | Target-profile policy violations | `lib.rs` | `cellc check`, CI gates |
 
 `cellc constraints` produces a human-readable subset focused on production
@@ -534,7 +556,7 @@ policy defaults:
 ```toml
 [package]
 name = "token"
-version = "0.12.0"
+version = "0.15.0"
 entry = "src/main.cell"
 source_roots = ["src"]
 

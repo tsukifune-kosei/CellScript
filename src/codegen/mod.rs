@@ -93,7 +93,7 @@ fn referenced_v014_runtime_helpers(ir: &IrModule) -> BTreeSet<String> {
             IrItem::Action(action) => Some(&action.body),
             IrItem::PureFn(function) => Some(&function.body),
             IrItem::Lock(lock) => Some(&lock.body),
-            IrItem::TypeDef(_) => None,
+            IrItem::TypeDef(_) | IrItem::Invariant(_) => None,
         };
         let Some(body) = body else {
             continue;
@@ -1148,7 +1148,7 @@ impl CodeGenerator {
                 IrItem::Action(action) => (&action.name, &action.params, &action.body),
                 IrItem::PureFn(function) => (&function.name, &function.params, &function.body),
                 IrItem::Lock(lock) => (&lock.name, &lock.params, &lock.body),
-                IrItem::TypeDef(_) => continue,
+                IrItem::TypeDef(_) | IrItem::Invariant(_) => continue,
             };
             let param_indices = params.iter().enumerate().map(|(index, param)| (param.binding.id, index)).collect::<HashMap<_, _>>();
             let mut type_hash_param_indices = BTreeSet::new();

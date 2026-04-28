@@ -31,7 +31,7 @@ if (pkg.name !== "cellscript-vscode") {
   throw new Error(`unexpected package name: ${pkg.name}`);
 }
 
-if (pkg.version !== "0.12.0") {
+if (pkg.version !== "0.15.0") {
   throw new Error(`unexpected extension version: ${pkg.version}`);
 }
 

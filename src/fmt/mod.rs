@@ -79,6 +79,7 @@ impl Formatter {
                 self.format_receipt_def(receipt)
             }
             Item::Struct(struct_def) => self.format_type_def("struct", &struct_def.name, &struct_def.fields, None),
+            Item::Invariant(invariant) => self.format_invariant(invariant),
             Item::Const(constant) => {
                 self.push_line(&format!(
                     "const {}: {} = {};",
@@ -167,6 +168,29 @@ impl Formatter {
         self.indent_level += 1;
         for field in &receipt.fields {
             self.push_line(&format!("{}: {},", field.name, format_type(&field.ty)));
+        }
+        self.indent_level -= 1;
+        self.push_line("}");
+        Ok(())
+    }
+
+    fn format_invariant(&mut self, invariant: &InvariantDef) -> Result<()> {
+        self.push_line(&format!("invariant {} {{", invariant.name));
+        self.indent_level += 1;
+        if let Some(trigger) = &invariant.trigger {
+            self.push_line(&format!("trigger: {}", trigger));
+        }
+        if let Some(scope) = &invariant.scope {
+            self.push_line(&format!("scope: {}", scope));
+        }
+        if !invariant.reads.is_empty() {
+            self.push_line(&format!("reads: {}", invariant.reads.join(", ")));
+        }
+        for aggregate in &invariant.aggregates {
+            self.push_line(&format_aggregate_invariant(aggregate));
+        }
+        for expr in &invariant.asserts {
+            self.push_line(&self.format_expr(expr));
         }
         self.indent_level -= 1;
         self.push_line("}");
@@ -430,6 +454,36 @@ fn format_effect(effect: EffectClass) -> &'static str {
         EffectClass::Mutating => "mutating",
         EffectClass::Creating => "creating",
         EffectClass::Destroying => "destroying",
+    }
+}
+
+fn format_aggregate_invariant(aggregate: &AggregateInvariant) -> String {
+    match aggregate.kind {
+        AggregateInvariantKind::Sum => format!(
+            "assert_sum({}) {} assert_sum({})",
+            aggregate.target,
+            aggregate.relation.map(format_aggregate_relation).unwrap_or("?"),
+            aggregate.rhs.as_deref().unwrap_or("?")
+        ),
+        AggregateInvariantKind::Conserved => format!("assert_conserved({}, scope = {})", aggregate.target, aggregate.scope),
+        AggregateInvariantKind::Delta => format!(
+            "assert_delta({}, {}, scope = {})",
+            aggregate.target,
+            aggregate.argument.as_deref().unwrap_or("?"),
+            aggregate.scope
+        ),
+        AggregateInvariantKind::Distinct => format!("assert_distinct({}, scope = {})", aggregate.target, aggregate.scope),
+        AggregateInvariantKind::Singleton => format!("assert_singleton({}, scope = {})", aggregate.target, aggregate.scope),
+    }
+}
+
+fn format_aggregate_relation(relation: AggregateRelation) -> &'static str {
+    match relation {
+        AggregateRelation::Lt => "<",
+        AggregateRelation::Le => "<=",
+        AggregateRelation::Eq => "==",
+        AggregateRelation::Ge => ">=",
+        AggregateRelation::Gt => ">",
     }
 }
 

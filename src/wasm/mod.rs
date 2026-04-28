@@ -182,7 +182,7 @@ pub fn audit_module(ir: &IrModule) -> WasmCompileReport {
             IrItem::Action(action) => blockers.push(format!("action '{}' has no wasm lowering", action.name)),
             IrItem::PureFn(function) => blockers.push(format!("fn '{}' has no wasm lowering", function.name)),
             IrItem::Lock(lock) => blockers.push(format!("lock '{}' has no wasm lowering", lock.name)),
-            IrItem::TypeDef(_) => {}
+            IrItem::TypeDef(_) | IrItem::Invariant(_) => {}
         }
     }
 

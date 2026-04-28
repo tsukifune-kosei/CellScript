@@ -11,6 +11,7 @@ pub enum TokenKind {
     Struct,     // struct
     Const,      // const
     Enum,       // enum
+    Invariant,  // invariant
     Action,     // action
     Fn,         // fn
     Lock,       // lock
@@ -111,6 +112,7 @@ impl fmt::Display for TokenKind {
             TokenKind::Struct => write!(f, "'struct'"),
             TokenKind::Const => write!(f, "'const'"),
             TokenKind::Enum => write!(f, "'enum'"),
+            TokenKind::Invariant => write!(f, "'invariant'"),
             TokenKind::Action => write!(f, "'action'"),
             TokenKind::Fn => write!(f, "'fn'"),
             TokenKind::Lock => write!(f, "'lock'"),
@@ -225,6 +227,7 @@ pub fn keyword_or_identifier(text: &str) -> TokenKind {
         "struct" => TokenKind::Struct,
         "const" => TokenKind::Const,
         "enum" => TokenKind::Enum,
+        "invariant" => TokenKind::Invariant,
         "action" => TokenKind::Action,
         "fn" => TokenKind::Fn,
         "lock" => TokenKind::Lock,

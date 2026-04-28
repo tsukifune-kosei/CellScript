@@ -2,7 +2,7 @@
   "name": "cellscript-vscode",
   "displayName": "CellScript",
   "description": "Production-grade local VS Code tooling for CellScript (.cell) contracts.",
-  "version": "0.12.0",
+  "version": "0.15.0",
   "publisher": "arthurzhang",
   "license": "MIT",
   "main": "./dist/extension.js",

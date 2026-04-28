@@ -1,6 +1,6 @@
 # CellScript Roadmap
 
-**Updated**: 2026-04-27
+**Updated**: 2026-04-28
 
 This roadmap is the high-level planning map for CellScript. It links the
 release-specific trackers and the deeper design notes so the project does not
@@ -20,6 +20,7 @@ The current project direction is simple:
 |---|---|---|
 | 0.13 release scope | Beta released; implementation scope closed. | [0.13 roadmap](CELLSCRIPT_0_13_ROADMAP.md), [0.13 release tracker](CELLSCRIPT_0_13_TODOLIST.md), [0.13 release notes draft](CELLSCRIPT_0_13_RELEASE_NOTES_DRAFT.md) |
 | 0.14 release scope | Implementation branch is feature-complete for the current CKB semantic-completeness beta scope. | [0.14 roadmap](CELLSCRIPT_0_14_ROADMAP.md), [0.14 release notes draft](CELLSCRIPT_0_14_RELEASE_NOTES_DRAFT.md) |
+| 0.15 release scope | Implementation branch adds scoped invariants, aggregate invariant primitives, Covenant ProofPlan output, risk diagnostics, and macro provenance. | [0.15 roadmap](CELLSCRIPT_0_15_ROADMAP.md) |
 | CKB language fit | CKB-first design is confirmed; remaining gaps are signer binding, continuity policy, capacity policy, and declarative time policy. | [CKB language audit](CELLSCRIPT_CKB_LANGUAGE_AUDIT.md) |
 | Surface syntax | Low-risk syntax pass is implemented; authority-sensitive syntax remains staged. | [Surface elegance RFC](CELLSCRIPT_SURFACE_ELEGANCE_RFC.md) |
 | Collections | Stack-backed fixed-width `Vec<T>` helper surface is implemented; cell-backed and generic map ownership remain fail-closed. | [Collections support matrix](CELLSCRIPT_COLLECTIONS_SUPPORT_MATRIX.md), [0.13 roadmap](CELLSCRIPT_0_13_ROADMAP.md) |
@@ -63,6 +64,25 @@ Detailed status:
 
 - [0.14 roadmap](CELLSCRIPT_0_14_ROADMAP.md)
 - [0.14 release notes draft](CELLSCRIPT_0_14_RELEASE_NOTES_DRAFT.md)
+
+### 0.15: Scoped Invariants And Covenant ProofPlan
+
+0.15 makes invariant scope and enforcement status visible without pretending that
+metadata-only declarations are already executable CKB verifier code:
+
+- top-level scoped `invariant` declarations with explicit `trigger`, `scope`,
+  and `reads`;
+- aggregate primitives for sum, conservation, delta, distinct field, and
+  singleton identity relations;
+- Covenant ProofPlan records for declared invariants, aggregate primitives,
+  selected protocol flows, and pool protocol metadata;
+- diagnostics for risky coverage assumptions such as `lock_group` verifiers that
+  inspect transaction-wide views;
+- macro expansion provenance for compiler-recognized protocol flows.
+
+Detailed status:
+
+- [0.15 roadmap](CELLSCRIPT_0_15_ROADMAP.md)
 
 ### Next Authorization Hardening Track
 

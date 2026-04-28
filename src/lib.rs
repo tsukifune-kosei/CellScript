@@ -18,6 +18,7 @@ pub mod lsp;
 pub mod optimize;
 pub mod package;
 pub mod parser;
+pub mod proof_plan;
 pub mod repl;
 pub mod resolve;
 pub mod runtime_errors;
@@ -25,6 +26,8 @@ pub mod simulate;
 pub mod stdlib;
 pub mod types;
 pub mod wasm;
+
+pub use proof_plan::{ProofPlanDiagnosticMetadata, ProofPlanMetadata, ProofPlanSourceSpanMetadata};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use error::{CompileError, Result};
@@ -56,7 +59,7 @@ fn validate_compile_options(options: &CompileOptions) -> Result<()> {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-pub const METADATA_SCHEMA_VERSION: u32 = 39;
+pub const METADATA_SCHEMA_VERSION: u32 = 40;
 const STACK_COLLECTION_BACKING_BYTES: usize = 256;
 pub const ENTRY_WITNESS_ABI: &str = "cellscript-entry-witness-v1";
 pub(crate) const ENTRY_WITNESS_ABI_MAGIC: &[u8; 8] = b"CSARGv1\0";
@@ -546,6 +549,8 @@ pub struct RuntimeMetadata {
     pub fail_closed_runtime_features: Vec<String>,
     pub ckb_runtime_accesses: Vec<CkbRuntimeAccessMetadata>,
     pub verifier_obligations: Vec<VerifierObligationMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proof_plan: Vec<ProofPlanMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub collection_instantiations: Vec<CollectionInstantiationMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2316,6 +2321,8 @@ pub struct ActionMetadata {
     pub fail_closed_runtime_features: Vec<String>,
     pub verifier_obligations: Vec<VerifierObligationMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proof_plan: Vec<ProofPlanMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transaction_runtime_input_requirements: Vec<TransactionRuntimeInputRequirementMetadata>,
     pub elf_compatible: bool,
     pub standalone_runner_compatible: bool,
@@ -2732,6 +2739,8 @@ pub struct FunctionMetadata {
     pub fail_closed_runtime_features: Vec<String>,
     pub verifier_obligations: Vec<VerifierObligationMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proof_plan: Vec<ProofPlanMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transaction_runtime_input_requirements: Vec<TransactionRuntimeInputRequirementMetadata>,
     pub elf_compatible: bool,
     pub block_count: usize,
@@ -2753,6 +2762,8 @@ pub struct LockMetadata {
     pub ckb_runtime_features: Vec<String>,
     pub fail_closed_runtime_features: Vec<String>,
     pub verifier_obligations: Vec<VerifierObligationMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proof_plan: Vec<ProofPlanMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transaction_runtime_input_requirements: Vec<TransactionRuntimeInputRequirementMetadata>,
     pub elf_compatible: bool,
@@ -3603,6 +3614,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
     let ckb_runtime_accesses = module_ckb_runtime_accesses(ir, &cell_type_kinds, &type_layouts);
     let verifier_obligations =
         module_verifier_obligations(ir, &type_layouts, &lifecycle_states, &cell_type_kinds, &pure_const_returns);
+    let proof_plan = module_proof_plan_metadata(ir, &type_layouts, &lifecycle_states, &cell_type_kinds, &pure_const_returns);
     let collection_instantiations = module_collection_instantiation_metadata(ir, &type_layouts, &pure_const_returns);
     let transaction_runtime_input_requirements = transaction_runtime_input_requirements_from_obligations(&verifier_obligations);
     let pool_primitives = module_pool_primitive_metadata(ir, &type_layouts, &cell_type_kinds, &pure_const_returns);
@@ -3664,6 +3676,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
             fail_closed_runtime_features,
             ckb_runtime_accesses,
             verifier_obligations,
+            proof_plan,
             collection_instantiations,
             transaction_runtime_input_requirements,
             pool_primitives,
@@ -3715,6 +3728,15 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                     );
                     let transaction_runtime_input_requirements =
                         transaction_runtime_input_requirements_from_obligations(&verifier_obligations);
+                    let proof_plan = crate::proof_plan::build_for_body(
+                        "action",
+                        &action.name,
+                        &action.body,
+                        &action.params,
+                        &verifier_obligations,
+                        &ckb_runtime_accesses,
+                        &pool_primitives,
+                    );
                     let standalone_runner_compatible = ckb_runtime_features.is_empty() && action.params.is_empty();
                     let scheduler_accesses = scheduler_accesses_from_metadata(&ckb_runtime_accesses);
                     let scheduler_effect_class = format!("{:?}", action.effect_class);
@@ -3754,6 +3776,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         standalone_runner_compatible,
                         fail_closed_runtime_features,
                         verifier_obligations,
+                        proof_plan,
                         transaction_runtime_input_requirements,
                         block_count: action.body.blocks.len(),
                     })
@@ -3809,6 +3832,15 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                     );
                     let transaction_runtime_input_requirements =
                         transaction_runtime_input_requirements_from_obligations(&verifier_obligations);
+                    let proof_plan = crate::proof_plan::build_for_body(
+                        "fn",
+                        &function.name,
+                        &function.body,
+                        &function.params,
+                        &verifier_obligations,
+                        &ckb_runtime_accesses,
+                        &pool_primitives,
+                    );
                     Some(FunctionMetadata {
                         name: function.name.clone(),
                         params: param_metadata_for_body(&function.params, &function.body, &cell_type_kinds),
@@ -3820,6 +3852,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         elf_compatible: true,
                         fail_closed_runtime_features,
                         verifier_obligations,
+                        proof_plan,
                         transaction_runtime_input_requirements,
                         block_count: function.body.blocks.len(),
                     })
@@ -3864,6 +3897,15 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         body_pool_primitive_metadata("lock", &lock.name, &lock.body, &lock.params, &type_layouts, &cell_type_kinds, &pure_const_returns);
                     let transaction_runtime_input_requirements =
                         transaction_runtime_input_requirements_from_obligations(&verifier_obligations);
+                    let proof_plan = crate::proof_plan::build_for_body(
+                        "lock",
+                        &lock.name,
+                        &lock.body,
+                        &lock.params,
+                        &verifier_obligations,
+                        &ckb_runtime_accesses,
+                        &pool_primitives,
+                    );
                     let standalone_runner_compatible = ckb_runtime_features.is_empty() && lock.params.is_empty();
                     Some(LockMetadata {
                         name: lock.name.clone(),
@@ -3886,6 +3928,7 @@ fn compile_metadata_from_ir(ir: &ir::IrModule, artifact_format: ArtifactFormat, 
                         standalone_runner_compatible,
                         fail_closed_runtime_features,
                         verifier_obligations,
+                        proof_plan,
                         transaction_runtime_input_requirements,
                         block_count: lock.body.blocks.len(),
                     })
@@ -4003,6 +4046,10 @@ fn scope_ir_to_entry(ir: &ir::IrModule, scope: &CompileEntryScope) -> Result<ir:
         ir::IrItem::TypeDef(type_def) if used_types.contains(&type_def.name) => Some(item.clone()),
         _ => None,
     }));
+    items.extend(ir.items.iter().filter_map(|item| match item {
+        ir::IrItem::Invariant(_) => Some(item.clone()),
+        _ => None,
+    }));
     items.push(selected_item);
     items.extend(ir.items.iter().filter_map(|item| match item {
         ir::IrItem::Action(action) if used_actions.contains(&action.name) => Some(item.clone()),
@@ -4045,7 +4092,7 @@ fn collect_entry_item_scope(item: &ir::IrItem, used_types: &mut BTreeSet<String>
             collect_params_named_types(&lock.params, used_types);
             collect_body_scope(&lock.body, used_types, pending_functions);
         }
-        ir::IrItem::TypeDef(_) | ir::IrItem::PureFn(_) => {}
+        ir::IrItem::TypeDef(_) | ir::IrItem::Invariant(_) | ir::IrItem::PureFn(_) => {}
     }
 }
 
@@ -4298,7 +4345,7 @@ fn module_fail_closed_runtime_features(
                     pure_const_returns,
                 ));
             }
-            ir::IrItem::TypeDef(_) => {}
+            ir::IrItem::TypeDef(_) | ir::IrItem::Invariant(_) => {}
         }
     }
     features.into_iter().collect()
@@ -4324,7 +4371,7 @@ fn module_ckb_runtime_accesses(
                 body_ckb_runtime_accesses(&lock.name, &lock.body, cell_type_kinds, type_layouts),
                 &lock.params,
             )),
-            ir::IrItem::TypeDef(_) => {}
+            ir::IrItem::TypeDef(_) | ir::IrItem::Invariant(_) => {}
         }
     }
     accesses
@@ -4350,7 +4397,7 @@ fn module_ckb_runtime_features(
                 body_ckb_runtime_features(&lock.name, &lock.body, cell_type_kinds, type_layouts),
                 &lock.params,
             )),
-            ir::IrItem::TypeDef(_) => {}
+            ir::IrItem::TypeDef(_) | ir::IrItem::Invariant(_) => {}
         }
     }
     features.into_iter().collect()
@@ -4468,10 +4515,185 @@ fn module_verifier_obligations(
                     pure_const_returns,
                 ));
             }
-            ir::IrItem::TypeDef(_) => {}
+            ir::IrItem::TypeDef(_) | ir::IrItem::Invariant(_) => {}
         }
     }
     obligations
+}
+
+fn module_proof_plan_metadata(
+    ir: &ir::IrModule,
+    type_layouts: &MetadataTypeLayouts,
+    lifecycle_states: &HashMap<String, Vec<String>>,
+    cell_type_kinds: &HashMap<String, ir::IrTypeKind>,
+    pure_const_returns: &HashMap<String, ir::IrConst>,
+) -> Vec<ProofPlanMetadata> {
+    let mut proof_plan = Vec::new();
+    for item in &ir.items {
+        match item {
+            ir::IrItem::Action(action) => {
+                let param_schema_vars = schema_pointer_var_ids(&action.body, &action.params);
+                let fail_closed_runtime_features = body_fail_closed_runtime_features(
+                    &action.body,
+                    &param_schema_vars,
+                    type_layouts,
+                    &action.params,
+                    cell_type_kinds,
+                    action.return_type.as_ref(),
+                    pure_const_returns,
+                );
+                let ckb_runtime_features = merge_ckb_runtime_features(
+                    body_ckb_runtime_features(&action.name, &action.body, cell_type_kinds, type_layouts),
+                    &action.params,
+                );
+                let ckb_runtime_accesses = merge_ckb_runtime_accesses(
+                    body_ckb_runtime_accesses(&action.name, &action.body, cell_type_kinds, type_layouts),
+                    &action.params,
+                );
+                let verifier_obligations = body_verifier_obligations(
+                    "action",
+                    &action.name,
+                    &action.body,
+                    &fail_closed_runtime_features,
+                    &ckb_runtime_features,
+                    &ckb_runtime_accesses,
+                    type_layouts,
+                    &action.params,
+                    lifecycle_states,
+                    cell_type_kinds,
+                    action.return_type.as_ref(),
+                    pure_const_returns,
+                );
+                let pool_primitives = body_pool_primitive_metadata(
+                    "action",
+                    &action.name,
+                    &action.body,
+                    &action.params,
+                    type_layouts,
+                    cell_type_kinds,
+                    pure_const_returns,
+                );
+                proof_plan.extend(crate::proof_plan::build_for_body(
+                    "action",
+                    &action.name,
+                    &action.body,
+                    &action.params,
+                    &verifier_obligations,
+                    &ckb_runtime_accesses,
+                    &pool_primitives,
+                ));
+            }
+            ir::IrItem::PureFn(function) => {
+                let param_schema_vars = schema_pointer_var_ids(&function.body, &function.params);
+                let fail_closed_runtime_features = body_fail_closed_runtime_features(
+                    &function.body,
+                    &param_schema_vars,
+                    type_layouts,
+                    &function.params,
+                    cell_type_kinds,
+                    function.return_type.as_ref(),
+                    pure_const_returns,
+                );
+                let ckb_runtime_features = merge_ckb_runtime_features(
+                    body_ckb_runtime_features(&function.name, &function.body, cell_type_kinds, type_layouts),
+                    &function.params,
+                );
+                let ckb_runtime_accesses = merge_ckb_runtime_accesses(
+                    body_ckb_runtime_accesses(&function.name, &function.body, cell_type_kinds, type_layouts),
+                    &function.params,
+                );
+                let verifier_obligations = body_verifier_obligations(
+                    "fn",
+                    &function.name,
+                    &function.body,
+                    &fail_closed_runtime_features,
+                    &ckb_runtime_features,
+                    &ckb_runtime_accesses,
+                    type_layouts,
+                    &function.params,
+                    lifecycle_states,
+                    cell_type_kinds,
+                    function.return_type.as_ref(),
+                    pure_const_returns,
+                );
+                let pool_primitives = body_pool_primitive_metadata(
+                    "fn",
+                    &function.name,
+                    &function.body,
+                    &function.params,
+                    type_layouts,
+                    cell_type_kinds,
+                    pure_const_returns,
+                );
+                proof_plan.extend(crate::proof_plan::build_for_body(
+                    "fn",
+                    &function.name,
+                    &function.body,
+                    &function.params,
+                    &verifier_obligations,
+                    &ckb_runtime_accesses,
+                    &pool_primitives,
+                ));
+            }
+            ir::IrItem::Lock(lock) => {
+                let param_schema_vars = schema_pointer_var_ids(&lock.body, &lock.params);
+                let fail_closed_runtime_features = body_fail_closed_runtime_features(
+                    &lock.body,
+                    &param_schema_vars,
+                    type_layouts,
+                    &lock.params,
+                    cell_type_kinds,
+                    None,
+                    pure_const_returns,
+                );
+                let ckb_runtime_features = merge_ckb_runtime_features(
+                    body_ckb_runtime_features(&lock.name, &lock.body, cell_type_kinds, type_layouts),
+                    &lock.params,
+                );
+                let ckb_runtime_accesses = merge_ckb_runtime_accesses(
+                    body_ckb_runtime_accesses(&lock.name, &lock.body, cell_type_kinds, type_layouts),
+                    &lock.params,
+                );
+                let verifier_obligations = body_verifier_obligations(
+                    "lock",
+                    &lock.name,
+                    &lock.body,
+                    &fail_closed_runtime_features,
+                    &ckb_runtime_features,
+                    &ckb_runtime_accesses,
+                    type_layouts,
+                    &lock.params,
+                    lifecycle_states,
+                    cell_type_kinds,
+                    None,
+                    pure_const_returns,
+                );
+                let pool_primitives = body_pool_primitive_metadata(
+                    "lock",
+                    &lock.name,
+                    &lock.body,
+                    &lock.params,
+                    type_layouts,
+                    cell_type_kinds,
+                    pure_const_returns,
+                );
+                proof_plan.extend(crate::proof_plan::build_for_body(
+                    "lock",
+                    &lock.name,
+                    &lock.body,
+                    &lock.params,
+                    &verifier_obligations,
+                    &ckb_runtime_accesses,
+                    &pool_primitives,
+                ));
+            }
+            ir::IrItem::Invariant(invariant) => {
+                proof_plan.extend(crate::proof_plan::build_for_invariant(invariant));
+            }
+            ir::IrItem::TypeDef(_) => {}
+        }
+    }
+    proof_plan
 }
 
 fn module_pool_primitive_metadata(
@@ -4516,7 +4738,7 @@ fn module_pool_primitive_metadata(
                     pure_const_returns,
                 ));
             }
-            ir::IrItem::TypeDef(_) => {}
+            ir::IrItem::TypeDef(_) | ir::IrItem::Invariant(_) => {}
         }
     }
     pool_primitives
@@ -4581,7 +4803,7 @@ fn module_collection_instantiation_metadata(
                 type_layouts,
                 pure_const_returns,
             )),
-            ir::IrItem::TypeDef(_) => {}
+            ir::IrItem::TypeDef(_) | ir::IrItem::Invariant(_) => {}
         }
     }
     instantiations
@@ -9396,7 +9618,7 @@ fn module_has_entry_params(ir: &ir::IrModule) -> bool {
         ir::IrItem::Action(action) => !action.params.is_empty(),
         ir::IrItem::Lock(lock) => !lock.params.is_empty(),
         ir::IrItem::PureFn(_) => false,
-        ir::IrItem::TypeDef(_) => false,
+        ir::IrItem::TypeDef(_) | ir::IrItem::Invariant(_) => false,
     })
 }
 
@@ -21289,6 +21511,466 @@ source_roots = ["src", "shared"]
     }
 
     #[test]
+    fn compile_metadata_exposes_covenant_proof_plan_for_transfer() {
+        let source = r#"
+module test
+
+resource Token has store, transfer {
+    amount: u64,
+}
+
+action transfer_token(token: Token, to: Address) -> Token {
+    return transfer token to to
+}
+"#;
+
+        let result = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..Default::default() }).unwrap();
+        let plan = result
+            .metadata
+            .runtime
+            .proof_plan
+            .iter()
+            .find(|plan| plan.feature == "transfer-output:Token")
+            .expect("transfer output ProofPlan record");
+
+        assert_eq!(plan.trigger, "explicit_entry");
+        assert_eq!(plan.scope, "transaction");
+        assert!(plan.reads.contains(&"input".to_string()), "{:?}", plan.reads);
+        assert!(plan.reads.contains(&"output".to_string()), "{:?}", plan.reads);
+        assert!(plan.coverage.iter().any(|coverage| coverage.contains("transaction-scoped relation")), "{:?}", plan.coverage);
+        assert!(
+            plan.coverage.iter().any(|coverage| coverage == "macro_expansion:transfer=consume-input+create-output"),
+            "{:?}",
+            plan.coverage
+        );
+        assert_eq!(
+            result
+                .metadata
+                .actions
+                .iter()
+                .find(|action| action.name == "transfer_token")
+                .expect("action metadata")
+                .proof_plan
+                .iter()
+                .filter(|plan| plan.feature == "transfer-output:Token")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn compile_metadata_exposes_lock_group_proof_plan_for_lock_entry() {
+        let source = r#"
+module test
+
+resource Config {
+    digest: Hash,
+}
+
+lock config_guard() -> bool {
+    let config = read_ref<Config>()
+    require config.digest == Hash::zero()
+}
+"#;
+
+        let result = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..Default::default() }).unwrap();
+        let plan =
+            result.metadata.runtime.proof_plan.iter().find(|plan| plan.origin == "lock:config_guard").expect("lock ProofPlan record");
+
+        assert_eq!(plan.trigger, "lock_group");
+        assert_eq!(plan.scope, "group");
+        assert!(plan.reads.contains(&"cell_dep".to_string()), "{:?}", plan.reads);
+        assert!(plan.coverage.iter().any(|coverage| coverage.contains("lock ScriptGroup coverage")), "{:?}", plan.coverage);
+    }
+
+    #[test]
+    fn compile_metadata_proof_plan_preserves_lock_args_source() {
+        let result =
+            compile(LOCK_ARGS_PARAM_PROGRAM, CompileOptions { target_profile: Some("ckb".to_string()), ..Default::default() })
+                .unwrap();
+
+        assert!(
+            result.metadata.runtime.proof_plan.iter().any(|plan| plan.feature == "ckb-lock-args"),
+            "{:?}",
+            result.metadata.runtime.proof_plan
+        );
+
+        let runtime_plan = result
+            .metadata
+            .runtime
+            .proof_plan
+            .iter()
+            .find(|plan| plan.feature == "lock-args:ScriptArgs#0")
+            .expect("runtime ProofPlan lock_args cell-access record");
+        assert_eq!(runtime_plan.category, "cell-access");
+        assert!(runtime_plan.reads.contains(&"lock_args".to_string()), "{:?}", runtime_plan.reads);
+        assert!(!runtime_plan.reads.contains(&"witness".to_string()), "{:?}", runtime_plan.reads);
+        assert!(runtime_plan.lock_args_fields.contains(&"lock_args.owner".to_string()), "{:?}", runtime_plan.lock_args_fields);
+        assert!(runtime_plan.lock_args_fields.contains(&"ScriptArgs#0:owner".to_string()), "{:?}", runtime_plan.lock_args_fields);
+        assert!(runtime_plan.witness_fields.is_empty(), "{:?}", runtime_plan.witness_fields);
+
+        let lock_plan = result
+            .metadata
+            .locks
+            .iter()
+            .find(|lock| lock.name == "bad")
+            .expect("lock metadata")
+            .proof_plan
+            .iter()
+            .find(|plan| plan.feature == "lock-args:ScriptArgs#0")
+            .expect("lock ProofPlan lock_args cell-access record");
+        assert_eq!(runtime_plan.reads, lock_plan.reads);
+        assert_eq!(runtime_plan.witness_fields, lock_plan.witness_fields);
+        assert_eq!(runtime_plan.lock_args_fields, lock_plan.lock_args_fields);
+    }
+
+    #[test]
+    fn compile_metadata_exposes_declared_invariant_proof_plan() {
+        let source = r#"
+module test
+
+invariant token_conservation {
+    trigger: type_group
+    scope: group
+    reads: group_inputs<Token>.amount, group_outputs<Token>.amount
+    assert_invariant(true, "token amount is conserved")
+}
+
+resource Token {
+    amount: u64,
+}
+
+action run() -> u64 {
+    return 0
+}
+"#;
+
+        let result = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..Default::default() }).unwrap();
+        let plan = result
+            .metadata
+            .runtime
+            .proof_plan
+            .iter()
+            .find(|plan| plan.origin == "invariant:token_conservation")
+            .expect("declared invariant ProofPlan record");
+
+        assert_eq!(plan.category, "declared-invariant");
+        assert_eq!(plan.trigger, "type_group");
+        assert_eq!(plan.scope, "group");
+        assert_eq!(plan.reads, vec!["group_inputs<Token>.amount", "group_outputs<Token>.amount"]);
+        assert!(!plan.on_chain_checked);
+        assert_eq!(plan.codegen_coverage_status, "gap:metadata-only");
+        assert!(plan.coverage.contains(&"declared_invariant_assertions:1".to_string()), "{:?}", plan.coverage);
+        assert!(plan.source_span.is_some());
+    }
+
+    #[test]
+    fn compile_metadata_exposes_aggregate_invariant_primitives_in_proof_plan() {
+        let source = r#"
+module test
+
+invariant token_conservation {
+    trigger: type_group
+    scope: group
+    reads: group_inputs<Token>.amount, group_outputs<Token>.amount
+    assert_conserved(Token.amount, scope = group)
+    assert_sum(group_outputs<Token>.amount) <= assert_sum(group_inputs<Token>.amount)
+}
+
+resource Token {
+    amount: u64,
+}
+
+action run() -> u64 {
+    return 0
+}
+"#;
+
+        let result = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..Default::default() }).unwrap();
+        let plan = result
+            .metadata
+            .runtime
+            .proof_plan
+            .iter()
+            .find(|plan| plan.origin == "invariant:token_conservation")
+            .expect("declared invariant ProofPlan record");
+
+        assert_eq!(plan.codegen_coverage_status, "gap:metadata-only");
+        assert!(plan.reads.contains(&"group_input".to_string()), "{:?}", plan.reads);
+        assert!(plan.reads.contains(&"group_output".to_string()), "{:?}", plan.reads);
+        assert!(
+            plan.input_output_relation_checks.iter().any(|check| check == "assert_conserved:Token.amount=metadata-only"),
+            "{:?}",
+            plan.input_output_relation_checks
+        );
+        assert!(
+            plan.input_output_relation_checks
+                .iter()
+                .any(|check| check == "assert_sum:group_outputs<Token>.amount<=group_inputs<Token>.amount=metadata-only"),
+            "{:?}",
+            plan.input_output_relation_checks
+        );
+        assert!(
+            plan.coverage.iter().any(|coverage| coverage.contains("aggregate_assertion:conserved(Token.amount) scope=group")),
+            "{:?}",
+            plan.coverage
+        );
+        assert!(plan.builder_assumptions.contains(&"declared(aggregate_invariant_count:2)".to_string()));
+
+        let aggregate_plans = result
+            .metadata
+            .runtime
+            .proof_plan
+            .iter()
+            .filter(|plan| plan.origin.starts_with("invariant:token_conservation#aggregate:"))
+            .collect::<Vec<_>>();
+        assert_eq!(aggregate_plans.len(), 2, "{:?}", aggregate_plans);
+        assert!(aggregate_plans.iter().any(|plan| {
+            plan.category == "aggregate-invariant"
+                && plan.feature == "assert_conserved:Token.amount"
+                && plan.input_output_relation_checks == vec!["assert_conserved:Token.amount=metadata-only"]
+                && plan.source_span.is_some()
+        }));
+        assert!(aggregate_plans.iter().any(|plan| {
+            plan.category == "aggregate-invariant"
+                && plan.feature == "assert_sum:group_outputs<Token>.amount<=group_inputs<Token>.amount"
+                && plan.reads.contains(&"group_input".to_string())
+                && plan.reads.contains(&"group_output".to_string())
+                && plan.source_span.is_some()
+        }));
+    }
+
+    #[test]
+    fn compile_metadata_exposes_transaction_and_selected_cell_aggregate_invariants() {
+        let source = r#"
+module test
+
+invariant nft_uniqueness {
+    trigger: explicit_entry
+    scope: transaction
+    reads: outputs<Nft>.id
+    assert_distinct(outputs<Nft>.id, scope = transaction)
+}
+
+invariant selected_token_delta {
+    trigger: explicit_entry
+    scope: selected_cells
+    reads: input<Token>.amount, output<Token>.amount
+    assert_delta(Token.amount, expected_delta, scope = selected_cells)
+}
+
+resource Nft {
+    id: Hash,
+}
+
+resource Token {
+    amount: u64,
+}
+
+action run() -> u64 {
+    return 0
+}
+"#;
+
+        let result = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..Default::default() }).unwrap();
+        let distinct = result
+            .metadata
+            .runtime
+            .proof_plan
+            .iter()
+            .find(|plan| plan.feature == "assert_distinct:outputs<Nft>.id")
+            .expect("transaction distinct aggregate ProofPlan");
+        assert_eq!(distinct.category, "aggregate-invariant");
+        assert_eq!(distinct.scope, "transaction");
+        assert!(distinct.reads.contains(&"output".to_string()), "{:?}", distinct.reads);
+
+        let delta = result
+            .metadata
+            .runtime
+            .proof_plan
+            .iter()
+            .find(|plan| plan.feature == "assert_delta:Token.amount:expected_delta")
+            .expect("selected cell delta aggregate ProofPlan");
+        assert_eq!(delta.category, "aggregate-invariant");
+        assert_eq!(delta.scope, "selected_cells");
+        assert_eq!(delta.input_output_relation_checks, vec!["assert_delta:Token.amount:expected_delta=metadata-only"]);
+        assert_eq!(delta.codegen_coverage_status, "gap:metadata-only");
+    }
+
+    #[test]
+    fn compile_metadata_warns_for_lock_group_transaction_invariant_scope() {
+        let source = r#"
+module test
+
+invariant lock_scans_transaction {
+    trigger: lock_group
+    scope: transaction
+    reads: inputs<Token>.amount, outputs<Token>.amount
+    assert_sum(outputs<Token>.amount) <= assert_sum(inputs<Token>.amount)
+}
+
+resource Token {
+    amount: u64,
+}
+
+action run() -> u64 {
+    return 0
+}
+"#;
+
+        let result = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..Default::default() }).unwrap();
+        let declared = result
+            .metadata
+            .runtime
+            .proof_plan
+            .iter()
+            .find(|plan| plan.origin == "invariant:lock_scans_transaction")
+            .expect("declared invariant ProofPlan record");
+
+        assert_eq!(declared.trigger, "lock_group");
+        assert_eq!(declared.scope, "transaction");
+        assert!(
+            declared.coverage.iter().any(|coverage| coverage.contains("only inputs sharing this lock script")),
+            "{:?}",
+            declared.coverage
+        );
+        assert!(
+            declared.builder_assumptions.iter().any(|assumption| assumption.contains("only protects the lock group")),
+            "{:?}",
+            declared.builder_assumptions
+        );
+        assert!(
+            declared
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == "warning"
+                    && diagnostic.message.contains("do not imply type-group conservation")),
+            "{:?}",
+            declared.diagnostics
+        );
+
+        let aggregate = result
+            .metadata
+            .runtime
+            .proof_plan
+            .iter()
+            .find(|plan| plan.origin == "invariant:lock_scans_transaction#aggregate:0")
+            .expect("aggregate invariant ProofPlan record");
+        assert_eq!(aggregate.category, "aggregate-invariant");
+        assert!(
+            aggregate
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == "warning"
+                    && diagnostic.message.contains("do not imply type-group conservation")),
+            "{:?}",
+            aggregate.diagnostics
+        );
+    }
+
+    #[test]
+    fn compile_rejects_aggregate_invariant_non_fixed_field() {
+        let source = r#"
+module test
+
+invariant flag_distinct {
+    trigger: type_group
+    scope: group
+    reads: group_inputs<Flag>.enabled, group_outputs<Flag>.enabled
+    assert_distinct(group_outputs<Flag>.enabled, scope = group)
+}
+
+resource Flag {
+    enabled: bool,
+}
+
+action run() -> u64 {
+    return 0
+}
+"#;
+
+        let err = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..Default::default() }).unwrap_err();
+
+        assert!(err.message.contains("must be a fixed-width integer or fixed bytes"), "unexpected error: {}", err.message);
+    }
+
+    #[test]
+    fn compile_rejects_invariant_without_explicit_trigger_and_scope() {
+        let source = r#"
+module test
+
+invariant token_conservation {
+    reads: group_inputs<Token>.amount
+    assert_invariant(true, "token amount is conserved")
+}
+
+resource Token {
+    amount: u64,
+}
+
+action run() -> u64 {
+    return 0
+}
+"#;
+
+        let err = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..Default::default() }).unwrap_err();
+
+        assert!(err.message.contains("must declare explicit trigger and scope"), "unexpected error: {}", err.message);
+    }
+
+    #[test]
+    fn compile_rejects_invalid_invariant_assert_expression() {
+        let source = r#"
+module test
+
+invariant token_conservation {
+    trigger: type_group
+    scope: group
+    reads: group_inputs<Token>.amount, group_outputs<Token>.amount
+    assert_invariant(1, "token amount is conserved")
+}
+
+resource Token {
+    amount: u64,
+}
+
+action run() -> u64 {
+    return 0
+}
+"#;
+
+        let err = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..Default::default() }).unwrap_err();
+
+        assert!(err.message.contains("assert condition must be boolean"), "unexpected error: {}", err.message);
+    }
+
+    #[test]
+    fn compile_rejects_invariant_assert_runtime_operation() {
+        let source = r#"
+module test
+
+invariant config_digest {
+    trigger: explicit_entry
+    scope: selected_cells
+    reads: cell_dep
+    assert_invariant(read_ref<Config>().digest == Hash::zero(), "config digest must be zero")
+}
+
+resource Config {
+    digest: Hash,
+}
+
+action run() -> u64 {
+    return 0
+}
+"#;
+
+        let err = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..Default::default() }).unwrap_err();
+
+        assert!(err.message.contains("pure function cannot contain 'read_ref'"), "unexpected error: {}", err.message);
+    }
+
+    #[test]
     fn create_output_verifier_accepts_fixed_byte_params_and_consts() {
         let result = compile(FIXED_BYTE_PARAM_AND_CONST_OUTPUT_PROGRAM, CompileOptions::default()).unwrap();
         let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
@@ -21473,6 +22155,7 @@ source_roots = ["src", "shared"]
             ckb_runtime_features: vec![],
             fail_closed_runtime_features: vec![],
             verifier_obligations: vec![],
+            proof_plan: vec![],
             transaction_runtime_input_requirements: vec![],
             elf_compatible: true,
             standalone_runner_compatible: true,

@@ -66,7 +66,13 @@ impl Optimizer {
                 Item::Lock(lock) => {
                     lock.body = self.with_child_scope(|this| this.optimize_stmts(&lock.body))?;
                 }
-                Item::Resource(_) | Item::Shared(_) | Item::Receipt(_) | Item::Struct(_) | Item::Enum(_) | Item::Use(_) => {}
+                Item::Resource(_)
+                | Item::Shared(_)
+                | Item::Receipt(_)
+                | Item::Struct(_)
+                | Item::Invariant(_)
+                | Item::Enum(_)
+                | Item::Use(_) => {}
             }
         }
 

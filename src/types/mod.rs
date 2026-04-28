@@ -445,6 +445,7 @@ impl<'a> TypeChecker<'a> {
                         struct_def.fields.iter().map(|field| (field.name.clone(), field.ty.clone())).collect(),
                     );
                 }
+                Item::Invariant(_) => {}
                 Item::Enum(enum_def) => {
                     self.enum_variants
                         .insert(enum_def.name.clone(), enum_def.variants.iter().map(|variant| variant.name.clone()).collect());
@@ -524,6 +525,7 @@ impl<'a> TypeChecker<'a> {
             Item::Shared(s) => self.check_shared(s),
             Item::Receipt(r) => self.check_receipt(r),
             Item::Struct(s) => self.check_struct(s),
+            Item::Invariant(i) => self.check_invariant(i),
             Item::Const(c) => self.check_const(c),
             Item::Enum(e) => self.check_enum(e),
             Item::Action(a) => self.check_action(a),
@@ -552,6 +554,201 @@ impl<'a> TypeChecker<'a> {
 
     fn check_struct(&mut self, struct_def: &StructDef) -> Result<()> {
         self.validate_schema_fields(&struct_def.fields, "struct", &struct_def.name)
+    }
+
+    fn check_invariant(&mut self, invariant: &InvariantDef) -> Result<()> {
+        let missing_trigger = invariant.trigger.is_none();
+        let missing_scope = invariant.scope.is_none();
+        if missing_trigger || missing_scope {
+            return Err(CompileError::new(
+                format!("strict CKB invariant '{}' must declare explicit trigger and scope", invariant.name),
+                invariant.span,
+            ));
+        }
+
+        if let Some(trigger) = &invariant.trigger {
+            match trigger.as_str() {
+                "explicit_entry" | "lock_group" | "type_group" => {}
+                _ => {
+                    return Err(CompileError::new(
+                        format!(
+                            "invariant '{}' has unsupported trigger '{}'; expected explicit_entry, lock_group, or type_group",
+                            invariant.name, trigger
+                        ),
+                        invariant.span,
+                    ));
+                }
+            }
+        }
+
+        if let Some(scope) = &invariant.scope {
+            match scope.as_str() {
+                "selected_cells" | "group" | "transaction" => {}
+                _ => {
+                    return Err(CompileError::new(
+                        format!(
+                            "invariant '{}' has unsupported scope '{}'; expected selected_cells, group, or transaction",
+                            invariant.name, scope
+                        ),
+                        invariant.span,
+                    ));
+                }
+            }
+        }
+
+        if invariant.reads.is_empty() {
+            return Err(CompileError::new(
+                format!("invariant '{}' must declare at least one read source", invariant.name),
+                invariant.span,
+            ));
+        }
+
+        for read in &invariant.reads {
+            let base = read.split(['<', '.']).next().unwrap_or(read.as_str());
+            match base {
+                "input" | "inputs" | "output" | "outputs" | "group_input" | "group_inputs" | "group_output" | "group_outputs"
+                | "cell_dep" | "cell_deps" | "header_dep" | "header_deps" | "witness" | "lock_args" => {}
+                _ => {
+                    return Err(CompileError::new(
+                        format!(
+                            "invariant '{}' has unsupported read source '{}'; expected input/output/group_input/group_output/cell_dep/header_dep/witness/lock_args variants",
+                            invariant.name, read
+                        ),
+                        invariant.span,
+                    ));
+                }
+            }
+        }
+
+        if invariant.asserts.is_empty() && invariant.aggregates.is_empty() {
+            return Err(CompileError::new(
+                format!(
+                    "invariant '{}' must contain at least one assert_invariant expression or aggregate invariant primitive",
+                    invariant.name
+                ),
+                invariant.span,
+            ));
+        }
+
+        for aggregate in &invariant.aggregates {
+            self.check_aggregate_invariant(invariant, aggregate)?;
+        }
+
+        let previous_callable = self.current_callable.replace(CallableKind::Function);
+        let mut assert_env = TypeEnv::default();
+        let assert_result = (|| -> Result<()> {
+            for expr in &invariant.asserts {
+                if !matches!(expr, Expr::Assert(_)) {
+                    return Err(CompileError::new(
+                        format!("invariant '{}' body only supports assert_invariant expressions", invariant.name),
+                        invariant.span,
+                    ));
+                }
+                self.infer_expr(&mut assert_env, expr)?;
+            }
+            Ok(())
+        })();
+        self.current_callable = previous_callable;
+        assert_result?;
+
+        Ok(())
+    }
+
+    fn check_aggregate_invariant(&self, invariant: &InvariantDef, aggregate: &AggregateInvariant) -> Result<()> {
+        match aggregate.scope.as_str() {
+            "selected_cells" | "group" | "transaction" => {}
+            _ => {
+                return Err(CompileError::new(
+                    format!(
+                        "aggregate invariant in '{}' has unsupported scope '{}'; expected selected_cells, group, or transaction",
+                        invariant.name, aggregate.scope
+                    ),
+                    aggregate.span,
+                ));
+            }
+        }
+
+        if invariant.scope.as_deref().is_some_and(|scope| scope != aggregate.scope) {
+            return Err(CompileError::new(
+                format!(
+                    "aggregate invariant scope '{}' must match enclosing invariant scope '{}'",
+                    aggregate.scope,
+                    invariant.scope.as_deref().unwrap_or("unspecified")
+                ),
+                aggregate.span,
+            ));
+        }
+
+        match aggregate.kind {
+            AggregateInvariantKind::Conserved | AggregateInvariantKind::Distinct => {
+                self.validate_aggregate_field_target(invariant, aggregate, &aggregate.target)?;
+            }
+            AggregateInvariantKind::Delta => {
+                if aggregate.argument.is_none() {
+                    return Err(CompileError::new(
+                        format!("assert_delta in invariant '{}' requires a delta argument", invariant.name),
+                        aggregate.span,
+                    ));
+                }
+                self.validate_aggregate_field_target(invariant, aggregate, &aggregate.target)?;
+            }
+            AggregateInvariantKind::Sum => {
+                if aggregate.relation.is_none() || aggregate.rhs.is_none() {
+                    return Err(CompileError::new(
+                        format!("assert_sum in invariant '{}' requires a comparison", invariant.name),
+                        aggregate.span,
+                    ));
+                }
+                self.validate_aggregate_field_target(invariant, aggregate, &aggregate.target)?;
+                if let Some(rhs) = &aggregate.rhs {
+                    self.validate_aggregate_field_target(invariant, aggregate, rhs)?;
+                }
+            }
+            AggregateInvariantKind::Singleton => {
+                if aggregate.target != "type_id" {
+                    self.validate_aggregate_field_target(invariant, aggregate, &aggregate.target)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_aggregate_field_target(&self, invariant: &InvariantDef, aggregate: &AggregateInvariant, target: &str) -> Result<()> {
+        let Some((type_name, field_name)) = aggregate_target_type_and_field(target) else {
+            return Err(CompileError::new(
+                format!(
+                    "aggregate invariant in '{}' must target a concrete field like Token.amount or group_inputs<Token>.amount",
+                    invariant.name
+                ),
+                aggregate.span,
+            ));
+        };
+        let Some(fields) = self.type_fields.get(type_name) else {
+            return Err(CompileError::new(
+                format!("aggregate invariant in '{}' references unknown type '{}'", invariant.name, type_name),
+                aggregate.span,
+            ));
+        };
+        let Some(field_ty) = fields.get(field_name) else {
+            return Err(CompileError::new(
+                format!("aggregate invariant in '{}' references unknown field '{}.{}'", invariant.name, type_name, field_name),
+                aggregate.span,
+            ));
+        };
+        if !aggregate_field_type_is_supported(field_ty) {
+            return Err(CompileError::new(
+                format!(
+                    "aggregate invariant in '{}' field '{}.{}' must be a fixed-width integer or fixed bytes, found {}",
+                    invariant.name,
+                    type_name,
+                    field_name,
+                    type_repr(field_ty)
+                ),
+                aggregate.span,
+            ));
+        }
+        Ok(())
     }
 
     fn validate_schema_fields(&self, fields: &[Field], item_kind: &str, item_name: &str) -> Result<()> {
@@ -3484,12 +3681,38 @@ fn item_symbol_name_and_span(item: &Item) -> Option<(&str, Span)> {
         Item::Shared(def) => Some((&def.name, def.span)),
         Item::Receipt(def) => Some((&def.name, def.span)),
         Item::Struct(def) => Some((&def.name, def.span)),
+        Item::Invariant(def) => Some((&def.name, def.span)),
         Item::Enum(def) => Some((&def.name, def.span)),
         Item::Const(def) => Some((&def.name, def.span)),
         Item::Action(def) => Some((&def.name, def.span)),
         Item::Function(def) => Some((&def.name, def.span)),
         Item::Lock(def) => Some((&def.name, def.span)),
         Item::Use(_) => None,
+    }
+}
+
+fn aggregate_target_type_and_field(target: &str) -> Option<(&str, &str)> {
+    if let Some((before_field, field)) = target.rsplit_once('.') {
+        if field.is_empty() {
+            return None;
+        }
+        if let Some(type_name) = before_field.split('<').nth(1).and_then(|rest| rest.split('>').next()) {
+            if !type_name.is_empty() {
+                return Some((type_name, field));
+            }
+        }
+        if !before_field.is_empty() {
+            return Some((before_field, field));
+        }
+    }
+    None
+}
+
+fn aggregate_field_type_is_supported(ty: &Type) -> bool {
+    match ty {
+        Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 | Type::Address | Type::Hash => true,
+        Type::Array(inner, _) => matches!(inner.as_ref(), Type::U8),
+        _ => false,
     }
 }
 

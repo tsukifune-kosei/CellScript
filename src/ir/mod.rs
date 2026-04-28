@@ -22,6 +22,7 @@ pub struct IrCallableAbi {
 #[derive(Debug, Clone)]
 pub enum IrItem {
     TypeDef(IrTypeDef),
+    Invariant(IrInvariant),
     Action(IrAction),
     PureFn(IrPureFn),
     Lock(IrLock),
@@ -39,6 +40,28 @@ pub struct IrTypeDef {
     pub claim_output: Option<IrType>,
     pub lifecycle_states: Option<Vec<String>>,
     pub lifecycle_rules: Vec<IrLifecycleRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IrInvariant {
+    pub name: String,
+    pub trigger: Option<String>,
+    pub scope: Option<String>,
+    pub reads: Vec<String>,
+    pub aggregates: Vec<IrAggregateInvariant>,
+    pub assert_count: usize,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct IrAggregateInvariant {
+    pub kind: AggregateInvariantKind,
+    pub target: String,
+    pub scope: String,
+    pub argument: Option<String>,
+    pub relation: Option<AggregateRelation>,
+    pub rhs: Option<String>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -469,6 +492,10 @@ impl IrGenerator {
                     let ir_item = IrItem::TypeDef(self.gen_struct(s));
                     self.module.items.push(ir_item);
                 }
+                Item::Invariant(invariant) => {
+                    let ir_item = IrItem::Invariant(self.gen_invariant(invariant));
+                    self.module.items.push(ir_item);
+                }
                 Item::Const(_) | Item::Enum(_) => {}
                 Item::Action(a) => {
                     let ir_item = IrItem::Action(self.gen_action(a));
@@ -557,6 +584,30 @@ impl IrGenerator {
             claim_output: None,
             lifecycle_states: None,
             lifecycle_rules: Vec::new(),
+        }
+    }
+
+    fn gen_invariant(&self, invariant: &InvariantDef) -> IrInvariant {
+        IrInvariant {
+            name: invariant.name.clone(),
+            trigger: invariant.trigger.clone(),
+            scope: invariant.scope.clone(),
+            reads: invariant.reads.clone(),
+            aggregates: invariant
+                .aggregates
+                .iter()
+                .map(|aggregate| IrAggregateInvariant {
+                    kind: aggregate.kind,
+                    target: aggregate.target.clone(),
+                    scope: aggregate.scope.clone(),
+                    argument: aggregate.argument.clone(),
+                    relation: aggregate.relation,
+                    rhs: aggregate.rhs.clone(),
+                    span: aggregate.span,
+                })
+                .collect(),
+            assert_count: invariant.asserts.len(),
+            span: invariant.span,
         }
     }
 
@@ -3948,7 +3999,7 @@ fn ir_item_callable_name(item: &IrItem) -> Option<&str> {
         IrItem::Action(action) => Some(&action.name),
         IrItem::PureFn(function) => Some(&function.name),
         IrItem::Lock(lock) => Some(&lock.name),
-        IrItem::TypeDef(_) => None,
+        IrItem::TypeDef(_) | IrItem::Invariant(_) => None,
     }
 }
 
@@ -3983,7 +4034,7 @@ fn collect_ir_item_call_names(item: &IrItem, pending: &mut Vec<String>) {
         IrItem::Action(action) => collect_ir_body_call_names(&action.body, pending),
         IrItem::PureFn(function) => collect_ir_body_call_names(&function.body, pending),
         IrItem::Lock(lock) => collect_ir_body_call_names(&lock.body, pending),
-        IrItem::TypeDef(_) => {}
+        IrItem::TypeDef(_) | IrItem::Invariant(_) => {}
     }
 }
 

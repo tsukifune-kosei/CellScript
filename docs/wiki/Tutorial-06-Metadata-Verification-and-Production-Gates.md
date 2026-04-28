@@ -163,12 +163,15 @@ python3 scripts/validate_ckb_cellscript_production_evidence.py \
   target/ckb-cellscript-acceptance/<run>/ckb-cellscript-acceptance-report.json
 ```
 
-The CKB validator requires strict bundled-example coverage, scoped action and
-lock compile coverage, builder-backed action runs, builder-backed lock
-valid-spend and invalid-spend matrices, valid transaction dry-runs, committed
-valid transactions, malformed rejection, measured cycles, consensus-serialized
-transaction size, occupied-capacity evidence, no under-capacity outputs, bundled
-example deployment, and a passed final production hardening gate.
+The CKB validator requires strict original bundled-example coverage, scoped
+action and lock compile coverage, builder-backed action runs, builder-backed
+lock valid-spend and invalid-spend matrices, valid transaction dry-runs,
+committed valid transactions, malformed rejection, measured cycles,
+consensus-serialized transaction size, occupied-capacity evidence, no
+under-capacity outputs, bundled example deployment, and a passed final
+production hardening gate.
+
+The report must explicitly record a passed final production hardening gate.
 
 The production gate compiles `examples/acceptance/*.cell` when present. Those
 files intentionally retain scheduler and effect-profile metadata while

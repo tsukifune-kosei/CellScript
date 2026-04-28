@@ -85,6 +85,7 @@ impl<'a> Parser<'a> {
             TokenKind::Struct => Some("struct".to_string()),
             TokenKind::Const => Some("const".to_string()),
             TokenKind::Enum => Some("enum".to_string()),
+            TokenKind::Invariant => Some("invariant".to_string()),
             TokenKind::Action => Some("action".to_string()),
             TokenKind::Lock => Some("lock".to_string()),
             TokenKind::Has => Some("has".to_string()),
@@ -373,6 +374,10 @@ impl<'a> Parser<'a> {
             TokenKind::Shared => Ok(Item::Shared(self.parse_shared(attrs.type_id, attrs.capabilities)?)),
             TokenKind::Receipt => Ok(Item::Receipt(self.parse_receipt(attrs.type_id, attrs.lifecycle, attrs.capabilities)?)),
             TokenKind::Struct => Ok(Item::Struct(self.parse_struct(attrs.type_id)?)),
+            TokenKind::Invariant => {
+                self.reject_all_attrs("invariant", &attrs)?;
+                Ok(Item::Invariant(self.parse_invariant()?))
+            }
             TokenKind::Const => {
                 self.reject_type_id_attr(&attrs)?;
                 Ok(Item::Const(self.parse_const()?))
@@ -400,6 +405,19 @@ impl<'a> Parser<'a> {
     fn reject_type_id_attr(&self, attrs: &PendingAttrs) -> Result<()> {
         if let Some(type_id) = &attrs.type_id {
             Err(CompileError::new("#[type_id] can only be applied to resource, shared, receipt, or struct definitions", type_id.span))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn reject_all_attrs(&self, item_kind: &str, attrs: &PendingAttrs) -> Result<()> {
+        if attrs.type_id.is_some()
+            || attrs.capabilities.is_some()
+            || attrs.lifecycle.is_some()
+            || attrs.effect.is_some()
+            || attrs.scheduler_hint.is_some()
+        {
+            Err(CompileError::new(format!("attributes cannot be applied to {} definitions", item_kind), self.current().span))
         } else {
             Ok(())
         }
@@ -811,6 +829,275 @@ impl<'a> Parser<'a> {
 
         let end_span = self.current().span;
         Ok(Field { name, ty, span: Span::new(start_span.start, end_span.end, start_span.line, start_span.column) })
+    }
+
+    fn parse_invariant(&mut self) -> Result<InvariantDef> {
+        let start_span = self.current().span;
+        self.expect(TokenKind::Invariant)?;
+        let name = self.parse_name()?;
+        self.expect(TokenKind::LBrace)?;
+        self.skip_newlines();
+
+        let mut trigger = None;
+        let mut scope = None;
+        let mut reads = Vec::new();
+        let mut aggregates = Vec::new();
+        let mut asserts = Vec::new();
+
+        while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {
+            self.skip_newlines();
+            if self.check(&TokenKind::RBrace) {
+                break;
+            }
+
+            if self.check(&TokenKind::Assert) {
+                if self.check(&TokenKind::Assert) && !self.check_invariant_call_assert() {
+                    asserts.push(self.parse_invariant_assert()?);
+                } else {
+                    asserts.push(self.parse_expr()?);
+                }
+                self.consume_optional_semi();
+                self.skip_newlines();
+                continue;
+            }
+
+            if let Some(name) = self.ident_like_name() {
+                if Self::is_invariant_aggregate_start(&name) {
+                    aggregates.push(self.parse_aggregate_invariant()?);
+                    self.consume_optional_semi();
+                    self.skip_newlines();
+                    continue;
+                }
+            }
+
+            let key_span = self.current().span;
+            let key = self.ident_like_name().ok_or_else(|| {
+                CompileError::new("expected invariant field, aggregate assertion, or assert_invariant", self.current().span)
+            })?;
+            self.advance();
+            self.expect(TokenKind::Colon)?;
+
+            match key.as_str() {
+                "trigger" => {
+                    if trigger.is_some() {
+                        return Err(CompileError::new("duplicate invariant trigger declaration", key_span));
+                    }
+                    trigger = Some(self.parse_name_path()?);
+                }
+                "scope" => {
+                    if scope.is_some() {
+                        return Err(CompileError::new("duplicate invariant scope declaration", key_span));
+                    }
+                    scope = Some(self.parse_name_path()?);
+                }
+                "reads" => {
+                    reads.extend(self.parse_invariant_reads()?);
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        format!("unknown invariant field '{}'; expected trigger, scope, reads, or assert_invariant", key),
+                        key_span,
+                    ));
+                }
+            }
+
+            self.consume_optional_semi();
+            self.skip_newlines();
+        }
+
+        let end_span = self.current().span;
+        self.expect(TokenKind::RBrace)?;
+        Ok(InvariantDef {
+            name,
+            trigger,
+            scope,
+            reads,
+            aggregates,
+            asserts,
+            span: Span::new(start_span.start, end_span.end, start_span.line, start_span.column),
+        })
+    }
+
+    fn is_invariant_aggregate_start(name: &str) -> bool {
+        matches!(name, "assert_sum" | "assert_conserved" | "assert_delta" | "assert_distinct" | "assert_singleton")
+    }
+
+    fn parse_aggregate_invariant(&mut self) -> Result<AggregateInvariant> {
+        let start_span = self.current().span;
+        let name = self.parse_name()?;
+        if name == "assert_sum" {
+            return self.parse_aggregate_sum_comparison(start_span);
+        }
+
+        self.expect(TokenKind::LParen)?;
+        self.skip_newlines();
+        let target = self.parse_invariant_read()?;
+        self.skip_newlines();
+        self.expect(TokenKind::Comma)?;
+        self.skip_newlines();
+
+        let (kind, argument, scope) = match name.as_str() {
+            "assert_conserved" => (AggregateInvariantKind::Conserved, None, self.parse_aggregate_scope_arg()?),
+            "assert_distinct" => (AggregateInvariantKind::Distinct, None, self.parse_aggregate_scope_arg()?),
+            "assert_singleton" => (AggregateInvariantKind::Singleton, None, self.parse_aggregate_scope_arg()?),
+            "assert_delta" => {
+                let delta = self.parse_aggregate_argument()?;
+                self.skip_newlines();
+                self.expect(TokenKind::Comma)?;
+                self.skip_newlines();
+                (AggregateInvariantKind::Delta, Some(delta), self.parse_aggregate_scope_arg()?)
+            }
+            _ => {
+                return Err(CompileError::new(format!("unknown aggregate invariant primitive '{}'", name), start_span));
+            }
+        };
+
+        self.skip_newlines();
+        let end_span = self.current().span;
+        self.expect(TokenKind::RParen)?;
+        Ok(AggregateInvariant {
+            kind,
+            target,
+            scope,
+            argument,
+            relation: None,
+            rhs: None,
+            span: Span::new(start_span.start, end_span.end, start_span.line, start_span.column),
+        })
+    }
+
+    fn parse_aggregate_sum_comparison(&mut self, start_span: Span) -> Result<AggregateInvariant> {
+        let left = self.parse_aggregate_sum_operand()?;
+        self.skip_newlines();
+        let relation = match self.current().kind {
+            TokenKind::Lt => AggregateRelation::Lt,
+            TokenKind::Le => AggregateRelation::Le,
+            TokenKind::EqEq => AggregateRelation::Eq,
+            TokenKind::Ge => AggregateRelation::Ge,
+            TokenKind::Gt => AggregateRelation::Gt,
+            _ => {
+                return Err(CompileError::new("assert_sum aggregate assertion requires a comparison operator", self.current().span));
+            }
+        };
+        self.advance();
+        self.skip_newlines();
+
+        let rhs_start = self.current().span;
+        let rhs_name = self.parse_name()?;
+        if rhs_name != "assert_sum" {
+            return Err(CompileError::new("assert_sum comparison right-hand side must be assert_sum(...)", rhs_start));
+        }
+        let right = self.parse_aggregate_sum_operand()?;
+        let scope = aggregate_scope_from_targets(&left, Some(&right)).ok_or_else(|| {
+            CompileError::new("assert_sum aggregate assertion requires explicit input/output source views", start_span)
+        })?;
+        let end_span = self.current().span;
+
+        Ok(AggregateInvariant {
+            kind: AggregateInvariantKind::Sum,
+            target: left,
+            scope,
+            argument: None,
+            relation: Some(relation),
+            rhs: Some(right),
+            span: Span::new(start_span.start, end_span.end, start_span.line, start_span.column),
+        })
+    }
+
+    fn parse_aggregate_sum_operand(&mut self) -> Result<String> {
+        self.expect(TokenKind::LParen)?;
+        self.skip_newlines();
+        let target = self.parse_invariant_read()?;
+        self.skip_newlines();
+        self.expect(TokenKind::RParen)?;
+        Ok(target)
+    }
+
+    fn parse_aggregate_scope_arg(&mut self) -> Result<String> {
+        let key_span = self.current().span;
+        let key = self.parse_name()?;
+        if key != "scope" {
+            return Err(CompileError::new("aggregate invariant primitive requires `scope = ...`", key_span));
+        }
+        self.skip_newlines();
+        self.expect(TokenKind::Eq)?;
+        self.skip_newlines();
+        self.parse_name_path()
+    }
+
+    fn parse_aggregate_argument(&mut self) -> Result<String> {
+        match &self.current().kind {
+            TokenKind::Integer(value) => {
+                let rendered = value.to_string();
+                self.advance();
+                Ok(rendered)
+            }
+            TokenKind::String(value) => {
+                let rendered = format!("{:?}", value);
+                self.advance();
+                Ok(rendered)
+            }
+            _ => self.parse_invariant_read(),
+        }
+    }
+
+    fn check_invariant_call_assert(&self) -> bool {
+        self.peek(1).kind == TokenKind::LParen || self.peek(1).kind == TokenKind::Not
+    }
+
+    fn parse_invariant_assert(&mut self) -> Result<Expr> {
+        let start_span = self.current().span;
+        self.expect(TokenKind::Assert)?;
+        let condition = self.parse_expr()?;
+        let end_span = self.current().span;
+        Ok(Expr::Assert(AssertExpr {
+            condition: Box::new(condition),
+            message: Box::new(Expr::String("invariant assertion failed".to_string())),
+            span: Span::new(start_span.start, end_span.end, start_span.line, start_span.column),
+        }))
+    }
+
+    fn parse_invariant_reads(&mut self) -> Result<Vec<String>> {
+        let mut reads = Vec::new();
+        self.skip_newlines();
+        if self.check(&TokenKind::RBrace) || self.check(&TokenKind::Semi) {
+            return Ok(reads);
+        }
+
+        loop {
+            reads.push(self.parse_invariant_read()?);
+            if self.check(&TokenKind::Comma) {
+                self.advance();
+                self.skip_newlines();
+                if self.check(&TokenKind::RBrace) || self.check(&TokenKind::Semi) {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(reads)
+    }
+
+    fn parse_invariant_read(&mut self) -> Result<String> {
+        let mut read = self.parse_name_path()?;
+        if self.check(&TokenKind::Lt) {
+            self.advance();
+            let ty = self.parse_type()?;
+            self.expect(TokenKind::Gt)?;
+            read.push('<');
+            read.push_str(&Self::render_type(&ty));
+            read.push('>');
+        }
+
+        while self.check(&TokenKind::Dot) {
+            self.advance();
+            read.push('.');
+            read.push_str(&self.parse_name()?);
+        }
+
+        Ok(read)
     }
 
     fn parse_type(&mut self) -> Result<Type> {
@@ -1937,6 +2224,26 @@ fn normalize_hash_type_decl(value: &str) -> Option<String> {
     }
 }
 
+fn aggregate_scope_from_targets(left: &str, right: Option<&str>) -> Option<String> {
+    let left_scope = aggregate_scope_from_target(left)?;
+    if let Some(right) = right {
+        let right_scope = aggregate_scope_from_target(right)?;
+        if left_scope != right_scope {
+            return None;
+        }
+    }
+    Some(left_scope.to_string())
+}
+
+fn aggregate_scope_from_target(target: &str) -> Option<&'static str> {
+    let base = target.split(['<', '.']).next().unwrap_or(target);
+    match base {
+        "group_input" | "group_inputs" | "group_output" | "group_outputs" => Some("group"),
+        "input" | "inputs" | "output" | "outputs" => Some("transaction"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1978,6 +2285,85 @@ resource Token has transfer, destroy {
         assert!(resource.capabilities.contains(&Capability::Store));
         assert!(resource.capabilities.contains(&Capability::Transfer));
         assert!(resource.capabilities.contains(&Capability::Destroy));
+    }
+
+    #[test]
+    fn test_parse_invariant() {
+        let input = r#"
+module test
+
+invariant token_conservation {
+    trigger: type_group
+    scope: group
+    reads: group_inputs<Token>.amount, group_outputs<Token>.amount
+    assert_invariant(true, "token amount is conserved")
+}
+"#;
+        let tokens = lex(input).unwrap();
+        let module = parse(&tokens).unwrap();
+        let invariant = match &module.items[0] {
+            Item::Invariant(invariant) => invariant,
+            other => panic!("expected invariant item, found {:?}", other),
+        };
+
+        assert_eq!(invariant.name, "token_conservation");
+        assert_eq!(invariant.trigger.as_deref(), Some("type_group"));
+        assert_eq!(invariant.scope.as_deref(), Some("group"));
+        assert_eq!(invariant.reads, vec!["group_inputs<Token>.amount", "group_outputs<Token>.amount"]);
+        assert_eq!(invariant.asserts.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_aggregate_invariant_primitives() {
+        let input = r#"
+module test
+
+invariant token_conservation {
+    trigger: type_group
+    scope: group
+    reads: group_inputs<Token>.amount, group_outputs<Token>.amount
+    assert_conserved(Token.amount, scope = group)
+    assert_sum(group_outputs<Token>.amount) <= assert_sum(group_inputs<Token>.amount)
+}
+"#;
+        let tokens = lex(input).unwrap();
+        let module = parse(&tokens).unwrap();
+        let invariant = match &module.items[0] {
+            Item::Invariant(invariant) => invariant,
+            other => panic!("expected invariant item, found {:?}", other),
+        };
+
+        assert_eq!(invariant.aggregates.len(), 2);
+        assert_eq!(invariant.aggregates[0].kind, AggregateInvariantKind::Conserved);
+        assert_eq!(invariant.aggregates[0].target, "Token.amount");
+        assert_eq!(invariant.aggregates[0].scope, "group");
+        assert_eq!(invariant.aggregates[1].kind, AggregateInvariantKind::Sum);
+        assert_eq!(invariant.aggregates[1].relation, Some(AggregateRelation::Le));
+        assert_eq!(invariant.aggregates[1].target, "group_outputs<Token>.amount");
+        assert_eq!(invariant.aggregates[1].rhs.as_deref(), Some("group_inputs<Token>.amount"));
+    }
+
+    #[test]
+    fn test_parse_invariant_assert_statement() {
+        let input = r#"
+module test
+
+invariant token_conservation {
+    trigger: type_group
+    scope: group
+    reads: group_inputs<Token>.amount, group_outputs<Token>.amount
+    assert true
+}
+"#;
+        let tokens = lex(input).unwrap();
+        let module = parse(&tokens).unwrap();
+        let invariant = match &module.items[0] {
+            Item::Invariant(invariant) => invariant,
+            other => panic!("expected invariant item, found {:?}", other),
+        };
+
+        assert_eq!(invariant.asserts.len(), 1);
+        assert!(matches!(invariant.asserts[0], Expr::Assert(_)));
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub enum Item {
     Shared(SharedDef),
     Receipt(ReceiptDef),
     Struct(StructDef),
+    Invariant(InvariantDef),
     Const(ConstDef),
     Enum(EnumDef),
     Action(ActionDef),
@@ -123,6 +124,46 @@ pub enum Capability {
 pub struct Field {
     pub name: String,
     pub ty: Type,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct InvariantDef {
+    pub name: String,
+    pub trigger: Option<String>,
+    pub scope: Option<String>,
+    pub reads: Vec<String>,
+    pub aggregates: Vec<AggregateInvariant>,
+    pub asserts: Vec<Expr>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AggregateInvariantKind {
+    Sum,
+    Conserved,
+    Delta,
+    Distinct,
+    Singleton,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AggregateRelation {
+    Lt,
+    Le,
+    Eq,
+    Ge,
+    Gt,
+}
+
+#[derive(Debug, Clone)]
+pub struct AggregateInvariant {
+    pub kind: AggregateInvariantKind,
+    pub target: String,
+    pub scope: String,
+    pub argument: Option<String>,
+    pub relation: Option<AggregateRelation>,
+    pub rhs: Option<String>,
     pub span: Span,
 }
 

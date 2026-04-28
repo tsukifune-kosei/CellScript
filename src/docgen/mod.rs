@@ -3,7 +3,7 @@
 use crate::ast::*;
 use crate::error::Result;
 use crate::{
-    CompileMetadata, PoolInvariantMetadata, PoolPrimitiveMetadata, PoolRuntimeInputRequirementMetadata,
+    CompileMetadata, PoolInvariantMetadata, PoolPrimitiveMetadata, PoolRuntimeInputRequirementMetadata, ProofPlanMetadata,
     TransactionRuntimeInputRequirementMetadata, VerifierObligationMetadata,
 };
 use serde::Serialize;
@@ -58,6 +58,7 @@ pub struct AuditDoc {
     pub ckb_runtime_features: Vec<String>,
     pub fail_closed_runtime_features: Vec<String>,
     pub verifier_obligations: Vec<AuditObligationDoc>,
+    pub proof_plan: Vec<ProofPlanMetadata>,
     pub transaction_invariant_checked_subconditions: Vec<AuditTransactionInvariantSubconditionDoc>,
     pub transaction_runtime_input_requirements: Vec<TransactionRuntimeInputRequirementMetadata>,
     pub pool_primitives: Vec<PoolPrimitiveMetadata>,
@@ -182,6 +183,7 @@ impl DocGenerator {
                     detail: obligation.detail.clone(),
                 })
                 .collect(),
+            proof_plan: metadata.runtime.proof_plan.clone(),
             transaction_invariant_checked_subconditions: transaction_invariant_checked_subcondition_docs(
                 &metadata.runtime.verifier_obligations,
             ),
@@ -435,6 +437,29 @@ impl AuditDoc {
             out.push('\n');
         }
 
+        out.push_str("### Covenant ProofPlan\n\n");
+        if self.proof_plan.is_empty() {
+            out.push_str("_No Covenant ProofPlan records emitted._\n\n");
+        } else {
+            out.push_str("| Constraint | Origin | Trigger | Scope | Reads | Coverage | On Chain Checked | Codegen Coverage | Builder Assumptions |\n");
+            out.push_str("|---|---|---|---|---|---|---|---|---|\n");
+            for plan in &self.proof_plan {
+                out.push_str(&format!(
+                    "| `{}` | `{}` | `{}` | `{}` | {} | {} | `{}` | `{}` | {} |\n",
+                    escape_markdown_table_cell(&plan.name),
+                    escape_markdown_table_cell(&plan.origin),
+                    escape_markdown_table_cell(&plan.trigger),
+                    escape_markdown_table_cell(&plan.scope),
+                    escape_markdown_table_cell(&comma_or_none(&plan.reads)),
+                    escape_markdown_table_cell(&comma_or_none(&plan.coverage)),
+                    plan.on_chain_checked,
+                    escape_markdown_table_cell(&plan.codegen_coverage_status),
+                    escape_markdown_table_cell(&comma_or_none(&plan.builder_assumptions))
+                ));
+            }
+            out.push('\n');
+        }
+
         out.push_str("### Verifier Obligations\n\n");
         if self.verifier_obligations.is_empty() {
             out.push_str("_No verifier obligations emitted._\n\n");
@@ -603,6 +628,29 @@ impl AuditDoc {
                     requirement.byte_len.map(|byte_len| byte_len.to_string()).unwrap_or_default(),
                     escape_html(requirement.blocker.as_deref().unwrap_or("")),
                     escape_html(requirement.blocker_class.as_deref().unwrap_or(""))
+                ));
+            }
+            out.push_str("</tbody></table>");
+        }
+        out.push_str("<h3>Covenant ProofPlan</h3>");
+        if self.proof_plan.is_empty() {
+            out.push_str("<p><em>No Covenant ProofPlan records emitted.</em></p>");
+        } else {
+            out.push_str(
+                "<table><thead><tr><th>Constraint</th><th>Origin</th><th>Trigger</th><th>Scope</th><th>Reads</th><th>Coverage</th><th>On Chain Checked</th><th>Codegen Coverage</th><th>Builder Assumptions</th></tr></thead><tbody>",
+            );
+            for plan in &self.proof_plan {
+                out.push_str(&format!(
+                    "<tr><td><code>{}</code></td><td><code>{}</code></td><td><code>{}</code></td><td><code>{}</code></td><td>{}</td><td>{}</td><td><code>{}</code></td><td><code>{}</code></td><td>{}</td></tr>",
+                    escape_html(&plan.name),
+                    escape_html(&plan.origin),
+                    escape_html(&plan.trigger),
+                    escape_html(&plan.scope),
+                    escape_html(&comma_or_none(&plan.reads)),
+                    escape_html(&comma_or_none(&plan.coverage)),
+                    plan.on_chain_checked,
+                    escape_html(&plan.codegen_coverage_status),
+                    escape_html(&comma_or_none(&plan.builder_assumptions))
                 ));
             }
             out.push_str("</tbody></table>");
@@ -788,6 +836,18 @@ fn item_doc(item: &Item) -> Option<ItemDoc> {
             signature: format!("struct {}", struct_def.name),
             summary: format!("Fields: {}", format_fields(&struct_def.fields)),
         }),
+        Item::Invariant(invariant) => Some(ItemDoc {
+            kind: "invariant".to_string(),
+            name: invariant.name.clone(),
+            signature: format!("invariant {}", invariant.name),
+            summary: format!(
+                "Trigger: {}. Scope: {}. Reads: {}. Aggregate primitives: {}.",
+                invariant.trigger.as_deref().unwrap_or("unspecified"),
+                invariant.scope.as_deref().unwrap_or("unspecified"),
+                comma_or_none(&invariant.reads),
+                invariant.aggregates.len()
+            ),
+        }),
         Item::Const(constant) => Some(ItemDoc {
             kind: "const".to_string(),
             name: constant.name.clone(),
@@ -964,6 +1024,7 @@ fn item_name_for_xref(item: &Item) -> Option<String> {
         Item::Shared(s) => Some(s.name.clone()),
         Item::Receipt(r) => Some(r.name.clone()),
         Item::Struct(s) => Some(s.name.clone()),
+        Item::Invariant(i) => Some(i.name.clone()),
         Item::Enum(e) => Some(e.name.clone()),
         Item::Action(a) => Some(a.name.clone()),
         Item::Function(f) => Some(f.name.clone()),
@@ -1088,6 +1149,7 @@ action add(x: u64, y: u64) -> u64 {
             ckb_runtime_features: Vec::new(),
             fail_closed_runtime_features: Vec::new(),
             verifier_obligations: Vec::new(),
+            proof_plan: Vec::new(),
             transaction_invariant_checked_subconditions: Vec::new(),
             transaction_runtime_input_requirements: Vec::new(),
             pool_primitives: vec![primitive.clone()],
@@ -1146,6 +1208,7 @@ action add(x: u64, y: u64) -> u64 {
                 status: obligation.status.clone(),
                 detail: obligation.detail.clone(),
             }],
+            proof_plan: Vec::new(),
             transaction_invariant_checked_subconditions: transaction_invariant_checked_subcondition_docs(&[obligation]),
             transaction_runtime_input_requirements: vec![TransactionRuntimeInputRequirementMetadata {
                 scope: "action:claim_vested".to_string(),

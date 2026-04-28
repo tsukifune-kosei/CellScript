@@ -100,6 +100,7 @@ impl ModuleResolver {
                 Item::Lock(l) => {
                     Self::insert_function_symbol(&mut symbol_table, &l.name, FunctionDef::Lock(l.clone()), l.span)?;
                 }
+                Item::Invariant(_) => {}
                 Item::Use(u) => {
                     for import in &u.imports {
                         let import_item = ImportItem {

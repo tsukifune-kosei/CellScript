@@ -2868,6 +2868,242 @@ fn cellc_explain_profile_reports_ckb_v0_14_contract() {
 }
 
 #[test]
+fn cellc_explain_proof_reports_covenant_proof_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("token.cell");
+    std::fs::write(
+        &input,
+        r#"
+module test
+
+resource Token has store, transfer {
+    amount: u64,
+}
+
+action transfer_token(token: Token, to: Address) -> Token {
+    return transfer token to to
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc")).arg("explain-proof").arg(&input).arg("--json").output().unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let proof_plan = summary["proof_plan"].as_array().expect("proof_plan array");
+    let transfer = proof_plan.iter().find(|plan| plan["feature"] == "transfer-output:Token").expect("transfer ProofPlan record");
+
+    assert_eq!(summary["status"], "ok");
+    assert_eq!(summary["proof_plan_summary"]["record_count"].as_u64().unwrap(), proof_plan.len() as u64);
+    assert!(summary["proof_plan_summary"]["macro_provenance_count"].as_u64().unwrap() > 0);
+    assert_eq!(transfer["trigger"], "explicit_entry");
+    assert_eq!(transfer["scope"], "transaction");
+    assert!(transfer["reads"].as_array().unwrap().iter().any(|read| read == "input"));
+    assert!(transfer["reads"].as_array().unwrap().iter().any(|read| read == "output"));
+    assert!(transfer["coverage"].as_array().unwrap().iter().any(|coverage| {
+        coverage.as_str().is_some_and(|coverage| coverage.contains("transaction-scoped relation over explicit input/output views"))
+    }));
+    assert!(transfer["coverage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|coverage| coverage == "macro_expansion:transfer=consume-input+create-output"));
+}
+
+#[test]
+fn cellc_explain_proof_human_reports_macro_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("token.cell");
+    std::fs::write(
+        &input,
+        r#"
+module test
+
+resource Token has store, transfer {
+    amount: u64,
+}
+
+action transfer_token(token: Token, to: Address) -> Token {
+    return transfer token to to
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc")).arg("explain-proof").arg(&input).output().unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Summary:"), "unexpected stdout: {}", stdout);
+    assert!(stdout.contains("macro_provenance_records:"), "unexpected stdout: {}", stdout);
+    assert!(stdout.contains("macro_provenance:"), "unexpected stdout: {}", stdout);
+    assert!(stdout.contains("macro_expansion:transfer=consume-input+create-output"), "unexpected stdout: {}", stdout);
+}
+
+#[test]
+fn cellc_explain_proof_reports_declared_invariant() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("token.cell");
+    std::fs::write(
+        &input,
+        r#"
+module test
+
+invariant token_conservation {
+    trigger: type_group
+    scope: group
+    reads: group_inputs<Token>.amount, group_outputs<Token>.amount
+    assert_conserved(Token.amount, scope = group)
+    assert_invariant(true, "token amount is conserved")
+}
+
+resource Token {
+    amount: u64,
+}
+
+action run() -> u64 {
+    return 0
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc")).arg("explain-proof").arg(&input).arg("--json").output().unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let proof_plan = summary["proof_plan"].as_array().expect("proof_plan array");
+    let declared =
+        proof_plan.iter().find(|plan| plan["origin"] == "invariant:token_conservation").expect("declared invariant ProofPlan record");
+
+    assert_eq!(summary["status"], "ok");
+    assert!(summary["proof_plan_summary"]["runtime_required_count"].as_u64().unwrap() > 0);
+    assert!(summary["proof_plan_summary"]["metadata_only_gap_count"].as_u64().unwrap() > 0);
+    assert_eq!(summary["proof_plan_summary"]["has_runtime_required_gaps"], true);
+    assert_eq!(declared["category"], "declared-invariant");
+    assert_eq!(declared["trigger"], "type_group");
+    assert_eq!(declared["scope"], "group");
+    assert_eq!(declared["codegen_coverage_status"], "gap:metadata-only");
+    assert_eq!(declared["on_chain_checked"], false);
+    assert!(declared["input_output_relation_checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|check| check == "assert_conserved:Token.amount=metadata-only"));
+}
+
+#[test]
+fn cellc_explain_proof_warns_for_lock_group_transaction_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("token.cell");
+    std::fs::write(
+        &input,
+        r#"
+module test
+
+invariant lock_scans_transaction {
+    trigger: lock_group
+    scope: transaction
+    reads: inputs<Token>.amount, outputs<Token>.amount
+    assert_sum(outputs<Token>.amount) <= assert_sum(inputs<Token>.amount)
+}
+
+resource Token {
+    amount: u64,
+}
+
+action run() -> u64 {
+    return 0
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc")).arg("explain-proof").arg(&input).arg("--json").output().unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let proof_plan = summary["proof_plan"].as_array().expect("proof_plan array");
+    let declared = proof_plan
+        .iter()
+        .find(|plan| plan["origin"] == "invariant:lock_scans_transaction")
+        .expect("lock-group transaction invariant ProofPlan record");
+
+    assert_eq!(declared["trigger"], "lock_group");
+    assert_eq!(declared["scope"], "transaction");
+    assert!(declared["coverage"].as_array().unwrap().iter().any(|coverage| {
+        coverage.as_str().is_some_and(|coverage| coverage.contains("only inputs sharing this lock script trigger the verifier"))
+    }));
+    assert!(declared["diagnostics"].as_array().unwrap().iter().any(|diagnostic| {
+        diagnostic["severity"] == "warning"
+            && diagnostic["message"].as_str().is_some_and(|message| message.contains("do not imply type-group conservation"))
+    }));
+}
+
+#[test]
+fn cellc_explain_proof_summary_reports_fail_closed_diagnostics() {
+    let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/language/v0_14_witness_source.cell");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc")).arg("explain-proof").arg(&input).arg("--json").output().unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let proof_summary = &summary["proof_plan_summary"];
+    assert!(proof_summary["fail_closed_count"].as_u64().unwrap() > 0, "unexpected summary: {}", summary);
+    assert!(proof_summary["diagnostic_error_count"].as_u64().unwrap() > 0, "unexpected summary: {}", summary);
+    assert_eq!(proof_summary["has_fail_closed_gaps"], true);
+    assert_eq!(proof_summary["has_blocking_diagnostics"], true);
+}
+
+#[test]
+fn cellc_check_denies_metadata_only_declared_invariant() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+name = "demo"
+version = "0.1.0"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src").join("main.cell"),
+        r#"
+module demo::main
+
+invariant token_conservation {
+    trigger: type_group
+    scope: group
+    reads: group_inputs<Token>.amount, group_outputs<Token>.amount
+    assert_invariant(true, "token amount is conserved")
+}
+
+resource Token {
+    amount: u64,
+}
+
+action run() -> u64 {
+    return 0
+}
+"#,
+    )
+    .unwrap();
+
+    let output =
+        Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("check").arg("--deny-runtime-obligations").output().unwrap();
+    assert!(!output.status.success(), "unexpected success: {}", String::from_utf8_lossy(&output.stdout));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("runtime-required ProofPlan gaps"), "unexpected stderr: {}", stderr);
+    assert!(stderr.contains("invariant:token_conservation"), "unexpected stderr: {}", stderr);
+    assert!(stderr.contains("gap:metadata-only"), "unexpected stderr: {}", stderr);
+}
+
+#[test]
 fn cellc_clean_subcommand_supports_json_summary() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

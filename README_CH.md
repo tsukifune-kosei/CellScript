@@ -511,7 +511,7 @@ IR 模块输出审计报告；其他入口返回
 ```toml
 [package]
 name = "token"
-version = "0.12.0"
+version = "0.15.0"
 entry = "src/main.cell"
 source_roots = ["src"]
 

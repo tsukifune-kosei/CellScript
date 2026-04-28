@@ -6,8 +6,8 @@ use crate::runtime_errors::{runtime_error_info, runtime_error_info_by_code, Cell
 use crate::{
     compile_path, compile_path_with_entry_action, compile_path_with_entry_lock, default_metadata_path_for_artifact,
     default_output_path_for_input, load_modules_for_input, resolve_input_path, validate_artifact_metadata,
-    validate_source_units_on_disk, ArtifactFormat, CompileMetadata, CompileOptions, EntryWitnessArg, ParamMetadata, TargetProfile,
-    ENTRY_WITNESS_ABI,
+    validate_source_units_on_disk, ArtifactFormat, CompileMetadata, CompileOptions, EntryWitnessArg, ParamMetadata, ProofPlanMetadata,
+    TargetProfile, ENTRY_WITNESS_ABI,
 };
 use camino::Utf8Path;
 #[cfg(feature = "vm-runner")]
@@ -39,6 +39,7 @@ pub enum Command {
     CkbHash(CkbHashArgs),
     Explain(ExplainArgs),
     ExplainProfile(ExplainProfileArgs),
+    ExplainProof(ExplainProofArgs),
     ExplainGenerics(ExplainGenericsArgs),
     OptReport(OptReportArgs),
     ActionBuild(ActionBuildArgs),
@@ -214,6 +215,14 @@ pub struct ExplainProfileArgs {
 }
 
 #[derive(Debug, Default)]
+pub struct ExplainProofArgs {
+    pub input: Option<PathBuf>,
+    pub target: Option<String>,
+    pub target_profile: Option<String>,
+    pub json: bool,
+}
+
+#[derive(Debug, Default)]
 pub struct ExplainGenericsArgs {
     pub input: Option<PathBuf>,
     pub target: Option<String>,
@@ -321,6 +330,7 @@ impl CommandExecutor {
             Command::CkbHash(args) => Self::ckb_hash(args),
             Command::Explain(args) => Self::explain(args),
             Command::ExplainProfile(args) => Self::explain_profile(args),
+            Command::ExplainProof(args) => Self::explain_proof(args),
             Command::ExplainGenerics(args) => Self::explain_generics(args),
             Command::OptReport(args) => Self::opt_report(args),
             Command::ActionBuild(args) => Self::action_build(args),
@@ -1316,6 +1326,43 @@ impl CommandExecutor {
         Ok(())
     }
 
+    fn explain_proof(args: ExplainProofArgs) -> Result<()> {
+        let input_path = args.input.unwrap_or_else(|| PathBuf::from("."));
+        let input = Utf8Path::from_path(&input_path)
+            .ok_or_else(|| crate::error::CompileError::without_span(format!("path '{}' is not valid UTF-8", input_path.display())))?;
+        let result = compile_path(
+            input,
+            CompileOptions { opt_level: 0, output: None, debug: false, target: args.target, target_profile: args.target_profile },
+        )?;
+        let proof_plan = result.metadata.runtime.proof_plan;
+
+        if args.json {
+            let proof_plan_summary = proof_plan_summary_json(&proof_plan);
+            let summary = serde_json::json!({
+                "status": "ok",
+                "module": result.metadata.module,
+                "target_profile": result.metadata.target_profile.name,
+                "proof_plan_summary": proof_plan_summary,
+                "proof_plan": proof_plan,
+            });
+            let json = serde_json::to_string_pretty(&summary)
+                .map_err(|error| crate::error::CompileError::without_span(format!("failed to serialize ProofPlan: {}", error)))?;
+            println!("{}", json);
+            return Ok(());
+        }
+
+        println!("Covenant ProofPlan for module `{}`", result.metadata.module);
+        print_proof_plan_summary(&proof_plan);
+        if proof_plan.is_empty() {
+            println!("  No ProofPlan records emitted.");
+            return Ok(());
+        }
+        for plan in &proof_plan {
+            print_proof_plan_record(plan);
+        }
+        Ok(())
+    }
+
     fn explain_generics(args: ExplainGenericsArgs) -> Result<()> {
         let input_path = args.input.unwrap_or_else(|| PathBuf::from("."));
         let input = Utf8Path::from_path(&input_path)
@@ -2182,6 +2229,130 @@ struct RegistryCredential {
     token: String,
 }
 
+fn proof_plan_summary_json(proof_plan: &[ProofPlanMetadata]) -> serde_json::Value {
+    let record_count = proof_plan.len();
+    let on_chain_checked_count = proof_plan.iter().filter(|plan| plan.on_chain_checked).count();
+    let runtime_required_count = proof_plan.iter().filter(|plan| plan.status == "runtime-required").count();
+    let metadata_only_gap_count = proof_plan.iter().filter(|plan| plan.codegen_coverage_status == "gap:metadata-only").count();
+    let fail_closed_count =
+        proof_plan.iter().filter(|plan| plan.status == "fail-closed" || plan.codegen_coverage_status == "fail-closed").count();
+    let diagnostic_error_count =
+        proof_plan.iter().flat_map(|plan| &plan.diagnostics).filter(|diagnostic| diagnostic.severity == "error").count();
+    let diagnostic_warning_count =
+        proof_plan.iter().flat_map(|plan| &plan.diagnostics).filter(|diagnostic| diagnostic.severity == "warning").count();
+    let macro_provenance_count =
+        proof_plan.iter().flat_map(|plan| &plan.coverage).filter(|coverage| coverage.starts_with("macro_expansion:")).count();
+    let has_runtime_required_gaps = proof_plan.iter().any(|plan| plan.status == "runtime-required" && !plan.on_chain_checked);
+    let has_fail_closed_gaps = fail_closed_count > 0;
+
+    serde_json::json!({
+        "record_count": record_count,
+        "on_chain_checked_count": on_chain_checked_count,
+        "runtime_required_count": runtime_required_count,
+        "metadata_only_gap_count": metadata_only_gap_count,
+        "fail_closed_count": fail_closed_count,
+        "diagnostic_error_count": diagnostic_error_count,
+        "diagnostic_warning_count": diagnostic_warning_count,
+        "macro_provenance_count": macro_provenance_count,
+        "has_runtime_required_gaps": has_runtime_required_gaps,
+        "has_fail_closed_gaps": has_fail_closed_gaps,
+        "has_blocking_diagnostics": has_runtime_required_gaps || has_fail_closed_gaps || diagnostic_error_count > 0,
+    })
+}
+
+fn print_proof_plan_summary(proof_plan: &[ProofPlanMetadata]) {
+    let summary = proof_plan_summary_json(proof_plan);
+    println!("  Summary:");
+    println!("    records: {}", summary["record_count"]);
+    println!("    on_chain_checked: {}", summary["on_chain_checked_count"]);
+    println!("    runtime_required: {}", summary["runtime_required_count"]);
+    println!("    metadata_only_gaps: {}", summary["metadata_only_gap_count"]);
+    println!("    fail_closed: {}", summary["fail_closed_count"]);
+    println!("    diagnostic_errors: {}", summary["diagnostic_error_count"]);
+    println!("    diagnostic_warnings: {}", summary["diagnostic_warning_count"]);
+    println!("    macro_provenance_records: {}", summary["macro_provenance_count"]);
+}
+
+fn print_proof_plan_record(plan: &ProofPlanMetadata) {
+    let coverage_notes = plan.coverage.iter().filter(|coverage| !coverage.starts_with("macro_expansion:")).collect::<Vec<_>>();
+    let macro_provenance = plan.coverage.iter().filter(|coverage| coverage.starts_with("macro_expansion:")).collect::<Vec<_>>();
+
+    println!();
+    println!("constraint: {}", plan.name);
+    println!("  origin: {}", plan.origin);
+    println!("  trigger: {}", plan.trigger);
+    println!("  scope: {}", plan.scope);
+    println!("  reads:");
+    if plan.reads.is_empty() {
+        println!("    - none");
+    } else {
+        for read in &plan.reads {
+            println!("    - {}", proof_plan_read_label(read));
+        }
+    }
+    println!("  coverage:");
+    if coverage_notes.is_empty() {
+        println!("    - none");
+    } else {
+        for coverage in coverage_notes {
+            println!("    - {}", coverage);
+        }
+    }
+    if !macro_provenance.is_empty() {
+        println!("  macro_provenance:");
+        for provenance in macro_provenance {
+            println!("    - {}", provenance);
+        }
+    }
+    println!("  relation_checks:");
+    if plan.input_output_relation_checks.is_empty() {
+        println!("    - none");
+    } else {
+        for check in &plan.input_output_relation_checks {
+            println!("    - {}", check);
+        }
+    }
+    println!("  on_chain_checked: {}", if plan.on_chain_checked { "yes" } else { "no" });
+    println!("  codegen_coverage_status: {}", plan.codegen_coverage_status);
+    if !plan.witness_fields.is_empty() {
+        println!("  witness_fields:");
+        for field in &plan.witness_fields {
+            println!("    - {}", field);
+        }
+    }
+    if !plan.lock_args_fields.is_empty() {
+        println!("  lock_args_fields:");
+        for field in &plan.lock_args_fields {
+            println!("    - {}", field);
+        }
+    }
+    println!("  builder_assumption:");
+    if plan.builder_assumptions.is_empty() {
+        println!("    - none");
+    } else {
+        for assumption in &plan.builder_assumptions {
+            println!("    - {}", assumption);
+        }
+    }
+    for diagnostic in &plan.diagnostics {
+        println!("  {}: {}", diagnostic.severity, diagnostic.message);
+    }
+}
+
+fn proof_plan_read_label(read: &str) -> String {
+    match read {
+        "input" => "Source::Input".to_string(),
+        "output" => "Source::Output".to_string(),
+        "group_input" => "Source::GroupInput".to_string(),
+        "group_output" => "Source::GroupOutput".to_string(),
+        "cell_dep" => "Source::CellDep".to_string(),
+        "header_dep" => "Source::HeaderDep".to_string(),
+        "witness" => "WitnessArgs".to_string(),
+        "lock_args" => "Script.args".to_string(),
+        other => other.to_string(),
+    }
+}
+
 fn dirs_config_dir() -> PathBuf {
     if let Ok(config) = std::env::var("CELLSCRIPT_CONFIG") {
         return PathBuf::from(config);
@@ -2444,6 +2615,17 @@ fn validate_check_policy(metadata: &crate::CompileMetadata, args: &CheckArgs) ->
             .collect::<Vec<_>>();
         if !runtime_required_obligations.is_empty() {
             violations.push(format!("runtime-required verifier obligations: {}", runtime_required_obligations.join(", ")));
+        }
+
+        let runtime_required_proof_plan = metadata
+            .runtime
+            .proof_plan
+            .iter()
+            .filter(|plan| plan.status == "runtime-required" && !plan.on_chain_checked)
+            .map(|plan| format!("{}:{} ({})", plan.origin, plan.feature, plan.codegen_coverage_status))
+            .collect::<Vec<_>>();
+        if !runtime_required_proof_plan.is_empty() {
+            violations.push(format!("runtime-required ProofPlan gaps: {}", runtime_required_proof_plan.join(", ")));
         }
 
         let transaction_invariants = transaction_invariant_checked_subcondition_summaries(metadata);
@@ -3651,6 +3833,14 @@ impl CliParser {
                     .arg(Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON explanation")),
             )
             .subcommand(
+                ClapCommand::new("explain-proof")
+                    .about("Explain Covenant ProofPlan trigger, scope, reads, coverage, and on-chain status")
+                    .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
+                    .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("json").long("json").action(ArgAction::SetTrue).help("Emit a machine-readable JSON ProofPlan")),
+            )
+            .subcommand(
                 ClapCommand::new("explain-generics")
                     .about("Explain checked bounded generic collection instantiations")
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
@@ -3935,6 +4125,12 @@ impl CliParser {
             }),
             Some(("explain-profile", m)) => Command::ExplainProfile(ExplainProfileArgs {
                 profile: m.get_one::<String>("profile").cloned().expect("required target profile"),
+                json: m.get_flag("json"),
+            }),
+            Some(("explain-proof", m)) => Command::ExplainProof(ExplainProofArgs {
+                input: m.get_one::<String>("input").map(PathBuf::from),
+                target: m.get_one::<String>("target").cloned(),
+                target_profile: m.get_one::<String>("target-profile").cloned(),
                 json: m.get_flag("json"),
             }),
             Some(("explain-generics", m)) => Command::ExplainGenerics(ExplainGenericsArgs {
