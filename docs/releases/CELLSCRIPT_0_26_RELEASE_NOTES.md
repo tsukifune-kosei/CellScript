@@ -126,6 +126,79 @@ experimental authoring route. It removes file padding and unnecessary
 constant-materialization instructions; it does not remove verification checks,
 weaken policy, or depend on 16-bit compressed instructions.
 
+### How the optimizations compose
+
+Read this section as the theory of the whole tranche: what was actually
+charging bytes and cycles, which layer owns each fix, and why the result is
+still a verified artifact rather than an unsafe speedup. Four pictures, then
+the sections below give the per-topic detail and the measurements.
+
+**1. Where each change lives.** Every optimization is an assembler, optimizer
+or runtime concern shared by both source editions; no source rewrite, no new
+witness ABI, no removed check.
+
+```mermaid
+flowchart TB
+    SRC["CellScript source<br/>(Edition 2026 or 2027 authoring route)"]
+    TS["Typed semantics v8<br/>roles, obligations, bindings"]
+    IR["IR lowering"]
+    OPT["Optimizer<br/>fold proven-exact byte loops<br/>reuse dominating size facts"]
+    CG["Codegen<br/>fused compare-branches<br/>callee-saved read windows"]
+    ASM["Assembler<br/>compact ELF layout<br/>optimal li forms<br/>Zbb rori / roriw hash cores"]
+    ELF["Deployable ELF<br/>rv64imac_zbb, data2"]
+    CHK["Independent checker<br/>re-derives machine code<br/>rejects weakened metadata"]
+    SRC --> TS --> IR --> OPT --> CG --> ASM --> ELF
+    ELF --> CHK
+```
+
+**2. What the bytes were made of.** The old artifact carried three distinct
+sinks. The fixed tax (file padding) went first and helped every contract
+equally; the per-instruction tax halved small-constant materialization; the
+repeated-work tax — the real code — needed the layered closure below. The
+Spore path shows all three compounding:
+
+```mermaid
+flowchart LR
+    A["Before<br/>Spore ELF 116,624 B<br/>cycles 3.37-3.70x Rust"] -->|"- file padding<br/>- li overhead"| B["Layout + li tranche<br/>smaller files,<br/>hash work still repeated"]
+    B -->|"- shared memcpy / memcmp<br/>- register read windows<br/>- Zbb rotate hash cores"| C["After closure<br/>53,000 B (-54.5%)<br/>cycles 0.883-0.972x Rust"]
+    A -->|"- schema size reuse<br/>- folded exact loops"| C
+```
+
+**3. Why Zbb is safe to use: the deployment contract.** The rotates are only
+sound if the executing VM is guaranteed to decode them. CKB provides that
+guarantee through the Script `hash_type`, and the compiler now binds the whole
+chain explicitly instead of assuming it:
+
+```mermaid
+flowchart LR
+    C["Compiler emits rori / roriw<br/>(Zbb rotate instructions)"]
+    C --> E["ELF advertises rv64imac_zbb"]
+    C --> M["Metadata pins<br/>minimum_vm_version = 2<br/>deployment_hash_types = [data2]"]
+    E --> D["Deploy as a data2 code Cell"]
+    M --> D
+    D --> K["CKB rule<br/>data2 selects VM version 2<br/>which guarantees the Zbb ISA"]
+    K --> V["Every verifier that resolves<br/>the code executes the rotates"]
+    D1["data1 deployment"] -. "does NOT guarantee Zbb<br/>compiler rejects data1 packages" .-> X["unsupported:<br/>new artifact under an old Script"]
+    CHK["Independent checker"] -. "accepts only the exact rotate encodings<br/>and rejects any post-production weakening" .-> M
+```
+
+Existing Data1 code Cells are never silently upgraded: a new artifact must be
+rebuilt with its sidecars and deployed under Data2, and every code-hash
+reference updated. That is a compatibility change, documented below.
+
+**4. How the claims are backed.** Each economic statement in this document is
+a measured corpus result, and the measurement path itself is checked:
+
+```mermaid
+flowchart LR
+    S["Matched corpora<br/>6 real contracts + 3 tight Rust pairs"] --> VM["Real CKB-VM runs<br/>accept / reject parity<br/>with error attribution"]
+    VM --> CR["Independent-process cold replay<br/>cycles and errors reproduced"]
+    VM --> MC["Independent checker<br/>plus mutation corpus"]
+    CR --> G["dev / backend gates<br/>and production stateful acceptance"]
+    MC --> G
+    G -. "still not, by itself" .-> P["mainnet production claim<br/>(release chain and pinned-CKB<br/>multi-version check pending)"]
+```
+
 ### Economic Backend Closure and VM2 Deployment Contract
 
 The compact ELF change removed a fixed file-format tax. It was necessary but
