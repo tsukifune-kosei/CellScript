@@ -17,6 +17,8 @@ pub mod cli;
 pub mod codegen;
 #[cfg(not(feature = "wasm"))]
 pub mod debug;
+#[cfg(not(feature = "wasm"))]
+pub mod deployment_line_handle;
 pub mod docgen;
 pub mod edition;
 pub mod error;
@@ -228,7 +230,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v44-0.30-dev2-exact-handle-tx-validation";
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v45-0.30-dev3-deployment-line-foundation";
 pub const METADATA_SCHEMA_VERSION: u32 = 71;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;

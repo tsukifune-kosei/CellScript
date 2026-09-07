@@ -265,10 +265,19 @@ lifecycle authority. ProtocolBundle emits the full-value CKB Blake2b-256 hash;
 `ExactScriptHandle` witness parameters and role-specific checked helpers bind
 that literal to the selected Lock/Type Script hash or verifier CellDep data
 hash in CKB-VM. Data-hash and Type-hash code identity are explicit separate
-policies. This establishes a stable exact handle for closed artifacts; it does
-not yet implement generic `ScriptHandle<I>` types, runtime-selected compatible
-construction, upgrade-line handles, compatible-open handles, or open
-cross-Script roles.
+policies. `cellc tx validate` also binds exact values to their compiled
+`CSARGv1` parameter positions and resolved transaction Script/CellDep identity
+before signing.
+
+The first deployment-line data foundation is implemented separately. It
+hash-links exact Type-hash version receipts, derives compatibility against the
+baseline and predecessor across all six interface dimensions, records
+monotonic active/yanked state, and emits the fixed 386-byte `CSLINv1` value
+committed as `CSREGv1 || handle_hash`. This does not yet admit Type-hash
+generated artifacts or provide the unique live admission Cell and runtime
+helper needed to reject stale line versions in consensus. Generic
+`ScriptHandle<I>` types, runtime-selected compatible construction,
+compatible-open handles, and open cross-Script roles remain open.
 
 Generated TypeScript action builders now expose the same ProtocolBundle v1
 state names and artifact-binding schema as the Rust adapter. Their client

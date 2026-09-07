@@ -116,5 +116,8 @@ acceptance remain separate release checks.
 This phase expresses exact artifact identity. `ScriptHandle<I>`,
 `VerifierHandle<I>`, compatible interface selection, deployment-line upgrade
 policies, Registry-selected runtime linkage, and open ProtocolBundle roles need
-their own versioned construction and verification contracts. They must not be
+their own versioned construction and verification contracts. The off-chain
+deployment-line receipt/value foundation is specified in
+[Deployment-line handles](CELLSCRIPT_DEPLOYMENT_LINE_HANDLES.md), but it has no
+source/runtime admission path yet. Compatible/open behavior must not be
 inferred from an `ExactScriptHandle` or from matching only one embedded field.

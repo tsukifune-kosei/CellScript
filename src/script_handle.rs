@@ -188,6 +188,12 @@ pub fn validate_exact_script_handle(receipt: &ExactScriptHandleReceipt, value: &
     Ok(())
 }
 
+/// Rebuild the canonical fixed-width value from an independently retained
+/// exact receipt.
+pub fn exact_script_handle_value_from_receipt(receipt: &ExactScriptHandleReceipt) -> Result<ExactScriptHandleValue> {
+    encode_exact_script_handle(receipt)
+}
+
 /// CKB Blake2b-256 commitment consumed by the on-chain exact-handle helpers.
 ///
 /// Binding the complete 202-byte value makes substitutions of the receipt,

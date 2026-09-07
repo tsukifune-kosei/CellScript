@@ -543,6 +543,8 @@ run_dev_gate() {
     run cargo check --locked -p cellscript-artifact-checker --all-targets
     run cargo test --locked -p cellscript-artifact-checker
     run cargo test --locked -p cellscript --test artifact_checker --test myelin_handoff
+    run cargo test --locked -p cellscript deployment_line_handle --lib
+    run cargo test --locked -p cellscript --test exact_script_handles
     run cargo check --locked -p cellscript-fiber-adapter --all-targets
     run cargo check --locked -p cellscript-ckb-adapter --all-targets
     run cargo check --locked -p cellscript-wasm --all-targets --features wasm

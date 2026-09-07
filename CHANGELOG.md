@@ -360,6 +360,19 @@
   parameter positions. Advance the artifact cache identity to
   `project-source-set-v44-0.30-dev2-exact-handle-tx-validation`.
 
+- Add issue #11's off-chain deployment-line foundation without weakening the
+  exact-artifact boundary. `cellscript-deployment-line-receipt-v1` accepts only
+  Type-hash exact receipts, derives six-dimensional compatibility against both
+  the baseline and immediate predecessor, preserves stable Script/network/
+  role/profile/ABI identity, hash-links a monotonic sequence, and represents
+  yanking as a terminal successor. `CSLINv1-fixed-386` embeds the full current
+  exact handle plus line, policy, receipt, predecessor, availability, and
+  admission-Cell identities; `CSREGv1 || handle_hash` commits the whole value.
+  Source/runtime use remains deferred until a distinct Type-hash target and
+  unique live admission-Cell replacement contract can reject stale versions
+  in consensus. Advance the artifact cache identity to
+  `project-source-set-v45-0.30-dev3-deployment-line-foundation`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,
