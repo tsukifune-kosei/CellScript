@@ -340,6 +340,107 @@ fn command_with_timeout(mut command: Command, timeout: Duration) -> Result<Outpu
     Ok(child.wait_with_output()?)
 }
 
+struct BrunoCompletion {
+    success: bool,
+    returncode: i32,
+    forced_cleanup_after_terminal_summary: bool,
+    terminal_summary_observed: bool,
+    request_steps_observed: usize,
+    request_steps_expected: usize,
+    timed_out: bool,
+}
+
+fn bruno_terminal_progress(stdout: &str, bruno: &Path, suite: &str) -> (bool, usize, usize) {
+    let suite_dir = bruno.join("e2e").join(suite);
+    let mut stems = fs::read_dir(suite_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "bru"))
+        .filter_map(|path| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()))
+        .collect::<Vec<_>>();
+    stems.sort();
+    let observed = stems.iter().filter(|stem| stdout.contains(&format!("e2e/{suite}/{stem} (200 OK)"))).count();
+    let terminal = !stems.is_empty()
+        && stdout.contains("Execution Summary")
+        && observed == stems.len()
+        && !stdout.contains('✗')
+        && !stdout.contains("AssertionError");
+    (terminal, observed, stems.len())
+}
+
+fn stop_command_tree(child: &mut Child) {
+    if let Ok(output) = Command::new("pgrep").args(["-P", &child.id().to_string()]).output() {
+        for pid in String::from_utf8_lossy(&output.stdout).split_whitespace() {
+            let _ = Command::new("kill").args(["-TERM", pid]).status();
+        }
+    }
+    stop(child);
+}
+
+fn bruno_with_timeout(
+    mut command: Command,
+    timeout: Duration,
+    stdout_path: &Path,
+    stderr_path: &Path,
+    bruno: &Path,
+    suite: &str,
+) -> Result<BrunoCompletion> {
+    let stdout_file = File::create(stdout_path)?;
+    let stderr_file = File::create(stderr_path)?;
+    command.stdout(Stdio::from(stdout_file)).stderr(Stdio::from(stderr_file));
+    let mut child = command.spawn()?;
+    let started = Instant::now();
+    let mut terminal_since = None;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let stdout = fs::read_to_string(stdout_path).unwrap_or_default();
+            let (terminal, observed, expected) = bruno_terminal_progress(&stdout, bruno, suite);
+            return Ok(BrunoCompletion {
+                success: status.success(),
+                returncode: status.code().unwrap_or(-1),
+                forced_cleanup_after_terminal_summary: false,
+                terminal_summary_observed: terminal,
+                request_steps_observed: observed,
+                request_steps_expected: expected,
+                timed_out: false,
+            });
+        }
+        let stdout = fs::read_to_string(stdout_path).unwrap_or_default();
+        let (terminal, observed, expected) = bruno_terminal_progress(&stdout, bruno, suite);
+        if terminal {
+            let terminal_since = terminal_since.get_or_insert_with(Instant::now);
+            if terminal_since.elapsed() >= Duration::from_secs(5) {
+                stop_command_tree(&mut child);
+                return Ok(BrunoCompletion {
+                    success: true,
+                    returncode: -1,
+                    forced_cleanup_after_terminal_summary: true,
+                    terminal_summary_observed: true,
+                    request_steps_observed: observed,
+                    request_steps_expected: expected,
+                    timed_out: false,
+                });
+            }
+        }
+        if started.elapsed() >= timeout {
+            stop_command_tree(&mut child);
+            return Ok(BrunoCompletion {
+                success: false,
+                returncode: -1,
+                forced_cleanup_after_terminal_summary: false,
+                terminal_summary_observed: terminal,
+                request_steps_observed: observed,
+                request_steps_expected: expected,
+                timed_out: true,
+            });
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
 fn cleanup(repo: &Path, all: bool) {
     let escaped = regex::escape(&repo.to_string_lossy());
     let mut patterns = vec![
@@ -530,21 +631,31 @@ fn execute_workflow(
     }
     let (bruno, patches) = bruno_workspace(repo, workflow.suite, &log)?;
     let command = bruno_command(&suite_arg, artifact_hash, bruno_cli, bruno_sandbox);
-    let completed = command_with_timeout(
+    let stdout_log = log.join("bruno.stdout");
+    let stderr_log = log.join("bruno.stderr");
+    let completed = bruno_with_timeout(
         {
             let mut value = Command::new(&command[0]);
             value.args(&command[1..]).current_dir(&bruno).envs(&environment);
             value
         },
         Duration::from_secs(timeout),
+        &stdout_log,
+        &stderr_log,
+        &bruno,
+        workflow.suite,
     )?;
-    fs::write(log.join("bruno.stdout"), &completed.stdout)?;
-    fs::write(log.join("bruno.stderr"), &completed.stderr)?;
     let mut execution = json!({
-        "status": if completed.status.success() { "passed" } else { "failed" }, "started_node": !assume,
-        "command": command, "returncode": completed.status.code().unwrap_or(-1),
+        "status": if completed.success { "passed" } else { "failed" }, "started_node": !assume,
+        "command": command, "returncode": completed.returncode,
+        "completion_basis": if completed.forced_cleanup_after_terminal_summary { "complete_terminal_summary_after_runner_cleanup" } else { "process_exit_status" },
+        "runner_forced_cleanup_after_terminal_summary": completed.forced_cleanup_after_terminal_summary,
+        "bruno_terminal_summary_observed": completed.terminal_summary_observed,
+        "bruno_request_steps_observed": completed.request_steps_observed,
+        "bruno_request_steps_expected": completed.request_steps_expected,
+        "runner_timed_out": completed.timed_out,
         "noninteractive_ckb_cli_account_import_wrapper": log.join("tool-bin/ckb-cli").is_file(),
-        "stdout_log": relative(&log.join("bruno.stdout"), repo_root), "stderr_log": relative(&log.join("bruno.stderr"), repo_root),
+        "stdout_log": relative(&stdout_log, repo_root), "stderr_log": relative(&stderr_log, repo_root),
         "duration_seconds": ((started.elapsed().as_secs_f64() * 1000.0).round() / 1000.0), "fiber_repo": info,
     });
     if !patches.is_empty() {
@@ -794,5 +905,31 @@ mod tests {
             "dirty": true, "tracked_dirty": false,
         });
         assert!(same_tracked_provenance(&before, &after));
+    }
+
+    #[test]
+    fn bruno_terminal_summary_requires_every_successful_request_and_no_failure_marker() {
+        let root = test_root("bruno-summary");
+        let suite = root.join("e2e/udt-router-pay");
+        fs::create_dir_all(&suite).unwrap();
+        fs::write(suite.join("01-first.bru"), "meta {}\n").unwrap();
+        fs::write(suite.join("02-second.bru"), "meta {}\n").unwrap();
+        let complete = "e2e/udt-router-pay/01-first (200 OK)\ne2e/udt-router-pay/02-second (200 OK)\nExecution Summary\n";
+
+        assert_eq!(bruno_terminal_progress(complete, &root, "udt-router-pay"), (true, 2, 2));
+        assert_eq!(
+            bruno_terminal_progress("e2e/udt-router-pay/01-first (200 OK)\nExecution Summary\n", &root, "udt-router-pay"),
+            (false, 1, 2)
+        );
+        assert_eq!(
+            bruno_terminal_progress(
+                "e2e/udt-router-pay/01-first (200 OK)\ne2e/udt-router-pay/02-second (500 Error)\nExecution Summary\n",
+                &root,
+                "udt-router-pay"
+            ),
+            (false, 1, 2)
+        );
+        assert_eq!(bruno_terminal_progress(&format!("{complete}✗ assertion"), &root, "udt-router-pay"), (false, 2, 2));
+        fs::remove_dir_all(root).unwrap();
     }
 }

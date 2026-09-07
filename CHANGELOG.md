@@ -79,9 +79,12 @@
   identity. Bruno's `safe`/`developer` sandbox selection is likewise explicit.
   The Fiber router-pay compatibility workspace expresses its final JavaScript
   checks as equivalent declarative assertions, avoiding a Bruno post-response
-  hang without removing requests or weakening expected values. Runtime-generated,
-  untracked node backups are reported after restoration but do not masquerade
-  as tracked source drift.
+  hang without removing requests or weakening expected values. If Bruno retains
+  RPC handles after its terminal summary, the runner requires a non-empty suite,
+  every request at `200 OK`, no failed assertion marker, and a five-second exit
+  grace before cleaning it up; the exceptional completion basis is recorded.
+  Runtime-generated, untracked node backups are reported after restoration but
+  do not masquerade as tracked source drift.
 
 - Add the bounded real-contract interoperability primitives exercised by the
   separate Spore and Fiber comparison work: exact witness/data/Lock/Type byte

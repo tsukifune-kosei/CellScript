@@ -215,8 +215,13 @@ post-response JavaScript checks with equivalent Bruno declarative assertions;
 the overspend rejection, final balances, request count, and synchronization
 before requests remain unchanged, and every patched file is listed in the
 report. Tracked Fiber state must return to its baseline; runtime-generated
-untracked node backups are disclosed separately. This mode still produces
-bounded local devnet evidence rather than a mainnet or operator-identity claim.
+untracked node backups are disclosed separately. If Bruno retains RPC handles
+after printing its terminal summary, cleanup is accepted only after a
+five-second grace and only when the non-empty suite has reported every request
+as `200 OK` with no failed assertion marker. The report binds the expected and
+observed request counts, terminal-summary status, timeout status, and exceptional
+completion basis. This mode still produces bounded local devnet evidence rather
+than a mainnet or operator-identity claim.
 
 Static mode runs the dedicated CKB-VM transaction matrix, adapter tests, and
 adapter clippy. It proves only compiler/artifact compatibility; it does not
