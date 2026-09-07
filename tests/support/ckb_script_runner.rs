@@ -9,7 +9,7 @@
 
 use ckb_testtool::ckb_types::{
     bytes::Bytes,
-    core::{DepType, EpochNumberWithFraction, HeaderBuilder, TransactionBuilder},
+    core::{DepType, EpochNumberWithFraction, HeaderBuilder, TransactionBuilder, TransactionView},
     packed,
     prelude::*,
 };
@@ -346,6 +346,21 @@ pub fn deterministic_always_success_lock_hash() -> [u8; 32] {
 /// The ELF is deployed as a type script code cell. The always_success
 /// lock script is also deployed for cells that use "always_success" lock.
 pub fn execute_cellscript_script(elf_bytes: &[u8], fixture: &CkbVmFixture) -> CkbScriptExecutionResult {
+    execute_cellscript_script_with_transaction_transform(elf_bytes, fixture, |tx, _| tx)
+}
+
+/// Execute a fixture after applying a deterministic witness-only transform to
+/// the completed transaction. The callback also receives the exact current
+/// type Script so SDK signing-message tests can construct its ScriptGroup.
+#[allow(dead_code)]
+pub fn execute_cellscript_script_with_transaction_transform<F>(
+    elf_bytes: &[u8],
+    fixture: &CkbVmFixture,
+    transform: F,
+) -> CkbScriptExecutionResult
+where
+    F: FnOnce(TransactionView, packed::Script) -> TransactionView,
+{
     let mut context = Context::new_with_deterministic_rng();
     context.set_capture_debug(true);
 
@@ -456,6 +471,7 @@ pub fn execute_cellscript_script(elf_bytes: &[u8], fixture: &CkbVmFixture) -> Ck
 
     let tx = tx_builder.build();
     let tx = context.complete_tx(tx);
+    let tx = transform(tx, type_script);
 
     // Execute via ckb-script ScriptVerify with full CKB syscall context.
     let verify_result = context.verify_tx(&tx, MAX_CYCLES);

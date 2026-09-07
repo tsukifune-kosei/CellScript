@@ -756,6 +756,15 @@ Treat `Address`,
 `lock_args Address`, and `witness Address` as data unless an explicit verifier
 result and key-to-authority binding prove otherwise.
 
+For a custom verifier using a completely zero-filled first lock placeholder,
+the separate bounded 0.30 API is
+`env::sighash_all_zero_lock(max_group_inputs, max_inputs,
+max_extra_witnesses, max_witness_bytes) -> SighashAllDigest`. It commits to the
+exact transaction hash, later group witnesses, and witnesses after the input
+count. It does not cover prefix-preserving multisig layouts. See the
+[BIP340 verifier ABI](../CELLSCRIPT_SIGNATURE_VERIFIER_ABI.md) for the exact
+order and limits.
+
 These are two distinct witness uses. Entry parameters such as `claimed_owner`
 come from `WitnessArgs.input_type`; `witness::lock(input)` explicitly reads the
 `lock` field. Sharing one serialized `WitnessArgs` does not make the fields

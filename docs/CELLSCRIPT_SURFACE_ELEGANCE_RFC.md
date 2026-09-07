@@ -102,6 +102,10 @@ The security-sensitive boundary remains deliberately narrow:
   `66 sighash-all-unsupported`. The language examples retain it only as an
   inspectable deferred boundary. High-level `verify_sighash_all(sig, owner)`
   composition is also unavailable.
+- `env::sighash_all_zero_lock(group, inputs, extra, bytes)` is the separate
+  executable 0.30 domain for a complete zero-filled first lock placeholder. It
+  exposes all bounds and returns `SighashAllDigest`; prefix-preserving multisig
+  layouts are outside that contract.
 - First-class verified signer values are deferred.
 - `protects T { self ... }` sugar is deferred until protected-input selection
   and lock-group aggregation semantics are exact.
@@ -477,6 +481,7 @@ This list is the living implementation tracker for the RFC.
 | `lock_args` data-source binding | Implemented for fixed-width lock parameters | Entry wrapper decodes the executing Script.args bytes and rejects trailing bytes after declared typed parameters. |
 | Source and witness building blocks (`source::group_input`, `witness::lock`) | Done | Executable source view construction and witness lock field loading. |
 | Canonical `env::sighash_all` digest construction | Deferred | Syntax remains inspectable; `ckb-sighash-all-deferred` rejects production compilation and audit execution exits with runtime error 66. No digest is produced. |
+| Bounded `env::sighash_all_zero_lock` domain | Implemented for all-zero lock placeholders | Current input Script group, exact witness order, complete first-lock zero replacement, `SighashAllDigest`, and four literal bounds are explicit and checked. |
 | High-level `verify_sighash_all` composition | Not started | Must compose building blocks into a single check and define digest mode, script group scope, witness layout, and replay assumptions. |
 | First-class verified signer abstraction | Deferred | Only after explicit verification primitives are proven and documented. |
 | Hidden sighash defaults | Rejected | Digest mode and signature scope must be visible. |

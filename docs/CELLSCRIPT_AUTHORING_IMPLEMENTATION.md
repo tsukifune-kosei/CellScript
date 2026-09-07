@@ -214,7 +214,7 @@ families pass; full gates on the final source are still required.
 These fixes do not complete branch-local successor relations,
 schema acknowledgements or the complete persistent policy product.
 
-## Deferred signing-message boundary
+## Signing-message boundaries
 
 Authorization integration also exposed a pre-existing unsupported path:
 `env::sighash_all` did not construct a canonical transaction digest. It could
@@ -228,6 +228,21 @@ call, rather than treating an error integer as a Hash or returning through a
 helper whose caller could ignore the result. Optimizer call-purity checks retain
 deferred, unresolved and imported evaluations; argument substitution cannot
 erase or duplicate an evaluation without the required purity evidence.
+
+The 0.30 branch adds a separate executable contract,
+`env::sighash_all_zero_lock(max_group_inputs, max_inputs,
+max_extra_witnesses, max_witness_bytes) -> SighashAllDigest`. It streams the
+current input Script-group signing message, replaces the complete first
+`WitnessArgs.lock` payload with equal-length zero bytes, and commits to later
+group witnesses and transaction-level extra witnesses. All four bounds are
+integer literals and are enforced at runtime. Metadata schema 71 and the
+standalone checker bind the scope, transform, order, type, and limits to typed
+semantics and runtime provenance. Differential CKB-VM evidence matches the
+pinned `ckb-sdk-rust` generator for this all-zero placeholder domain.
+
+This narrower contract does not implement prefix-preserving multisig message
+layouts. The legacy `env::sighash_all(source)` remains deferred, and standard
+multisig Locks continue to own their message construction and signing flow.
 
 Real VM tests cover direct verifier arguments, discarded and wildcard results,
 local wrappers, imported aliases and Lock execution in both editions. The
@@ -293,7 +308,7 @@ whole WitnessArgs limit is 4,096 bytes with at most eight records. Host and CKB
 adapter codecs are independently implemented; placement preserves other fields,
 rejects occupied `input_type`, and must occur before signing.
 
-Metadata schema 70, `cellscript-typed-semantics-v8` and
+Metadata schema 71, `cellscript-typed-semantics-v8` and
 `cellscript-semantic-foundation-v3` bind the declared policy, selector provenance,
 resource layout, variant payload schemas, fixed counts and ordered common
 checks. Runtime metadata also binds `cellscript-ckb-runtime-view-v1`, the

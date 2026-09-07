@@ -192,6 +192,9 @@ mismatched.
 Sighash is the transaction digest scope used for signature verification. A
 signature is only meaningful if you know what it signed.
 
-CellScript does not hide sighash defaults. Future signature verification syntax
-must expose digest mode, script group scope, witness layout, and replay
-assumptions.
+CellScript does not hide sighash defaults.
+`env::sighash_all_zero_lock(group, inputs, extra, bytes)` exposes one bounded
+current-input Script-group domain for a completely zero-filled first lock
+placeholder and returns `SighashAllDigest`. It does not cover multisig
+placeholders with a retained configuration prefix. The generic
+`env::sighash_all(source)` spelling remains deferred.

@@ -67,6 +67,7 @@ pub enum CellScriptRuntimeError {
     SighashAllUnsupported = 66,
     WitnessFieldAbsent = 67,
     WitnessBoundExceeded = 68,
+    SighashBoundExceeded = 69,
 }
 
 impl CellScriptRuntimeError {
@@ -137,6 +138,7 @@ impl CellScriptRuntimeError {
             Self::SighashAllUnsupported => "sighash-all-unsupported",
             Self::WitnessFieldAbsent => "witness-field-absent",
             Self::WitnessBoundExceeded => "witness-bound-exceeded",
+            Self::SighashBoundExceeded => "sighash-bound-exceeded",
         }
     }
 
@@ -221,6 +223,9 @@ impl CellScriptRuntimeError {
             Self::SighashAllUnsupported => "Canonical CKB transaction sighash construction is deferred and cannot produce a digest.",
             Self::WitnessFieldAbsent => "A requested bounded WitnessArgs field was None instead of a present Bytes value.",
             Self::WitnessBoundExceeded => "A raw witness or WitnessArgs field exceeded its compile-time maximum byte count.",
+            Self::SighashBoundExceeded => {
+                "The current signing-message domain exceeded a compile-time input, group, extra-witness, or witness-byte bound."
+            }
         }
     }
 
@@ -327,6 +332,9 @@ impl CellScriptRuntimeError {
             Self::WitnessBoundExceeded => {
                 "Reduce the witness value or raise the source-declared maximum within the supported 64 KiB bound."
             }
+            Self::SighashBoundExceeded => {
+                "Raise the explicit sighash bound within the supported maximum, or reduce the transaction group or witness domain."
+            }
         }
     }
 
@@ -393,6 +401,7 @@ impl CellScriptRuntimeError {
             66 => Some(Self::SighashAllUnsupported),
             67 => Some(Self::WitnessFieldAbsent),
             68 => Some(Self::WitnessBoundExceeded),
+            69 => Some(Self::SighashBoundExceeded),
             _ => None,
         }
     }
@@ -468,6 +477,7 @@ pub const ALL_RUNTIME_ERRORS: &[CellScriptRuntimeError] = &[
     CellScriptRuntimeError::SighashAllUnsupported,
     CellScriptRuntimeError::WitnessFieldAbsent,
     CellScriptRuntimeError::WitnessBoundExceeded,
+    CellScriptRuntimeError::SighashBoundExceeded,
 ];
 
 pub const RESERVED_RUNTIME_ERROR_CODES: &[u64] = &[6, 19, 27, 28, 29, 30, 31];

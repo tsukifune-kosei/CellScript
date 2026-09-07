@@ -1,7 +1,8 @@
 use super::*;
 
-// Private descriptors are (pointer-or-offset, length, kind), with kind 0
-// meaning local memory and kind 1 meaning a prevalidated transaction span.
+// Private descriptors are (pointer-or-offset, length, kind): 0 is local
+// memory, 1 is a prevalidated transaction span, 2 is a zero-filled logical
+// span, and values >=3 encode an Input/GroupInput witness index.
 // No user-supplied machine pointer crosses either public interface.
 impl CodeGenerator {
     /// Exact, unhashed bytes: a0=view, a1=offset, a3=out[32]; a0=status.
@@ -77,6 +78,10 @@ impl CodeGenerator {
         let advance = self.fresh_label("gather_segment_advance");
         let amount_ready = self.fresh_label("gather_amount_ready");
         let memory = self.fresh_label("gather_memory");
+        let transaction = self.fresh_label("gather_transaction");
+        let zero = self.fresh_label("gather_zero");
+        let witness = self.fresh_label("gather_witness");
+        let witness_source_ready = self.fresh_label("gather_witness_source_ready");
         let copy = self.fresh_label("gather_copy");
         let copied = self.fresh_label("gather_copied");
         let failed = self.fresh_label("gather_block_failed");
@@ -109,6 +114,16 @@ impl CodeGenerator {
         self.emit("ld t4, 16(t2)");
         self.emit(format!("beqz t4, {memory}"));
 
+        self.emit("li t5, 1");
+        self.emit(format!("beq t4, t5, {transaction}"));
+        self.emit("li t5, 2");
+        self.emit(format!("beq t4, t5, {zero}"));
+        self.emit("li t5, 3");
+        self.emit(format!("bgeu t4, t5, {witness}"));
+        self.emit(format!("j {failed}"));
+
+        self.emit_label(&transaction);
+
         self.emit_sp_addi("a0", M);
         self.emit("add a0, a0, t0");
         self.emit_sp_addi("a1", SIZE);
@@ -122,6 +137,39 @@ impl CodeGenerator {
         self.emit_stack_load("t1", READ);
         self.emit(format!("bltu t0, t1, {failed}"));
         self.emit(format!("j {copied}"));
+
+        // Kind 2 is a logical zero span. The BLAKE2b message block was
+        // pre-cleared, so advancing the cursors is the complete copy action.
+        self.emit_label(&zero);
+        self.emit(format!("j {copied}"));
+
+        // Kinds >=3 encode a LOAD_WITNESS source and index:
+        //   kind = 3 + (index << 1) + group_input_bit.
+        // This keeps a single bounded segment stream while preserving each
+        // witness's own source/index pair.
+        self.emit_label(&witness);
+        self.emit("addi t4, t4, -3");
+        self.emit("andi t5, t4, 1");
+        self.emit("srli t4, t4, 1");
+        self.emit(format!("li t6, {CKB_SOURCE_INPUT}"));
+        self.emit(format!("beqz t5, {witness_source_ready}"));
+        self.emit(format!("li t6, {}", CKB_SOURCE_GROUP_FLAG | CKB_SOURCE_INPUT));
+        self.emit_label(&witness_source_ready);
+        self.emit_sp_addi("a0", M);
+        self.emit_stack_load("t0", FILLED);
+        self.emit("add a0, a0, t0");
+        self.emit_sp_addi("a1", SIZE);
+        self.emit("mv a2, t3");
+        self.emit("mv a3, t4");
+        self.emit("mv a4, t6");
+        self.emit_stack_load("a7", SYSCALL);
+        self.emit("ecall");
+        self.emit(format!("bnez a0, {failed}"));
+        self.emit_stack_load("t0", SIZE);
+        self.emit_stack_load("t1", READ);
+        self.emit(format!("bltu t0, t1, {failed}"));
+        self.emit(format!("j {copied}"));
+
         self.emit_label(&memory);
         self.emit_sp_addi("t2", M);
         self.emit("add t2, t2, t0");

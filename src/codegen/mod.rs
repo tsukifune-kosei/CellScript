@@ -428,6 +428,7 @@ fn is_v014_runtime_helper(func: &str) -> bool {
             | "__ckb_witness_u64_le"
             | "__ckb_require_witness_size_at_least"
             | "__ckb_sighash_all"
+            | "__ckb_sighash_all_zero_lock"
             | "__ckb_require_maturity"
             | "__ckb_require_time"
             | "__ckb_require_epoch_after"

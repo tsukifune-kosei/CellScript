@@ -49,6 +49,16 @@ action inspect() -> u64 {
 }
 "#;
 
+const SIGHASH_ZERO_LOCK_SOURCE: &str = r#"
+module artifact_checker_sighash_zero_lock
+
+action inspect() -> u64 {
+    verification
+        let digest = env::sighash_all_zero_lock(4, 8, 4, 4096)
+        return 0
+}
+"#;
+
 #[derive(Clone)]
 struct Fixture {
     artifact: Vec<u8>,
@@ -181,7 +191,7 @@ fn checker_rejects_runtime_access_provenance_tampering_after_hash_rebinding() {
         )
         .unwrap(),
     );
-    assert_eq!(valid.metadata["metadata_schema_version"], Value::from(70));
+    assert_eq!(valid.metadata["metadata_schema_version"], Value::from(71));
     assert_eq!(
         valid.metadata["runtime"]["ckb_runtime_access_provenance_contract"],
         Value::String("cellscript-ckb-runtime-access-provenance-v1".to_string())
@@ -293,7 +303,7 @@ fn checker_binds_bounded_witness_owner_limit_range_and_typed_retyping() {
         )
         .unwrap(),
     );
-    assert_eq!(valid.metadata["metadata_schema_version"], Value::from(70));
+    assert_eq!(valid.metadata["metadata_schema_version"], Value::from(71));
 
     let mutate_bounded_accesses = |metadata: &mut Value, mutation: fn(&mut Value)| {
         for pointer in ["/runtime/ckb_runtime_accesses", "/actions/0/ckb_runtime_accesses"] {
@@ -341,6 +351,61 @@ fn checker_binds_bounded_witness_owner_limit_range_and_typed_retyping() {
     local.ty = "WitnessBytesView<signer,64>".to_string();
     changed.rebind_typed_semantics();
     assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
+}
+
+#[test]
+fn checker_binds_zero_lock_signing_domain_to_runtime_access_and_typed_call() {
+    let valid = Fixture::from_result(
+        compile(
+            SIGHASH_ZERO_LOCK_SOURCE,
+            CompileOptions {
+                edition: NEXT_EDITION,
+                target: Some("riscv64-elf".to_string()),
+                target_profile: Some("ckb".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    );
+    assert_eq!(valid.metadata["metadata_schema_version"], Value::from(71));
+    assert_eq!(valid.metadata["runtime"]["signing_message_domains"].as_array().unwrap().len(), 1);
+
+    for (field, tampered) in [
+        ("contract", "tampered-signing-domain"),
+        ("digest_type", "Hash"),
+        ("first_witness_lock_transform", "preserve-prefix-and-zero-signatures"),
+        ("runtime_helper", "__tampered_sighash"),
+    ] {
+        let mut changed = valid.clone();
+        changed.metadata["runtime"]["signing_message_domains"][0][field] = Value::String(tampered.to_string());
+        changed.rebind_sidecars();
+        assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+    }
+
+    let mut changed = valid.clone();
+    changed.metadata["runtime"]["signing_message_domains"] = serde_json::json!([]);
+    changed.rebind_sidecars();
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let mut changed = valid;
+    changed.metadata["runtime"]["signing_message_domains"][0]["max_group_inputs"] = Value::from(5);
+    for pointer in ["/runtime/ckb_runtime_accesses", "/actions/0/ckb_runtime_accesses"] {
+        let access = changed
+            .metadata
+            .pointer_mut(pointer)
+            .and_then(Value::as_array_mut)
+            .unwrap()
+            .iter_mut()
+            .find(|access| access["operation"] == "sighash-all-zero-lock-v1")
+            .expect("bounded sighash runtime access");
+        access["provenance"]["index"]["max_inclusive"] = Value::from(4);
+    }
+    changed.rebind_sidecars();
+    let error =
+        check_bundle_values(&changed.artifact, &changed.metadata, &changed.record, &changed.source_map, &CheckerBudgets::default())
+            .expect_err("metadata and access bounds cannot diverge from the typed call");
+    assert_eq!(error.code, CheckerRejectionCode::V2410MetadataBindingMismatch);
+    assert!(error.message.contains("typed bounded sighash call"), "{error}");
 }
 
 #[test]

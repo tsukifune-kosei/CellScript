@@ -6618,6 +6618,7 @@ impl IrGenerator {
                 "Hash::from_bytes" if call.args.len() == 1 => {
                     Some(self.lower_hash_from_bytes(&call.args[0], current, blocks, vars, call.span))
                 }
+                "Hash::from_sighash_all" if call.args.len() == 1 => Some(self.lower_expr(&call.args[0], current, blocks, vars)),
                 "script::hash_type_data" if call.args.is_empty() => {
                     Some(LoweredExpr { operand: IrOperand::Const(IrConst::U64(0)), current: Some(current) })
                 }
@@ -6660,6 +6661,15 @@ impl IrGenerator {
                 "env::sighash_all" if call.args.len() == 1 => {
                     self.lower_simple_runtime_call("__ckb_sighash_all", "sighash_all", IrType::Hash, &call.args, current, blocks, vars)
                 }
+                "env::sighash_all_zero_lock" if call.args.len() == 4 => self.lower_simple_runtime_call(
+                    "__ckb_sighash_all_zero_lock",
+                    "sighash_all_zero_lock",
+                    IrType::Hash,
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
                 "ckb::header_epoch_number" if call.args.is_empty() => {
                     let dest = self.new_var("ckb_header_epoch_number", IrType::U64);
                     self.block_mut(blocks, current).instructions.push(IrInstruction::Call {

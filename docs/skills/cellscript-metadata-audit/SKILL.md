@@ -25,13 +25,14 @@ stream, not consensus truth. ProofPlan rows, TemplateLayout records, receipts,
 constraints, ABI, and builder assumptions explain what the compiler emitted and
 what remains to be checked by builders or CKB nodes.
 
-For the `0.30` development branch, inspect current metadata schema 70 under
+For the `0.30` development branch, inspect current metadata schema 71 under
 Edition 2026 or the separately routed Edition 2027 preview and the resolved
 compatibility profile, together with typed-semantics v8, semantic-foundation
 v3, lowering-record v6, source-map v2, and the
 `cellscript-ckb-runtime-view-v1` runtime contract for CKB ELF builds. Use
 `cellc expand` for the deterministic diagnostic rendering; do not hash that
 rendering or treat it as a source-equivalence proof. Typed transaction views, bounded
+signing-message domains, bounded
 quantifiers/collections, capability proofs, enum layouts, validity predicates,
 borrow regions, and `fungible-type-group-v1` evidence introduced on the 0.22
 line remain part of that evidence stream. The 0.25 value-generic kernel adds

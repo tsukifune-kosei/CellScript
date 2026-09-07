@@ -6,7 +6,7 @@
 `cellscript-ckb-runtime-view-v1`. This is a development contract, not a claim
 that issue #24 or the 0.30 release gate is complete.**
 
-Compile metadata schema 70 records the view contract name in
+Compile metadata schema 71 records the view contract name in
 `runtime.ckb_runtime_view_contract` and binds
 `cellscript-ckb-runtime-access-provenance-v1` in
 `runtime.ckb_runtime_access_provenance_contract`. Metadata validation and the
@@ -85,7 +85,8 @@ hash; it does not prove existence, deployment, or authorization.
 | Input lineage | full OutPoint transaction hash/index requirements and MetaPoint pair helpers | Executable fixed-width helpers. Pair scanners are protocol-neutral but have separately documented cardinality bounds. |
 | Temporal and DAO | typed HeaderDep epoch fields plus full-header block number and millisecond timestamp; opaque and decoded `InputView.since`; six absolute/relative block, epoch, and timestamp `Since` domains; checked narrowing; checked `EpochDuration` arithmetic; explicit raw conversions; legacy raw constructors; DAO accumulated-rate/header-lineage/maturity helpers | The additive temporal subset is executable under the typed temporal contract. Full-header reads require the exact 208-byte Molecule Header; Since decoding validates RFC0017 flags and payloads; same-domain epoch-Since comparisons use canonical fraction ordering; duration construction and EpochNumber add/sub enforce the 24-bit domain. |
 | Witness | count/size, legacy exact byte/u32/u64/bytes32 reads, bounded spans, selected gather hashing, exact 32-byte typed WitnessArgs fields, and owner-tagged variable-length raw/lock/entry/output_type views with exact scalar reads and streaming Blake2b | Executable limited. Bounded views admit at most 65,536 bytes and do not expose allocation, mutation, slicing as an owned value, or unchecked pointers. |
-| Transaction identity and preimage | canonical `ckb::transaction_hash()` through exact 32-byte `LOAD_TX_HASH`; `transaction_u32_le`; bounded gather BLAKE2b; raw-transaction hash without CellDeps | The canonical raw transaction hash is executable and fixed-width. Other preimage reads remain limited to their declared offsets/chunks. Canonical CKB sighash-all remains fail-closed until its message and witness-ownership contract is implemented. |
+| Transaction identity and preimage | canonical `ckb::transaction_hash()` through exact 32-byte `LOAD_TX_HASH`; bounded `env::sighash_all_zero_lock`; `transaction_u32_le`; bounded gather BLAKE2b; raw-transaction hash without CellDeps | The raw transaction hash is fixed-width. The zero-lock signing domain is executable only for the current input Script group and its four declared bounds. The generic `env::sighash_all(source)` spelling remains fail-closed. |
+| Signing-message domain | `env::sighash_all_zero_lock(max_group_inputs, max_inputs, max_extra_witnesses, max_witness_bytes) -> SighashAllDigest`; explicit `Hash::from_sighash_all` conversion | Hashes the exact transaction hash, the first group witness with the complete `WitnessArgs.lock` payload replaced by equal-length zero bytes, later group witnesses, and witnesses after the transaction input count. Every witness is prefixed by its little-endian `u64` byte length. This covers simple all-zero lock placeholders. It does not implement multisig layouts that preserve a nonzero configuration prefix. |
 | Hashing | CKB BLAKE2b data/span helpers, fixed SHA-256/SHA256d values and pairs, bounded SHA256d Merkle proofs | Executable fixed-width or literal-bounded operations. No allocator-backed streaming hash surface is implied. |
 | CellDep delegation | exact-index/literal-bounded data-hash checks; fixed u8/hex4 EXEC; hex4 SPAWN/WAIT | Raw adapters remain fail-closed under production policy. `trusted_*` forms are a composition boundary requiring an exact manifest declaration and data hash; successful delegation does not prove external internals. |
 | Protocol helpers | bounded xUDT, DAO, C256, and MetaPoint requirements | Executable only for their documented fixed shapes. They do not widen the general transaction-view contract. |
@@ -113,6 +114,7 @@ hash; it does not prove existence, deployment, or authorization.
 | 66 | `sighash-all-unsupported` | Deferred canonical signing-message construction was requested. |
 | 67 | `witness-field-absent` | A bounded WitnessArgs field is absent; `Some(empty)` remains a present zero-length value. |
 | 68 | `witness-bound-exceeded` | The selected raw witness or field is larger than its compile-time declared maximum. |
+| 69 | `sighash-bound-exceeded` | A group/input/extra-witness count or included witness exceeds the signing-domain literals. |
 
 ## Current executable evidence
 
@@ -129,6 +131,16 @@ view domain. The bounded witness cases cover
 all four owners, 700/900/1024-byte fields, the complete serialized witness,
 exact scalar reads, streaming hashes, `Some(empty)`, absent and over-bound
 values, malformed/truncated Molecule data, and GroupOutput provenance.
+`tests/sighash_zero_lock.rs` differentially compares the emitted digest with
+the pinned `ckb-sdk-rust` message generator across a non-contiguous two-input
+Script group, an unrelated input witness, and a transaction-level extra
+witness. It also proves post-message witness mutation changes verification and
+all four declared bounds terminate with error 69. Metadata schema 71 records
+the exact transform, order, digest domain, scope, and limits; the independent
+checker binds those records to runtime access provenance and typed call
+operands after outer hashes are rebound. Generated TypeScript builder manifests
+and plans preserve the same domain and require pre-signing witness placement;
+the metadata-only browser summary exposes it as well.
 `tests/artifact_checker.rs` changes source, index bound, range, contract,
 transaction-hash operation/syscall/binding/width, bounded owner/maximum,
 handle, and module/entry copies after outer hash rebinding and requires
@@ -142,6 +154,8 @@ suites retain the older bounded helper families.
 The following work remains before issue #24 can close:
 
 - full-header hash decoding if the frozen business corpus requires it;
+- any additional signing domain selected by the business corpus, including a
+  multisig prefix-preserving layout, as a separately named contract;
 - persistent-policy and generated-builder parity for every admitted row;
 - standalone-checker machine mutations for the new HeaderDep source/index,
   field selector, exact width, syscall status, and terminal error;

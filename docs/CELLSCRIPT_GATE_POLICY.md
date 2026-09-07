@@ -283,7 +283,7 @@ CKB-VM execution, deployment, and chain evidence.
 
 ### 0.30 typed CKB runtime-view evidence
 
-The `0.30` development branch advances compile metadata to schema 70 and binds
+The `0.30` development branch advances compile metadata to schema 71 and binds
 `runtime.ckb_runtime_view_contract = cellscript-ckb-runtime-view-v1` plus
 `runtime.ckb_runtime_access_provenance_contract =
 cellscript-ckb-runtime-access-provenance-v1`. The first
@@ -315,8 +315,18 @@ temporal constructors, checked decoders, domains, fixed representation, and
 migration identity, and the Registry API retains a v2 reader. This evidence
 is mirrored by formatter, VS Code, generated-builder, locked package, WASM,
 Playground, and six-family business-fixture checks. The canonical browser
-summary build is 544,037 bytes gzip. Full candidate gates and independent
+summary build is 560,647 bytes gzip. Full candidate gates and independent
 review are still required to close the temporal issue or the release gate.
+
+Metadata schema 71 additionally binds
+`cellscript-ckb-sighash-all-zero-lock-v1`. Reviewers must check the current
+input Script-group scope, complete first-lock zero transform, witness order,
+`SighashAllDigest` type, and all four literal bounds together. The standalone
+checker compares these records with typed call operands and runtime access
+provenance. `tests/sighash_zero_lock.rs` supplies the pinned `ckb-sdk-rust`
+differential and adversarial bound/mutation cases. This evidence admits only
+the all-zero lock-placeholder domain; the generic `env::sighash_all(source)`
+and prefix-preserving multisig construction remain outside this contract.
 
 ### 0.26b semantic-foundation evidence
 

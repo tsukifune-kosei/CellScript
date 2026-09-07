@@ -123,6 +123,7 @@ pub struct CheckerReport {
 const CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT: &str = "cellscript-ckb-runtime-access-provenance-v1";
 const CKB_RUNTIME_ACCESS_PROVENANCE_METADATA_SCHEMA: u64 = 69;
 const BOUNDED_WITNESS_METADATA_SCHEMA: u64 = 70;
+const SIGHASH_ZERO_LOCK_METADATA_SCHEMA: u64 = 71;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -389,7 +390,7 @@ fn validate_metadata_binding(
 ) -> Result<(), CheckerError> {
     crate::policy::validate_policy_metadata(metadata, &record.typed_semantics)?;
     validate_ckb_vm2_target_contract(metadata)?;
-    validate_runtime_access_provenance_metadata(metadata)?;
+    validate_runtime_access_provenance_metadata(metadata, &record.typed_semantics)?;
     let artifact_hash = hex_encode(&ckb_blake2b256(artifact));
     if artifact_hash != record.artifact_hash || artifact.len() as u64 != record.artifact_size_bytes {
         return Err(CheckerError::new(
@@ -613,7 +614,7 @@ fn validate_ckb_vm2_target_contract(metadata: &Value) -> Result<(), CheckerError
     Ok(())
 }
 
-fn validate_runtime_access_provenance_metadata(metadata: &Value) -> Result<(), CheckerError> {
+fn validate_runtime_access_provenance_metadata(metadata: &Value, typed_semantics: &TypedSemanticRecord) -> Result<(), CheckerError> {
     let schema = json_u64(metadata, &["metadata_schema_version"])
         .ok_or_else(|| metadata_binding_error("compile metadata has no numeric metadata_schema_version"))?;
     if schema < CKB_RUNTIME_ACCESS_PROVENANCE_METADATA_SCHEMA {
@@ -690,6 +691,117 @@ fn validate_runtime_access_provenance_metadata(metadata: &Value) -> Result<(), C
                 )));
             }
         }
+    }
+    if schema >= SIGHASH_ZERO_LOCK_METADATA_SCHEMA {
+        validate_sighash_zero_lock_domains(metadata, &module_accesses, typed_semantics)?;
+    }
+    Ok(())
+}
+
+fn validate_sighash_zero_lock_domains(
+    metadata: &Value,
+    accesses: &[RuntimeAccess],
+    typed_semantics: &TypedSemanticRecord,
+) -> Result<(), CheckerError> {
+    let domains = match metadata.pointer("/runtime/signing_message_domains") {
+        Some(value) => {
+            value.as_array().ok_or_else(|| metadata_binding_error("runtime.signing_message_domains is not an array"))?.as_slice()
+        }
+        None => &[],
+    };
+    let canonical_accesses = accesses.iter().filter(|access| access.operation == "sighash-all-zero-lock-v1").collect::<Vec<_>>();
+    if domains.len() != canonical_accesses.len() {
+        return Err(metadata_binding_error("runtime.signing_message_domains do not match bounded sighash runtime accesses"));
+    }
+    let mut semantic_calls = typed_semantics
+        .entries
+        .iter()
+        .flat_map(|entry| {
+            entry.blocks.iter().flat_map(move |block| {
+                block.operations.iter().filter_map(move |operation| {
+                    let call = operation.call.as_ref()?;
+                    (call.target == "__ckb_sighash_all_zero_lock").then(|| {
+                        let bounds = operation
+                            .operands
+                            .iter()
+                            .map(|operand| match operand.constant.as_ref() {
+                                Some(TypedSemanticConstant::U64(value)) => value.parse::<u64>().ok(),
+                                _ => None,
+                            })
+                            .collect::<Option<Vec<_>>>();
+                        (entry.kind.clone(), entry.name.clone(), bounds)
+                    })
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    if semantic_calls.len() != domains.len()
+        || semantic_calls.iter().any(|(_, _, bounds)| bounds.as_ref().is_none_or(|values| values.len() != 4))
+    {
+        return Err(metadata_binding_error("runtime.signing_message_domains do not match typed bounded sighash calls"));
+    }
+    let mut unmatched = canonical_accesses;
+    for (index, domain) in domains.iter().enumerate() {
+        let label = format!("runtime.signing_message_domains[{index}]");
+        let u64_field = |field: &str| domain.get(field).and_then(Value::as_u64);
+        let string_field = |field: &str| domain.get(field).and_then(Value::as_str);
+        let max_group_inputs = u64_field("max_group_inputs");
+        let max_inputs = u64_field("max_inputs");
+        let max_extra_witnesses = u64_field("max_extra_witnesses");
+        let max_witness_bytes = u64_field("max_witness_bytes");
+        let scope_kind = string_field("scope_kind");
+        let scope_name = string_field("scope_name");
+        let scope_exists = scope_kind.zip(scope_name).is_some_and(|(kind, name)| {
+            let collection = match kind {
+                "action" => "actions",
+                "function" => "functions",
+                "lock" => "locks",
+                _ => return false,
+            };
+            metadata
+                .get(collection)
+                .and_then(Value::as_array)
+                .is_some_and(|entries| entries.iter().any(|entry| entry.get("name").and_then(Value::as_str) == Some(name)))
+        });
+        if !scope_exists
+            || string_field("contract") != Some("cellscript-ckb-sighash-all-zero-lock-v1")
+            || string_field("binding") != Some("env::sighash_all_zero_lock")
+            || string_field("digest_type") != Some("SighashAllDigest")
+            || string_field("hash_algorithm") != Some("ckb-default-hash-blake2b-256")
+            || string_field("transaction_hash_source") != Some("LOAD_TX_HASH-exact-32")
+            || string_field("group_scope") != Some("current-input-script-group")
+            || string_field("first_witness_source") != Some("GroupInput[0]-WitnessArgs")
+            || string_field("first_witness_lock_transform") != Some("replace-entire-lock-payload-with-equal-length-zero-bytes")
+            || string_field("witness_length_prefix") != Some("u64-little-endian-byte-length")
+            || string_field("later_group_witness_order") != Some("GroupInput[1..]-script-group-order-if-present")
+            || string_field("extra_witness_source") != Some("Input[input_count..witness_count]-transaction-order")
+            || !max_group_inputs.is_some_and(|value| (1..=64).contains(&value))
+            || !max_inputs.is_some_and(|value| (1..=256).contains(&value))
+            || max_group_inputs.zip(max_inputs).is_none_or(|(group, inputs)| group > inputs)
+            || !max_extra_witnesses.is_some_and(|value| value <= 64)
+            || !max_witness_bytes.is_some_and(|value| (1..=65_536).contains(&value))
+            || string_field("runtime_helper") != Some("__ckb_sighash_all_zero_lock")
+            || string_field("evidence_tier") != Some("checked-runtime")
+        {
+            return Err(metadata_binding_error(format!("{label} does not match the canonical zero-lock signing domain")));
+        }
+        let Some(position) = unmatched.iter().position(|access| {
+            access.provenance.index.max_inclusive == max_group_inputs.map(|value| value - 1)
+                && access.provenance.range.length.max_inclusive == max_witness_bytes
+        }) else {
+            return Err(metadata_binding_error(format!("{label} has no runtime access with matching group and witness bounds")));
+        };
+        unmatched.remove(position);
+        let domain_bounds = [max_group_inputs, max_inputs, max_extra_witnesses, max_witness_bytes];
+        let Some(position) = semantic_calls.iter().position(|(kind, name, bounds)| {
+            let kind = if kind == "helper" { "function" } else { kind.as_str() };
+            Some(kind) == scope_kind
+                && Some(name.as_str()) == scope_name
+                && bounds.as_ref().is_some_and(|values| values.iter().copied().map(Some).eq(domain_bounds))
+        }) else {
+            return Err(metadata_binding_error(format!("{label} has no typed bounded sighash call with matching scope and bounds")));
+        };
+        semantic_calls.remove(position);
     }
     Ok(())
 }
@@ -874,6 +986,7 @@ fn parse_runtime_accesses(value: Option<&Value>, label: &str) -> Result<Vec<Runt
         }
         validate_runtime_access_provenance(&prefix, &access.source, Some(access.index), &access.provenance)?;
         validate_canonical_transaction_hash_runtime_access(&prefix, access)?;
+        validate_canonical_sighash_zero_lock_runtime_access(&prefix, access)?;
     }
     Ok(accesses)
 }
@@ -903,6 +1016,41 @@ fn validate_canonical_transaction_hash_runtime_access(prefix: &str, access: &Run
         || access.provenance.range != fixed_32
     {
         return Err(metadata_binding_error(format!("{prefix} does not match the canonical 32-byte LOAD_TX_HASH contract")));
+    }
+    Ok(())
+}
+
+fn validate_canonical_sighash_zero_lock_runtime_access(prefix: &str, access: &RuntimeAccess) -> Result<(), CheckerError> {
+    let identifies_domain = access.operation == "sighash-all-zero-lock-v1"
+        || access.syscall == "CKB_SIGHASH_ALL_ZERO_LOCK_V1"
+        || access.binding == "env::sighash_all_zero_lock";
+    if !identifies_domain {
+        return Ok(());
+    }
+    let range = &access.provenance.range;
+    if access.operation != "sighash-all-zero-lock-v1"
+        || access.syscall != "CKB_SIGHASH_ALL_ZERO_LOCK_V1"
+        || access.source != "GroupInput"
+        || access.index != 0
+        || access.binding != "env::sighash_all_zero_lock"
+        || access.provenance.source.resolved_source != "GroupInput"
+        || access.provenance.source.origin != "bounded-scan"
+        || access.provenance.source.binding.is_some()
+        || access.provenance.index.kind != "bounded-scan"
+        || access.provenance.index.value.is_some()
+        || access.provenance.index.binding.is_some()
+        || access.provenance.index.max_inclusive.is_none_or(|maximum| maximum > 63)
+        || range.kind != "bounded-range"
+        || range.offset.kind != "static"
+        || range.offset.value != Some(0)
+        || range.offset.binding.is_some()
+        || range.length.kind != "dynamic"
+        || range.length.value.is_some()
+        || range.length.binding.as_deref() != Some("sighash_all_zero_lock.witness_size")
+        || range.offset.max_inclusive != range.length.max_inclusive
+        || range.length.max_inclusive.is_none_or(|maximum| maximum == 0 || maximum > 65_536)
+    {
+        return Err(metadata_binding_error(format!("{prefix} does not match the bounded CKB sighash-all zero-lock runtime contract")));
     }
     Ok(())
 }
@@ -1074,7 +1222,7 @@ fn known_runtime_syscall(syscall: &str) -> bool {
             | "LOAD_WITNESS_ARGS_LOCK"
             | "LOAD_WITNESS_ARGS_INPUT_TYPE"
             | "LOAD_WITNESS_ARGS_OUTPUT_TYPE"
-            | "CKB_SIGHASH_ALL"
+            | "CKB_SIGHASH_ALL_ZERO_LOCK_V1"
             | "EXIT"
             | "CAPACITY_POLICY"
             | "CKB_BLAKE2B"
@@ -1105,7 +1253,7 @@ fn runtime_syscall_allows_source(syscall: &str, source: &str) -> bool {
         "LOAD_HEADER_BY_FIELD" => source == "HeaderDep",
         "LOAD_INPUT_BY_FIELD" => matches!(source, "GroupInput" | "SourceView" | "Input/GroupInput"),
         "LOAD_SCRIPT" | "LOAD_SCRIPT_HASH" => source == "CurrentScript",
-        "CKB_SIGHASH_ALL" => source == "GroupInput",
+        "CKB_SIGHASH_ALL_ZERO_LOCK_V1" => source == "GroupInput",
         "EXIT" => source == "Process",
         "LOAD_SCRIPT_ARGS" => source == "ScriptArgs",
         "SOURCE_VIEW" => {
@@ -2506,6 +2654,32 @@ fn validate_typed_operation(
                     || call.effect != "deferred-runtime-fail-closed:66:ckb-sighash-all-deferred")
             {
                 return typed_error("deferred sighash call does not declare its canonical failure contract".to_string());
+            }
+            if call.target == "__ckb_sighash_all_zero_lock" {
+                let bounds = operation
+                    .operands
+                    .iter()
+                    .map(|operand| match operand.constant.as_ref() {
+                        Some(TypedSemanticConstant::U64(value)) => value.parse::<u64>().ok(),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>();
+                let valid_bounds = bounds.as_deref().is_some_and(|values| {
+                    values.len() == 4
+                        && (1..=64).contains(&values[0])
+                        && (1..=256).contains(&values[1])
+                        && values[0] <= values[1]
+                        && values[2] <= 64
+                        && (1..=65_536).contains(&values[3])
+                });
+                if call.contract != "versioned-runtime-helper"
+                    || call.effect != "runtime-contract"
+                    || call.params != ["u64", "u64", "u64", "u64"]
+                    || call.return_type != "hash"
+                    || !valid_bounds
+                {
+                    return typed_error("bounded zero-lock sighash call does not declare its canonical runtime contract".to_string());
+                }
             }
             if call.contract == "typed-local" {
                 let Some(callee) = entries.get(call.target.as_str()) else { return fail() };

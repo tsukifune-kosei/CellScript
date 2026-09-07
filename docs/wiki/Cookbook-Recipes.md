@@ -225,6 +225,26 @@ construction is deferred. Production compilation rejects
 instead of producing a digest. For executable authorization, use a standard
 authenticated Lock or define and verify a complete explicit message policy.
 
+For a custom verifier whose complete first `WitnessArgs.lock` placeholder is
+zero-filled, construct the bounded 0.30 domain explicitly:
+
+```cellscript
+let digest = env::sighash_all_zero_lock(4, 8, 4, 4096)
+verifier::btc::bip340::require_signature_from_cell_dep(
+    3,
+    digest,
+    xonly_pubkey,
+    signature,
+)
+```
+
+The four literals bound current-group inputs, transaction inputs, extra
+witnesses, and each included witness. This domain commits to the transaction
+hash, later group witnesses, and witnesses after the input count. It replaces
+the complete first lock payload with equal-length zeros, so it is not the
+message contract for a multisig placeholder that preserves a configuration
+prefix.
+
 ## Recipe: Pin And Spawn A BIP340 Verifier
 
 Use an explicit resolved CellDep index and bind its data hash before the VM2

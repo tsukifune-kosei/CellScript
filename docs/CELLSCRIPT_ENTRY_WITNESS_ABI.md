@@ -80,6 +80,15 @@ while `Some(empty)` is a present zero-length value. A value above its declared
 maximum fails with error 68. The 65,536-byte read-view ceiling does not widen
 the 4,096-byte `CSARGv1` entry trampoline limit described below.
 
+Metadata schema 71 adds the separately versioned
+`cellscript-ckb-sighash-all-zero-lock-v1` message domain. It preserves the
+serialized first `WitnessArgs` and replaces only the complete `lock` payload
+with equal-length zero bytes before hashing. The existing `input_type` entry
+payload and `output_type` bytes therefore remain committed. This contract
+matches a completely zero-filled lock placeholder; multisig placeholders with
+a retained configuration prefix continue to use their standard Lock signer or
+a separately specified domain.
+
 ## Payload Envelope v1
 
 Every parameterized entry payload that has witness-backed arguments starts with:

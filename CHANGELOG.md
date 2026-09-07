@@ -156,6 +156,29 @@
   within the 600 KiB budget. Advance the artifact cache identity to
   `project-source-set-v41-0.30-dev1-transaction-hash`.
 
+- Add the bounded `env::sighash_all_zero_lock(max_group_inputs, max_inputs,
+  max_extra_witnesses, max_witness_bytes) -> SighashAllDigest` signing-message
+  contract. The CKB backend hashes the exact transaction hash, the first
+  current-group witness with its complete `WitnessArgs.lock` payload replaced
+  by equal-length zero bytes, later present group witnesses, and witnesses after
+  the transaction input count, with canonical little-endian `u64` length
+  prefixes. All counts and each included witness are bounded; excess runtime
+  shape uses stable error 69. A real CKB-VM differential matches the pinned
+  `ckb-sdk-rust` generator across a non-contiguous Script group, an unrelated
+  input witness, and a transaction-level extra witness. Metadata schema 71
+  binds the exact domain, scope, transform, ordering, result type, and four
+  literal limits. The generated TypeScript builder manifest and action plan
+  preserve the domain and mark pre-signing witness placement as required; the
+  browser summary exposes the same record. The standalone checker cross-checks
+  those records against
+  typed call operands and runtime access provenance after outer hashes are
+  rebound. The generic `env::sighash_all(source)` path remains deferred, and
+  this all-zero placeholder contract does not claim prefix-preserving multisig
+  layouts. The rebuilt browser bundle is 560,647 bytes gzip with SHA-256
+  `fb58a9463bbf83f056b496b505e44fb0072f8b0e6c8d392678c959771279ed15`,
+  within the 600 KiB budget. Advance the artifact cache identity to
+  `project-source-set-v42-0.30-dev1-sighash-zero-lock`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

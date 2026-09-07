@@ -363,6 +363,9 @@ impl CodeGenerator {
         if self.emit_runtime_current_script_hash_call(dest, func, args)? {
             return Ok(());
         }
+        if self.emit_runtime_sighash_all_zero_lock_call(dest, func, args)? {
+            return Ok(());
+        }
         if self.emit_runtime_input_out_point_tx_hash_call(dest, func, args)? {
             return Ok(());
         }
@@ -578,6 +581,44 @@ impl CodeGenerator {
         self.emit(format!("call {helper}"));
         let ok_label = self.fresh_label(&format!("{label_prefix}_ok"));
         self.emit(format!("beqz a0, {}", ok_label));
+        self.emit_process_failure_status();
+        self.emit_label(&ok_label);
+        self.emit_sp_addi("t0", buffer_offset);
+        self.emit_stack_store("t0", dest.id * 8);
+        Ok(true)
+    }
+
+    fn emit_runtime_sighash_all_zero_lock_call(&mut self, dest: Option<&IrVar>, func: &str, args: &[IrOperand]) -> Result<bool> {
+        if func != "__ckb_sighash_all_zero_lock" {
+            return Ok(false);
+        }
+        let Some(dest) = dest else {
+            return Ok(false);
+        };
+        if args.len() != 4 || dest.ty != IrType::Hash {
+            return Ok(false);
+        }
+        let Some(size_offset) = self.cell_buffer_size_offsets.get(&dest.id).copied() else {
+            self.emit("# cellscript abi: sighash-all destination has no 32-byte storage; fail closed");
+            self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+            return Ok(true);
+        };
+        let Some(buffer_offset) = self.cell_buffer_offsets.get(&dest.id).copied() else {
+            self.emit("# cellscript abi: sighash-all destination has no buffer storage; fail closed");
+            self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+            return Ok(true);
+        };
+
+        self.emit("# cellscript abi: canonical bounded CKB sighash-all zero-lock message domain");
+        self.emit("li t0, 32");
+        self.emit_schema_size_store("t0", size_offset);
+        for (arg, register) in args.iter().zip(["a0", "a1", "a2", "a3"]) {
+            self.emit_operand_to_register(register, arg);
+        }
+        self.emit_sp_addi("a4", buffer_offset);
+        self.emit("call __ckb_sighash_all_zero_lock");
+        let ok_label = self.fresh_label("sighash_all_zero_lock_ok");
+        self.emit(format!("beqz a0, {ok_label}"));
         self.emit_process_failure_status();
         self.emit_label(&ok_label);
         self.emit_sp_addi("t0", buffer_offset);

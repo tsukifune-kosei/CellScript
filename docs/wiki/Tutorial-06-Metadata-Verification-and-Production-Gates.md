@@ -25,10 +25,16 @@ The profile combines that with independently versioned target,
 primitive-assurance, entry payload, witness placement, and metadata-schema
 axes. Verification rejects a sidecar whose profile does not resolve from those
 inputs; it never guesses another contract. Current `0.30` outputs use metadata
-schema 70, source schema 2, artifact schema 1, and constraints schema 4. Runtime
+schema 71, source schema 2, artifact schema 1, and constraints schema 4. Runtime
 metadata binds the closed `cellscript-ckb-runtime-view-v1` contract and the
 structured `cellscript-ckb-runtime-access-provenance-v1` source/index/range
 contract.
+Schema 71 also records `runtime.signing_message_domains`. For
+`cellscript-ckb-sighash-all-zero-lock-v1`, verify the current input Script-group
+scope, complete first-lock zero transform, witness ordering, `SighashAllDigest`
+result type, and four literal bounds as one contract. The independent checker
+cross-checks the record against typed semantics and runtime provenance. This
+record does not cover prefix-preserving multisig placeholders.
 Metadata includes canonical `public_interface` / `interface_hash` and
 `typed_semantics` / `typed_semantics_hash` pairs. Typed semantics v6 embeds the
 semantic-foundation v2 record and resolved fixed-Cell binding tables. Registry,
@@ -256,7 +262,7 @@ records the exact `identity(...)` condition declared by the same resource.
 No proof may source authority from a container or another Cell type.
 
 Top-level `enum_layouts` for concrete payload ADTs first appeared in schema 53
-and remain in current metadata schema 70 on the `0.30` development branch. Audit the
+and remain in current metadata schema 71 on the `0.30` development branch. Audit the
 `packed-tagged-union-v1` layout, one-byte tag, sequential variant tags, packed
 field offsets, encoded size, ownership, storage, and ABI together. A
 `linear-cell-handle` field is exactly eight bytes and forces
@@ -295,7 +301,7 @@ emit runtime error 24 in permissive artifacts and stop at E2105 under the
 production policy; a static `N` alone is never evidence that a scan ran.
 
 The validity record first appeared in schema 55 during the 0.22 line and is
-retained by current metadata schema 70 on the `0.30` development branch as
+retained by current metadata schema 71 on the `0.30` development branch as
 `types[].validity_predicates`. Review each predicate's
 `expression`, `dependencies`, `evidence_tier`,
 `runtime_checked_on_create`, `create_paths_selected`,

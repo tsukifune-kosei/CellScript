@@ -9949,7 +9949,7 @@ action inspect(source_index: u64) -> u64 {
     assert!(metadata_output.status.success(), "stderr: {}", String::from_utf8_lossy(&metadata_output.stderr));
 
     let metadata: serde_json::Value = serde_json::from_slice(&std::fs::read(&metadata_path).unwrap()).unwrap();
-    assert_eq!(metadata["metadata_schema_version"], 70);
+    assert_eq!(metadata["metadata_schema_version"], 71);
     assert_eq!(metadata["runtime"]["ckb_runtime_access_provenance_contract"], "cellscript-ckb-runtime-access-provenance-v1");
     let dynamic_access = metadata["actions"][0]["ckb_runtime_accesses"]
         .as_array()
@@ -10039,7 +10039,7 @@ action inspect() -> u64 {
     assert!(metadata_output.status.success(), "stderr: {}", String::from_utf8_lossy(&metadata_output.stderr));
 
     let metadata: serde_json::Value = serde_json::from_slice(&std::fs::read(&metadata_path).unwrap()).unwrap();
-    assert_eq!(metadata["metadata_schema_version"], 70);
+    assert_eq!(metadata["metadata_schema_version"], 71);
     let handle = metadata["runtime"]["transaction_view_handles"]
         .as_array()
         .unwrap()
@@ -10086,6 +10086,82 @@ action inspect() -> u64 {
     assert!(index_ts.contains("WitnessBytesView<lock,64>"), "{index_ts}");
     assert!(index_ts.contains("\"witness_owner\": \"lock\""), "{index_ts}");
     assert!(index_ts.contains("\"max_bytes\": 64"), "{index_ts}");
+}
+
+#[test]
+fn cellc_gen_builder_preserves_zero_lock_signing_message_domain() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+edition = "2027"
+name = "sighash-zero-lock-builder"
+version = "0.1.0"
+
+[build]
+target_profile = "ckb"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src").join("main.cell"),
+        r#"
+module sighash_zero_lock_builder::main
+
+action inspect() -> u64 {
+    verification
+        let digest = env::sighash_all_zero_lock(4, 8, 4, 4096)
+        let expected = witness::args(0).lock
+        require Hash::from_sighash_all(digest) == expected
+        return 0
+}
+"#,
+    )
+    .unwrap();
+
+    let metadata_path = root.join("inspect.meta.json");
+    let metadata_output = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("metadata")
+        .arg("--output")
+        .arg(&metadata_path)
+        .output()
+        .unwrap();
+    assert!(metadata_output.status.success(), "stderr: {}", String::from_utf8_lossy(&metadata_output.stderr));
+
+    let output_dir = root.join("generated-builder");
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("gen-builder")
+        .arg("--target")
+        .arg("typescript")
+        .arg("--metadata")
+        .arg(&metadata_path)
+        .arg("--output")
+        .arg(&output_dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output_dir.join("cellscript-builder-manifest.json")).unwrap()).unwrap();
+    let domain = &manifest["signing_message_domains"][0];
+    assert_eq!(domain["contract"], "cellscript-ckb-sighash-all-zero-lock-v1");
+    assert_eq!(domain["max_group_inputs"], 4);
+    assert_eq!(domain["max_inputs"], 8);
+    assert_eq!(domain["max_extra_witnesses"], 4);
+    assert_eq!(domain["max_witness_bytes"], 4096);
+    assert_eq!(manifest["runtime_contract"]["requires_pre_signing_witness_placement"], true);
+
+    let index_ts = std::fs::read_to_string(output_dir.join("src").join("index.ts")).unwrap();
+    assert!(index_ts.contains("export const signingMessageDomains"), "{index_ts}");
+    assert!(index_ts.contains("cellscript-ckb-sighash-all-zero-lock-v1"), "{index_ts}");
+    assert!(index_ts.contains("signingMessageDomains: typeof signingMessageDomains"), "{index_ts}");
 }
 
 #[test]

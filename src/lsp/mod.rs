@@ -592,6 +592,7 @@ impl LspServer {
                 for (name, insert) in [
                     ("current_timepoint", "env::current_timepoint()"),
                     ("sighash_all", "env::sighash_all(${1:source::group_input(0)})"),
+                    ("sighash_all_zero_lock", "env::sighash_all_zero_lock(${1:8}, ${2:64}, ${3:16}, ${4:65536})"),
                 ] {
                     items.push(CompletionItem {
                         label: name.to_string(),
@@ -1002,7 +1003,11 @@ impl LspServer {
                 return items;
             }
             "Hash" => {
-                for (name, insert) in [("zero", "Hash::zero()"), ("from_bytes", "Hash::from_bytes(${1:b\"\\\\x00\\\\x00...\"})")] {
+                for (name, insert) in [
+                    ("zero", "Hash::zero()"),
+                    ("from_bytes", "Hash::from_bytes(${1:b\"\\\\x00\\\\x00...\"})"),
+                    ("from_sighash_all", "Hash::from_sighash_all(${1:digest})"),
+                ] {
                     items.push(CompletionItem {
                         label: name.to_string(),
                         kind: CompletionItemKind::Function,
@@ -1217,6 +1222,7 @@ impl LspServer {
             "Address",
             "Hash",
             "ScriptHash",
+            "SighashAllDigest",
             "EpochNumber",
             "EpochDuration",
             "BlockNumber",
@@ -3164,6 +3170,7 @@ mod tests {
         assert!(types.iter().any(|item| item.label == "BoundedCellSet"));
         assert!(types.iter().any(|item| item.label == "BoundedList"));
         assert!(types.iter().any(|item| item.label == "DecodedSince"));
+        assert!(types.iter().any(|item| item.label == "SighashAllDigest"));
         assert!(types.iter().any(|item| item.label == "AbsoluteBlockSince"));
         assert!(types.iter().any(|item| item.label == "RelativeTimestampSince"));
     }
@@ -3174,6 +3181,10 @@ mod tests {
 
         let env = server.member_completions("file:///test.cell", "env");
         assert!(env.iter().any(|item| item.label == "sighash_all"));
+        assert!(env.iter().any(|item| item.label == "sighash_all_zero_lock"));
+
+        let hash = server.member_completions("file:///test.cell", "Hash");
+        assert!(hash.iter().any(|item| item.label == "from_sighash_all"));
 
         let source = server.member_completions("file:///test.cell", "source");
         assert!(source.iter().any(|item| item.label == "group_input"));

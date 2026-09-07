@@ -581,6 +581,13 @@ impl CodeGenerator {
                         next_cell_slot += RUNTIME_CELL_SLOT_SIZE;
                     }
                     IrInstruction::Call { dest: Some(dest), func, args }
+                        if func == "__ckb_sighash_all_zero_lock" && args.len() == 4 && dest.ty == IrType::Hash =>
+                    {
+                        self.cell_buffer_size_offsets.insert(dest.id, next_cell_slot);
+                        self.cell_buffer_offsets.insert(dest.id, next_cell_slot + 8);
+                        next_cell_slot += RUNTIME_CELL_SLOT_SIZE;
+                    }
+                    IrInstruction::Call { dest: Some(dest), func, args }
                         if matches!(
                             func.as_str(),
                             "__ckb_input_out_point_tx_hash"

@@ -14,7 +14,7 @@ Use the error name first when debugging. Numeric codes are retained for VM,
 wallet, explorer, and acceptance-script compatibility.
 
 The table was introduced in compile metadata schema 30 and is emitted by the
-current metadata schema 70 on the `0.30` development branch under
+current metadata schema 71 on the `0.30` development branch under
 `constraints.runtime_errors`, so `cellc constraints`, `cellc check --json`, and
 sidecar metadata all expose the same machine-readable registry.
 The experimental `0.26b` baseline emitted the same registry in schema 67.
@@ -114,6 +114,7 @@ for the independent check's exact scope.
 | 66 | `sighash-all-unsupported` | Canonical CKB transaction sighash construction is deferred and cannot produce a digest. | Use an authenticated standard Lock or an explicit verifier with an independently specified message contract. |
 | 67 | `witness-field-absent` | A bounded read selected a WitnessArgs field whose `BytesOpt` is absent. | Put the value in the declared owner field; use `Some(empty)` when an intentionally empty value is required. |
 | 68 | `witness-bound-exceeded` | A raw witness or selected WitnessArgs field exceeded the compile-time bounded-view maximum. | Increase the literal maximum within 65,536 bytes or reject the transaction shape before building it. |
+| 69 | `sighash-bound-exceeded` | The current Script group, transaction inputs, extra witnesses, or an included witness exceeded an `env::sighash_all_zero_lock` literal bound. | Increase only the reviewed bound within the supported maximum, or reject the transaction shape before signing. |
 
 ## Stability
 

@@ -269,6 +269,21 @@ profile-specific builtins such as CKB time/header helpers. Treat raw syscall
 helpers as backend machinery unless a compiler diagnostic or low-level document
 explicitly tells you otherwise.
 
+The 0.30 development surface exposes one signing-message builtin with visible
+bounds:
+
+```cellscript
+let digest: SighashAllDigest =
+    env::sighash_all_zero_lock(4, 8, 4, 4096)
+let generic_hash = Hash::from_sighash_all(digest)
+```
+
+It uses the current input Script group and replaces the complete first
+`WitnessArgs.lock` payload with equal-length zeros. The four literals bound
+group inputs, all inputs, extra witnesses, and bytes per included witness.
+This is not a prefix-preserving multisig domain. The generic
+`env::sighash_all(source)` spelling remains deferred.
+
 ## What The Stdlib Does Not Do
 
 The current standard library does not provide:

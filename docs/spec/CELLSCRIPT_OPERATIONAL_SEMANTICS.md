@@ -41,12 +41,22 @@ E |- f(args) => v
 ```
 
 Runtime CKB calls such as `source::group_input`, `witness::lock`,
-`env::sighash_all`, and `read_ref<T>()` are not pure expression rules. They emit
-runtime access metadata and explicit obligations. Canonical
+`env::sighash_all`, `env::sighash_all_zero_lock`, and `read_ref<T>()` are not
+pure expression rules. They emit runtime access metadata and explicit
+obligations. Canonical generic
 `env::sighash_all` construction is deferred: production artifact generation
 rejects `ckb-sighash-all-deferred`; audit execution terminates the process
 with runtime error 66 and does not return a `Hash`. This effect must survive
 unused-result elimination and helper inlining.
+
+`env::sighash_all_zero_lock(g, i, e, b)` is a separate versioned runtime
+contract. Its arguments are statically checked `u64` literals. Runtime
+evaluation hashes the exact transaction hash; the length-prefixed first current
+group witness with its complete `WitnessArgs.lock` payload replaced by
+equal-length zero bytes; later present group witnesses; and witnesses after the
+transaction input count. Exceeding `g`, `i`, `e`, or `b` terminates with error
+69. Successful evaluation returns the distinct `SighashAllDigest` source
+domain. This rule does not describe a prefix-preserving multisig placeholder.
 
 ## Linear Resource State
 

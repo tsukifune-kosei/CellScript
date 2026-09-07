@@ -295,9 +295,11 @@ transformations:
   Merkle paths lower to executable CKB-VM helpers with stable failures.
 - **Explicit external signature verification** —
   `verifier::btc::bip340::require_signature_from_cell_dep` spawns a pinned
-  verifier dependency through a fixed VM2 IPC ABI. Message domain, sighash,
-  witness selection, authority binding, and replay policy remain visible
-  application responsibilities.
+  verifier dependency through a fixed VM2 IPC ABI.
+  `env::sighash_all_zero_lock` supplies one bounded current-group message
+  domain for complete zero-filled lock placeholders and returns the distinct
+  `SighashAllDigest` type. Multisig layouts, authority binding, deployment
+  identity, and replay policy remain explicit application responsibilities.
 
 ## Example
 

@@ -22,8 +22,9 @@ type, while `ckb::script_hash(Hash)` makes conversion from an already trusted
 raw hash explicit. The conversion does not prove Script existence, deployment,
 or authorization. Formatter/LSP support and real CKB-VM matching and
 substitution-negative fixtures ship with the compiler path. This closes one
-bounded part of #25; complete Script construction/hashing, authorization-domain
-APIs, cryptographic capability contracts, and the rest of Stage 1 remain open.
+bounded part of #25; complete Script construction/hashing, broader
+authorization-domain APIs, cryptographic capability contracts, and the rest of
+Stage 1 remain open.
 The slice has the development source identity
 `cellscript-source-semantics-2027-0.30-dev1`; it does not reuse or redefine the
 recorded `authoring1` identity and is not the final 0.30 grammar identity.
@@ -33,7 +34,7 @@ The first #24 runtime-view tranche is specified by the
 The additive typed HeaderDep and six-domain `Since` subset is specified in the
 [0.30 temporal-domain contract](CELLSCRIPT_0_30_TEMPORAL_DOMAINS.md); it does
 not by itself close issue #12.
-Metadata schema 70 binds `cellscript-ckb-runtime-view-v1` together with the
+Metadata schema 71 binds `cellscript-ckb-runtime-view-v1` together with the
 structured `cellscript-ckb-runtime-access-provenance-v1` source/index/range
 contract. Typed Cell views now expose occupied/unoccupied capacity, consensus
 data hashes and input `since`;
@@ -55,10 +56,16 @@ scalar reads, streaming Blake2b, stable absent/over-bound failures, and
 schema/checker mutation coverage.
 The runtime now also exposes the canonical 32-byte raw transaction hash through
 `ckb::transaction_hash()` and `LOAD_TX_HASH`, with exact range provenance and
-real CKB-VM evidence. This closes the transaction-identity prefix needed by a
-signing-message domain. Canonical sighash construction remains open because it
-must still bind the first group witness with its lock field cleared, all other
-group witnesses, and transaction-level extra witnesses under explicit bounds.
+real CKB-VM evidence. The bounded
+`env::sighash_all_zero_lock(group, inputs, extra, bytes)` domain uses that hash,
+replaces the complete first group `WitnessArgs.lock` payload with equal-length
+zero bytes, and commits to later group witnesses and transaction-level extra
+witnesses in canonical order. A real CKB-VM differential matches the pinned
+`ckb-sdk-rust` message generator. Its `SighashAllDigest` result, four literal
+bounds, exact transform, scope, and order are bound in metadata schema 71 and
+the independent checker. This is the simple all-zero placeholder domain; it
+does not claim multisig layouts that preserve a nonzero configuration prefix,
+and the older generic `env::sighash_all(source)` spelling remains fail-closed.
 
 The goal is business-scenario coverage comparable to hand-written Rust CKB
 Scripts for a defined, bounded portfolio. It is not unrestricted Rust language

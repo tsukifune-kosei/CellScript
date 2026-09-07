@@ -392,6 +392,7 @@ const CKB_WITNESS_BYTES_MAX: u64 = 65_536;
 const CKB_OUT_POINT_TYPE: &str = "OutPoint";
 const CKB_SCRIPT_VIEW_TYPE: &str = "ScriptView";
 const CKB_SCRIPT_HASH_TYPE: &str = "ScriptHash";
+const CKB_SIGHASH_ALL_DIGEST_TYPE: &str = "SighashAllDigest";
 const CKB_EPOCH_NUMBER_TYPE: &str = "EpochNumber";
 const CKB_EPOCH_DURATION_TYPE: &str = "EpochDuration";
 const CKB_BLOCK_NUMBER_TYPE: &str = "BlockNumber";
@@ -6660,6 +6661,13 @@ impl<'a> TypeChecker<'a> {
                             }
                             Type::Hash
                         }
+                        ("Hash", "from_sighash_all") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if arg_types[0] != Type::Named(CKB_SIGHASH_ALL_DIGEST_TYPE.to_string()) {
+                                return Err(CompileError::new("Hash::from_sighash_all expects a SighashAllDigest", call.span));
+                            }
+                            Type::Hash
+                        }
                         ("script", "args_empty") => {
                             self.validate_builtin_arity(name, 0, arg_types, call.span)?;
                             Type::Named(CKB_SCRIPT_ARGS_TYPE.to_string())
@@ -6703,6 +6711,49 @@ impl<'a> TypeChecker<'a> {
                                 ));
                             }
                             Type::Hash
+                        }
+                        ("env", "sighash_all_zero_lock") => {
+                            self.validate_builtin_arity(name, 4, arg_types, call.span)?;
+                            if arg_types.iter().any(|ty| *ty != Type::U64) {
+                                return Err(CompileError::new(
+                                    "env::sighash_all_zero_lock expects four u64 integer literals: max_group_inputs, max_inputs, max_extra_witnesses, max_witness_bytes",
+                                    call.span,
+                                ));
+                            }
+                            let mut limits = [0u128; 4];
+                            for (index, (arg, (label, maximum))) in call
+                                .args
+                                .iter()
+                                .zip([
+                                    ("max_group_inputs", 64u128),
+                                    ("max_inputs", 256u128),
+                                    ("max_extra_witnesses", 64u128),
+                                    ("max_witness_bytes", u128::from(CKB_WITNESS_BYTES_MAX)),
+                                ])
+                                .enumerate()
+                            {
+                                let Expr::Integer(value) = arg else {
+                                    return Err(CompileError::new(
+                                        format!("env::sighash_all_zero_lock {label} must be an integer literal"),
+                                        call.span,
+                                    ));
+                                };
+                                let minimum = if index == 2 { 0 } else { 1 };
+                                if *value < minimum || *value > maximum {
+                                    return Err(CompileError::new(
+                                        format!("env::sighash_all_zero_lock {label} must be in {minimum}..={maximum}"),
+                                        call.span,
+                                    ));
+                                }
+                                limits[index] = *value;
+                            }
+                            if limits[0] > limits[1] {
+                                return Err(CompileError::new(
+                                    "env::sighash_all_zero_lock max_group_inputs must not exceed max_inputs",
+                                    call.span,
+                                ));
+                            }
+                            Type::Named(CKB_SIGHASH_ALL_DIGEST_TYPE.to_string())
                         }
                         (
                             "ckb",
@@ -7213,8 +7264,10 @@ impl<'a> TypeChecker<'a> {
                             let value_offset = usize::from(explicit_dep);
                             let pubkey_ty = Type::Array(Box::new(Type::U8), 32);
                             let signature_ty = Type::Array(Box::new(Type::U8), 64);
+                            let message_type_ok = arg_types[value_offset] == Type::Hash
+                                || arg_types[value_offset] == Type::Named(CKB_SIGHASH_ALL_DIGEST_TYPE.to_string());
                             if (explicit_dep && arg_types[0] != Type::U64)
-                                || arg_types[value_offset] != Type::Hash
+                                || !message_type_ok
                                 || arg_types[value_offset + 1] != pubkey_ty
                                 || arg_types[value_offset + 2] != signature_ty
                             {
@@ -8287,6 +8340,7 @@ impl<'a> TypeChecker<'a> {
             | CKB_OUT_POINT_TYPE
             | CKB_SCRIPT_VIEW_TYPE
             | CKB_SCRIPT_HASH_TYPE
+            | CKB_SIGHASH_ALL_DIGEST_TYPE
             | CKB_EPOCH_NUMBER_TYPE
             | CKB_EPOCH_DURATION_TYPE
             | CKB_BLOCK_NUMBER_TYPE

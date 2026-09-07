@@ -8384,6 +8384,7 @@ fn typescript_builder_manifest(
             })
             .collect::<Vec<_>>(),
         "transaction_view_handles": metadata.runtime.transaction_view_handles,
+        "signing_message_domains": metadata.runtime.signing_message_domains,
         "runtime_error_catalog": runtime_error_catalog_json(),
         "runtime_contract": {
             "requires_live_cell_resolution": true,
@@ -8398,6 +8399,7 @@ fn typescript_builder_manifest(
             "action_scan_selectors_schema": "cellscript-action-scan-selectors-v0.21",
             "action_scan_selector_source": "transaction_runtime_input_requirements",
             "runtime_access_provenance": metadata.runtime.ckb_runtime_access_provenance_contract,
+            "requires_pre_signing_witness_placement": !metadata.runtime.signing_message_domains.is_empty(),
             "temporal_interface": metadata.public_interface.runtime_contract.temporal,
         }
     });
@@ -8486,6 +8488,7 @@ fn typescript_builder_index(
         &typescript_builder_manifest(package_name, metadata, actions, metadata_hash, locked_identity, deployment_identity),
     )?;
     let metadata_json = json_string_pretty("metadata", metadata)?;
+    let signing_message_domains_json = json_string_pretty("signing message domains", &metadata.runtime.signing_message_domains)?;
 
     let mut ts = String::new();
     ts.push_str("export const CELLSCRIPT_BUILDER_SCHEMA = \"cellscript-generated-action-builder-v0.23-edition-2026\" as const;\n");
@@ -8496,6 +8499,7 @@ fn typescript_builder_index(
     ts.push_str("export const temporalContract = metadata.public_interface.runtime_contract.temporal;\n");
     ts.push_str("export const runtimeAccessProvenanceContract = metadata.runtime.ckb_runtime_access_provenance_contract;\n");
     ts.push_str("export const transactionViewHandles = metadata.runtime.transaction_view_handles;\n");
+    ts.push_str(&format!("export const signingMessageDomains = {signing_message_domains_json} as const;\n"));
     ts.push_str(&format!("export const actionSpecs = {action_specs_json} as const;\n\n"));
     ts.push_str(&format!("export const actionErrorContexts = {action_error_contexts_json} as const;\n"));
     ts.push_str(&format!("export const runtimeErrorCatalog = {runtime_error_catalog_json} as const;\n\n"));
@@ -8640,6 +8644,7 @@ fn typescript_builder_index(
          cellDataCodecManifest: typeof cellDataCodecManifest;\n\
          temporalContract: typeof temporalContract;\n\
          runtimeAccessProvenanceContract: typeof runtimeAccessProvenanceContract;\n\
+         signingMessageDomains: typeof signingMessageDomains;\n\
          runtimeAccesses: readonly unknown[];\n\
          runtimeInputRequirements: readonly unknown[];\n\
          actionScanSelectors: ActionScanSelectors;\n\
@@ -9154,7 +9159,7 @@ fn typescript_builder_index(
     );
     ts.push_str("  assertRuntimeAccessParams(actionSpec.runtimeAccesses, params);\n");
     ts.push_str(&format!(
-        "  return {{\n    schema: CELLSCRIPT_BUILDER_SCHEMA,\n    state: \"GeneratedActionPlan\",\n    status: \"requires-runtime-resolution\",\n    action,\n    params,\n    options,\n    metadataHash: {},\n    artifactHash: {},\n    targetProfile: {},\n    canSubmit: false,\n    requiresLiveCellResolution: true,\n    requiresDeploymentResolution: true,\n    cellDataCodecManifest,\n    temporalContract,\n    runtimeAccessProvenanceContract,\n    runtimeAccesses: [...actionSpec.runtimeAccesses],\n    runtimeInputRequirements: [...actionSpec.runtimeInputRequirements],\n    actionScanSelectors: actionSpec.actionScanSelectors as ActionScanSelectors,\n    verifierObligations: [...actionSpec.verifierObligations],\n    failClosedRuntimeFeatures: [...actionSpec.failClosedRuntimeFeatures],\n    notProvenByGeneratedBuilder: [\n      \"live_cell_availability\",\n      \"deployment_live_chain_match\",\n      \"capacity_fee_balance\",\n      \"signature_authority\",\n      \"ckb_vm_execution\",\n      \"cell_data_codec_materialization\",\n      \"tx_pool_acceptance\",\n      \"submission\"\n    ] as const,\n  }};\n}}\n\n",
+        "  return {{\n    schema: CELLSCRIPT_BUILDER_SCHEMA,\n    state: \"GeneratedActionPlan\",\n    status: \"requires-runtime-resolution\",\n    action,\n    params,\n    options,\n    metadataHash: {},\n    artifactHash: {},\n    targetProfile: {},\n    canSubmit: false,\n    requiresLiveCellResolution: true,\n    requiresDeploymentResolution: true,\n    cellDataCodecManifest,\n    temporalContract,\n    runtimeAccessProvenanceContract,\n    signingMessageDomains,\n    runtimeAccesses: [...actionSpec.runtimeAccesses],\n    runtimeInputRequirements: [...actionSpec.runtimeInputRequirements],\n    actionScanSelectors: actionSpec.actionScanSelectors as ActionScanSelectors,\n    verifierObligations: [...actionSpec.verifierObligations],\n    failClosedRuntimeFeatures: [...actionSpec.failClosedRuntimeFeatures],\n    notProvenByGeneratedBuilder: [\n      \"live_cell_availability\",\n      \"deployment_live_chain_match\",\n      \"capacity_fee_balance\",\n      \"signature_authority\",\n      \"ckb_vm_execution\",\n      \"cell_data_codec_materialization\",\n      \"tx_pool_acceptance\",\n      \"submission\"\n    ] as const,\n  }};\n}}\n\n",
         typescript_string_literal(metadata_hash),
         metadata.artifact_hash.as_deref().map(typescript_string_literal).unwrap_or_else(|| "null".to_string()),
         typescript_string_literal(&metadata.target_profile.name)

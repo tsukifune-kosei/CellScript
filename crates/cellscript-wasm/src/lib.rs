@@ -285,6 +285,7 @@ fn browser_metadata_value(metadata: &cellscript::CompileMetadata) -> serde_json:
         "runtime": {
             "fail_closed_runtime_features": metadata.runtime.fail_closed_runtime_features,
             "fail_closed_obligations": fail_closed_obligations,
+            "signing_message_domains": metadata.runtime.signing_message_domains,
         },
         "native_records_omitted": [
             "public_interface",
@@ -440,6 +441,31 @@ mod tests {
                 assert_eq!(report["metadata"]["runtime"], result["runtime"]);
             }
         }
+    }
+
+    #[test]
+    fn wasm_summary_exposes_the_bounded_zero_lock_signing_domain() {
+        let source = r#"
+module browser_sighash
+
+action inspect() -> u64 {
+    let digest = env::sighash_all_zero_lock(4, 8, 4, 4096)
+    return 0
+}
+"#;
+        let result: serde_json::Value = serde_json::from_str(&compile_metadata_json(source, "2027", None)).unwrap();
+        assert!(result.get("error").is_none(), "unexpected wasm compile error: {result}");
+        assert_eq!(result["metadata_schema_version"], 71);
+        assert_eq!(result["runtime"]["fail_closed_runtime_features"], serde_json::json!([]));
+        let domain = &result["runtime"]["signing_message_domains"][0];
+        assert_eq!(domain["contract"], "cellscript-ckb-sighash-all-zero-lock-v1");
+        assert_eq!(domain["scope_kind"], "action");
+        assert_eq!(domain["scope_name"], "inspect");
+        assert_eq!(domain["digest_type"], "SighashAllDigest");
+        assert_eq!(domain["max_group_inputs"], 4);
+        assert_eq!(domain["max_inputs"], 8);
+        assert_eq!(domain["max_extra_witnesses"], 4);
+        assert_eq!(domain["max_witness_bytes"], 4096);
     }
 
     #[test]

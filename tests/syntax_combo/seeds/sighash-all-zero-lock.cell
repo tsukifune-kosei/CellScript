@@ -1,0 +1,10 @@
+// audit: phase=accept
+module cellscript::audit::seed_sighash_all_zero_lock
+
+action inspect() -> u64 {
+    verification
+        let digest = env::sighash_all_zero_lock(4, 8, 4, 4096)
+        let expected = witness::args(0).lock
+        require Hash::from_sighash_all(digest) == expected
+        return 0
+}
