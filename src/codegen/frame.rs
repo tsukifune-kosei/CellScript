@@ -333,7 +333,7 @@ impl CodeGenerator {
                 next_cell_slot += RUNTIME_CELL_SLOT_SIZE;
                 continue;
             }
-            if self.fieldless_enum_width(&param.ty).is_some() {
+            if is_ckb_temporal_scalar_ir_type(&param.ty) || self.fieldless_enum_width(&param.ty).is_some() {
                 continue;
             } else if named_type_name(&param.ty).is_some_and(|name| self.cell_type_names.contains(name)) {
                 self.schema_pointer_size_offsets.insert(param.binding.id, next_cell_slot);
@@ -853,7 +853,11 @@ impl CodeGenerator {
     pub(super) fn emit_param_spills(&mut self, params: &[IrParam]) -> Result<()> {
         let mut abi_index = 0usize;
         for param in params {
-            if let Some(width) = self.fieldless_enum_width(&param.ty) {
+            if is_ckb_temporal_scalar_ir_type(&param.ty) {
+                self.emit(format!("# cellscript abi: temporal scalar param {} value={}", param.name, abi_arg_label(abi_index)));
+                self.emit_spill_abi_arg(abi_index, param.binding.id * 8);
+                abi_index += 1;
+            } else if let Some(width) = self.fieldless_enum_width(&param.ty) {
                 self.emit(format!(
                     "# cellscript abi: fieldless enum param {} value={} width={}",
                     param.name,

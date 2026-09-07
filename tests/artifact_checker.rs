@@ -1330,6 +1330,46 @@ fn typed_semantics_rejects_operator_and_constant_mutations_after_rebinding() {
 }
 
 #[test]
+fn typed_semantics_rejects_cross_domain_epoch_since_comparison() {
+    let valid = Fixture::from_source(
+        r#"
+module checker::temporal
+
+action main() -> bool {
+    verification
+        let left = ckb::since_absolute_epoch(42, 3, 10)
+        let right = ckb::since_absolute_epoch(43, 0, 10)
+        return left < right
+}
+"#,
+    );
+    let binary = valid
+        .record
+        .typed_semantics
+        .entries
+        .iter()
+        .flat_map(|entry| &entry.blocks)
+        .flat_map(|block| &block.operations)
+        .find(|operation| matches!(&operation.detail, TypedSemanticOperationDetail::BinaryOperator { operator } if operator == "lt"))
+        .expect("fixture must contain the temporal comparison");
+    assert!(binary.operands.iter().all(|operand| operand.ty == "AbsoluteEpochSince"));
+
+    let mut changed = valid.clone();
+    let binary = changed
+        .record
+        .typed_semantics
+        .entries
+        .iter_mut()
+        .flat_map(|entry| &mut entry.blocks)
+        .flat_map(|block| &mut block.operations)
+        .find(|operation| matches!(&operation.detail, TypedSemanticOperationDetail::BinaryOperator { operator } if operator == "lt"))
+        .expect("fixture must contain the temporal comparison");
+    binary.operands[1].ty = "RelativeEpochSince".to_string();
+    changed.rebind_typed_semantics();
+    assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
+}
+
+#[test]
 fn typed_semantics_accepts_declared_vec_constructors_and_unsigned_widening() {
     let widened = Fixture::from_source(
         r#"

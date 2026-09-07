@@ -222,7 +222,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v32-0.30-dev1-runtime-view-v1";
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v33-0.30-dev1-temporal-domains";
 pub const METADATA_SCHEMA_VERSION: u32 = 68;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -35073,7 +35073,7 @@ action inspect() -> u64 {
         let lock = ckb::lock_script(input)
         require lock.args_empty || lock.hash_type <= 4
         require dep.data_hash == dep.data_hash
-        return input.capacity + input.occupied_capacity + input.unoccupied_capacity + input.since + output.output_index + dep.data_size + witness_args.size + out_point.index + header.epoch_number + header.epoch_start_block_number + header.epoch_length
+        return input.capacity + input.occupied_capacity + input.unoccupied_capacity + ckb::since_to_raw(input.since) + output.output_index + dep.data_size + witness_args.size + out_point.index + ckb::epoch_number_to_u64(header.epoch_number) + ckb::block_number_to_u64(header.epoch_start_block_number) + ckb::epoch_length_to_u64(header.epoch_length)
 }
 "#;
 

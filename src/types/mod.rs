@@ -390,6 +390,12 @@ const CKB_WITNESS_ARGS_VIEW_TYPE: &str = "WitnessArgsView";
 const CKB_OUT_POINT_TYPE: &str = "OutPoint";
 const CKB_SCRIPT_VIEW_TYPE: &str = "ScriptView";
 const CKB_SCRIPT_HASH_TYPE: &str = "ScriptHash";
+const CKB_EPOCH_NUMBER_TYPE: &str = "EpochNumber";
+const CKB_BLOCK_NUMBER_TYPE: &str = "BlockNumber";
+const CKB_EPOCH_LENGTH_TYPE: &str = "EpochLength";
+const CKB_ENCODED_SINCE_TYPE: &str = "EncodedSince";
+const CKB_ABSOLUTE_EPOCH_SINCE_TYPE: &str = "AbsoluteEpochSince";
+const CKB_RELATIVE_EPOCH_SINCE_TYPE: &str = "RelativeEpochSince";
 
 fn param_source_repr(source: ParamSource) -> &'static str {
     match source {
@@ -3842,6 +3848,12 @@ impl<'a> TypeChecker<'a> {
                         Ok(Type::Bool)
                     }
                     BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
+                        if Self::is_ordered_ckb_temporal_type(&left_ty) || Self::is_ordered_ckb_temporal_type(&right_ty) {
+                            if left_ty != right_ty {
+                                return Err(CompileError::new("ordering comparison requires matching CKB temporal domains", bin.span));
+                            }
+                            return Ok(Type::Bool);
+                        }
                         if !self.is_numeric_type(&left_ty) || !self.is_numeric_type(&right_ty) {
                             return Err(CompileError::new("ordering comparison requires numeric types", bin.span));
                         }
@@ -6178,7 +6190,7 @@ impl<'a> TypeChecker<'a> {
                         "data_hash" => Ok(Type::Hash),
                         "lock" | "type" | "type_script" => Ok(Type::Named(CKB_SCRIPT_VIEW_TYPE.to_string())),
                         "out_point" if base_name == CKB_INPUT_VIEW_TYPE => Ok(Type::Named(CKB_OUT_POINT_TYPE.to_string())),
-                        "since" if base_name == CKB_INPUT_VIEW_TYPE => Ok(Type::U64),
+                        "since" if base_name == CKB_INPUT_VIEW_TYPE => Ok(Type::Named(CKB_ENCODED_SINCE_TYPE.to_string())),
                         _ => Err(CompileError::new(
                             format!(
                                 "unknown transaction-view field '{}'; expected capacity, occupied_capacity, unoccupied_capacity, data_size, data_hash, lock_hash, type_hash, lock, type_script{}",
@@ -6195,7 +6207,9 @@ impl<'a> TypeChecker<'a> {
                 }
                 if base_name == CKB_HEADER_DEP_VIEW_TYPE {
                     return match field {
-                        "epoch_number" | "epoch_start_block_number" | "epoch_length" => Ok(Type::U64),
+                        "epoch_number" => Ok(Type::Named(CKB_EPOCH_NUMBER_TYPE.to_string())),
+                        "epoch_start_block_number" => Ok(Type::Named(CKB_BLOCK_NUMBER_TYPE.to_string())),
+                        "epoch_length" => Ok(Type::Named(CKB_EPOCH_LENGTH_TYPE.to_string())),
                         _ => Err(CompileError::new(
                             format!(
                                 "unknown HeaderDepView field '{}'; expected epoch_number, epoch_start_block_number, or epoch_length",
@@ -6742,6 +6756,45 @@ impl<'a> TypeChecker<'a> {
                             }
                             Type::U64
                         }
+                        ("ckb", "since_absolute_epoch" | "since_relative_epoch") => {
+                            self.validate_builtin_arity(name, 3, arg_types, call.span)?;
+                            if arg_types.iter().any(|ty| *ty != Type::U64) {
+                                return Err(CompileError::new(
+                                    format!("{} expects (number: u64, index: u64, length: u64)", name),
+                                    call.span,
+                                ));
+                            }
+                            Type::Named(
+                                if suffix == "since_absolute_epoch" {
+                                    CKB_ABSOLUTE_EPOCH_SINCE_TYPE
+                                } else {
+                                    CKB_RELATIVE_EPOCH_SINCE_TYPE
+                                }
+                                .to_string(),
+                            )
+                        }
+                        ("ckb", "since_to_raw") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if !Self::is_ckb_since_type(&arg_types[0]) {
+                                return Err(CompileError::new(
+                                    "ckb::since_to_raw expects EncodedSince or a typed Since<Mode, Metric> value",
+                                    call.span,
+                                ));
+                            }
+                            Type::U64
+                        }
+                        ("ckb", "epoch_number_to_u64" | "block_number_to_u64" | "epoch_length_to_u64") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            let expected = match suffix {
+                                "epoch_number_to_u64" => CKB_EPOCH_NUMBER_TYPE,
+                                "block_number_to_u64" => CKB_BLOCK_NUMBER_TYPE,
+                                _ => CKB_EPOCH_LENGTH_TYPE,
+                            };
+                            if arg_types[0] != Type::Named(expected.to_string()) {
+                                return Err(CompileError::new(format!("{} expects a {} value", name, expected), call.span));
+                            }
+                            Type::U64
+                        }
                         (
                             "ckb",
                             "cell_capacity"
@@ -7157,9 +7210,11 @@ impl<'a> TypeChecker<'a> {
                         }
                         ("dao", "require_input_since_at_least") => {
                             self.validate_builtin_arity(name, 2, arg_types, call.span)?;
-                            if !Self::is_input_view_type(&arg_types[0]) || arg_types[1] != Type::U64 {
+                            if !Self::is_input_view_type(&arg_types[0])
+                                || (arg_types[1] != Type::U64 && !Self::is_ckb_since_type(&arg_types[1]))
+                            {
                                 return Err(CompileError::new(
-                                    "dao::require_input_since_at_least expects (input_view: u64, required_since: u64)",
+                                    "dao::require_input_since_at_least expects (input_view, required_since: u64 or typed Since)",
                                     call.span,
                                 ));
                             }
@@ -8050,7 +8105,17 @@ impl<'a> TypeChecker<'a> {
             | CKB_WITNESS_ARGS_VIEW_TYPE
             | CKB_OUT_POINT_TYPE
             | CKB_SCRIPT_VIEW_TYPE
-            | CKB_SCRIPT_HASH_TYPE => return Ok(()),
+            | CKB_SCRIPT_HASH_TYPE
+            | CKB_EPOCH_NUMBER_TYPE
+            | CKB_BLOCK_NUMBER_TYPE
+            | CKB_EPOCH_LENGTH_TYPE
+            | CKB_ENCODED_SINCE_TYPE
+            | CKB_ABSOLUTE_EPOCH_SINCE_TYPE
+            | CKB_RELATIVE_EPOCH_SINCE_TYPE
+            | "Since"
+            | "Absolute"
+            | "Relative"
+            | "EpochFraction" => return Ok(()),
             _ => {}
         }
 
@@ -8335,6 +8400,33 @@ impl<'a> TypeChecker<'a> {
     fn is_numeric_type(&self, ty: &Type) -> bool {
         matches!(ty, Type::U8 | Type::U16 | Type::U32 | Type::I32 | Type::U64 | Type::U128)
             || matches!(ty, Type::Named(name) if name == "usize" || name == "isize")
+    }
+
+    fn is_ordered_ckb_temporal_type(ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::Named(name)
+                if matches!(
+                    name.as_str(),
+                    CKB_EPOCH_NUMBER_TYPE
+                        | CKB_BLOCK_NUMBER_TYPE
+                        | CKB_EPOCH_LENGTH_TYPE
+                        | CKB_ABSOLUTE_EPOCH_SINCE_TYPE
+                        | CKB_RELATIVE_EPOCH_SINCE_TYPE
+                )
+        )
+    }
+
+    fn is_ckb_since_type(ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::Named(name)
+                if name == CKB_ENCODED_SINCE_TYPE
+                    || name == CKB_ABSOLUTE_EPOCH_SINCE_TYPE
+                    || name == CKB_RELATIVE_EPOCH_SINCE_TYPE
+                    || name.starts_with("Since<Absolute, ")
+                    || name.starts_with("Since<Relative, ")
+        )
     }
 
     fn is_unsigned_shift_count_type(ty: &Type) -> bool {
@@ -10070,7 +10162,7 @@ action inspect() -> u64 {
         let lock = input.lock
         require lock.args_empty || lock.hash_type <= 4
         require dep.data_hash == dep.data_hash
-        return input.capacity + input.occupied_capacity + input.unoccupied_capacity + input.since + output.output_index + dep.data_size + witness_args.size + out_point.index + header.epoch_number + header.epoch_start_block_number + header.epoch_length
+        return input.capacity + input.occupied_capacity + input.unoccupied_capacity + ckb::since_to_raw(input.since) + output.output_index + dep.data_size + witness_args.size + out_point.index + ckb::epoch_number_to_u64(header.epoch_number) + ckb::block_number_to_u64(header.epoch_start_block_number) + ckb::epoch_length_to_u64(header.epoch_length)
 }
 "#,
         );
@@ -10113,6 +10205,45 @@ action inspect() -> ScriptHash {
         );
         let err = check(&confused).unwrap_err();
         assert!(err.message.contains("return type mismatch") && err.message.contains("Hash"), "unexpected error: {}", err.message);
+    }
+
+    #[test]
+    fn ckb_temporal_domains_require_explicit_raw_conversion() {
+        let valid = source_module(
+            r#"
+module test
+
+resource Token has store { amount: u64 }
+
+action inspect() -> bool {
+    verification
+        let header = ckb::header_dep(0)
+        let absolute = ckb::since_absolute_epoch(42, 3, 10)
+        let another_absolute = ckb::since_absolute_epoch(43, 0, 10)
+        let encoded = ckb::input<Token>(0).since
+        require absolute < another_absolute
+        return ckb::epoch_number_to_u64(header.epoch_number) == 42
+            && ckb::block_number_to_u64(header.epoch_start_block_number) == 97
+            && ckb::epoch_length_to_u64(header.epoch_length) == 10
+            && ckb::since_to_raw(encoded) >= 0
+            && ckb::since_epoch_absolute(1, 0, 1) >= 0
+            && ckb::input_since_at(source::input(0)) >= 0
+}
+"#,
+        );
+        check(&valid).unwrap();
+
+        for (expression, expected) in [
+            ("ckb::since_absolute_epoch(1, 0, 1) == ckb::since_relative_epoch(1, 0, 1)", "comparison requires matching types"),
+            ("ckb::header_dep(0).epoch_number == ckb::header_dep(0).epoch_start_block_number", "comparison requires matching types"),
+            ("ckb::input<Token>(0).since == 0", "comparison requires matching types"),
+        ] {
+            let invalid = source_module(&format!(
+                "module test\nresource Token has store {{ amount: u64 }}\naction inspect() -> bool {{ verification return {expression} }}"
+            ));
+            let err = check(&invalid).unwrap_err();
+            assert!(err.message.contains(expected), "unexpected error for {expression}: {}", err.message);
+        }
     }
 
     #[test]

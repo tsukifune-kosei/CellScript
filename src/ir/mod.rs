@@ -6658,6 +6658,35 @@ impl IrGenerator {
                     blocks,
                     vars,
                 ),
+                "ckb::since_absolute_epoch" if call.args.len() == 3 => self.lower_simple_runtime_call(
+                    "__ckb_since_epoch_absolute",
+                    "ckb_since_absolute_epoch",
+                    IrType::Named("AbsoluteEpochSince".to_string()),
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
+                "ckb::since_relative_epoch" if call.args.len() == 3 => self.lower_simple_runtime_call(
+                    "__ckb_since_epoch_relative",
+                    "ckb_since_relative_epoch",
+                    IrType::Named("RelativeEpochSince".to_string()),
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
+                "ckb::since_to_raw" | "ckb::epoch_number_to_u64" | "ckb::block_number_to_u64" | "ckb::epoch_length_to_u64"
+                    if call.args.len() == 1 =>
+                {
+                    let helper = match name.as_str() {
+                        "ckb::since_to_raw" => "__ckb_since_to_raw",
+                        "ckb::epoch_number_to_u64" => "__ckb_epoch_number_to_u64",
+                        "ckb::block_number_to_u64" => "__ckb_block_number_to_u64",
+                        _ => "__ckb_epoch_length_to_u64",
+                    };
+                    self.lower_simple_runtime_call(helper, "ckb_temporal_raw", IrType::U64, &call.args, current, blocks, vars)
+                }
                 "ckb::current_role" if call.args.is_empty() => {
                     let role = if self.lowering_lock_entry { 1 } else { 2 };
                     Some(LoweredExpr { operand: IrOperand::Const(IrConst::U64(role)), current: Some(current) })
@@ -8850,7 +8879,7 @@ fn typed_view_property_runtime_helper(ty: &IrType, field: &str) -> Option<(&'sta
             Some(("__ckb_cell_data_hash_field", "typed_view_data_hash", IrType::Hash))
         }
         ("OutputView", "output_index") => Some(("__ckb_cell_output_index", "typed_view_output_index", IrType::U64)),
-        ("InputView", "since") => Some(("__ckb_input_since_at", "typed_view_since", IrType::U64)),
+        ("InputView", "since") => Some(("__ckb_input_since_at", "typed_view_since", IrType::Named("EncodedSince".to_string()))),
         ("InputView" | "OutputView" | "CellDepView", "lock_hash") => {
             Some(("__ckb_cell_lock_hash", "typed_view_lock_hash", IrType::Hash))
         }
@@ -8861,11 +8890,17 @@ fn typed_view_property_runtime_helper(ty: &IrType, field: &str) -> Option<(&'sta
         ("WitnessArgsView", "lock") => Some(("__ckb_witness_lock", "typed_witness_lock", IrType::Hash)),
         ("WitnessArgsView", "input_type") => Some(("__ckb_witness_input_type", "typed_witness_input_type", IrType::Hash)),
         ("WitnessArgsView", "output_type") => Some(("__ckb_witness_output_type", "typed_witness_output_type", IrType::Hash)),
-        ("HeaderDepView", "epoch_number") => Some(("__ckb_header_dep_epoch_number", "typed_header_epoch_number", IrType::U64)),
-        ("HeaderDepView", "epoch_start_block_number") => {
-            Some(("__ckb_header_dep_epoch_start_block_number", "typed_header_epoch_start_block_number", IrType::U64))
+        ("HeaderDepView", "epoch_number") => {
+            Some(("__ckb_header_dep_epoch_number", "typed_header_epoch_number", IrType::Named("EpochNumber".to_string())))
         }
-        ("HeaderDepView", "epoch_length") => Some(("__ckb_header_dep_epoch_length", "typed_header_epoch_length", IrType::U64)),
+        ("HeaderDepView", "epoch_start_block_number") => Some((
+            "__ckb_header_dep_epoch_start_block_number",
+            "typed_header_epoch_start_block_number",
+            IrType::Named("BlockNumber".to_string()),
+        )),
+        ("HeaderDepView", "epoch_length") => {
+            Some(("__ckb_header_dep_epoch_length", "typed_header_epoch_length", IrType::Named("EpochLength".to_string())))
+        }
         (CKB_INPUT_OUT_POINT_REF_TYPE, "index") => Some(("__ckb_input_out_point_index", "typed_out_point_index", IrType::U64)),
         (CKB_INPUT_OUT_POINT_REF_TYPE, "tx_hash") => Some(("__ckb_input_out_point_tx_hash", "typed_out_point_tx_hash", IrType::Hash)),
         _ => None,

@@ -28,6 +28,22 @@
   substitution. Advance the artifact cache identity to
   `project-source-set-v32-0.30-dev1-runtime-view-v1`.
 
+- Add the first typed CKB temporal domains without changing the Edition 2026
+  raw API. `HeaderDepView` now distinguishes `EpochNumber`, `BlockNumber`, and
+  `EpochLength`; `InputView.since` is `EncodedSince`; and the new
+  `ckb::since_absolute_epoch` / `ckb::since_relative_epoch` constructors
+  produce `AbsoluteEpochSince` / `RelativeEpochSince`. Same-domain epoch-Since
+  comparisons use epoch-first rational-fraction ordering rather than packed
+  integer ordering, explicit conversions recover raw wire bits, and temporal
+  helper parameters use a fixed one-register ABI. Type tests reject mixed
+  domains and real CKB-VM vectors cover absolute/relative encodings,
+  equivalent fractions, helper calls, and malformed zero-length input. Keep
+  the older constructors and `input_since_at` as `u64`, and advance the
+  artifact cache identity to
+  `project-source-set-v33-0.30-dev1-temporal-domains`. Block/timestamp variants,
+  decoded Since, checked duration arithmetic, migration, and the complete
+  business corpus remain open under issue #12.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

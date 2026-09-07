@@ -1676,7 +1676,13 @@ fn validate_typed_operation(
                 || (!validate_binary_types(operator, operand_type(0), operand_type(1), destination_type(0))
                     && !encoded_unit_enum_comparison)
             {
-                return fail();
+                return typed_error(format!(
+                    "typed binary '{}' has invalid operands {:?}, {:?} or destination {:?}",
+                    operator,
+                    operand_type(0),
+                    operand_type(1),
+                    destination_type(0)
+                ));
             }
         }
         "unary" => {
@@ -2146,7 +2152,10 @@ fn validate_binary_types(operator: &str, left: Option<&str>, right: Option<&str>
         }
         "shl" | "shr" => is_integer_type(left) && is_integer_type(right) && destination == left,
         "eq" | "ne" => left == right && destination == "bool",
-        "lt" | "le" | "gt" | "ge" => arithmetic_result_type(left, right).is_some() && destination == "bool",
+        "lt" | "le" | "gt" | "ge" => {
+            (arithmetic_result_type(left, right).is_some() || left == right && is_ckb_temporal_ordered_type(left))
+                && destination == "bool"
+        }
         "and" | "or" => left == "bool" && right == "bool" && destination == "bool",
         _ => false,
     }
@@ -2207,6 +2216,12 @@ fn typed_call_operand_matches(entry: &TypedSemanticEntry, param: &str, operand: 
 
 fn is_integer_type(ty: &str) -> bool {
     matches!(ty, "u8" | "u16" | "u32" | "i32" | "u64" | "u128")
+}
+
+fn is_ckb_temporal_ordered_type(ty: &str) -> bool {
+    matches!(ty, "EpochNumber" | "BlockNumber" | "EpochLength" | "AbsoluteEpochSince" | "RelativeEpochSince")
+        || ty.starts_with("Since<Absolute, ")
+        || ty.starts_with("Since<Relative, ")
 }
 
 fn strip_reference(ty: &str) -> &str {

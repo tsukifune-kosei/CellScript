@@ -70,6 +70,12 @@ impl CodeGenerator {
         if self.emit_u128_binary(dest, op, left, right) {
             return Ok(());
         }
+        if matches!(op, BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge)
+            && matching_ckb_epoch_since_operands(left, right)
+        {
+            self.emit_ckb_epoch_since_comparison(dest, op, left, right);
+            return Ok(());
+        }
         if matches!(op, BinaryOp::Eq | BinaryOp::Ne) && self.emit_dynamic_byte_comparison(dest, op, left, right) {
             return Ok(());
         }
@@ -198,6 +204,56 @@ impl CodeGenerator {
 
         self.emit_stack_store("t0", dest.id * 8);
         Ok(())
+    }
+
+    fn emit_ckb_epoch_since_comparison(&mut self, dest: &IrVar, op: BinaryOp, left: &IrOperand, right: &IrOperand) {
+        let less = self.fresh_label("ckb_epoch_since_less");
+        let greater = self.fresh_label("ckb_epoch_since_greater");
+        let equal = self.fresh_label("ckb_epoch_since_equal");
+        let done = self.fresh_label("ckb_epoch_since_compare_done");
+        let less_result = matches!(op, BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le);
+        let greater_result = matches!(op, BinaryOp::Ne | BinaryOp::Gt | BinaryOp::Ge);
+        let equal_result = matches!(op, BinaryOp::Eq | BinaryOp::Le | BinaryOp::Ge);
+
+        self.emit(format!("# binary {:?} over matching typed RFC0017 epoch Since values", op));
+        self.emit_operand_to_register("t0", left);
+        self.emit_operand_to_register("t1", right);
+
+        // Epoch numbers occupy the low 24 bits. The fraction fields occupy
+        // higher bits, so integer ordering of the wire encoding is not time
+        // ordering. Compare the number first, then index/length by cross
+        // multiplication. Each product is at most 32 bits.
+        self.emit(format!("li t6, {}", CKB_EPOCH_NUMBER_MASK));
+        self.emit("and t2, t0, t6");
+        self.emit("and t3, t1, t6");
+        self.emit(format!("bltu t2, t3, {}", less));
+        self.emit(format!("bltu t3, t2, {}", greater));
+
+        self.emit(format!("li t6, {}", CKB_EPOCH_FRACTION_MASK));
+        self.emit("srli t2, t0, 24");
+        self.emit("and t2, t2, t6");
+        self.emit("srli t3, t1, 40");
+        self.emit("and t3, t3, t6");
+        self.emit("mul t2, t2, t3");
+        self.emit("srli t3, t1, 24");
+        self.emit("and t3, t3, t6");
+        self.emit("srli t4, t0, 40");
+        self.emit("and t4, t4, t6");
+        self.emit("mul t3, t3, t4");
+        self.emit(format!("bltu t2, t3, {}", less));
+        self.emit(format!("bltu t3, t2, {}", greater));
+        self.emit(format!("j {}", equal));
+
+        self.emit_label(&less);
+        self.emit(format!("li t0, {}", u8::from(less_result)));
+        self.emit(format!("j {}", done));
+        self.emit_label(&greater);
+        self.emit(format!("li t0, {}", u8::from(greater_result)));
+        self.emit(format!("j {}", done));
+        self.emit_label(&equal);
+        self.emit(format!("li t0, {}", u8::from(equal_result)));
+        self.emit_label(&done);
+        self.emit_stack_store("t0", dest.id * 8);
     }
 
     fn emit_u128_binary(&mut self, dest: &IrVar, op: BinaryOp, left: &IrOperand, right: &IrOperand) -> bool {

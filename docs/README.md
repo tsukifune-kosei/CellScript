@@ -5,6 +5,8 @@ stable category that matches how readers should use them.
 
 The active `0.30` implementation uses metadata schema 68; its first runtime
 matrix is [`cellscript-ckb-runtime-view-v1`](CELLSCRIPT_0_30_CKB_RUNTIME_VIEW_MATRIX.md).
+The additive epoch subset of issue #12 is recorded in the
+[typed CKB temporal-domain contract](CELLSCRIPT_0_30_TEMPORAL_DOMAINS.md).
 The experimental `0.26b` baseline used schema 67. The existing unreleased 0.26
 implementation record below retains the historical schema 62 baseline; its
 contents may be folded into 0.30 without publishing a stable 0.26 release.

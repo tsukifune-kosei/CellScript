@@ -680,6 +680,12 @@ impl LspServer {
                     ("input_since", "ckb::input_since()"),
                     ("since_epoch_absolute", "ckb::since_epoch_absolute(${1:number}, ${2:index}, ${3:length})"),
                     ("since_epoch_relative", "ckb::since_epoch_relative(${1:number}, ${2:index}, ${3:length})"),
+                    ("since_absolute_epoch", "ckb::since_absolute_epoch(${1:number}, ${2:index}, ${3:length})"),
+                    ("since_relative_epoch", "ckb::since_relative_epoch(${1:number}, ${2:index}, ${3:length})"),
+                    ("since_to_raw", "ckb::since_to_raw(${1:since})"),
+                    ("epoch_number_to_u64", "ckb::epoch_number_to_u64(${1:epoch})"),
+                    ("block_number_to_u64", "ckb::block_number_to_u64(${1:block})"),
+                    ("epoch_length_to_u64", "ckb::epoch_length_to_u64(${1:length})"),
                     ("current_role", "ckb::current_role()"),
                     ("current_script_hash", "ckb::current_script_hash()"),
                     ("script_hash", "ckb::script_hash(${1:hash})"),
@@ -3085,6 +3091,10 @@ mod tests {
         let ckb = server.member_completions("file:///test.cell", "ckb");
         assert!(ckb.iter().any(|item| item.label == "input_since"));
         assert!(ckb.iter().any(|item| item.label == "since_epoch_relative"));
+        assert!(ckb.iter().any(|item| item.label == "since_absolute_epoch"));
+        assert!(ckb.iter().any(|item| item.label == "since_relative_epoch"));
+        assert!(ckb.iter().any(|item| item.label == "since_to_raw"));
+        assert!(ckb.iter().any(|item| item.label == "epoch_number_to_u64"));
         assert!(ckb.iter().any(|item| item.label == "cell_lock_code_hash"));
         assert!(ckb.iter().any(|item| item.label == "cell_type_args_hash"));
         assert!(ckb.iter().any(|item| item.label == "require_cell_lock_args_prefix_hash"));

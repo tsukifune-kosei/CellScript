@@ -20,6 +20,10 @@ and
 length. Header timestamp and exact block number require bounded full-header
 decoding and are not represented as field-syscall values.
 
+The typed temporal subset is defined separately in the
+[0.30 temporal-domain contract](CELLSCRIPT_0_30_TEMPORAL_DOMAINS.md) and follows
+CKB RFC0017 wire semantics.
+
 ## Classification terms
 
 | Status | Meaning |
@@ -41,12 +45,12 @@ field-specific terminal error.
 
 | Handle and constructor | Source | Executable fields | Source type | Runtime width and failure |
 |---|---|---|---|---|
-| `ckb::input<T>(i)` | Input | `capacity`, `occupied_capacity`, `unoccupied_capacity`, `data_size`, `data_hash`, `lock_hash`, `type_hash`, `lock`, `type_script`, `out_point`, `since` | `InputView<T>` | Scalars are 8 bytes; hashes are 32 bytes; OutPoint is 36 bytes. Invalid/missing reads terminate. |
+| `ckb::input<T>(i)` | Input | `capacity`, `occupied_capacity`, `unoccupied_capacity`, `data_size`, `data_hash`, `lock_hash`, `type_hash`, `lock`, `type_script`, `out_point`, `since: EncodedSince` | `InputView<T>` | Scalars are 8 bytes; hashes are 32 bytes; OutPoint is 36 bytes. Invalid/missing reads terminate. |
 | `ckb::group_input<T>(i)` | GroupInput | Same field set as `InputView<T>` | `InputView<T>` | Same fixed widths; current Script-group-relative index. |
 | `ckb::output<T>(i)` | Output | `capacity`, `occupied_capacity`, `unoccupied_capacity`, `data_size`, `data_hash`, `lock_hash`, `type_hash`, `lock`, `type_script`, `output_index` | `OutputView<T>` | Same scalar/hash bounds; output index is derived from the closed source view. |
 | `ckb::group_output<T>(i)` | GroupOutput | Same field set as `OutputView<T>` | `OutputView<T>` | Same fixed widths; current Script-group-relative index. |
 | `ckb::cell_dep(i)` | CellDep | `capacity`, `occupied_capacity`, `unoccupied_capacity`, `data_size`, `data_hash`, `lock_hash`, `type_hash`, `lock`, `type_script` | `CellDepView` | Same fixed widths. Resolved dep position is runtime evidence; original DepGroup/OutPoint identity remains builder or manifest evidence. |
-| `ckb::header_dep(i)` | HeaderDep | `epoch_number`, `epoch_start_block_number`, `epoch_length` | `HeaderDepView` | Each field is exactly 8 bytes through `LOAD_HEADER_BY_FIELD`; bad source uses error 44 and missing/one-past-last HeaderDep uses error 45. |
+| `ckb::header_dep(i)` | HeaderDep | `epoch_number: EpochNumber`, `epoch_start_block_number: BlockNumber`, `epoch_length: EpochLength` | `HeaderDepView` | Each field is exactly 8 bytes through `LOAD_HEADER_BY_FIELD`; bad source uses error 44 and missing/one-past-last HeaderDep uses error 45. |
 | `witness::args(i)` | Witness/Input | `size`, fixed 32-byte `lock`, `input_type`, `output_type` projections | `WitnessArgsView` | `size` is 8 bytes. Field projections are executable only when the selected Molecule field is exactly 32 bytes; malformed/truncated values use errors 42/43. |
 | `ckb::input_out_point(input)` or `input.out_point` | inherited Input/GroupInput | `tx_hash`, `index` | `OutPoint` | 32-byte transaction hash plus 4-byte CKB index widened to `u64`; incompatible source or malformed width terminates. |
 | `ckb::lock_script(cell)` or `cell.lock` | inherited Cell source | `hash`, `code_hash`, `hash_type`, `args_empty`, `args_hash` | `ScriptView` | Complete `hash` is `ScriptHash`; `code_hash` and `args_hash` are raw `Hash`; scalar fields are bounded and Molecule-checked. |
@@ -66,7 +70,7 @@ hash; it does not prove existence, deployment, or authorization.
 | Cell scalars and fixed bytes | capacity/occupied/unoccupied, count, type presence, data size, exact u8/u32/u64 reads, serialized Script byte/size reads | Executable or executable limited. Every byte offset is checked; fixed reads never allocate an unbounded buffer. |
 | Cell identities | data/lock/type hash reads and requirements, Script code-hash/hash-type/args checks, current Script args checks | Executable fixed 32-byte or scalar reads. Absent Type Script and wrong Script domain fail closed. |
 | Input lineage | full OutPoint transaction hash/index requirements and MetaPoint pair helpers | Executable fixed-width helpers. Pair scanners are protocol-neutral but have separately documented cardinality bounds. |
-| Temporal and DAO | raw `input_since_at`, epoch constructors, DAO accumulated-rate/header-lineage/maturity helpers | Executable within the current raw `u64` Since contract. Dedicated temporal value domains remain owned by issue #12. |
+| Temporal and DAO | typed HeaderDep fields, opaque `InputView.since`, `since_absolute_epoch`, `since_relative_epoch`, explicit raw conversions, legacy raw constructors, DAO accumulated-rate/header-lineage/maturity helpers | The additive epoch subset is executable under the typed temporal contract. Same-domain epoch-Since comparisons use canonical fraction ordering. Block/timestamp variants, decoded Since, and duration arithmetic remain owned by issue #12. |
 | Witness | count/size, exact byte/u32/u64/bytes32 reads, bounded spans, selected gather hashing, fixed 32-byte WitnessArgs fields | Executable limited. Arbitrary materialization of a variable-length witness or WitnessArgs field is deferred. |
 | Transaction preimage | `transaction_u32_le`, bounded gather BLAKE2b, raw-transaction hash without CellDeps | Executable limited to the declared offsets/chunks. Canonical CKB sighash-all remains fail-closed until its message and witness-ownership contract is implemented. |
 | Hashing | CKB BLAKE2b data/span helpers, fixed SHA-256/SHA256d values and pairs, bounded SHA256d Merkle proofs | Executable fixed-width or literal-bounded operations. No allocator-backed streaming hash surface is implied. |
@@ -98,8 +102,10 @@ hash; it does not prove existence, deployment, or authorization.
 
 `tests/typed_runtime_views.rs` executes the new Cell, input, CellDep, and
 HeaderDep fields in CKB-VM. It covers a nonzero header epoch at index zero, the
-derived epoch-start block number, a one-past-last HeaderDep, an exact CellDep
-data hash, and a substituted hash. `tests/authoring_replace.rs` exercises the
+derived epoch-start block number, a one-past-last HeaderDep, exact absolute and
+relative Since wire vectors, canonical epoch-fraction comparisons, a malformed
+fraction, an exact CellDep data hash, and a substituted hash.
+`tests/authoring_replace.rs` exercises the
 `ScriptHash` domain against real output Lock Script hashes. Existing
 `tests/ickb_diff.rs`, `tests/crypto_primitives.rs`, and artifact-checker mutation
 suites retain the older bounded helper families.
@@ -112,7 +118,8 @@ The following work remains before issue #24 can close:
   ownership shared across #8, #13, and #22;
 - full-header decoding for timestamp, block number, and header hash when the
   frozen business corpus requires them;
-- typed `Since` values and mismatch tests owned by #12;
+- the remaining block/timestamp, decoded-Since, duration-arithmetic, migration,
+  and business-fixture work owned by #12;
 - persistent-policy and generated-builder parity for every admitted row;
 - standalone-checker machine mutations for the new HeaderDep source/index,
   field selector, exact width, syscall status, and terminal error;

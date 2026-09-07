@@ -20,6 +20,14 @@ CKB transaction-view hash fields produce that type, and
 authorization. Real CKB-VM tests cover matching and substituted output Lock
 Script hashes while the existing `lock = exact(address)` form remains intact.
 
+The next Stage 1 slice adds concrete CKB temporal domains for typed HeaderDep
+fields, opaque input `since`, and absolute/relative epoch-fraction Since
+values. It preserves the existing raw Edition 2026 functions, requires
+explicit raw conversions for new typed values, and emits canonical rational
+epoch-fraction comparisons. This is the implemented epoch subset of issue #12;
+block/timestamp variants, decoded Since, duration arithmetic, migration, and
+the required business corpus remain open.
+
 Until this branch passes those criteria, treat it as development work, use
 `0.26b` only as its experimental implementation baseline, and retain 0.25 as
 the predecessor release contract. Do not publish a 0.26 tag solely to preserve

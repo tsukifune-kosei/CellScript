@@ -1349,6 +1349,9 @@ impl CodeGenerator {
         arg: &IrOperand,
         outgoing_stack_arg_bytes: usize,
     ) -> bool {
+        if is_ckb_temporal_scalar_ir_type(&param.ty) {
+            return self.emit_call_scalar_arg(func, &param.name, abi_index, arg, outgoing_stack_arg_bytes);
+        }
         if let IrType::Named(name) = &param.ty
             && let Some(layout) = self.enum_layouts.get(name).filter(|layout| layout.has_payload())
         {

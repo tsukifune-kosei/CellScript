@@ -456,6 +456,10 @@ impl CodeGenerator {
             ("__ckb_spawn_wait_cell_dep_hex4", "checked returning SPAWN and WAIT with four hexadecimal arguments"),
             ("__ckb_current_role", "current script role inferred from group input lock/type hashes"),
             ("__ckb_current_script_hash", "current script hash loaded via LOAD_SCRIPT_HASH"),
+            ("__ckb_since_to_raw", "explicit typed Since to raw CKB wire bits conversion"),
+            ("__ckb_epoch_number_to_u64", "explicit EpochNumber to u64 conversion"),
+            ("__ckb_block_number_to_u64", "explicit BlockNumber to u64 conversion"),
+            ("__ckb_epoch_length_to_u64", "explicit EpochLength to u64 conversion"),
             ("__ckb_cell_capacity", "SourceView cell capacity field"),
             ("__ckb_cell_occupied_capacity", "SourceView occupied capacity from CellOutput scripts and data bytes"),
             ("__ckb_cell_unoccupied_capacity", "SourceView capacity minus occupied capacity"),
@@ -605,6 +609,10 @@ impl CodeGenerator {
                 "__ckb_transaction_blake2b_gather" => self.emit_runtime_gather_hash(enabled, false),
                 "__ckb_witness_blake2b_select_chunks" => self.emit_runtime_gather_hash(enabled, true),
                 "__ckb_current_script_hash" => self.emit_runtime_current_script_hash_helper(enabled),
+                "__ckb_since_to_raw"
+                | "__ckb_epoch_number_to_u64"
+                | "__ckb_block_number_to_u64"
+                | "__ckb_epoch_length_to_u64" => self.emit_runtime_ckb_temporal_to_raw(name, detail),
                 "__ckb_exec_cell_dep_u8_args" => self.emit_runtime_exec_cell_dep_u8_args(enabled),
                 "__ckb_exec_cell_dep_hex4" => self.emit_runtime_cell_dep_hex4(enabled, false),
                 "__ckb_spawn_wait_cell_dep_hex4" => self.emit_runtime_cell_dep_hex4(enabled, true),
@@ -3231,6 +3239,14 @@ impl CodeGenerator {
         self.emit("li a0, 0");
         self.emit(format!("li a1, {}", CellScriptRuntimeError::CkbSinceMalformed.code()));
         self.emit_label(&done);
+        self.emit("ret");
+    }
+
+    fn emit_runtime_ckb_temporal_to_raw(&mut self, symbol: &str, detail: &str) {
+        self.emit_global(symbol);
+        self.emit_label(symbol);
+        self.emit(format!("# cellscript abi: {detail}; preserves the exact 64-bit representation"));
+        self.emit("li a1, 0");
         self.emit("ret");
     }
 

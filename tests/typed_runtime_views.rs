@@ -20,17 +20,36 @@ module runtime_views::header
 
 resource Token has store { amount: u64 }
 
+fn preserve_epoch_since(value: AbsoluteEpochSince) -> AbsoluteEpochSince {
+    return value
+}
+
 action inspect(witness expected_data_hash: Hash) -> u64 {
     let input = ckb::input<Token>(0)
     let dep = ckb::cell_dep(0)
     let header = ckb::header_dep(0)
-    require input.since == 0
+    let earlier = preserve_epoch_since(ckb::since_absolute_epoch(42, 3, 10))
+    let later = ckb::since_absolute_epoch(43, 0, 10)
+    let half = ckb::since_absolute_epoch(42, 1, 2)
+    let two_fifths = ckb::since_absolute_epoch(42, 2, 5)
+    let equivalent_half = ckb::since_absolute_epoch(42, 2, 4)
+    let relative = ckb::since_relative_epoch(2, 1, 4)
+    require ckb::since_to_raw(earlier) == 2305854004380303402
+    require earlier < later
+    require earlier <= later
+    require later > earlier
+    require later >= earlier
+    require half > two_fifths
+    require half == equivalent_half
+    require half != two_fifths
+    require ckb::since_to_raw(relative) == 11529219444131758082
+    require ckb::since_to_raw(input.since) == 0
     require input.occupied_capacity <= input.capacity
     require input.unoccupied_capacity + input.occupied_capacity == input.capacity
     require dep.data_hash == expected_data_hash
-    require header.epoch_number == 42
-    require header.epoch_start_block_number == 97
-    require header.epoch_length == 10
+    require ckb::epoch_number_to_u64(header.epoch_number) == 42
+    require ckb::block_number_to_u64(header.epoch_start_block_number) == 97
+    require ckb::epoch_length_to_u64(header.epoch_length) == 10
     return 0
 }
 "#;
@@ -86,4 +105,11 @@ fn typed_cell_input_and_header_views_execute_and_fail_closed() {
     let missing_header = fixture(dep_data, witness(&missing_header_result, expected_hash));
     let execution = execute_cellscript_script(strip_vm_abi_trailer(&missing_header_result.artifact_bytes), &missing_header);
     assert_eq!(execution.exit_code, 45, "a one-past-last HeaderDep must use the stable header-dep-missing error");
+
+    let malformed_since_result =
+        compile(&SOURCE.replace("ckb::since_absolute_epoch(42, 3, 10)", "ckb::since_absolute_epoch(42, 0, 0)"));
+    let malformed_since =
+        fixture(Bytes::from_static(b"cellscript-0.30-runtime-view"), witness(&malformed_since_result, expected_hash));
+    let execution = execute_cellscript_script(strip_vm_abi_trailer(&malformed_since_result.artifact_bytes), &malformed_since);
+    assert_eq!(execution.exit_code, 37, "a zero-length epoch fraction must use ckb-since-malformed");
 }

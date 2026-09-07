@@ -284,6 +284,10 @@ fn is_v014_runtime_helper(func: &str) -> bool {
             | "__ckb_source_group_output"
             | "__ckb_since_epoch_absolute"
             | "__ckb_since_epoch_relative"
+            | "__ckb_since_to_raw"
+            | "__ckb_epoch_number_to_u64"
+            | "__ckb_block_number_to_u64"
+            | "__ckb_epoch_length_to_u64"
             | "__ckb_current_role"
             | "__ckb_current_script_hash"
             | "__ckb_cell_capacity"
@@ -532,12 +536,24 @@ fn fixed_scalar_width(ty: &IrType, fixed_size: Option<usize>) -> Option<usize> {
         (IrType::U32, Some(4)) => Some(4),
         (IrType::I32, Some(4)) => Some(4),
         (IrType::U64, Some(8)) => Some(8),
+        (IrType::Named(name), Some(8)) if is_ckb_temporal_scalar_name(name) => Some(8),
         _ => None,
     }
 }
 
+fn is_ckb_temporal_scalar_name(name: &str) -> bool {
+    matches!(name, "EpochNumber" | "BlockNumber" | "EpochLength" | "EncodedSince" | "AbsoluteEpochSince" | "RelativeEpochSince")
+        || name.starts_with("Since<Absolute, ")
+        || name.starts_with("Since<Relative, ")
+}
+
+fn is_ckb_temporal_scalar_ir_type(ty: &IrType) -> bool {
+    matches!(ty, IrType::Named(name) if is_ckb_temporal_scalar_name(name))
+}
+
 fn is_fixed_scalar_ir_type(ty: &IrType) -> bool {
     matches!(ty, IrType::Bool | IrType::U8 | IrType::U16 | IrType::U32 | IrType::I32 | IrType::U64)
+        || is_ckb_temporal_scalar_ir_type(ty)
 }
 
 fn identity_policy_label(identity: &IrIdentityPolicy) -> String {
@@ -627,6 +643,7 @@ fn type_static_length(ty: &IrType) -> Option<usize> {
         IrType::Tuple(items) => items.iter().try_fold(0usize, |acc, item| type_static_length(item).map(|len| acc + len)),
         IrType::Unit => Some(0),
         IrType::Ref(inner) | IrType::MutRef(inner) => type_static_length(inner),
+        IrType::Named(name) if is_ckb_temporal_scalar_name(name) => Some(8),
         IrType::Named(_) => None,
     }
 }
@@ -672,9 +689,29 @@ fn fixed_scalar_operand_width(operand: &IrOperand) -> Option<usize> {
 fn simple_scalar_operand(operand: &IrOperand) -> bool {
     match operand {
         IrOperand::Const(IrConst::Bool(_) | IrConst::U8(_) | IrConst::U16(_) | IrConst::U32(_) | IrConst::U64(_)) => true,
-        IrOperand::Var(var) => matches!(var.ty, IrType::Bool | IrType::U8 | IrType::U16 | IrType::U32 | IrType::I32 | IrType::U64),
+        IrOperand::Var(var) => {
+            matches!(var.ty, IrType::Bool | IrType::U8 | IrType::U16 | IrType::U32 | IrType::I32 | IrType::U64)
+                || is_ckb_temporal_scalar_ir_type(&var.ty)
+        }
         _ => false,
     }
+}
+
+fn ckb_epoch_since_operand_type(operand: &IrOperand) -> Option<&str> {
+    let IrOperand::Var(var) = operand else {
+        return None;
+    };
+    let IrType::Named(name) = &var.ty else {
+        return None;
+    };
+    matches!(name.as_str(), "AbsoluteEpochSince" | "RelativeEpochSince").then_some(name)
+}
+
+fn matching_ckb_epoch_since_operands(left: &IrOperand, right: &IrOperand) -> bool {
+    let (Some(left), Some(right)) = (ckb_epoch_since_operand_type(left), ckb_epoch_since_operand_type(right)) else {
+        return false;
+    };
+    left == right
 }
 
 fn body_var_use_count(body: &IrBody, var_id: usize) -> usize {
@@ -938,6 +975,9 @@ fn align_stack_arg_bytes(bytes: usize) -> usize {
 }
 
 fn call_param_abi_arg_count(param: &IrParam, needs_type_hash: bool) -> usize {
+    if is_ckb_temporal_scalar_ir_type(&param.ty) {
+        return 1;
+    }
     if named_type_name(&param.ty).is_some() {
         return 2 + usize::from(needs_type_hash) * 2;
     }
@@ -1900,7 +1940,7 @@ impl CodeGenerator {
         self.aggregate_pointer_sources.clear();
         for param in params {
             self.param_vars.insert(param.binding.id);
-            if self.fieldless_enum_width(&param.ty).is_some() {
+            if is_ckb_temporal_scalar_ir_type(&param.ty) || self.fieldless_enum_width(&param.ty).is_some() {
                 continue;
             } else if named_type_name(&param.ty).is_some_and(|name| self.cell_type_names.contains(name)) {
                 self.schema_pointer_vars.insert(param.binding.id);
@@ -2224,7 +2264,8 @@ impl CodeGenerator {
                         self.prelude_u64_value_sources.insert(dest.id, PreludeU64ValueSource::Min { left: Box::new(left), right });
                     }
                     IrInstruction::Call { dest: Some(dest), func, .. }
-                        if dest.ty == IrType::U64 && is_runtime_header_u64_call(func) =>
+                        if (dest.ty == IrType::U64 || is_ckb_temporal_scalar_ir_type(&dest.ty))
+                            && is_runtime_header_u64_call(func) =>
                     {
                         self.prelude_u64_value_sources.insert(dest.id, PreludeU64ValueSource::StackVar(dest.id));
                     }

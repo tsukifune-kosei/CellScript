@@ -294,6 +294,17 @@ closed fields only; it does not complete the wider 0.30 runtime-view, temporal,
 authorization, or release portfolio. The authoritative field and exclusion
 matrix is [the 0.30 CKB runtime-view matrix](CELLSCRIPT_0_30_CKB_RUNTIME_VIEW_MATRIX.md).
 
+The additive issue #12 epoch tranche keeps the old raw constructors and
+`input_since_at` return type intact while adding distinct HeaderDep temporal
+types, an opaque typed-view `since`, typed absolute/relative epoch
+constructors, explicit raw conversions, and canonical epoch-fraction
+comparison. Its CKB-VM regression includes exact absolute and relative wire
+vectors, a helper-call ABI round trip, packed-order counterexamples, rationally
+equivalent fractions, and malformed zero-length rejection. See the
+[typed CKB temporal-domain contract](CELLSCRIPT_0_30_TEMPORAL_DOMAINS.md) for
+the implemented and deferred rows. This evidence does not close the complete
+temporal issue or the release gate.
+
 ### 0.26b semantic-foundation evidence
 
 The `0.26b` experimental branch advances compile metadata to schema 67,

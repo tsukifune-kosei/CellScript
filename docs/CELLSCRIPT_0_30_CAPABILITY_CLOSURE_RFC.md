@@ -30,6 +30,9 @@ recorded `authoring1` identity and is not the final 0.30 grammar identity.
 
 The first #24 runtime-view tranche is specified by the
 [0.30 CKB runtime-view matrix](CELLSCRIPT_0_30_CKB_RUNTIME_VIEW_MATRIX.md).
+The additive typed epoch subset is specified in the
+[0.30 temporal-domain contract](CELLSCRIPT_0_30_TEMPORAL_DOMAINS.md); it does
+not by itself close issue #12.
 Metadata schema 68 binds `cellscript-ckb-runtime-view-v1`. Typed Cell views now
 expose occupied/unoccupied capacity, consensus data hashes and input `since`;
 typed HeaderDep views expose all three fields admitted by CKB's

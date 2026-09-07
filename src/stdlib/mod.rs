@@ -174,6 +174,24 @@ impl StdLib {
                 ],
                 return_type: Some(IrType::U64),
             },
+            StdFunction {
+                name: "ckb_since_absolute_epoch".to_string(),
+                params: vec![
+                    ("number".to_string(), IrType::U64),
+                    ("index".to_string(), IrType::U64),
+                    ("length".to_string(), IrType::U64),
+                ],
+                return_type: Some(IrType::Named("AbsoluteEpochSince".to_string())),
+            },
+            StdFunction {
+                name: "ckb_since_relative_epoch".to_string(),
+                params: vec![
+                    ("number".to_string(), IrType::U64),
+                    ("index".to_string(), IrType::U64),
+                    ("length".to_string(), IrType::U64),
+                ],
+                return_type: Some(IrType::Named("RelativeEpochSince".to_string())),
+            },
             StdFunction { name: "ckb_current_role".to_string(), params: vec![], return_type: Some(IrType::U64) },
             StdFunction {
                 name: "ckb_cell_capacity".to_string(),
