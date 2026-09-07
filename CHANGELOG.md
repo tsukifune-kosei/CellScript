@@ -302,6 +302,17 @@
   discovery, offline conflict checks, Rust adapter states, generated TypeScript
   external-signing flow, and the bounded confirmation/finality boundary.
 
+- Implement closed typed cross-Script roles for issue #10. The versioned
+  `cellscript-protocol-closed-role-v1` record reuses ProtocolBundle Cell and
+  witness claims, requires one exclusive provider plus shared-read consumers
+  at the identical physical source, and checks an exact Molecule type/hash in
+  every participant's independently admitted metadata. Resolved roles bind
+  package, entry, interface, ELF, and deployment Script identities into the
+  canonical bundle; `PB213` reports incompatible type, ownership,
+  correspondence, or closed-foreign identity. Generated TypeScript packages
+  export the same schema and a `bindClosedProtocolRole` constructor. Open or
+  runtime-selected roles remain assigned to the separate Script-handle work.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

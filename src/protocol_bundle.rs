@@ -19,9 +19,11 @@ pub const PROTOCOL_BUNDLE_INPUT_SCHEMA: &str = "cellscript-protocol-bundle-input
 pub const PROTOCOL_BUNDLE_REPORT_SCHEMA: &str = "cellscript-protocol-bundle-report-v1";
 pub const PROTOCOL_BUNDLE_EVIDENCE_SCHEMA: &str = "cellscript-protocol-bundle-evidence-v1";
 pub const PROTOCOL_BUNDLE_HASH_DOMAIN: &str = "cellscript-protocol-bundle-v1";
+pub const PROTOCOL_CLOSED_ROLE_SCHEMA: &str = "cellscript-protocol-closed-role-v1";
 
 const MAX_ARTIFACTS: usize = 64;
 const MAX_ROLE_BINDINGS: usize = 4_096;
+const MAX_CLOSED_ROLE_BINDINGS: usize = 1_024;
 const MAX_WITNESS_CLAIMS: usize = 4_096;
 const MAX_DEP_CLAIMS: usize = 4_096;
 const MAX_POLICY_CLAIMS: usize = 256;
@@ -157,6 +159,56 @@ pub struct ProtocolRoleBinding {
     pub exact_capacity: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minimum_capacity: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolRoleSchemaIdentity {
+    pub type_name: String,
+    /// Canonical Molecule schema hash from checked compile metadata.
+    pub schema_hash: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProtocolClosedRoleKind {
+    Cell,
+    Witness,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolPhysicalRoleRef {
+    pub artifact: String,
+    pub claim: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProtocolRoleCorrespondence {
+    ExactPhysicalBinding,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProtocolRoleLocality {
+    ClosedForeign,
+}
+
+/// Artifact-only declaration that one checked participant owns a typed Cell or
+/// witness role and other checked participants consume the identical physical
+/// value. Open/runtime-selected participants belong to the Script-handle
+/// contract and are intentionally outside this closed-role record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolClosedRoleBinding {
+    pub schema: String,
+    pub role_id: String,
+    pub kind: ProtocolClosedRoleKind,
+    pub schema_identity: ProtocolRoleSchemaIdentity,
+    pub provider: ProtocolPhysicalRoleRef,
+    pub consumers: Vec<ProtocolPhysicalRoleRef>,
+    pub correspondence: ProtocolRoleCorrespondence,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -299,6 +351,8 @@ pub struct ProtocolBundleInput {
     pub transaction: ProtocolTransactionSkeleton,
     #[serde(default)]
     pub roles: Vec<ProtocolRoleBinding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub closed_roles: Vec<ProtocolClosedRoleBinding>,
     #[serde(default)]
     pub witnesses: Vec<ProtocolWitnessClaim>,
     #[serde(default)]
@@ -327,10 +381,46 @@ pub struct ProtocolArtifactIdentity {
     pub lowering_record_hash: String,
     pub source_map_hash: String,
     pub interface_hash: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub schema_contracts: Vec<ProtocolRoleSchemaIdentity>,
     pub target_profile_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub builder_manifest_hash: Option<String>,
     pub verified_bundle_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolClosedRoleParticipant {
+    pub artifact: String,
+    pub package_coordinate: String,
+    pub entry: ProtocolEntryIdentity,
+    pub script_role: ProtocolScriptRole,
+    pub claim: String,
+    pub interface_hash: String,
+    pub artifact_hash: String,
+    pub deployment: ProtocolDeploymentIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "kebab-case")]
+pub enum ProtocolClosedRoleSource {
+    Cell { location: ProtocolCellLocation, index: u32 },
+    Witness { index: u32, field: ProtocolWitnessField },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResolvedProtocolClosedRoleBinding {
+    pub schema: String,
+    pub role_id: String,
+    pub locality: ProtocolRoleLocality,
+    pub kind: ProtocolClosedRoleKind,
+    pub schema_identity: ProtocolRoleSchemaIdentity,
+    pub source: ProtocolClosedRoleSource,
+    pub provider: ProtocolClosedRoleParticipant,
+    pub consumers: Vec<ProtocolClosedRoleParticipant>,
+    pub correspondence: ProtocolRoleCorrespondence,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -341,6 +431,8 @@ pub struct ResolvedProtocolBundle {
     pub artifacts: Vec<ProtocolArtifactIdentity>,
     pub transaction: ProtocolTransactionSkeleton,
     pub roles: Vec<ProtocolRoleBinding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub closed_roles: Vec<ResolvedProtocolClosedRoleBinding>,
     pub witnesses: Vec<ProtocolWitnessClaim>,
     pub cell_deps: Vec<ProtocolCellDepClaim>,
     pub header_deps: Vec<ProtocolHeaderDepClaim>,
@@ -411,6 +503,7 @@ pub fn check_protocol_bundle(input: &ProtocolBundleInput, base: &Path) -> Result
         identities.push(identity);
     }
     identities.sort_by(|left, right| left.id.cmp(&right.id));
+    let closed_roles = resolve_closed_roles(&input.closed_roles, &identities, &input.roles, &input.witnesses)?;
 
     let mut bundle = ResolvedProtocolBundle {
         schema: PROTOCOL_BUNDLE_SCHEMA.to_string(),
@@ -418,6 +511,7 @@ pub fn check_protocol_bundle(input: &ProtocolBundleInput, base: &Path) -> Result
         artifacts: identities,
         transaction: input.transaction.clone(),
         roles: input.roles.clone(),
+        closed_roles,
         witnesses: input.witnesses.clone(),
         cell_deps: input.cell_deps.clone(),
         header_deps: input.header_deps.clone(),
@@ -477,6 +571,7 @@ fn validate_input_shape(input: &ProtocolBundleInput) -> Result<()> {
         return Err(CompileError::without_span(format!("ProtocolBundle must contain between 2 and {MAX_ARTIFACTS} artifacts")));
     }
     bounded_count("role bindings", input.roles.len(), MAX_ROLE_BINDINGS)?;
+    bounded_count("closed role bindings", input.closed_roles.len(), MAX_CLOSED_ROLE_BINDINGS)?;
     bounded_count("witness claims", input.witnesses.len(), MAX_WITNESS_CLAIMS)?;
     bounded_count("CellDep claims", input.cell_deps.len(), MAX_DEP_CLAIMS)?;
     bounded_count("HeaderDep claims", input.header_deps.len(), MAX_DEP_CLAIMS)?;
@@ -744,6 +839,14 @@ fn admit_artifact(input: &ProtocolArtifactInput, base: &Path) -> Result<(Protoco
     }
     let builder_manifest_hash =
         input.files.builder_manifest.as_deref().map(|path| validate_builder_manifest(input, &metadata, base, path)).transpose()?;
+    let mut schema_contracts = metadata
+        .molecule_schema_manifest
+        .entries
+        .iter()
+        .map(|entry| ProtocolRoleSchemaIdentity { type_name: entry.type_name.clone(), schema_hash: entry.schema_hash.clone() })
+        .collect::<Vec<_>>();
+    schema_contracts.sort();
+    schema_contracts.dedup();
     Ok((
         ProtocolArtifactIdentity {
             id: input.id.clone(),
@@ -761,6 +864,7 @@ fn admit_artifact(input: &ProtocolArtifactInput, base: &Path) -> Result<(Protoco
             lowering_record_hash: report.lowering_record_hash.clone(),
             source_map_hash: report.source_map_hash.clone(),
             interface_hash: metadata.interface_hash.clone(),
+            schema_contracts,
             target_profile_hash,
             builder_manifest_hash,
             verified_bundle_id,
@@ -814,6 +918,7 @@ fn validate_builder_manifest(input: &ProtocolArtifactInput, metadata: &CompileMe
                 "schema": "cellscript-protocol-bundle-v1",
                 "report_schema": "cellscript-protocol-bundle-report-v1",
                 "artifact_binding_schema": "cellscript-protocol-bundle-artifact-binding-v1",
+                "closed_role_schema": "cellscript-protocol-closed-role-v1",
                 "runtime_adapter": "cellscript-ckb-adapter",
                 "states": [
                     "MaterializedProtocolBundleTx",
@@ -915,6 +1020,127 @@ fn validate_entry(input: &ProtocolArtifactInput, metadata: &CompileMetadata) -> 
     Ok(())
 }
 
+fn resolve_closed_roles(
+    bindings: &[ProtocolClosedRoleBinding],
+    artifacts: &[ProtocolArtifactIdentity],
+    roles: &[ProtocolRoleBinding],
+    witnesses: &[ProtocolWitnessClaim],
+) -> Result<Vec<ResolvedProtocolClosedRoleBinding>> {
+    let mut role_ids = BTreeSet::new();
+    let mut resolved = Vec::with_capacity(bindings.len());
+    for binding in bindings {
+        if binding.schema != PROTOCOL_CLOSED_ROLE_SCHEMA {
+            return Err(CompileError::without_span(format!(
+                "unsupported ProtocolBundle closed role schema '{}'; expected '{}'",
+                binding.schema, PROTOCOL_CLOSED_ROLE_SCHEMA
+            )));
+        }
+        validate_name(&binding.role_id, "closed role id")?;
+        validate_name(&binding.schema_identity.type_name, "closed role schema type_name")?;
+        canonical_raw_hash32(&binding.schema_identity.schema_hash, "closed role schema_hash")?;
+        if !role_ids.insert(binding.role_id.clone()) {
+            return Err(CompileError::without_span(format!("duplicate ProtocolBundle closed role id '{}'", binding.role_id)));
+        }
+        if binding.consumers.is_empty() {
+            return Err(CompileError::without_span(format!(
+                "ProtocolBundle closed role '{}' requires at least one consumer",
+                binding.role_id
+            )));
+        }
+        bounded_count(&format!("closed role '{}' consumers", binding.role_id), binding.consumers.len(), MAX_ARTIFACTS - 1)?;
+
+        let (provider, source) =
+            resolve_closed_role_participant(&binding.provider, binding.kind, artifacts, roles, witnesses, &binding.role_id)?;
+        let mut consumers = Vec::with_capacity(binding.consumers.len());
+        let mut participant_artifacts = BTreeSet::new();
+        participant_artifacts.insert(binding.provider.artifact.as_str());
+        for consumer_ref in &binding.consumers {
+            if !participant_artifacts.insert(consumer_ref.artifact.as_str()) {
+                return Err(CompileError::without_span(format!(
+                    "ProtocolBundle closed role '{}' repeats participant artifact '{}'",
+                    binding.role_id, consumer_ref.artifact
+                )));
+            }
+            let (consumer, _) =
+                resolve_closed_role_participant(consumer_ref, binding.kind, artifacts, roles, witnesses, &binding.role_id)?;
+            consumers.push(consumer);
+        }
+        consumers.sort_by(|left, right| {
+            (left.artifact.as_str(), left.claim.as_str()).cmp(&(right.artifact.as_str(), right.claim.as_str()))
+        });
+        resolved.push(ResolvedProtocolClosedRoleBinding {
+            schema: binding.schema.clone(),
+            role_id: binding.role_id.clone(),
+            locality: ProtocolRoleLocality::ClosedForeign,
+            kind: binding.kind,
+            schema_identity: binding.schema_identity.clone(),
+            source,
+            provider,
+            consumers,
+            correspondence: binding.correspondence,
+        });
+    }
+    resolved.sort_by(|left, right| left.role_id.cmp(&right.role_id));
+    Ok(resolved)
+}
+
+fn resolve_closed_role_participant(
+    reference: &ProtocolPhysicalRoleRef,
+    kind: ProtocolClosedRoleKind,
+    artifacts: &[ProtocolArtifactIdentity],
+    roles: &[ProtocolRoleBinding],
+    witnesses: &[ProtocolWitnessClaim],
+    role_id: &str,
+) -> Result<(ProtocolClosedRoleParticipant, ProtocolClosedRoleSource)> {
+    validate_name(&reference.artifact, "closed role participant artifact")?;
+    validate_name(&reference.claim, "closed role participant claim")?;
+    let artifact = artifacts.iter().find(|artifact| artifact.id == reference.artifact).ok_or_else(|| {
+        CompileError::without_span(format!(
+            "ProtocolBundle closed role '{role_id}' references unknown artifact '{}'",
+            reference.artifact
+        ))
+    })?;
+    let source = match kind {
+        ProtocolClosedRoleKind::Cell => {
+            let matches =
+                roles.iter().filter(|claim| claim.artifact == reference.artifact && claim.name == reference.claim).collect::<Vec<_>>();
+            if matches.len() != 1 {
+                return Err(CompileError::without_span(format!(
+                    "ProtocolBundle closed role '{role_id}' requires exactly one cell claim '{}:{}'",
+                    reference.artifact, reference.claim
+                )));
+            }
+            ProtocolClosedRoleSource::Cell { location: matches[0].location, index: matches[0].index }
+        }
+        ProtocolClosedRoleKind::Witness => {
+            let matches = witnesses
+                .iter()
+                .filter(|claim| claim.artifact == reference.artifact && claim.name == reference.claim)
+                .collect::<Vec<_>>();
+            if matches.len() != 1 {
+                return Err(CompileError::without_span(format!(
+                    "ProtocolBundle closed role '{role_id}' requires exactly one witness claim '{}:{}'",
+                    reference.artifact, reference.claim
+                )));
+            }
+            ProtocolClosedRoleSource::Witness { index: matches[0].index, field: matches[0].field }
+        }
+    };
+    Ok((
+        ProtocolClosedRoleParticipant {
+            artifact: artifact.id.clone(),
+            package_coordinate: artifact.package_coordinate.clone(),
+            entry: artifact.entry.clone(),
+            script_role: artifact.script_role,
+            claim: reference.claim.clone(),
+            interface_hash: artifact.interface_hash.clone(),
+            artifact_hash: artifact.artifact_hash.clone(),
+            deployment: artifact.deployment.clone(),
+        },
+        source,
+    ))
+}
+
 fn canonicalize_bundle(bundle: &mut ResolvedProtocolBundle) {
     bundle.roles.sort_by(|left, right| {
         (left.location, left.index, left.artifact.as_str(), left.name.as_str()).cmp(&(
@@ -924,6 +1150,12 @@ fn canonicalize_bundle(bundle: &mut ResolvedProtocolBundle) {
             right.name.as_str(),
         ))
     });
+    for role in &mut bundle.closed_roles {
+        role.consumers.sort_by(|left, right| {
+            (left.artifact.as_str(), left.claim.as_str()).cmp(&(right.artifact.as_str(), right.claim.as_str()))
+        });
+    }
+    bundle.closed_roles.sort_by(|left, right| left.role_id.cmp(&right.role_id));
     bundle.witnesses.sort_by(|left, right| {
         (left.index, left.field, left.artifact.as_str(), left.name.as_str()).cmp(&(
             right.index,
@@ -953,6 +1185,7 @@ fn detect_conflicts(bundle: &ResolvedProtocolBundle) -> Result<Vec<ProtocolBundl
     let mut conflicts = Vec::new();
     detect_artifact_conflicts(bundle, &mut conflicts);
     detect_role_conflicts(bundle, &mut conflicts)?;
+    detect_closed_role_conflicts(bundle, &mut conflicts);
     detect_witness_conflicts(bundle, &mut conflicts)?;
     detect_cell_dep_conflicts(bundle, &mut conflicts)?;
     detect_header_dep_conflicts(bundle, &mut conflicts)?;
@@ -991,6 +1224,143 @@ fn validate_claim_references(bundle: &ResolvedProtocolBundle, artifact_ids: &BTr
         }
     }
     Ok(())
+}
+
+fn detect_closed_role_conflicts(bundle: &ResolvedProtocolBundle, conflicts: &mut Vec<ProtocolBundleConflict>) {
+    for binding in &bundle.closed_roles {
+        let mut participants = Vec::with_capacity(binding.consumers.len() + 1);
+        participants.push((&binding.provider, true));
+        participants.extend(binding.consumers.iter().map(|consumer| (consumer, false)));
+        let artifacts = participants.iter().map(|(participant, _)| participant.artifact.clone()).collect::<Vec<_>>();
+
+        for (participant, is_provider) in participants {
+            let Some(artifact) = bundle.artifacts.iter().find(|artifact| artifact.id == participant.artifact) else {
+                continue;
+            };
+            if !artifact.schema_contracts.contains(&binding.schema_identity) {
+                push_conflict(
+                    conflicts,
+                    "PB213",
+                    "closed-role-type",
+                    format!("closed_role:{}.schema", binding.role_id),
+                    vec![participant.artifact.clone()],
+                    format!(
+                        "participant metadata does not expose Molecule type '{}' with schema hash '{}'",
+                        binding.schema_identity.type_name, binding.schema_identity.schema_hash
+                    ),
+                );
+            }
+            if !is_provider && participant.deployment.script == binding.provider.deployment.script {
+                push_conflict(
+                    conflicts,
+                    "PB213",
+                    "closed-role-identity",
+                    format!("closed_role:{}.participant", binding.role_id),
+                    vec![binding.provider.artifact.clone(), participant.artifact.clone()],
+                    "closed-foreign participants resolve to the same deployed Script identity",
+                );
+            }
+
+            match binding.kind {
+                ProtocolClosedRoleKind::Cell => {
+                    let Some(claim) =
+                        bundle.roles.iter().find(|claim| claim.artifact == participant.artifact && claim.name == participant.claim)
+                    else {
+                        continue;
+                    };
+                    let source = ProtocolClosedRoleSource::Cell { location: claim.location, index: claim.index };
+                    if source != binding.source {
+                        push_conflict(
+                            conflicts,
+                            "PB213",
+                            "closed-role-correspondence",
+                            format!("closed_role:{}.source", binding.role_id),
+                            artifacts.clone(),
+                            "provider and consumers do not reference the identical Cell slot",
+                        );
+                    }
+                    let ownership_ok = if is_provider {
+                        claim.ownership == ProtocolRoleOwnership::Exclusive
+                    } else {
+                        claim.ownership == ProtocolRoleOwnership::SharedRead
+                    };
+                    if !ownership_ok {
+                        push_conflict(
+                            conflicts,
+                            "PB213",
+                            "closed-role-ownership",
+                            format!("closed_role:{}.ownership", binding.role_id),
+                            vec![participant.artifact.clone()],
+                            if is_provider {
+                                "closed Cell-role provider must hold the exclusive physical claim"
+                            } else {
+                                "closed Cell-role consumer must hold a shared-read physical claim"
+                            },
+                        );
+                    }
+                    if claim.resource_identity.as_deref() != Some(binding.schema_identity.type_name.as_str()) {
+                        push_conflict(
+                            conflicts,
+                            "PB213",
+                            "closed-role-type",
+                            format!("closed_role:{}.resource", binding.role_id),
+                            vec![participant.artifact.clone()],
+                            "physical Cell claim resource_identity does not match the closed-role type name",
+                        );
+                    }
+                }
+                ProtocolClosedRoleKind::Witness => {
+                    let Some(claim) = bundle
+                        .witnesses
+                        .iter()
+                        .find(|claim| claim.artifact == participant.artifact && claim.name == participant.claim)
+                    else {
+                        continue;
+                    };
+                    let source = ProtocolClosedRoleSource::Witness { index: claim.index, field: claim.field };
+                    if source != binding.source {
+                        push_conflict(
+                            conflicts,
+                            "PB213",
+                            "closed-role-correspondence",
+                            format!("closed_role:{}.source", binding.role_id),
+                            artifacts.clone(),
+                            "provider and consumers do not reference the identical WitnessArgs field",
+                        );
+                    }
+                    let ownership_ok = if is_provider {
+                        claim.ownership == ProtocolWitnessOwnership::ExclusiveWrite
+                    } else {
+                        claim.ownership == ProtocolWitnessOwnership::SharedRead
+                    };
+                    if !ownership_ok {
+                        push_conflict(
+                            conflicts,
+                            "PB213",
+                            "closed-role-ownership",
+                            format!("closed_role:{}.ownership", binding.role_id),
+                            vec![participant.artifact.clone()],
+                            if is_provider {
+                                "closed witness-role provider must hold the exclusive-write physical claim"
+                            } else {
+                                "closed witness-role consumer must hold a shared-read physical claim"
+                            },
+                        );
+                    }
+                    if claim.abi != binding.schema_identity.type_name {
+                        push_conflict(
+                            conflicts,
+                            "PB213",
+                            "closed-role-type",
+                            format!("closed_role:{}.abi", binding.role_id),
+                            vec![participant.artifact.clone()],
+                            "physical witness claim ABI does not match the closed-role type name",
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn detect_artifact_conflicts(bundle: &ResolvedProtocolBundle, conflicts: &mut Vec<ProtocolBundleConflict>) {
@@ -1454,6 +1824,7 @@ mod tests {
     }
 
     fn artifact(id: &str, network: ProtocolNetworkIdentity) -> ProtocolArtifactIdentity {
+        let deployment_byte = if id == "order" { "a" } else { "b" };
         ProtocolArtifactIdentity {
             id: id.to_string(),
             package_coordinate: format!("org/{id}@1.0.0"),
@@ -1462,19 +1833,20 @@ mod tests {
             script_role: ProtocolScriptRole::Type,
             deployment: ProtocolDeploymentIdentity {
                 network,
-                artifact_hash: raw_hash("a"),
-                script: script("a"),
-                code_cell_dep: cell_dep("a", 0),
+                artifact_hash: raw_hash(deployment_byte),
+                script: script(deployment_byte),
+                code_cell_dep: cell_dep(deployment_byte, 0),
             },
             compiler_version: "0.26.0".to_string(),
             edition: "2026".to_string(),
             metadata_schema_version: 71,
-            artifact_hash: raw_hash("a"),
+            artifact_hash: raw_hash(deployment_byte),
             metadata_hash: raw_hash("b"),
             typed_semantics_hash: raw_hash("c"),
             lowering_record_hash: raw_hash("d"),
             source_map_hash: raw_hash("e"),
             interface_hash: raw_hash("f"),
+            schema_contracts: vec![ProtocolRoleSchemaIdentity { type_name: "SharedRecord".to_string(), schema_hash: raw_hash("7") }],
             target_profile_hash: raw_hash("1"),
             builder_manifest_hash: None,
             verified_bundle_id: raw_hash("2"),
@@ -1538,6 +1910,7 @@ mod tests {
                 builder_assumption_evidence: BTreeMap::new(),
             },
             roles: Vec::new(),
+            closed_roles: Vec::new(),
             witnesses: Vec::new(),
             cell_deps: Vec::new(),
             header_deps: Vec::new(),
@@ -1644,6 +2017,123 @@ mod tests {
             canonical_hash(PROTOCOL_BUNDLE_HASH_DOMAIN, &left).unwrap(),
             canonical_hash(PROTOCOL_BUNDLE_HASH_DOMAIN, &right).unwrap()
         );
+    }
+
+    #[test]
+    fn closed_cell_role_binds_type_interface_artifact_and_deployment_identity() {
+        let mut bundle = bundle();
+        let mut provider = role("order", "shared-output", ProtocolCellLocation::Output, ProtocolRoleOwnership::Exclusive);
+        provider.resource_identity = Some("SharedRecord".to_string());
+        let mut consumer = role("token", "shared-output", ProtocolCellLocation::Output, ProtocolRoleOwnership::SharedRead);
+        consumer.resource_identity = Some("SharedRecord".to_string());
+        bundle.roles.extend([provider, consumer]);
+
+        let declared = ProtocolClosedRoleBinding {
+            schema: PROTOCOL_CLOSED_ROLE_SCHEMA.to_string(),
+            role_id: "settlement-record".to_string(),
+            kind: ProtocolClosedRoleKind::Cell,
+            schema_identity: ProtocolRoleSchemaIdentity { type_name: "SharedRecord".to_string(), schema_hash: raw_hash("7") },
+            provider: ProtocolPhysicalRoleRef { artifact: "order".to_string(), claim: "shared-output".to_string() },
+            consumers: vec![ProtocolPhysicalRoleRef { artifact: "token".to_string(), claim: "shared-output".to_string() }],
+            correspondence: ProtocolRoleCorrespondence::ExactPhysicalBinding,
+        };
+        bundle.closed_roles = resolve_closed_roles(&[declared], &bundle.artifacts, &bundle.roles, &bundle.witnesses).unwrap();
+
+        assert!(detect_conflicts(&bundle).unwrap().is_empty());
+        let resolved = &bundle.closed_roles[0];
+        assert_eq!(resolved.locality, ProtocolRoleLocality::ClosedForeign);
+        assert_eq!(resolved.source, ProtocolClosedRoleSource::Cell { location: ProtocolCellLocation::Output, index: 0 });
+        assert_eq!(resolved.provider.interface_hash, bundle.artifacts[0].interface_hash);
+        assert_eq!(resolved.provider.artifact_hash, bundle.artifacts[0].artifact_hash);
+        assert_eq!(resolved.provider.deployment, bundle.artifacts[0].deployment);
+        assert_eq!(resolved.consumers[0].deployment, bundle.artifacts[1].deployment);
+
+        let original_hash = canonical_hash(PROTOCOL_BUNDLE_HASH_DOMAIN, &bundle).unwrap();
+        bundle.closed_roles[0].schema_identity.schema_hash = raw_hash("8");
+        assert_ne!(original_hash, canonical_hash(PROTOCOL_BUNDLE_HASH_DOMAIN, &bundle).unwrap());
+        assert!(detect_conflicts(&bundle).unwrap().iter().any(|conflict| conflict.code == "PB213"));
+    }
+
+    #[test]
+    fn closed_witness_role_requires_one_writer_and_identical_typed_field() {
+        let mut bundle = bundle();
+        bundle.witnesses.extend([
+            ProtocolWitnessClaim {
+                artifact: "order".to_string(),
+                name: "shared-envelope".to_string(),
+                index: 0,
+                field: ProtocolWitnessField::InputType,
+                ownership: ProtocolWitnessOwnership::ExclusiveWrite,
+                abi: "SharedRecord".to_string(),
+                value_commitment: None,
+                signing_domain: None,
+            },
+            ProtocolWitnessClaim {
+                artifact: "token".to_string(),
+                name: "shared-envelope".to_string(),
+                index: 0,
+                field: ProtocolWitnessField::InputType,
+                ownership: ProtocolWitnessOwnership::SharedRead,
+                abi: "SharedRecord".to_string(),
+                value_commitment: None,
+                signing_domain: None,
+            },
+        ]);
+        let declared = ProtocolClosedRoleBinding {
+            schema: PROTOCOL_CLOSED_ROLE_SCHEMA.to_string(),
+            role_id: "settlement-envelope".to_string(),
+            kind: ProtocolClosedRoleKind::Witness,
+            schema_identity: ProtocolRoleSchemaIdentity { type_name: "SharedRecord".to_string(), schema_hash: raw_hash("7") },
+            provider: ProtocolPhysicalRoleRef { artifact: "order".to_string(), claim: "shared-envelope".to_string() },
+            consumers: vec![ProtocolPhysicalRoleRef { artifact: "token".to_string(), claim: "shared-envelope".to_string() }],
+            correspondence: ProtocolRoleCorrespondence::ExactPhysicalBinding,
+        };
+        bundle.closed_roles = resolve_closed_roles(&[declared], &bundle.artifacts, &bundle.roles, &bundle.witnesses).unwrap();
+
+        assert!(detect_conflicts(&bundle).unwrap().is_empty());
+        assert_eq!(
+            bundle.closed_roles[0].source,
+            ProtocolClosedRoleSource::Witness { index: 0, field: ProtocolWitnessField::InputType }
+        );
+
+        bundle.witnesses[1].field = ProtocolWitnessField::OutputType;
+        let conflicts = detect_conflicts(&bundle).unwrap();
+        assert!(conflicts.iter().any(|conflict| conflict.class == "closed-role-correspondence"));
+    }
+
+    #[test]
+    fn closed_role_rejects_unknown_or_repeated_participants_before_hashing() {
+        let mut bundle = bundle();
+        let declared = ProtocolClosedRoleBinding {
+            schema: PROTOCOL_CLOSED_ROLE_SCHEMA.to_string(),
+            role_id: "bad-role".to_string(),
+            kind: ProtocolClosedRoleKind::Cell,
+            schema_identity: ProtocolRoleSchemaIdentity { type_name: "SharedRecord".to_string(), schema_hash: raw_hash("7") },
+            provider: ProtocolPhysicalRoleRef { artifact: "missing".to_string(), claim: "shared".to_string() },
+            consumers: vec![ProtocolPhysicalRoleRef { artifact: "token".to_string(), claim: "shared".to_string() }],
+            correspondence: ProtocolRoleCorrespondence::ExactPhysicalBinding,
+        };
+        let error = resolve_closed_roles(&[declared], &bundle.artifacts, &bundle.roles, &bundle.witnesses).unwrap_err();
+        assert!(error.to_string().contains("unknown artifact 'missing'"), "{error}");
+
+        bundle.roles.extend([
+            role("order", "shared", ProtocolCellLocation::Output, ProtocolRoleOwnership::Exclusive),
+            role("token", "shared", ProtocolCellLocation::Output, ProtocolRoleOwnership::SharedRead),
+        ]);
+        let repeated = ProtocolClosedRoleBinding {
+            schema: PROTOCOL_CLOSED_ROLE_SCHEMA.to_string(),
+            role_id: "bad-role".to_string(),
+            kind: ProtocolClosedRoleKind::Cell,
+            schema_identity: ProtocolRoleSchemaIdentity { type_name: "SharedRecord".to_string(), schema_hash: raw_hash("7") },
+            provider: ProtocolPhysicalRoleRef { artifact: "order".to_string(), claim: "shared".to_string() },
+            consumers: vec![
+                ProtocolPhysicalRoleRef { artifact: "token".to_string(), claim: "shared".to_string() },
+                ProtocolPhysicalRoleRef { artifact: "token".to_string(), claim: "second".to_string() },
+            ],
+            correspondence: ProtocolRoleCorrespondence::ExactPhysicalBinding,
+        };
+        let error = resolve_closed_roles(&[repeated], &bundle.artifacts, &bundle.roles, &bundle.witnesses).unwrap_err();
+        assert!(error.to_string().contains("repeats participant artifact 'token'"), "{error}");
     }
 
     #[test]

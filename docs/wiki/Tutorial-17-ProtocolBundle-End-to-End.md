@@ -7,7 +7,7 @@ development contract from checked ELF files through an externally signed,
 bounded confirmation receipt.
 
 The current endpoint records a canonical-chain inclusion and caller-selected
-depth without claiming absolute finality. Builder-derived live Cell selection
+depth without claiming absolute finality. Automatic builder-selected live Cells
 and independently measured per-Script-Group cycles remain open.
 
 ## 1. Know the three identities
@@ -23,7 +23,8 @@ ProtocolBundle uses three versioned schemas for different jobs:
 Generated TypeScript builders use
 `cellscript-protocol-bundle-artifact-binding-v1` to bind one generated package
 to its exact metadata, ELF, interface, builder manifest, selected entry, Script
-role, and deployment.
+role, and deployment. Closed cross-Script roles use
+`cellscript-protocol-closed-role-v1`.
 
 The bundle hash is the CKB Blake2b-256 digest of the domain string, a zero byte,
 and canonical JSON for the resolved bundle. Local file paths do not enter that
@@ -94,6 +95,7 @@ Create `protocol-bundle.json` beside the evidence files. Its top-level shape is:
     "builder_assumption_evidence": {}
   },
   "roles": [],
+  "closed_roles": [],
   "witnesses": [],
   "cell_deps": [],
   "header_deps": [],
@@ -111,7 +113,17 @@ another Script that only observes the same Cell. Witness fields use
 `exclusive-write` and `shared-read`. The checker rejects multiple owners,
 multiple writers, incompatible ABIs, different signing domains, conflicting
 Script identities, and claims for indexes outside the skeleton. It reports
-stable `PB200` through `PB212` codes and never chooses a winner.
+stable `PB200` through `PB213` codes and never chooses a winner.
+
+A `closed_roles` entry turns compatible physical claims into a typed
+cross-Script relation. It names one provider claim, one or more consumer
+claims, and an exact Molecule type name/hash. Every participant must expose
+that schema in checked metadata. The resolver copies each participant's
+interface hash, ELF hash, selected entry, and deployment Script identity into
+the canonical bundle. Providers use `exclusive` or `exclusive-write`;
+consumers use `shared-read`; all references must resolve to the identical Cell
+slot or witness field. Open/runtime-selected participants are not accepted by
+this schema.
 
 ## 4. Run the offline composition check
 
@@ -167,6 +179,7 @@ fields in a ProtocolBundle or evidence record.
 Every generated TypeScript action-builder package exports:
 
 - `bindProtocolBundleArtifact`;
+- `bindClosedProtocolRole`;
 - `createProtocolBundleClient`;
 - the same nine state names;
 - `ProtocolBundleSigningRequest`; and
@@ -183,6 +196,19 @@ const artifact = builder.bindProtocolBundleArtifact({
   scriptRole: "type",
   deployment,
 });
+
+const sharedSchema = artifact.schemaContracts.find(
+  (schema) => schema.type_name === "SettlementRecord",
+);
+if (!sharedSchema) throw new Error("SettlementRecord schema is not exported");
+
+bundleInput.closed_roles = [builder.bindClosedProtocolRole({
+  roleId: "settlement-record",
+  kind: "cell",
+  schemaIdentity: sharedSchema,
+  provider: { artifact, claim: "settlement-output" },
+  consumers: [{ artifact: authArtifact, claim: "settlement-output" }],
+})];
 
 const client = builder.createProtocolBundleClient(runtime);
 const flow = await client.prepare(bundleInput, [artifact, authArtifact]);

@@ -117,7 +117,7 @@ form a complete 0.30 business-capability plan.
 | Bounded variable-cardinality Type-group inputs | [#7](https://github.com/CellScript-Labs/CellScript/issues/7) | Partial. It owns bounded selection, count, decode, predicate, and lifecycle discharge. Native authoring integration and the final cross-product of role shapes still need 0.30 acceptance. |
 | Bounded output plans and one-to-one output correspondence | [#8](https://github.com/CellScript-Labs/CellScript/issues/8) | Partial. The runtime foundation exists on the 0.26 development line, while authoring, shared-witness composition, builders, and complete independent machine evidence remain release work. |
 | Multi-Script transaction construction and conflict handling | [#9](https://github.com/CellScript-Labs/CellScript/issues/9) | Covered as the architecture owner. The ProtocolBundle must precede any `.celltx` convenience syntax. |
-| Typed roles across Script boundaries | [#10](https://github.com/CellScript-Labs/CellScript/issues/10) | Covered as a design owner, dependent on the ProtocolBundle and exact Script/interface identity. |
+| Typed roles across Script boundaries | [#10](https://github.com/CellScript-Labs/CellScript/issues/10) | Closed artifact-known Cell/witness roles are implemented in ProtocolBundle with exact schema/interface/ELF/deployment identity. Open/runtime-selected roles remain dependent on #11. |
 | Runtime Script and verifier handles | [#11](https://github.com/CellScript-Labs/CellScript/issues/11) | Covered as the identity and ABI owner. Current exact-hash trusted delegation is a bounded precursor, not full closure. |
 | Timelocks, epochs, timestamps, and `Since` | [#12](https://github.com/CellScript-Labs/CellScript/issues/12) | Covered for typed temporal domains. It does not own the rest of the transaction-view and syscall surface. |
 | Digest-committed substate and authenticated openings | [#13](https://github.com/CellScript-Labs/CellScript/issues/13) | Covered for commitments and opening correspondence. It must share the entry witness envelope with output plans and verifier proofs. |
@@ -236,19 +236,32 @@ and Script code identity under the same transaction and chain evidence.
 The adapter now gates signing on both live receipts, delegates key operations to
 caller-supplied SDK unlockers, preserves compiler-owned witness fields, verifies
 the signed bytes through node execution and tx-pool acceptance, and gates
-submission on that evidence. Builder-derived live selection, independently
-measured per-group cycles, and the remaining runtime-adapter work remain
-required before issue #9 is complete. Confirmation now polls the canonical
+submission on that evidence. Automatic builder-selected live Cells and
+independently measured per-group cycles remain outside current evidence.
+Confirmation now polls the canonical
 transaction location to a caller-selected depth, restarts after an observed
 reorg, and preserves the final inclusion/tip snapshot without claiming absolute
 finality. See
 [CellScript ProtocolBundle v1](CELLSCRIPT_PROTOCOL_BUNDLE.md).
 
+The first #10 closure is also implemented without adding source syntax.
+`cellscript-protocol-closed-role-v1` references the existing physical Cell or
+witness claims, requires one exclusive provider and shared-read consumers at
+the identical physical source, and requires every participant's checked
+metadata to expose the same Molecule type name/hash. Resolution copies exact
+package, entry, interface, ELF, and deployment identities into the canonical
+bundle. `PB213` reports type, ownership, correspondence, or closed-foreign
+identity conflicts. Runtime-selected/open participants remain blocked on #11's
+typed Script-handle contract.
+
 Generated TypeScript action builders now expose the same ProtocolBundle v1
 state names and artifact-binding schema as the Rust adapter. Their client
 orders offline checking, live resolution, external signing resumption, signed
 node execution, tx-pool acceptance, and submission. It accepts opaque signer
-results and never accepts a private key field. Registry verified-build evidence
+results and never accepts a private key field. Generated artifacts expose their
+checked Molecule schema contracts, and `bindClosedProtocolRole` refuses a
+provider or consumer that lacks the exact requested type/hash. Registry
+verified-build evidence
 publishes the same bundle schema, artifact-binding schema, and runtime-adapter
 identity only for complete independently checked CKB ELF bundles; source-only
 and generic hash-bound artifacts remain unmarked. The website-rendered

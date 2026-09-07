@@ -1017,7 +1017,10 @@ dry-run the signed bytes, require tx-pool acceptance, and submit with a hash-bou
 uncommitted receipt. A reorg-aware confirmation poll can then bind canonical
 block inclusion and a caller-selected minimum depth to the same bundle and
 transaction identities; the receipt remains a bounded observation rather than
-an absolute-finality claim. Generated TypeScript packages expose the same ordered
+an absolute-finality claim. Closed cross-Script Cell and witness roles can bind
+one provider and one or more consumers through an exact Molecule schema,
+interface, ELF, and deployment identity; open/runtime-selected roles remain a
+separate Script-handle boundary. Generated TypeScript packages expose the same ordered
 states and an artifact binding tied to their metadata, ELF, interface, and
 builder-manifest identities; signing requests carry no private keys.
 Registry verified-build evidence exposes the same bundle schema, binding

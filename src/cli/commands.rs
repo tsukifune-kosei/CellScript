@@ -8321,6 +8321,7 @@ fn write_typescript_builder_package(
         "deployment_verified": deployment_identity.is_some(),
         "protocol_bundle_api_schema": "cellscript-protocol-bundle-v1",
         "protocol_bundle_artifact_binding_schema": "cellscript-protocol-bundle-artifact-binding-v1",
+        "protocol_bundle_closed_role_schema": "cellscript-protocol-closed-role-v1",
         "resumable_external_signing": true,
         "private_keys_in_generated_api": false,
         "lockfile": lockfile_path.map(|path| path.display().to_string()),
@@ -8448,6 +8449,7 @@ fn typescript_builder_manifest(
             "schema": "cellscript-protocol-bundle-v1",
             "report_schema": "cellscript-protocol-bundle-report-v1",
             "artifact_binding_schema": "cellscript-protocol-bundle-artifact-binding-v1",
+            "closed_role_schema": "cellscript-protocol-closed-role-v1",
             "runtime_adapter": "cellscript-ckb-adapter",
             "states": [
                 "MaterializedProtocolBundleTx",
@@ -8537,6 +8539,7 @@ fn typescript_protocol_bundle_api() -> &'static str {
 export const PROTOCOL_BUNDLE_SCHEMA = "cellscript-protocol-bundle-v1" as const;
 export const PROTOCOL_BUNDLE_REPORT_SCHEMA = "cellscript-protocol-bundle-report-v1" as const;
 export const PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA = "cellscript-protocol-bundle-artifact-binding-v1" as const;
+export const PROTOCOL_CLOSED_ROLE_SCHEMA = "cellscript-protocol-closed-role-v1" as const;
 
 export type ProtocolBundleScriptRole = "lock" | "type" | "spawned-verifier";
 
@@ -8554,10 +8557,16 @@ export interface ProtocolBundleArtifactBinding {
   metadataHash: string;
   artifactHash: string;
   interfaceHash: string;
+  schemaContracts: readonly ProtocolBundleRoleSchemaIdentity[];
   builderManifestSchema: typeof CELLSCRIPT_BUILDER_SCHEMA;
   entry: { kind: "action" | "lock"; name: string };
   scriptRole: ProtocolBundleScriptRole;
   deployment: ProtocolBundleDeploymentBinding;
+}
+
+export interface ProtocolBundleRoleSchemaIdentity {
+  type_name: string;
+  schema_hash: string;
 }
 
 export const protocolBundleArtifactIdentity = Object.freeze({
@@ -8565,6 +8574,10 @@ export const protocolBundleArtifactIdentity = Object.freeze({
   metadataHash: builderManifest.metadata_hash,
   artifactHash: builderManifest.artifact_hash,
   interfaceHash: metadata.interface_hash,
+  schemaContracts: Object.freeze(builderManifest.molecule_schema_manifest.entries.map((entry) => Object.freeze({
+    type_name: entry.type_name,
+    schema_hash: entry.schema_hash,
+  }))),
   builderManifestSchema: CELLSCRIPT_BUILDER_SCHEMA,
 });
 
@@ -8592,10 +8605,62 @@ export function bindProtocolBundleArtifact(options: {
     metadataHash: protocolBundleArtifactIdentity.metadataHash,
     artifactHash,
     interfaceHash: protocolBundleArtifactIdentity.interfaceHash,
+    schemaContracts: protocolBundleArtifactIdentity.schemaContracts,
     builderManifestSchema: protocolBundleArtifactIdentity.builderManifestSchema,
     entry: Object.freeze({ ...options.entry }),
     scriptRole: options.scriptRole,
     deployment: Object.freeze(options.deployment),
+  });
+}
+
+export interface ProtocolBundleClosedRoleInput {
+  schema: typeof PROTOCOL_CLOSED_ROLE_SCHEMA;
+  role_id: string;
+  kind: "cell" | "witness";
+  schema_identity: ProtocolBundleRoleSchemaIdentity;
+  provider: { artifact: string; claim: string };
+  consumers: readonly { artifact: string; claim: string }[];
+  correspondence: "exact-physical-binding";
+}
+
+export function bindClosedProtocolRole(options: {
+  roleId: string;
+  kind: "cell" | "witness";
+  schemaIdentity: ProtocolBundleRoleSchemaIdentity;
+  provider: { artifact: ProtocolBundleArtifactBinding; claim: string };
+  consumers: readonly { artifact: ProtocolBundleArtifactBinding; claim: string }[];
+}): ProtocolBundleClosedRoleInput {
+  if (!options.roleId || !options.provider.claim || options.consumers.length < 1) {
+    throw new Error("closed ProtocolBundle role requires an id, provider claim, and at least one consumer");
+  }
+  if (!options.schemaIdentity.type_name || !/^[0-9a-f]{64}$/.test(options.schemaIdentity.schema_hash)) {
+    throw new Error("closed ProtocolBundle role schema identity is invalid");
+  }
+  const participants = [options.provider, ...options.consumers];
+  const participantIds = participants.map((participant) => participant.artifact.id);
+  if (new Set(participantIds).size !== participantIds.length || options.consumers.some((consumer) => !consumer.claim)) {
+    throw new Error("closed ProtocolBundle role participants and claims must be distinct and non-empty");
+  }
+  for (const participant of participants) {
+    if (participant.artifact.schema !== PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA) {
+      throw new Error(`ProtocolBundle artifact '${participant.artifact.id}' has an invalid binding schema`);
+    }
+    const exposesSchema = participant.artifact.schemaContracts.some((candidate) =>
+      candidate.type_name === options.schemaIdentity.type_name
+      && candidate.schema_hash === options.schemaIdentity.schema_hash);
+    if (!exposesSchema) {
+      throw new Error(`ProtocolBundle artifact '${participant.artifact.id}' does not expose the closed-role schema identity`);
+    }
+  }
+  return Object.freeze({
+    schema: PROTOCOL_CLOSED_ROLE_SCHEMA,
+    role_id: options.roleId,
+    kind: options.kind,
+    schema_identity: Object.freeze({ ...options.schemaIdentity }),
+    provider: Object.freeze({ artifact: options.provider.artifact.id, claim: options.provider.claim }),
+    consumers: Object.freeze(options.consumers.map((consumer) =>
+      Object.freeze({ artifact: consumer.artifact.id, claim: consumer.claim }))),
+    correspondence: "exact-physical-binding" as const,
   });
 }
 
@@ -9734,6 +9799,20 @@ fn typescript_builder_test(actions: &[&crate::ActionMetadata]) -> Result<String>
              id: \"first\", entry: { kind: \"action\", name: actionCases[0].name }, scriptRole: \"type\", deployment,\n\
            });\n\
            const second = Object.freeze({ ...first, id: \"second\" });\n\
+           const sharedSchema = first.schemaContracts[0];\n\
+           assert.ok(sharedSchema);\n\
+           const closedRole = builder.bindClosedProtocolRole({\n\
+             roleId: \"shared-token\", kind: \"cell\", schemaIdentity: sharedSchema,\n\
+             provider: { artifact: first, claim: \"shared-output\" },\n\
+             consumers: [{ artifact: second, claim: \"shared-output\" }],\n\
+           });\n\
+           assert.equal(closedRole.schema, builder.PROTOCOL_CLOSED_ROLE_SCHEMA);\n\
+           assert.deepEqual(closedRole.provider, { artifact: \"first\", claim: \"shared-output\" });\n\
+           assert.throws(() => builder.bindClosedProtocolRole({\n\
+             roleId: \"bad\", kind: \"cell\", schemaIdentity: sharedSchema,\n\
+             provider: { artifact: first, claim: \"shared-output\" },\n\
+             consumers: [{ artifact: first, claim: \"shared-input\" }],\n\
+           }), /participants and claims must be distinct/);\n\
            const calls = [];\n\
            const stage = (state, previous, transaction = { state }) => ({\n\
              state, bundleHash: previous?.bundleHash ?? \"bundle-hash\",\n\

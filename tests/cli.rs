@@ -2384,6 +2384,10 @@ fn protocol_bundle_checks_three_independent_artifacts_and_hashes_canonical_compo
             r#"
 module protocol::order
 
+resource SharedRecord has store, create {
+    amount: u64
+}
+
 action settle() -> bool {
     verification
         true
@@ -2395,13 +2399,13 @@ action settle() -> bool {
             r#"
 module protocol::token
 
-resource Token has store, create {
+resource SharedRecord has store, create {
     amount: u64
 }
 
-action transfer() -> Token {
+action transfer() -> SharedRecord {
     verification
-        create Token { amount: 1 }
+        create SharedRecord { amount: 1 }
 }
 "#,
         ),
@@ -2409,6 +2413,10 @@ action transfer() -> Token {
             "auth",
             r#"
 module protocol::auth
+
+resource SharedRecord has store, create {
+    amount: u64
+}
 
 lock authorize(witness approved: bool) -> bool {
     verification
@@ -2448,6 +2456,21 @@ lock authorize(witness approved: bool) -> bool {
             .unwrap();
         assert!(generated.status.success(), "{}", String::from_utf8_lossy(&generated.stderr));
     }
+    let shared_schema_hashes = metadata_values
+        .values()
+        .map(|metadata| {
+            metadata["molecule_schema_manifest"]["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["type_name"] == "SharedRecord")
+                .and_then(|entry| entry["schema_hash"].as_str())
+                .unwrap()
+                .to_string()
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(shared_schema_hashes.len(), 1, "all participants must compile the identical SharedRecord schema");
+    let shared_schema_hash = shared_schema_hashes.into_iter().next().unwrap();
 
     let network = serde_json::json!({
         "chain_id": "ckb-testnet",
@@ -2565,9 +2588,32 @@ lock authorize(witness approved: bool) -> bool {
             {
                 "artifact": "token", "name": "token-output", "location": "output", "index": 0,
                 "ownership": "exclusive", "expected_type": token_script,
+                "resource_identity": "SharedRecord",
                 "cell_commitment": format!("0x{}", "5".repeat(64)), "exact_capacity": 80_000_000_000u64,
             },
+            {
+                "artifact": "order", "name": "settlement-output", "location": "output", "index": 0,
+                "ownership": "shared-read", "expected_type": token_script,
+                "resource_identity": "SharedRecord",
+            },
+            {
+                "artifact": "auth", "name": "settlement-output", "location": "output", "index": 0,
+                "ownership": "shared-read", "expected_type": token_script,
+                "resource_identity": "SharedRecord",
+            },
         ],
+        "closed_roles": [{
+            "schema": "cellscript-protocol-closed-role-v1",
+            "role_id": "settlement-record",
+            "kind": "cell",
+            "schema_identity": { "type_name": "SharedRecord", "schema_hash": shared_schema_hash },
+            "provider": { "artifact": "token", "claim": "token-output" },
+            "consumers": [
+                { "artifact": "order", "claim": "settlement-output" },
+                { "artifact": "auth", "claim": "settlement-output" },
+            ],
+            "correspondence": "exact-physical-binding",
+        }],
         "cell_deps": [
             { "artifact": "order", "name": "order-code", "index": 0, "cell_dep": cell_deps[0].clone() },
             { "artifact": "token", "name": "token-code", "index": 1, "cell_dep": cell_deps[1].clone() },
@@ -2603,6 +2649,12 @@ lock authorize(witness approved: bool) -> bool {
     let first: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
     assert_eq!(first["status"], "ok");
     assert_eq!(first["bundle"]["artifacts"].as_array().unwrap().len(), 3);
+    assert_eq!(first["bundle"]["closed_roles"].as_array().unwrap().len(), 1);
+    assert_eq!(first["bundle"]["closed_roles"][0]["locality"], "closed-foreign");
+    assert_eq!(first["bundle"]["closed_roles"][0]["provider"]["artifact"], "token");
+    assert_eq!(first["bundle"]["closed_roles"][0]["consumers"].as_array().unwrap().len(), 2);
+    assert!(first["bundle"]["closed_roles"][0]["provider"]["interface_hash"].as_str().is_some());
+    assert!(first["bundle"]["closed_roles"][0]["provider"]["deployment"]["script"]["code_hash"].as_str().is_some());
     assert_eq!(
         first["bundle"]["artifacts"]
             .as_array()
@@ -2633,6 +2685,22 @@ lock authorize(witness approved: bool) -> bool {
     assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
     let second: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
     assert_eq!(first["bundle_hash"], second["bundle_hash"]);
+
+    let valid_closed_role_schema_hash = manifest["closed_roles"][0]["schema_identity"]["schema_hash"].clone();
+    manifest["closed_roles"][0]["schema_identity"]["schema_hash"] = serde_json::json!("8".repeat(64));
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    let closed_role_conflict_path = root.join("protocol-closed-role-conflicts.json");
+    let closed_role_conflict = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .args(["protocol", "bundle", "check"])
+        .arg(&manifest_path)
+        .arg("--output")
+        .arg(&closed_role_conflict_path)
+        .output()
+        .unwrap();
+    assert!(!closed_role_conflict.status.success(), "an unknown participant schema must fail before signing");
+    let closed_role_report: serde_json::Value = serde_json::from_slice(&std::fs::read(closed_role_conflict_path).unwrap()).unwrap();
+    assert!(closed_role_report["conflicts"].as_array().unwrap().iter().any(|conflict| conflict["code"] == "PB213"));
+    manifest["closed_roles"][0]["schema_identity"]["schema_hash"] = valid_closed_role_schema_hash;
 
     let valid_builder_evidence = manifest["transaction"]["builder_assumption_evidence"].clone();
     manifest["transaction"]["builder_assumption_evidence"] = serde_json::json!({});
@@ -10037,6 +10105,7 @@ action mint(amount: u64, owner: Address) -> Token {
     assert_eq!(summary["raw_cell_data_required"], false);
     assert_eq!(summary["protocol_bundle_api_schema"], "cellscript-protocol-bundle-v1");
     assert_eq!(summary["protocol_bundle_artifact_binding_schema"], "cellscript-protocol-bundle-artifact-binding-v1");
+    assert_eq!(summary["protocol_bundle_closed_role_schema"], "cellscript-protocol-closed-role-v1");
     assert_eq!(summary["resumable_external_signing"], true);
     assert_eq!(summary["private_keys_in_generated_api"], false);
 
@@ -10069,6 +10138,7 @@ action mint(amount: u64, owner: Address) -> Token {
     assert_eq!(manifest["actions"][0]["action_scan_selectors"]["schema"], "cellscript-action-scan-selectors-v0.21");
     assert_eq!(manifest["actions"][0]["action_scan_selectors"]["source"], "transaction_runtime_input_requirements");
     assert_eq!(manifest["protocol_bundle_contract"]["schema"], "cellscript-protocol-bundle-v1");
+    assert_eq!(manifest["protocol_bundle_contract"]["closed_role_schema"], "cellscript-protocol-closed-role-v1");
     assert_eq!(manifest["protocol_bundle_contract"]["runtime_adapter"], "cellscript-ckb-adapter");
     assert_eq!(manifest["protocol_bundle_contract"]["private_keys"], "never-in-bundle-or-evidence");
     assert_eq!(manifest["protocol_bundle_contract"]["states"].as_array().unwrap().len(), 9);
@@ -10115,6 +10185,9 @@ action mint(amount: u64, owner: Address) -> Token {
     assert!(!index_ts.contains("import metadataJson"), "{index_ts}");
     assert!(index_ts.contains("PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA"), "{index_ts}");
     assert!(index_ts.contains("bindProtocolBundleArtifact"), "{index_ts}");
+    assert!(index_ts.contains("PROTOCOL_CLOSED_ROLE_SCHEMA"), "{index_ts}");
+    assert!(index_ts.contains("bindClosedProtocolRole"), "{index_ts}");
+    assert!(index_ts.contains("schemaContracts"), "{index_ts}");
     assert!(index_ts.contains("createProtocolBundleClient"), "{index_ts}");
     assert!(index_ts.contains("ProtocolBundleSigningRequest"), "{index_ts}");
     assert!(index_ts.contains("ProtocolBundleConfirmationPolicy"), "{index_ts}");
@@ -10137,6 +10210,7 @@ action mint(amount: u64, owner: Address) -> Token {
     assert!(builder_test.contains("rejects mismatched deployment identity"), "{builder_test}");
     assert!(builder_test.contains("trust policy requires a deployment record"), "{builder_test}");
     assert!(builder_test.contains("resumable ProtocolBundle runtime state machine without private keys"), "{builder_test}");
+    assert!(builder_test.contains("shared-token"), "{builder_test}");
 
     let generated_metadata: serde_json::Value =
         serde_json::from_slice(&std::fs::read(output_dir.join("src").join("metadata.json")).unwrap()).unwrap();

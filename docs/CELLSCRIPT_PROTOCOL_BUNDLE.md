@@ -1,7 +1,8 @@
 # CellScript ProtocolBundle v1
 
-Status: 0.30 development contract for issue
-[#9](https://github.com/CellScript-Labs/CellScript/issues/9).
+Status: 0.30 development contract for issues
+[#9](https://github.com/CellScript-Labs/CellScript/issues/9) and
+[#10](https://github.com/CellScript-Labs/CellScript/issues/10).
 
 ## Boundary
 
@@ -20,7 +21,9 @@ more independently compiled CKB Script artifacts. The offline checker:
    and change claims against one deterministic transaction skeleton;
 5. validates that same skeleton and its explicit builder-assumption evidence
    against every admitted artifact's compile metadata; and
-6. emits a stable bundle hash, conflict report, and runtime evidence template.
+6. resolves closed cross-Script roles through checked Molecule schema,
+   interface, ELF, and deployment identities; and
+7. emits a stable bundle hash, conflict report, and runtime evidence template.
 
 This layer does not link ELF files, merge their trust boundaries, call one CKB
 Script from another, query RPC, sign, submit, or claim CKB-VM/chain evidence.
@@ -59,6 +62,7 @@ The top-level input contains:
 | `artifacts` | 2 to 64 independent checked ELF references |
 | `transaction` | Version-0 transaction skeleton with exact ordered cell, witness, CellDep, HeaderDep, fee-policy, and change-policy commitments; optional concrete adapter fields are hash-bound when present |
 | `roles` | Named input/output indexes with exclusive or shared-read ownership and optional exact Script/resource/cell/capacity requirements |
+| `closed_roles` | Typed provider/consumer relations over existing Cell or witness claims, using `cellscript-protocol-closed-role-v1` |
 | `witnesses` | Exact `WitnessArgs` index/field, ABI, commitment, signing domain, and write/read ownership |
 | `cell_deps` / `header_deps` | Named logical dependencies mapped to exact global positions |
 | `policies` | Fee or change policy hashes with exclusive or shared ownership |
@@ -98,6 +102,42 @@ the corresponding commitment is present, it must equal CKB Blake2b-256 of
 those bytes. This records ownership and materialization; it does not
 manufacture a signature or canonical signing message.
 
+## Closed typed roles
+
+A closed role connects already admitted artifacts; it does not select a Script
+at runtime. The provider and every consumer reference an existing physical
+Cell or witness claim:
+
+```json
+{
+  "schema": "cellscript-protocol-closed-role-v1",
+  "role_id": "settlement-record",
+  "kind": "cell",
+  "schema_identity": {
+    "type_name": "SettlementRecord",
+    "schema_hash": "...64 lowercase hex digits..."
+  },
+  "provider": { "artifact": "order-type", "claim": "settlement-output" },
+  "consumers": [
+    { "artifact": "token-type", "claim": "settlement-output" }
+  ],
+  "correspondence": "exact-physical-binding"
+}
+```
+
+The provider must own the physical Cell claim with `exclusive`, or the witness
+claim with `exclusive-write`. Consumers must use `shared-read`. Every claim
+must resolve to the identical Cell slot or `WitnessArgs` field and name the
+same resource/ABI as `schema_identity.type_name`. Checked metadata for every
+participant must expose that exact Molecule type name and schema hash.
+
+The resolved record copies each participant's package coordinate, selected
+entry, Script role, interface hash, ELF hash, and complete deployment identity
+into the canonical bundle. This makes the relation auditable and hash-bound;
+it does not mean that CKB-VM links the ELFs or calls one Script from another.
+Runtime-selected/open roles remain outside this schema until the separately
+versioned Script-handle contract is admitted.
+
 ## Conflict codes
 
 The checker returns conflicts in stable code/key/artifact order and never
@@ -118,6 +158,7 @@ chooses a winner:
 | `PB210` | signature policy | Signing domains disagree for one witness field |
 | `PB211` | skeleton binding | A claimed global index does not exist |
 | `PB212` | builder validation | The shared transaction skeleton or supplied evidence violates an artifact's metadata builder assumptions |
+| `PB213` | closed typed role | A provider/consumer has the wrong ownership, physical source, schema, interface-bound artifact, or deployment identity |
 
 Malformed schemas, unknown fields, duplicate artifact/claim identities,
 unknown artifact references, non-canonical hashes, escaped paths, over-budget
@@ -205,7 +246,9 @@ The signing path is an ordered state machine:
 Private keys are never fields in the ProtocolBundle or its evidence. Hardware,
 wallet, and software signers remain behind CKB SDK `ScriptUnlocker` interfaces.
 Generated TypeScript builders expose the same rule through
-`ProtocolBundleSigningRequest.privateKeysIncluded = false`. Their
+`ProtocolBundleSigningRequest.privateKeysIncluded = false`. They also export
+`bindClosedProtocolRole`, which requires every bound generated artifact to
+expose the exact Molecule type/hash before producing a closed-role input. Their
 `createProtocolBundleClient` rejects duplicate artifact IDs, wrong stage names,
 and any bundle or raw-transaction identity change between stages. Each package
 also exports `bindProtocolBundleArtifact`, which refuses a deployment ELF hash
@@ -244,13 +287,10 @@ format/threat-model contract plus the builder-contract portion of Phase 1
 offline composition. The adapter evidence advances a concrete report to a
 byte-exact transaction while preserving the offline report unchanged.
 
-The next bundle phases must add, without weakening this hash boundary:
-
-- builder-derived transaction claims and live Cell selection;
-- independently attributed per-group cycles when an execution backend can
-  report them;
-- additional product-specific finality policy beyond the adapter's bounded,
-  reorg-aware confirmation observation.
+Later bundle phases may add builder-selected live Cells, independently
+attributed per-group cycles from a backend that can report them, and
+product-specific finality policies. None is inferred by the closed-role
+contract or the current adapter evidence.
 
 The original compiler report remains offline structural evidence. Adapter
 materialization, live resolution, dependency resolution, signed dry-run,
