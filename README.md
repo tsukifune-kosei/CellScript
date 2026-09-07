@@ -1005,8 +1005,9 @@ tiers, offline checker, and adapter materialization boundary are specified in
 [CellScript ProtocolBundle v1](docs/CELLSCRIPT_PROTOCOL_BUNDLE.md).
 Successful reports with concrete input, output-data, and witness fields can be
 materialized by `cellscript-ckb-adapter` into one packed transaction with
-byte-identical per-group attribution; execution evidence remains a later
-adapter step.
+byte-identical per-group attribution. A node `estimate_cycles` result can then
+bind aggregate acceptance to every direct group without inventing unavailable
+per-group cycle counts.
 | `cellc publish` / `cellc publish --offline` / `cellc registry add` / `cellc registry edit --yank` | Public publish plus explicit local/offline registry metadata flow; public registry policy makes bare `cellc publish` an authenticated registry write, with Git/static metadata retained for audit and fallback |
 | `cellc auth capability create/submit/revoke` / public registry write API / non-CellScript artifact install | Typed wallet-rooted publication policy and future-facing artifact profiles; fail-closed where unsupported |
 

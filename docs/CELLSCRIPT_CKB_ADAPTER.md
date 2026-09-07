@@ -144,6 +144,16 @@ execution. Its CKB-VM and chain evidence fields therefore remain
 `not-executed`; input capacity and fee remain skeleton-sourced until live Cell
 resolution.
 
+`CkbSdkAcceptance::dry_run_protocol_bundle()` and the equivalent
+`CellScriptAdapter` method call CKB `estimate_cycles` with that exact
+transaction. A successful result produces
+`cellscript-protocol-bundle-dry-run-v1`, preserves the aggregate cycles, and
+marks each direct group as accepted under the same full-serialization hash.
+Because the node RPC exposes one aggregate count, the report leaves individual
+group cycles null and says so in `cycle_attribution`. This is executable node
+dry-run evidence; tx-pool acceptance and chain confirmation remain false, and
+spawned verifiers are not claimed as independently observed.
+
 Do not start with a framework. Start with cookbook-grade examples that complete
 real deployment and transaction acceptance loops.
 

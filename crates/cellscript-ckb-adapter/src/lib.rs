@@ -23,7 +23,8 @@ pub mod policy_witness;
 mod protocol_bundle;
 
 pub use protocol_bundle::{
-    materialize_protocol_bundle_report, ProtocolBundleIndexBinding, ProtocolBundleMaterializationEvidence,
+    materialize_protocol_bundle_report, protocol_bundle_dry_run_evidence, ProtocolBundleDryRunEvidence,
+    ProtocolBundleGroupDryRunEvidence, ProtocolBundleIndexBinding, ProtocolBundleMaterializationEvidence,
     ProtocolBundleScriptGroupEvidence,
 };
 
@@ -1514,6 +1515,15 @@ impl<'a> CkbSdkAcceptance<'a> {
         self.client.estimate_cycles(to_rpc_transaction(tx))
     }
 
+    pub fn dry_run_protocol_bundle(
+        &self,
+        tx: &TransactionView,
+        materialization: &ProtocolBundleMaterializationEvidence,
+    ) -> Result<ProtocolBundleDryRunEvidence> {
+        let estimate = self.estimate_cycles(tx)?;
+        protocol_bundle_dry_run_evidence(tx, materialization, &estimate)
+    }
+
     pub fn test_tx_pool_accept(&self, tx: &TransactionView) -> std::result::Result<EntryCompleted, ckb_sdk::RpcError> {
         self.client.test_tx_pool_accept(to_rpc_transaction(tx), Some(OutputsValidator::Passthrough))
     }
@@ -1837,6 +1847,17 @@ impl CellScriptAdapter {
     /// Estimate cycles for a transaction.
     pub fn estimate_cycles(&self, tx: &TransactionView) -> std::result::Result<EstimateCycles, ckb_sdk::RpcError> {
         self.client.estimate_cycles(to_rpc_transaction(tx))
+    }
+
+    /// Run the exact materialized ProtocolBundle transaction through the node
+    /// and bind its aggregate cycle result to every direct Script Group.
+    pub fn dry_run_protocol_bundle(
+        &self,
+        tx: &TransactionView,
+        materialization: &ProtocolBundleMaterializationEvidence,
+    ) -> Result<ProtocolBundleDryRunEvidence> {
+        let estimate = self.estimate_cycles(tx)?;
+        protocol_bundle_dry_run_evidence(tx, materialization, &estimate)
     }
 
     /// Test tx-pool acceptance for a transaction.

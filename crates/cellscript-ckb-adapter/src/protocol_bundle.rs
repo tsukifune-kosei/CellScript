@@ -9,6 +9,7 @@
 use anyhow::{bail, Context, Result};
 use cellscript_artifact_checker::canonical_hash;
 use ckb_hash::blake2b_256;
+use ckb_jsonrpc_types::EstimateCycles;
 use ckb_sdk::core::TransactionBuilder;
 use ckb_types::{
     bytes::Bytes,
@@ -63,6 +64,33 @@ pub struct ProtocolBundleMaterializationEvidence {
     pub transaction_serialization: &'static str,
     pub script_groups: Vec<ProtocolBundleScriptGroupEvidence>,
     pub ckb_vm_execution: &'static str,
+    pub chain_evidence: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleGroupDryRunEvidence {
+    pub artifact: String,
+    pub script_role: String,
+    pub script_hash: String,
+    pub transaction_bytes_hash: String,
+    pub acceptance: String,
+    pub cycles: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleDryRunEvidence {
+    pub schema: &'static str,
+    pub state: &'static str,
+    pub bundle_hash: String,
+    pub raw_transaction_hash: String,
+    pub serialized_transaction_hash: String,
+    pub serialized_transaction_size_bytes: usize,
+    pub aggregate_cycles: u64,
+    pub direct_script_group_count: usize,
+    pub groups: Vec<ProtocolBundleGroupDryRunEvidence>,
+    pub ckb_vm_execution: &'static str,
+    pub cycle_attribution: &'static str,
+    pub tx_pool_acceptance: bool,
     pub chain_evidence: &'static str,
 }
 
@@ -257,6 +285,74 @@ pub fn materialize_protocol_bundle_report(bytes: &[u8]) -> Result<(TransactionVi
             chain_evidence: "not-executed",
         },
     ))
+}
+
+/// Bind a successful node `estimate_cycles` response to the exact packed
+/// transaction and its ProtocolBundle materialization evidence.
+///
+/// CKB's RPC result proves aggregate execution of all direct Script Groups in
+/// the transaction but does not expose per-group cycles. This report therefore
+/// records per-artifact acceptance against one byte hash while leaving each
+/// group's `cycles` value empty. Spawned-verifier entries remain separately
+/// unresolved because transaction-level success does not prove that a
+/// particular spawn path executed.
+pub fn protocol_bundle_dry_run_evidence(
+    tx: &TransactionView,
+    materialization: &ProtocolBundleMaterializationEvidence,
+    estimate: &EstimateCycles,
+) -> Result<ProtocolBundleDryRunEvidence> {
+    let packed_transaction = tx.data();
+    let serialized = packed_transaction.as_slice();
+    let serialized_hash = hash_hex(serialized);
+    let raw_hash = format!("0x{}", hex::encode(tx.hash().as_slice()));
+    if serialized_hash != materialization.serialized_transaction_hash
+        || raw_hash != materialization.raw_transaction_hash
+        || serialized.len() != materialization.serialized_transaction_size_bytes
+    {
+        bail!("ProtocolBundle dry-run transaction does not match materialization evidence");
+    }
+    if materialization.transaction_serialization != "verified" {
+        bail!("ProtocolBundle transaction serialization is not verified");
+    }
+    let mut groups = Vec::with_capacity(materialization.script_groups.len());
+    let mut direct_script_group_count = 0usize;
+    for group in &materialization.script_groups {
+        if group.transaction_bytes_hash != serialized_hash {
+            bail!("ProtocolBundle Script Group '{}' is bound to another transaction byte hash", group.artifact);
+        }
+        let acceptance = if group.direct_script_group {
+            direct_script_group_count += 1;
+            "accepted-by-aggregate-estimate-cycles"
+        } else {
+            "not-independently-observed"
+        };
+        groups.push(ProtocolBundleGroupDryRunEvidence {
+            artifact: group.artifact.clone(),
+            script_role: group.script_role.clone(),
+            script_hash: group.script_hash.clone(),
+            transaction_bytes_hash: serialized_hash.clone(),
+            acceptance: acceptance.to_string(),
+            cycles: None,
+        });
+    }
+    if direct_script_group_count == 0 {
+        bail!("ProtocolBundle dry-run evidence contains no direct Script Group");
+    }
+    Ok(ProtocolBundleDryRunEvidence {
+        schema: "cellscript-protocol-bundle-dry-run-v1",
+        state: "DryRunProtocolBundleTx",
+        bundle_hash: materialization.bundle_hash.clone(),
+        raw_transaction_hash: raw_hash,
+        serialized_transaction_hash: serialized_hash,
+        serialized_transaction_size_bytes: serialized.len(),
+        aggregate_cycles: estimate.cycles.value(),
+        direct_script_group_count,
+        groups,
+        ckb_vm_execution: "verified-aggregate",
+        cycle_attribution: "aggregate-only-rpc-does-not-report-per-group-cycles",
+        tx_pool_acceptance: false,
+        chain_evidence: "node-dry-run-uncommitted",
+    })
 }
 
 fn validate_report_boundary(report: &ReportWire) -> Result<()> {
@@ -808,5 +904,22 @@ mod tests {
         rebind_bundle_hash(&mut report);
         let error = materialize_protocol_bundle_report(&serde_json::to_vec(&report).unwrap()).unwrap_err().to_string();
         assert!(error.contains("does not match its commitment"), "{error}");
+    }
+
+    #[test]
+    fn aggregate_dry_run_preserves_each_group_and_rejects_another_transaction() {
+        let report = report();
+        let (transaction, materialization) = materialize_protocol_bundle_report(&serde_json::to_vec(&report).unwrap()).unwrap();
+        let estimate = EstimateCycles { cycles: 45_000u64.into() };
+        let dry_run = protocol_bundle_dry_run_evidence(&transaction, &materialization, &estimate).unwrap();
+
+        assert_eq!(dry_run.aggregate_cycles, 45_000);
+        assert_eq!(dry_run.direct_script_group_count, 2);
+        assert!(dry_run.groups.iter().all(|group| group.acceptance == "accepted-by-aggregate-estimate-cycles"));
+        assert!(dry_run.groups.iter().all(|group| group.cycles.is_none()));
+
+        let changed = transaction.as_advanced_builder().set_witnesses(vec![Bytes::from_static(b"changed").pack()]).build();
+        let error = protocol_bundle_dry_run_evidence(&changed, &materialization, &estimate).unwrap_err().to_string();
+        assert!(error.contains("does not match materialization evidence"), "{error}");
     }
 }

@@ -50,3 +50,6 @@ Validation defaults:
   `cellscript_ckb_adapter::materialize_protocol_bundle_report`; require all
   per-group records to carry its exact serialized transaction hash and keep
   execution/chain evidence `not-executed` until a later adapter step runs them.
+- use `CkbSdkAcceptance::dry_run_protocol_bundle` for node execution of those
+  exact bytes; retain its aggregate cycles, null per-group cycles, uncommitted
+  state, and separately unobserved spawned-verifier status.

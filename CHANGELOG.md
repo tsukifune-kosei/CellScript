@@ -233,6 +233,15 @@
   transaction byte hash. CKB-VM group execution, signing, RPC, and chain
   evidence remain explicitly unexecuted.
 
+- Add a hash-checked ProtocolBundle node dry-run receipt. The CKB adapter sends
+  the exact materialized transaction to `estimate_cycles`, rejects any
+  transaction/materialization mismatch, retains aggregate cycles, and records
+  every direct Lock/Type artifact as accepted under the same complete
+  serialization hash. Per-group cycle fields remain null because this RPC
+  exposes only the aggregate count; spawned verifiers remain independently
+  unobserved. Tx-pool and committed-chain evidence are not inferred from the
+  dry-run.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

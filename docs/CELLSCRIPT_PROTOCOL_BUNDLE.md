@@ -164,6 +164,16 @@ bind their exact code CellDep but are not misreported as direct CKB Script
 Groups. Input capacity and the resulting fee are sourced from the bundle
 skeleton until live Cell resolution verifies them.
 
+`CkbSdkAcceptance::dry_run_protocol_bundle` sends that exact packed transaction
+to CKB `estimate_cycles`. A successful response emits
+`cellscript-protocol-bundle-dry-run-v1`: every direct Lock/Type group is marked
+`accepted-by-aggregate-estimate-cycles` under the same serialized byte hash,
+and the aggregate cycle count is retained. The RPC does not expose per-group
+cycles, so each group cycle field remains null and `cycle_attribution` states
+that limitation. Spawned-verifier records remain `not-independently-observed`
+unless later execution evidence proves that path ran. Dry-run evidence is
+uncommitted and does not imply tx-pool acceptance or chain confirmation.
+
 ## Evidence tiers and remaining phases
 
 The v1 offline report retains the standalone checker report and metadata
@@ -182,8 +192,8 @@ The next bundle phases must add, without weakening this hash boundary:
 - revalidation of the packed transaction view against every artifact's builder
   assumptions;
 - per-Script-Group CKB-VM execution over byte-identical transaction bytes;
-- occupied-capacity, fee, change, serialized-size, and aggregate/per-group
-  cycle evidence;
+- live-backed capacity, fee, and change evidence plus independently attributed
+  per-group cycles;
 - runtime-adapter live Cell and deployment resolution; and
 - generated TypeScript/Rust-facing APIs with resumable signing.
 

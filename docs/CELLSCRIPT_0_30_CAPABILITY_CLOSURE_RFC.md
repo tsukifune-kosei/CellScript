@@ -226,8 +226,11 @@ CKB-VM execution, and chain evidence unexecuted. The first runtime-adapter
 slice now independently rechecks that report and materializes one concrete
 Molecule transaction with exact raw/full hashes, size, capacity/fee evidence,
 and global/group-relative indexes sharing one transaction-byte identity.
-Builder-derived claims, live Cell resolution, per-group execution, and the
-remaining runtime-adapter work remain required before issue #9 is complete. See
+The adapter can also bind a successful node `estimate_cycles` result to every
+direct group under that byte identity while retaining the aggregate cycles and
+truthfully leaving per-group cycles unattributed. Builder-derived claims, live
+Cell resolution, independently measured per-group execution, and the remaining
+runtime-adapter work remain required before issue #9 is complete. See
 [CellScript ProtocolBundle v1](CELLSCRIPT_PROTOCOL_BUNDLE.md).
 
 Extend trusted external verification through exact artifact, interface,
