@@ -6,7 +6,7 @@ and the locks that decide whether a Cell may be spent. The compiler then turns
 that `.cell` source into ckb-vm compatible RISC-V assembly or ELF artifacts, and
 writes metadata that explains what was built.
 
-Last updated: 2026-08-28 (`nightly-0.26` development line).
+Last updated: 2026-09-08 (`0.30` capability-closure development branch).
 
 This wiki is a guided path. It starts with one compiled example, then slowly
 builds the mental model: source files, Cell effects, packages, the CKB profile,
@@ -61,6 +61,9 @@ After that, the wiki continues outward:
 - v0.26 implements that first narrow executable shape: exact fixed-width
   Type Script `GroupInput` scans and versioned fixed-width witness plans bound
   one-to-one to canonical `GroupOutput` data, locks, capacity, and count;
+- v0.30 adds typed CKB runtime/time/signing domains and the ProtocolBundle v1
+  path for composing independently checked artifacts through live resolution,
+  external signing, tx-pool acceptance, and an uncommitted submission receipt;
 - production evidence proves more than compiler success;
 - editor tooling shortens the local loop;
 - bundled examples show the style in real contracts.
@@ -86,6 +89,8 @@ If you already know what you need, jump directly:
   [Generics, Public Interfaces, and Typed Artifacts](Tutorial-16-Generics-Interfaces-and-Typed-Artifacts.md).
 - publishing or resolving an LS-IDL Lock Script interface: read
   [LS-IDL for CKB Lock Scripts](Tutorial-15-LS-IDL-for-CKB-Lock-Scripts.md).
+- composing independently checked Scripts in one transaction: read
+  [ProtocolBundle End to End](Tutorial-17-ProtocolBundle-End-to-End.md).
 - using CellScript fungible assets with Fiber: read the
   [bounded Fiber interoperability guide](https://github.com/CellScript-Labs/CellScript/blob/nightly-0.24/examples/fiber/README.md).
 - evaluating Spore or RGB++ integration: read
@@ -138,6 +143,9 @@ If you already know what you need, jump directly:
 16. [Generics, Public Interfaces, and Typed Artifacts](Tutorial-16-Generics-Interfaces-and-Typed-Artifacts.md):
    use bounded value generics, explicit visibility, deterministic interface
    compatibility, and the independently checked typed-semantics record.
+17. [ProtocolBundle End to End](Tutorial-17-ProtocolBundle-End-to-End.md):
+   compose independent CKB Script artifacts, preserve per-Script evidence,
+   resume external signing, and keep submission separate from confirmation.
 
 After the numbered path, use [Cookbook Recipes](Cookbook-Recipes.md) for small
 patterns and keep [CKB Glossary](CKB-Glossary.md) nearby for terminology.

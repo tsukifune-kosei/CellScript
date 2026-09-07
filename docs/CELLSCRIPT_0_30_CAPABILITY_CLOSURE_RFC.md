@@ -248,8 +248,9 @@ node execution, tx-pool acceptance, and submission. It accepts opaque signer
 results and never accepts a private key field. Registry verified-build evidence
 publishes the same bundle schema, artifact-binding schema, and runtime-adapter
 identity only for complete independently checked CKB ELF bundles; source-only
-and generic hash-bound artifacts remain unmarked. The numbered website tutorial
-is the remaining documentation-alignment work for this phase.
+and generic hash-bound artifacts remain unmarked. The website-rendered
+[ProtocolBundle end-to-end tutorial](wiki/Tutorial-17-ProtocolBundle-End-to-End.md)
+uses those same schemas, states, and evidence limits.
 
 Extend trusted external verification through exact artifact, interface,
 deployment, argument-adapter, and result contracts. General process or pipe

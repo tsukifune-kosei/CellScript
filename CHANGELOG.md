@@ -287,6 +287,11 @@
   build evidence. Generic CKB executables and source-only snapshots remain
   unmarked.
 
+- Publish the numbered ProtocolBundle end-to-end wiki tutorial consumed by the
+  website docs renderer. It connects standalone artifact admission, Registry
+  discovery, offline conflict checks, Rust adapter states, generated TypeScript
+  external-signing flow, and the remaining confirmation/reorg boundary.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,
