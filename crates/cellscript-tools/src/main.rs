@@ -230,6 +230,9 @@ enum Command {
         /// Exact Bruno CLI package version (defaults to the version pinned by Fiber CI).
         #[arg(long, default_value = "@usebruno/cli@1.20.0")]
         bruno_cli: String,
+        /// Bruno JavaScript sandbox (`safe` matches upstream CI; `developer` is an explicit compatibility mode).
+        #[arg(long, default_value = "safe")]
+        bruno_sandbox: String,
         #[arg(long)]
         output: Option<PathBuf>,
         #[arg(long)]
@@ -495,6 +498,7 @@ fn main() -> ExitCode {
             fiber_repo,
             cellscript_fungible_artifact,
             bruno_cli,
+            bruno_sandbox,
             output,
             pretty,
             run_suite,
@@ -506,6 +510,7 @@ fn main() -> ExitCode {
             fiber_repo.as_deref(),
             cellscript_fungible_artifact.as_deref(),
             &bruno_cli,
+            &bruno_sandbox,
             output.as_deref(),
             pretty,
             &run_suite,

@@ -76,8 +76,12 @@
   pinned `--bruno-cli @usebruno/cli@MAJOR.MINOR.PATCH` override, and override
   `UDT_CODE_HASH` with the installed CellScript artifact's data hash. The exact
   Bruno, Node, npm, CKB and ckb-cli versions are part of the report and cache
-  identity. Runtime-generated, untracked node backups are reported after
-  restoration but do not masquerade as tracked source drift.
+  identity. Bruno's `safe`/`developer` sandbox selection is likewise explicit.
+  The Fiber router-pay compatibility workspace expresses its final JavaScript
+  checks as equivalent declarative assertions, avoiding a Bruno post-response
+  hang without removing requests or weakening expected values. Runtime-generated,
+  untracked node backups are reported after restoration but do not masquerade
+  as tracked source drift.
 
 - Add the bounded real-contract interoperability primitives exercised by the
   separate Spore and Fiber comparison work: exact witness/data/Lock/Type byte

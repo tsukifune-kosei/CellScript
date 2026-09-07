@@ -385,7 +385,10 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
 }
 
 fn bruno_workspace(repo: &Path, suite: &str, log: &Path) -> Result<(PathBuf, Vec<String>)> {
-    if !matches!(suite, "watchtower/force-close-with-pending-tlcs-and-udt" | "cross-chain-hub" | "cross-chain-hub-separate") {
+    if !matches!(
+        suite,
+        "udt-router-pay" | "watchtower/force-close-with-pending-tlcs-and-udt" | "cross-chain-hub" | "cross-chain-hub-separate"
+    ) {
         return Ok((repo.join("tests/bruno"), vec![]));
     }
     let workspace = log.join("bruno-worktree");
@@ -394,6 +397,26 @@ fn bruno_workspace(repo: &Path, suite: &str, log: &Path) -> Result<(PathBuf, Vec
     }
     copy_tree(&repo.join("tests/bruno"), &workspace)?;
     let mut replacements = Vec::new();
+    if suite == "udt-router-pay" {
+        // Bruno can strand this collection in the two final post-response
+        // scripts even after Fiber has returned the response. Express their
+        // checks through Bruno's declarative assertion engine instead. The
+        // requests, expected rejection, balance values, and all pre-request
+        // synchronization remain unchanged.
+        replacements.extend([
+            (
+                "script:post-response {\n  // Sleep for sometime to make sure current operation finishes before next request starts.\n  await new Promise(r => setTimeout(r, 100));\n  console.log(\"send payment result: \", res.body);\n}\n"
+                    .into(),
+                String::new(),
+            ),
+            (
+                "assert {\n  res.status: eq 200\n}\n\nscript:post-response {\n  await new Promise(r => setTimeout(r, 1000));\n  console.log(\"step 17 list channels: \", res.body.result.channels[0]);\n  // step 12: 100000000\n  // step 14: 32\n  // step 15: 48\n  // sum is: 100000080 (0x5f5e150)\n  if (res.body.result.channels[0].remote_balance != \"0x5f5e150\" || res.body.result.channels[0].local_balance != \"0x35a4e8b0\") {\n    throw new Error(\"Assertion failed: channel amount is not right\");\n  }\n}\n"
+                    .into(),
+                "assert {\n  res.status: eq 200\n  res.body.result.channels[0].remote_balance: eq \"0x5f5e150\"\n  res.body.result.channels[0].local_balance: eq \"0x35a4e8b0\"\n}\n"
+                    .into(),
+            ),
+        ]);
+    }
     if suite == "watchtower/force-close-with-pending-tlcs-and-udt" {
         for name in ["NODE1_BALANCE", "NODE2_BALANCE", "NODE1_NEW_BALANCE", "NODE2_NEW_BALANCE"] {
             replacements.push((format!("bru.setVar(\"{name}\", capacity);"), format!("bru.setVar(\"{name}\", capacity.toString());")));
@@ -426,7 +449,7 @@ fn bruno_workspace(repo: &Path, suite: &str, log: &Path) -> Result<(PathBuf, Vec
     Ok((workspace, patched))
 }
 
-fn bruno_command(suite_arg: &str, artifact_hash: Option<&str>, bruno_cli: &str) -> Vec<String> {
+fn bruno_command(suite_arg: &str, artifact_hash: Option<&str>, bruno_cli: &str, bruno_sandbox: &str) -> Vec<String> {
     let mut command = vec![
         "npm".into(),
         "exec".into(),
@@ -437,6 +460,8 @@ fn bruno_command(suite_arg: &str, artifact_hash: Option<&str>, bruno_cli: &str) 
         "-r".into(),
         "--env".into(),
         "test".into(),
+        "--sandbox".into(),
+        bruno_sandbox.into(),
     ];
     if let Some(artifact_hash) = artifact_hash {
         command.extend(["--env-var".into(), format!("UDT_CODE_HASH={artifact_hash}")]);
@@ -463,6 +488,7 @@ fn execute_workflow(
     info: &Value,
     artifact_hash: Option<&str>,
     bruno_cli: &str,
+    bruno_sandbox: &str,
 ) -> Result<Value> {
     let suite_arg = format!("e2e/{}", workflow.suite);
     let log = output.parent().unwrap().join("novaseal-fiber-node-experiments").join(workflow.suite.replace('/', "__"));
@@ -503,7 +529,7 @@ fn execute_workflow(
         }
     }
     let (bruno, patches) = bruno_workspace(repo, workflow.suite, &log)?;
-    let command = bruno_command(&suite_arg, artifact_hash, bruno_cli);
+    let command = bruno_command(&suite_arg, artifact_hash, bruno_cli, bruno_sandbox);
     let completed = command_with_timeout(
         {
             let mut value = Command::new(&command[0]);
@@ -538,6 +564,7 @@ pub fn run(
     fiber_repo: Option<&Path>,
     cellscript_fungible_artifact: Option<&Path>,
     bruno_cli: &str,
+    bruno_sandbox: &str,
     output: Option<&Path>,
     pretty: bool,
     suites: &[String],
@@ -553,6 +580,9 @@ pub fn run(
     let exact_bruno = Regex::new(r"^@usebruno/cli@[0-9]+\.[0-9]+\.[0-9]+$").unwrap();
     if !exact_bruno.is_match(bruno_cli) {
         bail!("Bruno CLI must be an exact @usebruno/cli MAJOR.MINOR.PATCH package version");
+    }
+    if !matches!(bruno_sandbox, "safe" | "developer") {
+        bail!("Bruno sandbox must be either safe or developer");
     }
     if let Some(invalid) = suites.iter().find(|suite| !allowed.contains(suite.as_str())) {
         bail!("unknown Fiber suite: {invalid}");
@@ -580,6 +610,7 @@ pub fn run(
     let artifact_hash = artifact.get("ckb_data_hash").and_then(Value::as_str);
     let execution_toolchain = json!({
         "bruno_cli": bruno_cli,
+        "bruno_sandbox": bruno_sandbox,
         "node": version("node"),
         "npm": version("npm"),
         "ckb": version("ckb"),
@@ -591,7 +622,18 @@ pub fn run(
     for workflow in WORKFLOWS.iter().filter(|workflow| selected.contains(workflow.suite)) {
         executions.insert(
             workflow.suite.into(),
-            execute_workflow(&repo_root, &fiber_repo, &output, workflow, assume, timeout, &info, artifact_hash, bruno_cli)?,
+            execute_workflow(
+                &repo_root,
+                &fiber_repo,
+                &output,
+                workflow,
+                assume,
+                timeout,
+                &info,
+                artifact_hash,
+                bruno_cli,
+                bruno_sandbox,
+            )?,
         );
     }
     let mut restored_info = info.clone();
@@ -636,7 +678,7 @@ pub fn run(
         "cellscript_fungible_artifact": artifact,
         "execution_toolchain": execution_toolchain,
         "devnet_contract": {"runnable_devnet_contract_present": runnable, "start_command": "./tests/nodes/start.sh e2e/<suite>",
-            "wait_command": "./tests/nodes/wait.sh", "bruno_command": format!("cd tests/bruno && npm exec -- {bruno_cli} run e2e/<suite> -r --env test"), "source_docs": "docs/dev/README.md"},
+            "wait_command": "./tests/nodes/wait.sh", "bruno_command": format!("cd tests/bruno && npm exec -- {bruno_cli} run e2e/<suite> -r --env test --sandbox {bruno_sandbox}"), "source_docs": "docs/dev/README.md"},
         "workflow_coverage": {"required_count": WORKFLOWS.len(), "present_count": present, "executed_count": executed,
             "passed_execution_count": passed, "all_required_workflows_present": all_present, "all_required_workflows_executed": all_executed,
             "all_required_workflows_executed_passed": all_passed, "partial_execution_passed": partial},
@@ -696,7 +738,8 @@ mod tests {
         let output = root.join("report.json");
         let provenance = json!({"path":"fiber", "origin":"origin", "branch":"develop", "commit":"abc", "dirty":false});
         let artifact = json!({"ckb_data_hash":"0x01"});
-        let toolchain = json!({"bruno_cli": BRUNO_CLI, "node": "v20", "npm": "10", "ckb": "0.202", "ckb_cli": "1.15"});
+        let toolchain =
+            json!({"bruno_cli": BRUNO_CLI, "bruno_sandbox": "safe", "node": "v20", "npm": "10", "ckb": "0.202", "ckb_cli": "1.15"});
         fs::write(
             &output,
             serde_json::to_vec(&json!({
@@ -722,7 +765,7 @@ mod tests {
 
     #[test]
     fn live_bruno_command_is_version_pinned_and_binds_the_artifact_hash() {
-        let command = bruno_command("e2e/udt", Some("0x1234"), BRUNO_CLI);
+        let command = bruno_command("e2e/udt", Some("0x1234"), BRUNO_CLI, "developer");
         assert_eq!(
             command,
             [
@@ -735,6 +778,8 @@ mod tests {
                 "-r",
                 "--env",
                 "test",
+                "--sandbox",
+                "developer",
                 "--env-var",
                 "UDT_CODE_HASH=0x1234",
             ]

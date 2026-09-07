@@ -208,11 +208,15 @@ CellScript and Fiber revisions. Cached workflow results are reusable only when
 all three identities remain exact. The runner defaults to Bruno CLI `1.20.0`
 to match Fiber CI; a host-compatibility override must be an exact
 `--bruno-cli @usebruno/cli@MAJOR.MINOR.PATCH` value. Bruno, Node, npm, CKB and
-ckb-cli versions are report- and cache-bound. The installed ELF's CKB data hash
-is passed as `UDT_CODE_HASH`. Tracked Fiber state must return to its baseline;
-runtime-generated untracked node backups are disclosed separately. This mode
-still produces bounded local devnet evidence rather than a mainnet or
-operator-identity claim.
+ckb-cli versions and the explicit `--bruno-sandbox safe|developer` selection
+are report- and cache-bound. The installed ELF's CKB data hash is passed as
+`UDT_CODE_HASH`. The router-pay compatibility workspace replaces its final
+post-response JavaScript checks with equivalent Bruno declarative assertions;
+the overspend rejection, final balances, request count, and synchronization
+before requests remain unchanged, and every patched file is listed in the
+report. Tracked Fiber state must return to its baseline; runtime-generated
+untracked node backups are disclosed separately. This mode still produces
+bounded local devnet evidence rather than a mainnet or operator-identity claim.
 
 Static mode runs the dedicated CKB-VM transaction matrix, adapter tests, and
 adapter clippy. It proves only compiler/artifact compatibility; it does not
