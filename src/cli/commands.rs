@@ -12585,6 +12585,7 @@ fn manifest_target_profile() -> Result<Option<TargetProfile>> {
 fn compile_target_profile_for_check(profile: TargetProfile) -> Option<String> {
     match profile {
         TargetProfile::Ckb => Some(TargetProfile::Ckb.name().to_string()),
+        TargetProfile::CkbTypeHash => Some(TargetProfile::CkbTypeHash.name().to_string()),
     }
 }
 
@@ -14094,6 +14095,7 @@ fn target_profile_policy_violations(
 ) -> Vec<String> {
     match profile {
         TargetProfile::Ckb => ckb_target_profile_policy_violations(metadata, artifact_format),
+        TargetProfile::CkbTypeHash => ckb_target_profile_policy_violations(metadata, artifact_format),
     }
 }
 
@@ -15050,7 +15052,7 @@ impl CliParser {
                     .about("Compile the current package")
                     .arg(Arg::new("release").long("release").short('r').action(ArgAction::SetTrue).help("Build in release mode"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                     .arg(
                         Arg::new("entry-action")
                             .long("entry-action")
@@ -15268,7 +15270,7 @@ impl CliParser {
                             .action(ArgAction::SetTrue)
                             .help("Also check the current ELF-compatible target path"),
                     )
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                     .arg(Arg::new("features").long("features").value_delimiter(',').num_args(1..).value_name("FEATURES").help("Activate package features"))
                     .arg(Arg::new("all-features").long("all-features").action(ArgAction::SetTrue).help("Activate all package features"))
                     .arg(Arg::new("no-default-features").long("no-default-features").action(ArgAction::SetTrue).help("Do not activate the default feature"))
@@ -15337,7 +15339,7 @@ impl CliParser {
                     .arg(Arg::new("artifact").long("artifact").value_name("NAME").help("Inspect the declared policy artifact without generating machine code"))
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON metadata to a file"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb")),
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash")),
             )
             .subcommand(
                 ClapCommand::new("expand")
@@ -15347,7 +15349,7 @@ impl CliParser {
                     .arg(Arg::new("artifact").long("artifact").value_name("NAME").help("Expand the declared policy artifact without generating machine code"))
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write the expansion to a file"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb")),
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash")),
             )
             .subcommand(
                 ClapCommand::new("migrate")
@@ -15377,7 +15379,7 @@ impl CliParser {
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write the interface JSON to a file"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb")),
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash")),
             )
             .subcommand(
                 ClapCommand::new("interface-diff")
@@ -15393,7 +15395,7 @@ impl CliParser {
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON constraints to a file"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                     .arg(
                         Arg::new("entry-action")
                             .long("entry-action")
@@ -15408,7 +15410,7 @@ impl CliParser {
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON ABI report to a file"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                     .arg(Arg::new("action").long("action").value_name("NAME").help("Explain ABI for this action"))
                     .arg(Arg::new("lock").long("lock").value_name("NAME").help("Explain ABI for this lock")),
             )
@@ -15418,7 +15420,7 @@ impl CliParser {
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON scheduler plan to a file"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb")),
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash")),
             )
             .subcommand(
                 ClapCommand::new("ckb-hash")
@@ -15450,7 +15452,7 @@ impl CliParser {
                             .about("Explain Covenant ProofPlan trigger, scope, reads, coverage, and on-chain status")
                             .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                             .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                            .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                            .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                             ,
                     )
                     .subcommand(
@@ -15458,7 +15460,7 @@ impl CliParser {
                             .about("Explain v0.16 builder assumptions derived from ProofPlan metadata")
                             .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                             .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                            .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                            .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                             ,
                     )
                     .subcommand(
@@ -15466,7 +15468,7 @@ impl CliParser {
                             .about("Explain value-generic monomorphizations and bounded collection instantiations")
                             .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                             .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                            .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                            .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                             ,
                     )
                     .subcommand(
@@ -15474,7 +15476,7 @@ impl CliParser {
                             .about("Derive a cyclic ProtocolGraph audit view from compile metadata")
                             .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                             .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                            .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                            .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                             .arg(
                                 Arg::new("format")
                                     .long("format")
@@ -15498,7 +15500,7 @@ impl CliParser {
                     .about("Explain Covenant ProofPlan trigger, scope, reads, coverage, and on-chain status")
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                     ,
             )
             .subcommand(
@@ -15507,7 +15509,7 @@ impl CliParser {
                     .about("Explain v0.16 builder assumptions derived from ProofPlan metadata")
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                     ,
             )
             .subcommand(
@@ -15516,7 +15518,7 @@ impl CliParser {
                     .about("Explain value-generic monomorphizations and bounded collection instantiations")
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                     ,
             )
             .subcommand(
@@ -15525,7 +15527,7 @@ impl CliParser {
                     .about("Derive a cyclic ProtocolGraph audit view from compile metadata")
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                     .arg(
                         Arg::new("format")
                             .long("format")
@@ -15547,7 +15549,7 @@ impl CliParser {
                             .help("Write JSON optimization report to a file"),
                     )
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb")),
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash")),
             )
             .subcommand(
                 ClapCommand::new("proof-diff")
@@ -15562,7 +15564,7 @@ impl CliParser {
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("entry").long("entry").value_name("NAME").help("Limit profile to one action or lock"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                     ,
             )
             .subcommand(
@@ -15584,7 +15586,7 @@ impl CliParser {
                             .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                             .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON solver template"))
                             .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                            .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                            .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                             ,
                     )
                     .subcommand(
@@ -15609,7 +15611,7 @@ impl CliParser {
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("output").long("output").short('o').value_name("DIR").help("Output directory"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                     ,
             )
             .subcommand(
@@ -15627,7 +15629,7 @@ impl CliParser {
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON solver template"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                     ,
             )
             .subcommand(
@@ -15648,7 +15650,7 @@ impl CliParser {
                             .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                             .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON deploy plan"))
                             .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                            .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                            .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                             ,
                     )
                     .subcommand(
@@ -15670,7 +15672,7 @@ impl CliParser {
                             .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                             .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write dependency lock JSON"))
                             .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                            .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                            .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                             ,
                     ),
             )
@@ -15681,7 +15683,7 @@ impl CliParser {
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON deploy plan"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                     ,
             )
             .subcommand(
@@ -15706,7 +15708,7 @@ impl CliParser {
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write dependency lock JSON"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                     ,
             )
             .subcommand(
@@ -15720,7 +15722,7 @@ impl CliParser {
                         .arg(Arg::new("action").long("action").value_name("NAME").help("Action to plan; defaults to the first action"))
                         .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write JSON builder plan to a file"))
                         .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                        .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                        .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                         .arg(
                             Arg::new("fabric-intent")
                                 .long("fabric-intent")
@@ -15772,7 +15774,7 @@ impl CliParser {
                     )
                     .arg(Arg::new("action").long("action").value_name("NAME").help("Generate only this action; defaults to all actions"))
                     .arg(Arg::new("output").long("output").short('o').value_name("DIR").help("Output package directory"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile when compiling INPUT: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile when compiling INPUT: ckb or ckb-type-hash"))
                     .arg(Arg::new("package-name").long("package-name").value_name("NAME").help("Generated package.json name"))
                     ,
             )
@@ -15794,7 +15796,7 @@ impl CliParser {
                     )
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write raw witness bytes to a file"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                     ,
             )
             .subcommand(
@@ -15811,7 +15813,7 @@ impl CliParser {
                             .help("Write the compile receipt JSON to this file"),
                     )
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
-                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
                     ,
             )
             .subcommand(
@@ -15939,7 +15941,7 @@ impl CliParser {
                         Arg::new("expect-target-profile")
                             .long("expect-target-profile")
                             .value_name("PROFILE")
-                            .help("Require metadata target_profile to match this value: ckb"),
+                            .help("Require metadata target_profile to match this value: ckb or ckb-type-hash"),
                     )
                     .arg(
                         Arg::new("expect-artifact-hash")

@@ -345,10 +345,13 @@ The deployment-line foundation adds the canonical
 `cellscript-deployment-line-receipt-v1` chain and `CSLINv1-fixed-386` value.
 `dev` and `ci` execute its initial, additive-upgrade, breaking-change,
 same-version replay, stable-Script, stale-predecessor, yank, and data-hash
-rejection cases. This is off-chain evidence only. The gate must not present it
-as runtime-complete until the separate Type-hash target, unique live admission
-Cell, ProtocolBundle/`tx validate` integration, independent checker records,
-and real CKB-VM cases exist. See
+rejection cases. The same gates compile the distinct `ckb-type-hash` profile
+and require the standalone checker to bind it to `deployment_hash_types =
+["type"]`, while the default `ckb` profile remains `["data2"]`. The receipt
+foundation is still off-chain evidence only. The gate must not present it as
+runtime-complete until the unique live admission Cell, ProtocolBundle/`tx
+validate` integration, independent deployment-line checker records, and real
+CKB-VM cases exist. See
 [the deployment-line handle contract](CELLSCRIPT_DEPLOYMENT_LINE_HANDLES.md).
 
 ### 0.26b semantic-foundation evidence
@@ -372,10 +375,11 @@ the manifest claim matches exactly, and
 `compiler_proves_internal_semantics = false`. Raw or undeclared external calls
 remain production blockers.
 The target and constraints records additionally bind
-`minimum_vm_version = 2`, `riscv_isa = "rv64imac_zbb"`, and
-`deployment_hash_types = ["data2"]`. The independent checker rejects any
-bundle that weakens this generated-artifact deployment contract. Constraints
-metadata is schema 4.
+`minimum_vm_version = 2`, `riscv_isa = "rv64imac_zbb"`, and a profile-specific
+deployment hash type: `["data2"]` for `ckb`, or `["type"]` for the distinct
+`ckb-type-hash` upgrade-line profile. The independent checker rejects any
+bundle that weakens or swaps this generated-artifact deployment contract.
+Constraints metadata is schema 4.
 Executable `require`/`enforce` claims additionally bind canonical condition
 text to one condition-provenance node, the ordered typed success/failure
 branch, and the exact fail-closed runtime error. Mutation tests reject broken

@@ -373,6 +373,16 @@
   in consensus. Advance the artifact cache identity to
   `project-source-set-v45-0.30-dev3-deployment-line-foundation`.
 
+- Add the distinct `ckb-type-hash` generated-artifact profile for deployment
+  lines. It reuses the CKB VM2/Zbb code-generation ABI while admitting only
+  `hash_type = "type"`; the existing `ckb` profile remains pinned to `data2`.
+  `Cell.toml`, compile metadata, constraints, compatibility identity, CLI help,
+  and the standalone artifact checker preserve the distinction and reject
+  cross-profile hash-type substitution. This does not treat Type ID as
+  compatibility evidence or implement the unique admission Cell/runtime path.
+  Advance the artifact cache identity to
+  `project-source-set-v46-0.30-dev4-type-hash-profile`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

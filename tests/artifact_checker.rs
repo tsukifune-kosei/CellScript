@@ -206,6 +206,32 @@ fn checker_rejects_vm2_isa_or_data2_contract_tampering() {
 }
 
 #[test]
+fn checker_accepts_type_hash_profile_and_rejects_cross_profile_hash_type_tampering() {
+    let valid = Fixture::from_result(
+        compile(
+            FIXTURE_SOURCE,
+            CompileOptions {
+                target: Some("riscv64-elf".to_string()),
+                target_profile: Some("ckb-type-hash".to_string()),
+                ..CompileOptions::default()
+            },
+        )
+        .unwrap(),
+    );
+    assert_eq!(valid.metadata["target_profile"]["deployment_hash_types"], serde_json::json!(["type"]));
+    assert_eq!(
+        valid.metadata["constraints"]["ckb"]["hash_type_policy"]["default_script_hash_type"],
+        Value::String("type".to_string())
+    );
+
+    let mut changed = valid.clone();
+    changed.metadata["target_profile"]["deployment_hash_types"] = serde_json::json!(["data2"]);
+    changed.metadata["constraints"]["ckb"]["profile_abi_contract"]["deployment_hash_types"] = serde_json::json!(["data2"]);
+    changed.metadata["constraints"]["ckb"]["hash_type_policy"]["default_script_hash_type"] = Value::String("data2".to_string());
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+}
+
+#[test]
 fn checker_rejects_runtime_access_provenance_tampering_after_hash_rebinding() {
     let valid = Fixture::from_result(
         compile(

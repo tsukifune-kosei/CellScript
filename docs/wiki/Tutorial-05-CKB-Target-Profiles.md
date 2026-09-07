@@ -3,13 +3,15 @@
 A target profile answers a practical question: which runtime are you preparing
 this source for?
 
-For CKB work, the answer should be explicit. The CKB profile controls syscall
+For CKB work, the answer should be explicit. The CKB profiles control syscall
 choices, source constants, header/runtime rules, artifact packaging, metadata
-policy, and verification boundaries.
+policy, verification boundaries, and whether deployment binds exact data bytes
+or a Type-hash upgrade line.
 
 Edition and target profile are related, but they are not duplicate settings.
 `edition = "2026"` selects source-language semantics. The independently
-versioned `ckb` target profile selects CKB-facing runtime rules. The resolved
+versioned `ckb` or `ckb-type-hash` target profile selects CKB-facing runtime
+and deployment rules. The resolved
 compatibility profile combines both identities with primitive assurance,
 metadata schemas, and wire ABIs. Changing the target cannot opt out of the
 edition, and passing `--target-profile ckb` cannot repair a package with a
@@ -17,7 +19,7 @@ missing or non-2026 edition.
 
 ## What You Will Learn
 
-- how to use the `ckb` profile consistently;
+- how to choose the exact-data `ckb` or upgrade-line `ckb-type-hash` profile;
 - how Edition 2026 and the CKB profile combine;
 - why unsupported CKB assumptions fail closed;
 - which commands check assembly and ELF-compatible paths;
@@ -36,11 +38,23 @@ cellc build --target riscv64-elf --target-profile ckb
 ```
 
 Use this profile when the artifact is intended for CKB or for CKB-like local
-acceptance testing.
+acceptance testing and its Script will use `hash_type = data2`.
 
-## What The CKB Profile Enforces
+Use the separate profile when the artifact is deployed in a Type ID code Cell
+and the consuming Script locates it by that Cell's Type Script hash:
 
-The profile checks and records:
+```bash
+cellc build --target riscv64-elf --target-profile ckb-type-hash
+```
+
+`ckb-type-hash` changes the admitted deployment hash type from `data2` to
+`type` and gives the resulting metadata a different target-profile identity.
+Each code version still needs exact checked artifact evidence, a stable Type ID
+lineage, and an explicit compatibility and authorization policy.
+
+## What The CKB Profiles Enforce
+
+Both profiles check and record:
 
 - CKB syscall numbers;
 - CKB source constants;
@@ -65,6 +79,12 @@ Verify the result:
 
 ```bash
 cellc verify-artifact build/main.elf --expect-target-profile ckb
+```
+
+For an upgrade-line artifact, require the distinct identity:
+
+```bash
+cellc verify-artifact build/main.elf --expect-target-profile ckb-type-hash
 ```
 
 ## Typical Checks
@@ -112,7 +132,7 @@ rotate instructions (`rori`/`roriw`) in their hash cores. Those instructions
 are only guaranteed to decode on CKB VM version 2, and on chain the Script
 `hash_type` selects that version for data-hash deployments: `data2` selects
 VM2 (Zbb guaranteed), while `data1` does not. The compiler therefore emits and
-pins one explicit contract:
+pins an explicit exact-data contract for `ckb`:
 
 ```text
 minimum_vm_version = 2
@@ -132,6 +152,32 @@ Consequences for deployment review:
   generated CellScript ELF, determine their VM requirement.
 - The independent artifact checker rejects any bundle whose metadata weakens
   the VM2/Zbb/`data2` contract after production.
+
+### The Type-hash deployment contract (0.30 development branch)
+
+The `ckb-type-hash` profile uses the same CKB VM2 RISC-V backend and ABIs, but
+pins a separate deployment contract:
+
+```text
+minimum_vm_version = 2
+riscv_isa = "rv64imac_zbb"
+deployment_hash_types = ["type"]
+```
+
+CKB resolves a Type-hash Script through the Type Script hash of a live code
+CellDep. A Type ID on that code Cell supplies singleton lineage, while the code
+Cell Lock supplies upgrade authorization. The compiler and standalone checker
+keep the profile identity and `type` deployment policy hash-bound to the
+artifact sidecars. They do not infer compatibility from Type ID: deployment
+line receipts and admission evidence must bind the exact selected bytes and
+checked interface before signing and at runtime.
+
+Type-hash execution follows the VM version selected by the active CKB consensus
+rules. This profile retains `minimum_vm_version = 2` and is valid only for a
+chain identity where VM2 is active.
+
+For either profile:
+
 - inspect `cellc constraints --target-profile ckb --json` before deployment;
 - inspect witness layout with `cellc abi` or `cellc entry-witness`;
 - place the reported `CSARGv1` entry payload in

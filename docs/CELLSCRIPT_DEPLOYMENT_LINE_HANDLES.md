@@ -1,6 +1,7 @@
 # CellScript Deployment-Line Handles
 
-Status: off-chain receipt and fixed-value foundation implemented on the `0.30`
+Status: off-chain receipt/fixed-value foundation and the distinct
+`ckb-type-hash` generated-artifact profile are implemented on the `0.30`
 development branch. ProtocolBundle admission, source/runtime helpers, the
 unique admission Cell, and compatible open roles remain release blockers.
 
@@ -91,9 +92,10 @@ entire line value without treating the off-chain Registry as consensus.
 
 ## Remaining runtime closure
 
-The current CKB target profile permits data2 deployment for generated
-artifacts. It does not yet admit the separate Type-hash code-cell deployment
-profile required by this handle class. The current Registry Type Script also
+The default `ckb` profile remains exact-data deployment and permits only
+`data2`. The separate `ckb-type-hash` profile now emits the same CKB VM2/Zbb
+artifact ABI while permitting only `type`, and the standalone checker binds
+that choice to the artifact evidence. The current Registry Type Script still
 validates commitment shape and custody, but does not establish one unique live
 Cell per deployment line. Until a versioned unique replacement contract is
 implemented and tested, a stale active commitment could coexist with a newer
@@ -101,8 +103,8 @@ one.
 
 For that reason no source type or runtime helper consumes
 `DeploymentLineHandle` yet, and ProtocolBundle/`tx validate` do not accept it.
-The next phase must add the distinct Type-hash target, unique admission Cell,
-full runtime checks for the embedded exact version and admission commitment,
+The next phase must add the unique Type ID admission Cell, full runtime checks
+for the embedded exact version and admission commitment,
 standalone-checker mutations, real CKB-VM stale/yank/substitution cases, and
 ProtocolBundle history retention. Compatible open handles remain a later
 phase and cannot infer behavioral equivalence from interface compatibility.

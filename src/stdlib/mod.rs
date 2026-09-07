@@ -728,7 +728,7 @@ impl StdLib {
         asm.push_str("    ret\n\n");
 
         let load_script_syscall = match target_profile {
-            TargetProfile::Ckb => ckb_abi::syscall::LOAD_SCRIPT,
+            TargetProfile::Ckb | TargetProfile::CkbTypeHash => ckb_abi::syscall::LOAD_SCRIPT,
         };
         asm.push_str(&format!("# Syscall: load_script ({})\n", load_script_syscall));
         asm.push_str(".global __syscall_load_script\n");
@@ -880,23 +880,23 @@ impl StdLib {
             "__ckb_header_epoch_number",
             "ckb_epoch_number",
             ckb_abi::header_field::EPOCH_NUMBER,
-            target_profile == TargetProfile::Ckb,
+            target_profile.is_ckb(),
         );
         Self::push_ckb_header_epoch_helper(
             &mut asm,
             "__ckb_header_epoch_start_block_number",
             "ckb_epoch_start_block_number",
             ckb_abi::header_field::EPOCH_START_BLOCK_NUMBER,
-            target_profile == TargetProfile::Ckb,
+            target_profile.is_ckb(),
         );
         Self::push_ckb_header_epoch_helper(
             &mut asm,
             "__ckb_header_epoch_length",
             "ckb_epoch_length",
             ckb_abi::header_field::EPOCH_LENGTH,
-            target_profile == TargetProfile::Ckb,
+            target_profile.is_ckb(),
         );
-        Self::push_ckb_input_since_helper(&mut asm, target_profile == TargetProfile::Ckb);
+        Self::push_ckb_input_since_helper(&mut asm, target_profile.is_ckb());
 
         // env_remaining_cycles
         asm.push_str("# Env: remaining_cycles\n");

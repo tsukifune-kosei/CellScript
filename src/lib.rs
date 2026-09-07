@@ -230,7 +230,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v45-0.30-dev3-deployment-line-foundation";
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v46-0.30-dev4-type-hash-profile";
 pub const METADATA_SCHEMA_VERSION: u32 = 71;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -262,6 +262,7 @@ const CKB_TYPE_ID_CODE_HASH: [u8; 32] =
 const CKB_TYPE_ID_ABI: &str = "ckb-type-id-v1";
 const CKB_TYPE_ID_HASH_TYPE: &str = "type";
 const CKB_DEFAULT_SCRIPT_HASH_TYPE: &str = "data2";
+const CKB_TYPE_HASH_SCRIPT_HASH_TYPE: &str = "type";
 const CKB_MINIMUM_VM_VERSION: u8 = 2;
 const CKB_RISCV_ISA: &str = "rv64imac_zbb";
 const CKB_TYPE_ID_ARGS_SOURCE: &str = "first-input-output-index";
@@ -275,13 +276,18 @@ const CKB_TYPE_ID_WASM_SETTING: &str = "ckbTypeIdOutputs";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetProfile {
     Ckb,
+    CkbTypeHash,
 }
 
 impl TargetProfile {
     pub fn from_name(name: &str) -> Result<Self> {
         match name {
             "ckb" => Ok(Self::Ckb),
-            other => Err(CompileError::without_span(format!("unsupported target profile '{}'; supported profile: ckb", other))),
+            "ckb-type-hash" => Ok(Self::CkbTypeHash),
+            other => Err(CompileError::without_span(format!(
+                "unsupported target profile '{}'; supported profiles: ckb, ckb-type-hash",
+                other
+            ))),
         }
     }
 
@@ -297,6 +303,18 @@ impl TargetProfile {
     pub fn name(self) -> &'static str {
         match self {
             Self::Ckb => "ckb",
+            Self::CkbTypeHash => "ckb-type-hash",
+        }
+    }
+
+    pub fn is_ckb(self) -> bool {
+        matches!(self, Self::Ckb | Self::CkbTypeHash)
+    }
+
+    pub fn deployment_hash_type(self) -> &'static str {
+        match self {
+            Self::Ckb => CKB_DEFAULT_SCRIPT_HASH_TYPE,
+            Self::CkbTypeHash => CKB_TYPE_HASH_SCRIPT_HASH_TYPE,
         }
     }
 
@@ -309,34 +327,32 @@ impl TargetProfile {
     }
 
     fn metadata(self, artifact_format: ArtifactFormat) -> TargetProfileMetadata {
-        match self {
-            Self::Ckb => TargetProfileMetadata {
-                name: self.name().to_string(),
-                target_chain: "ckb".to_string(),
-                vm_abi: "ckb-molecule".to_string(),
-                hash_domain: "ckb-packed-molecule-blake2b".to_string(),
-                syscall_set: "ckb-mainnet-syscalls".to_string(),
-                artifact_packaging: match artifact_format {
-                    ArtifactFormat::RiscvAssembly => "ckb-asm-sidecar".to_string(),
-                    ArtifactFormat::RiscvElf => "ckb-elf".to_string(),
-                },
-                header_abi: "ckb-header".to_string(),
-                scheduler_abi: "none".to_string(),
-                witness_abi: "ckb-molecule-witness-args-input-type-v2+cellscript-entry-witness-v1".to_string(),
-                lock_args_abi: "ckb-script-args-typed-fixed-bytes".to_string(),
-                source_encoding: "ckb-source-group-high-bit".to_string(),
-                spawn_ipc_abi: "ckb-vm-v2-spawn-ipc-syscalls-2601-2608".to_string(),
-                since_abi: "ckb-since-rfc0017-typed-v1".to_string(),
-                cell_dep_abi: "ckb-cell-dep-outpoint-and-dep-group".to_string(),
-                script_ref_abi: "ckb-script-code-hash-hash-type-args".to_string(),
-                output_data_abi: "ckb-outputs-and-outputs-data-index-aligned".to_string(),
-                capacity_floor_abi: "ckb-output-capacity-floor-shannons".to_string(),
-                type_id_abi: CKB_TYPE_ID_ABI.to_string(),
-                minimum_vm_version: CKB_MINIMUM_VM_VERSION,
-                riscv_isa: CKB_RISCV_ISA.to_string(),
-                deployment_hash_types: vec![CKB_DEFAULT_SCRIPT_HASH_TYPE.to_string()],
-                tx_version: 0,
+        TargetProfileMetadata {
+            name: self.name().to_string(),
+            target_chain: "ckb".to_string(),
+            vm_abi: "ckb-molecule".to_string(),
+            hash_domain: "ckb-packed-molecule-blake2b".to_string(),
+            syscall_set: "ckb-mainnet-syscalls".to_string(),
+            artifact_packaging: match artifact_format {
+                ArtifactFormat::RiscvAssembly => "ckb-asm-sidecar".to_string(),
+                ArtifactFormat::RiscvElf => "ckb-elf".to_string(),
             },
+            header_abi: "ckb-header".to_string(),
+            scheduler_abi: "none".to_string(),
+            witness_abi: "ckb-molecule-witness-args-input-type-v2+cellscript-entry-witness-v1".to_string(),
+            lock_args_abi: "ckb-script-args-typed-fixed-bytes".to_string(),
+            source_encoding: "ckb-source-group-high-bit".to_string(),
+            spawn_ipc_abi: "ckb-vm-v2-spawn-ipc-syscalls-2601-2608".to_string(),
+            since_abi: "ckb-since-rfc0017-typed-v1".to_string(),
+            cell_dep_abi: "ckb-cell-dep-outpoint-and-dep-group".to_string(),
+            script_ref_abi: "ckb-script-code-hash-hash-type-args".to_string(),
+            output_data_abi: "ckb-outputs-and-outputs-data-index-aligned".to_string(),
+            capacity_floor_abi: "ckb-output-capacity-floor-shannons".to_string(),
+            type_id_abi: CKB_TYPE_ID_ABI.to_string(),
+            minimum_vm_version: CKB_MINIMUM_VM_VERSION,
+            riscv_isa: CKB_RISCV_ISA.to_string(),
+            deployment_hash_types: vec![self.deployment_hash_type().to_string()],
+            tx_version: 0,
         }
     }
 }
@@ -2185,7 +2201,7 @@ fn validate_target_profile_metadata(metadata: &CompileMetadata, artifact_format:
 
 fn target_profile_artifact_policy_violations(_metadata: &CompileMetadata, profile: TargetProfile) -> Vec<String> {
     match profile {
-        TargetProfile::Ckb => Vec::new(),
+        TargetProfile::Ckb | TargetProfile::CkbTypeHash => Vec::new(),
     }
 }
 
@@ -2427,7 +2443,7 @@ fn constraints_metadata(
 
     let max_entry_witness_bytes = entry_abi.iter().map(|entry| entry.min_witness_bytes).max().unwrap_or(0);
     let estimated_cycles = metadata.actions.iter().map(|action| action.estimated_cycles).chain(metadata.locks.iter().map(|_| 0)).max();
-    let ckb = (target_profile == TargetProfile::Ckb).then(|| {
+    let ckb = target_profile.is_ckb().then(|| {
         warnings.push(
             "CKB cycles and transaction size are not measured by the compiler; require builder dry-run for production".to_string(),
         );
@@ -2598,6 +2614,8 @@ fn ckb_constraints(
     max_entry_witness_bytes: usize,
     estimated_cycles: Option<u64>,
 ) -> CkbConstraintsMetadata {
+    let deployment_hash_type =
+        metadata.target_profile.deployment_hash_types.first().cloned().unwrap_or_else(|| CKB_DEFAULT_SCRIPT_HASH_TYPE.to_string());
     let max_tx_verify_cycles = env_u64("CELLSCRIPT_CKB_MAX_TX_VERIFY_CYCLES").unwrap_or(CKB_DEFAULT_MAX_TX_VERIFY_CYCLES);
     let max_block_cycles = env_u64("CELLSCRIPT_CKB_MAX_BLOCK_CYCLES").unwrap_or(CKB_DEFAULT_MAX_BLOCK_CYCLES);
     let max_block_bytes = env_u64("CELLSCRIPT_CKB_MAX_BLOCK_BYTES").unwrap_or(CKB_DEFAULT_MAX_BLOCK_BYTES);
@@ -2660,11 +2678,11 @@ fn ckb_constraints(
             .to_string(),
         hash_type_policy: CkbHashTypePolicyMetadata {
             source: "compiler-default".to_string(),
-            default_script_hash_type: CKB_DEFAULT_SCRIPT_HASH_TYPE.to_string(),
+            default_script_hash_type: deployment_hash_type.clone(),
             declared_hash_type: None,
             type_id_hash_type: CKB_TYPE_ID_HASH_TYPE.to_string(),
             supported_hash_types: ckb_supported_hash_types(),
-            status: "builder-must-use-data2-for-vm2-zbb-artifact".to_string(),
+            status: format!("builder-must-use-{deployment_hash_type}-for-vm2-zbb-artifact"),
         },
         dep_group_manifest: CkbDepGroupManifestMetadata {
             source: "not-declared".to_string(),
@@ -2863,7 +2881,7 @@ fn apply_manifest_deploy_metadata(metadata: &mut CompileMetadata, manifest: &Pac
 
     if let Some(hash_type) = ckb_manifest.hash_type.as_deref() {
         validate_ckb_hash_type(hash_type)?;
-        validate_ckb_generated_artifact_hash_type(hash_type)?;
+        validate_ckb_generated_artifact_hash_type(hash_type, &metadata.target_profile)?;
         ckb_constraints.hash_type_policy.source = "Cell.toml deploy.ckb.hash_type".to_string();
         ckb_constraints.hash_type_policy.declared_hash_type = Some(hash_type.to_string());
         ckb_constraints.hash_type_policy.status = "manifest-declared-builder-must-match".to_string();
@@ -3202,13 +3220,18 @@ fn validate_ckb_hash_type(hash_type: &str) -> Result<()> {
     }
 }
 
-fn validate_ckb_generated_artifact_hash_type(hash_type: &str) -> Result<()> {
-    if hash_type == CKB_DEFAULT_SCRIPT_HASH_TYPE {
+fn validate_ckb_generated_artifact_hash_type(hash_type: &str, target_profile: &TargetProfileMetadata) -> Result<()> {
+    let expected = target_profile.deployment_hash_types.as_slice();
+    if expected == [hash_type] {
         Ok(())
     } else {
         Err(CompileError::without_span(format!(
-            "CKB VM{} / {} CellScript artifacts require deploy.ckb.hash_type = '{}'; '{}' selects a VM that does not guarantee the emitted ISA",
-            CKB_MINIMUM_VM_VERSION, CKB_RISCV_ISA, CKB_DEFAULT_SCRIPT_HASH_TYPE, hash_type
+            "CKB VM{} / {} target profile '{}' artifacts require deploy.ckb.hash_type = '{}'; got '{}'",
+            CKB_MINIMUM_VM_VERSION,
+            CKB_RISCV_ISA,
+            target_profile.name,
+            expected.first().map(String::as_str).unwrap_or("<missing>"),
+            hash_type
         )))
     }
 }
@@ -3569,7 +3592,7 @@ fn ckb_capacity_floor_multiset_difference(
 }
 
 fn validate_ckb_constraints_summary_metadata(metadata: &CompileMetadata) -> Result<()> {
-    let profile_is_ckb = TargetProfile::from_name(&metadata.target_profile.name)? == TargetProfile::Ckb;
+    let profile_is_ckb = TargetProfile::from_name(&metadata.target_profile.name)?.is_ckb();
     let Some(ckb_constraints) = metadata.constraints.ckb.as_ref() else {
         if profile_is_ckb && (metadata.artifact_hash.is_some() || metadata.artifact_size_bytes.is_some()) {
             return Err(CompileError::without_span("metadata is missing constraints.ckb for the ckb target profile"));
@@ -3690,7 +3713,7 @@ fn validate_ckb_summary_bool(field: &str, actual: bool, expected: bool) -> Resul
 }
 
 fn validate_ckb_type_id_metadata(metadata: &CompileMetadata, ty: &TypeMetadata, ckb_type_id: &CkbTypeIdMetadata) -> Result<()> {
-    if metadata.target_profile.name != TargetProfile::Ckb.name() {
+    if !TargetProfile::from_name(&metadata.target_profile.name)?.is_ckb() {
         return Err(CompileError::without_span(format!("metadata type '{}' has ckb_type_id outside the ckb target profile", ty.name)));
     }
     if ty.type_id.is_none() {
@@ -3719,7 +3742,7 @@ fn validate_ckb_type_id_metadata(metadata: &CompileMetadata, ty: &TypeMetadata, 
 
 fn validate_ckb_type_id_output_metadata(metadata: &CompileMetadata) -> Result<()> {
     let types_by_name = metadata.types.iter().map(|ty| (ty.name.as_str(), ty)).collect::<HashMap<_, _>>();
-    let profile_is_ckb = metadata.target_profile.name == TargetProfile::Ckb.name();
+    let profile_is_ckb = TargetProfile::from_name(&metadata.target_profile.name)?.is_ckb();
 
     for action in &metadata.actions {
         validate_ckb_type_id_create_set_metadata("action", &action.name, &action.create_set, &types_by_name, profile_is_ckb)?;
@@ -3732,7 +3755,7 @@ fn validate_ckb_type_id_output_metadata(metadata: &CompileMetadata) -> Result<()
 }
 
 fn validate_ckb_output_data_binding_metadata(metadata: &CompileMetadata) -> Result<()> {
-    let profile_is_ckb = metadata.target_profile.name == TargetProfile::Ckb.name();
+    let profile_is_ckb = TargetProfile::from_name(&metadata.target_profile.name)?.is_ckb();
 
     for action in &metadata.actions {
         validate_ckb_output_data_create_set_metadata("action", &action.name, &action.create_set, profile_is_ckb)?;
@@ -4696,7 +4719,7 @@ fn validate_ckb_entry_script_group_metadata(
 }
 
 fn validate_ckb_script_reference_metadata(metadata: &CompileMetadata) -> Result<()> {
-    let profile_is_ckb = TargetProfile::from_name(&metadata.target_profile.name)? == TargetProfile::Ckb;
+    let profile_is_ckb = TargetProfile::from_name(&metadata.target_profile.name)?.is_ckb();
     let Some(ckb_constraints) = metadata.constraints.ckb.as_ref() else {
         return Ok(());
     };
@@ -9335,7 +9358,7 @@ fn compile_metadata_from_ir(
                 selection: if embeds_vm_abi_trailer {
                     "RISC-V ELF artifacts embed a fixed VM ABI trailer; verifier callers strip the trailer and select the declared ABI"
                         .to_string()
-                } else if target_profile == TargetProfile::Ckb && artifact_format == ArtifactFormat::RiscvElf {
+                } else if target_profile.is_ckb() && artifact_format == ArtifactFormat::RiscvElf {
                     "CKB-target ELF artifacts do not embed VM ABI trailer bytes; the profile selects CKB Molecule ABI out of band"
                         .to_string()
                 } else {
@@ -19850,7 +19873,7 @@ fn ckb_script_group_metadata(
     ckb_runtime_accesses: &[CkbRuntimeAccessMetadata],
     target_profile: TargetProfile,
 ) -> Option<CkbScriptGroupMetadata> {
-    if target_profile != TargetProfile::Ckb {
+    if !target_profile.is_ckb() {
         return None;
     }
 
@@ -20254,7 +20277,7 @@ fn validity_predicate_metadata(
 }
 
 fn ckb_type_id_metadata(type_def: &ir::IrTypeDef, target_profile: TargetProfile) -> Option<CkbTypeIdMetadata> {
-    if target_profile != TargetProfile::Ckb || type_def.type_id.is_none() {
+    if !target_profile.is_ckb() || type_def.type_id.is_none() {
         return None;
     }
     if !matches!(type_def.kind, ir::IrTypeKind::Resource | ir::IrTypeKind::Shared | ir::IrTypeKind::Receipt) {
@@ -21382,7 +21405,7 @@ fn ckb_output_data_binding_metadata(
     output_index: usize,
     target_profile: TargetProfile,
 ) -> Option<CkbOutputDataBindingMetadata> {
-    if target_profile != TargetProfile::Ckb
+    if !target_profile.is_ckb()
         || !matches!(
             pattern.operation.as_str(),
             "create" | "output" | "create_unique" | "replace_unique" | "transfer" | "claim" | "settle"
@@ -21407,7 +21430,7 @@ fn ckb_type_id_output_metadata(
     type_defs: &BTreeMap<String, &ir::IrTypeDef>,
     target_profile: TargetProfile,
 ) -> Option<CkbTypeIdOutputMetadata> {
-    if target_profile != TargetProfile::Ckb || !matches!(pattern.operation.as_str(), "create" | "output" | "create_unique") {
+    if !target_profile.is_ckb() || !matches!(pattern.operation.as_str(), "create" | "output" | "create_unique") {
         return None;
     }
     if pattern.operation == "create_unique" && !matches!(pattern.identity, ir::IrIdentityPolicy::CkbTypeId) {
@@ -30271,6 +30294,29 @@ action inspect() -> u64 {
     }
 
     #[test]
+    fn compile_accepts_distinct_ckb_type_hash_deployment_profile() {
+        let result = compile(
+            SIMPLE_PROGRAM,
+            CompileOptions {
+                target: Some("riscv64-elf".to_string()),
+                target_profile: Some("ckb-type-hash".to_string()),
+                ..CompileOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.metadata.target_profile.name, "ckb-type-hash");
+        assert_eq!(result.metadata.target_profile.target_chain, "ckb");
+        assert_eq!(result.metadata.target_profile.deployment_hash_types, ["type"]);
+        let constraints = result.metadata.constraints.ckb.as_ref().expect("CKB constraints");
+        assert_eq!(constraints.profile_abi_contract.deployment_hash_types, ["type"]);
+        assert_eq!(constraints.hash_type_policy.default_script_hash_type, "type");
+        assert_eq!(constraints.hash_type_policy.status, "builder-must-use-type-for-vm2-zbb-artifact");
+        assert!(!result.metadata.runtime.vm_abi.embedded_in_artifact);
+        result.validate().unwrap();
+    }
+
+    #[test]
     fn compile_accepts_ckb_shared_create_when_verifier_covered() {
         let source = r#"
 module test::shared_create
@@ -30513,6 +30559,55 @@ action add(a: u64, b: u64) -> u64 {
                 && dep.hash_type.as_deref() == Some("type")
         }));
         assert_eq!(ckb.dep_group_manifest.status, "manifest-declares-dep-group-builder-must-expand-or-reference");
+    }
+
+    #[test]
+    fn ckb_type_hash_profile_requires_type_deployment_manifest() {
+        let dir = tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+edition = "2026"
+name = "type_hash_deploy_manifest"
+version = "1.0.0"
+entry = "src/main.cell"
+
+[build]
+target_profile = "ckb-type-hash"
+
+[deploy.ckb]
+hash_type = "type"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/main.cell"),
+            r#"
+module type_hash_deploy_manifest
+
+action add(a: u64, b: u64) -> u64 {
+    verification
+        a + b
+}
+"#,
+        )
+        .unwrap();
+
+        let result = compile_path(root, CompileOptions::default()).unwrap();
+        let ckb = result.metadata.constraints.ckb.as_ref().expect("CKB constraints");
+        assert_eq!(result.metadata.target_profile.name, "ckb-type-hash");
+        assert_eq!(ckb.hash_type_policy.declared_hash_type.as_deref(), Some("type"));
+        assert_eq!(ckb.hash_type_policy.default_script_hash_type, "type");
+        result.validate().unwrap();
+
+        let manifest_path = root.join("Cell.toml");
+        let manifest = std::fs::read_to_string(&manifest_path).unwrap().replace("hash_type = \"type\"", "hash_type = \"data2\"");
+        std::fs::write(manifest_path, manifest).unwrap();
+        let error = compile_path(root, CompileOptions::default()).unwrap_err();
+        assert!(error.message.contains("target profile 'ckb-type-hash' artifacts require deploy.ckb.hash_type = 'type'"));
     }
 
     #[test]

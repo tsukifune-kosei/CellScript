@@ -105,42 +105,42 @@ impl CodeGenerator {
                 "__ckb_header_epoch_number",
                 "ckb_epoch_number",
                 CKB_HEADER_FIELD_EPOCH_NUMBER,
-                self.options.target_profile == TargetProfile::Ckb,
+                self.options.target_profile.is_ckb(),
                 "ckb::header_epoch_number is rejected outside the ckb target profile",
             ),
             (
                 "__ckb_header_epoch_start_block_number",
                 "ckb_epoch_start_block_number",
                 CKB_HEADER_FIELD_EPOCH_START_BLOCK_NUMBER,
-                self.options.target_profile == TargetProfile::Ckb,
+                self.options.target_profile.is_ckb(),
                 "ckb::header_epoch_start_block_number is rejected outside the ckb target profile",
             ),
             (
                 "__ckb_header_epoch_length",
                 "ckb_epoch_length",
                 CKB_HEADER_FIELD_EPOCH_LENGTH,
-                self.options.target_profile == TargetProfile::Ckb,
+                self.options.target_profile.is_ckb(),
                 "ckb::header_epoch_length is rejected outside the ckb target profile",
             ),
             (
                 "__ckb_header_dep_epoch_number",
                 "ckb_epoch_number",
                 CKB_HEADER_FIELD_EPOCH_NUMBER,
-                self.options.target_profile == TargetProfile::Ckb,
+                self.options.target_profile.is_ckb(),
                 "HeaderDepView.epoch_number is rejected outside the ckb target profile",
             ),
             (
                 "__ckb_header_dep_epoch_start_block_number",
                 "ckb_epoch_start_block_number",
                 CKB_HEADER_FIELD_EPOCH_START_BLOCK_NUMBER,
-                self.options.target_profile == TargetProfile::Ckb,
+                self.options.target_profile.is_ckb(),
                 "HeaderDepView.epoch_start_block_number is rejected outside the ckb target profile",
             ),
             (
                 "__ckb_header_dep_epoch_length",
                 "ckb_epoch_length",
                 CKB_HEADER_FIELD_EPOCH_LENGTH,
-                self.options.target_profile == TargetProfile::Ckb,
+                self.options.target_profile.is_ckb(),
                 "HeaderDepView.epoch_length is rejected outside the ckb target profile",
             ),
         ] {
@@ -171,7 +171,7 @@ impl CodeGenerator {
                     symbol,
                     field_name,
                     field_offset,
-                    self.options.target_profile == TargetProfile::Ckb,
+                    self.options.target_profile.is_ckb(),
                     disabled_reason,
                 );
             }
@@ -181,7 +181,7 @@ impl CodeGenerator {
                 "__ckb_input_since",
                 "ckb_input_since",
                 CKB_INPUT_FIELD_SINCE,
-                self.options.target_profile == TargetProfile::Ckb,
+                self.options.target_profile.is_ckb(),
                 "ckb::input_since is rejected outside the ckb target profile",
             );
         }
@@ -275,7 +275,7 @@ impl CodeGenerator {
     }
 
     fn emit_runtime_ckb_v014_surface_helpers(&mut self, referenced_helpers: &BTreeSet<String>) {
-        let enabled = self.options.target_profile == TargetProfile::Ckb;
+        let enabled = self.options.target_profile.is_ckb();
         for (name, syscall, detail) in [
             ("__ckb_spawn", ckb_abi::syscall::SPAWN, "spawn bounded verifier child"),
             ("__ckb_wait", ckb_abi::syscall::WAIT, "wait for bounded verifier child"),

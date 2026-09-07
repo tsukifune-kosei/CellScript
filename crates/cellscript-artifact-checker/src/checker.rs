@@ -304,10 +304,10 @@ fn validate_record_schema(record: &VerifiedLoweringRecord) -> Result<(), Checker
             "lowering record overclaims or mislabels the v1 verification boundary",
         ));
     }
-    if record.artifact_format != "RISC-V ELF" || record.target_profile != "ckb" {
+    if record.artifact_format != "RISC-V ELF" || ckb_deployment_hash_type(&record.target_profile).is_none() {
         return Err(CheckerError::new(
             CheckerRejectionCode::V2403UnsupportedSchema,
-            "v1 checker accepts only the CKB RISC-V ELF profile",
+            "v1 checker accepts only the ckb or ckb-type-hash RISC-V ELF profiles",
         ));
     }
     if record.compatibility_profile.target_profile != record.target_profile
@@ -588,6 +588,9 @@ fn validate_metadata_binding(
 }
 
 fn validate_ckb_vm2_target_contract(metadata: &Value) -> Result<(), CheckerError> {
+    let target_profile = json_string(metadata, &["target_profile", "name"])
+        .and_then(ckb_deployment_hash_type)
+        .ok_or_else(|| metadata_binding_error("compile metadata has an unsupported CKB target profile"))?;
     let deployment_hash_types = metadata
         .pointer("/target_profile/deployment_hash_types")
         .and_then(Value::as_array)
@@ -600,18 +603,26 @@ fn validate_ckb_vm2_target_contract(metadata: &Value) -> Result<(), CheckerError
         .and_then(|values| values[0].as_str());
     if json_u64(metadata, &["target_profile", "minimum_vm_version"]) != Some(2)
         || json_string(metadata, &["target_profile", "riscv_isa"]) != Some("rv64imac_zbb")
-        || deployment_hash_types != Some("data2")
+        || deployment_hash_types != Some(target_profile)
         || json_u64(metadata, &["constraints", "ckb", "profile_abi_contract", "minimum_vm_version"]) != Some(2)
         || json_string(metadata, &["constraints", "ckb", "profile_abi_contract", "riscv_isa"]) != Some("rv64imac_zbb")
-        || constraints_hash_types != Some("data2")
-        || json_string(metadata, &["constraints", "ckb", "hash_type_policy", "default_script_hash_type"]) != Some("data2")
+        || constraints_hash_types != Some(target_profile)
+        || json_string(metadata, &["constraints", "ckb", "hash_type_policy", "default_script_hash_type"]) != Some(target_profile)
     {
         return Err(CheckerError::new(
             CheckerRejectionCode::V2410MetadataBindingMismatch,
-            "compile metadata does not bind the CKB VM2, rv64imac_zbb, data2 deployment contract",
+            format!("compile metadata does not bind the CKB VM2, rv64imac_zbb, {target_profile} deployment contract"),
         ));
     }
     Ok(())
+}
+
+fn ckb_deployment_hash_type(target_profile: &str) -> Option<&'static str> {
+    match target_profile {
+        "ckb" => Some("data2"),
+        "ckb-type-hash" => Some("type"),
+        _ => None,
+    }
 }
 
 fn validate_runtime_access_provenance_metadata(metadata: &Value, typed_semantics: &TypedSemanticRecord) -> Result<(), CheckerError> {

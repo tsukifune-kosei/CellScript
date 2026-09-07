@@ -166,7 +166,7 @@ const CKB_RUNTIME_SYSCALL_ABI: RuntimeSyscallAbi = RuntimeSyscallAbi {
 
 fn runtime_syscall_abi(profile: TargetProfile) -> RuntimeSyscallAbi {
     match profile {
-        TargetProfile::Ckb => CKB_RUNTIME_SYSCALL_ABI,
+        TargetProfile::Ckb | TargetProfile::CkbTypeHash => CKB_RUNTIME_SYSCALL_ABI,
     }
 }
 
