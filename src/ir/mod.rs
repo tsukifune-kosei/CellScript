@@ -5,8 +5,10 @@ use crate::runtime_errors::CellScriptRuntimeError;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 mod bindings;
+mod optimize;
 mod policy;
 pub use bindings::{IrCellBinding, IrCellBindingRole, IrCellMembership, IrCellSource};
+pub(crate) use optimize::{optimize_exact_cell_data_equality, optimize_source_byte_equality};
 pub(crate) use policy::bind_artifact_policy;
 
 #[derive(Debug, Clone)]

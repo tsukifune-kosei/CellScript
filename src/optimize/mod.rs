@@ -412,14 +412,16 @@ impl Optimizer {
                 {
                     continue;
                 }
-                let Some(body) = inlineable_function_body(&function.body) else { continue };
+                let Some(body) = inlineable_function_body(&function.body) else {
+                    continue;
+                };
                 let params = function.params.iter().map(|param| param.name.clone()).collect::<Vec<_>>();
                 let captures = self.scopes[0]
                     .iter()
                     .filter(|(name, _)| !params.contains(name))
                     .filter_map(|(name, value)| value.clone().map(|value| (name.clone(), const_to_expr(value))))
                     .collect::<HashMap<_, _>>();
-                let body = substitute_expr(body, &captures);
+                let body = substitute_expr(&body, &captures);
                 if !expr_is_closed_inline_candidate(&body, &params, &self.inline_functions) {
                     continue;
                 }
@@ -537,11 +539,30 @@ impl Optimizer {
     }
 }
 
-fn inlineable_function_body(body: &[Stmt]) -> Option<&Expr> {
-    match body {
-        [Stmt::Return(ReturnStmt { value: Some(expr), .. })] | [Stmt::Expr(expr)] => Some(expr),
-        _ => None,
+fn inlineable_function_body(body: &[Stmt]) -> Option<Expr> {
+    if let [Stmt::Expr(expr)] = body {
+        return Some(expr.clone());
     }
+    let (last, prefix) = body.split_last()?;
+    let Stmt::Return(ReturnStmt { value: Some(final_value), .. }) = last else {
+        return None;
+    };
+    let mut result = final_value.clone();
+    for statement in prefix.iter().rev() {
+        let Stmt::If(IfStmt { condition, then_branch, else_branch: None, span }) = statement else {
+            return None;
+        };
+        let [Stmt::Return(ReturnStmt { value: Some(early_value), .. })] = then_branch.as_slice() else {
+            return None;
+        };
+        result = Expr::If(IfExpr {
+            condition: Box::new(condition.clone()),
+            then_branch: Box::new(early_value.clone()),
+            else_branch: Box::new(result),
+            span: *span,
+        });
+    }
+    Some(result)
 }
 
 fn expr_is_closed_inline_candidate(expr: &Expr, params: &[String], functions: &HashMap<String, InlineFunction>) -> bool {

@@ -127,7 +127,8 @@ Declarations are exact and closed:
 
 ## Evidence and checker boundary
 
-Metadata schema 66 and `cellscript-typed-semantics-v8` carry the canonical
+The trusted-external record was introduced in metadata schema 66 and remains
+unchanged in current schema 67. `cellscript-typed-semantics-v8` carries the canonical
 trusted-verifier record in runtime metadata, CKB constraints, typed semantics,
 and the verified lowering bundle. The copies must agree exactly. Its fixed
 fields include:

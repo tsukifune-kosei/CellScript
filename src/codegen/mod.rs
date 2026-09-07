@@ -95,6 +95,17 @@ const CKB_LENGTH_NOT_ENOUGH: u64 = ckb_abi::syscall_error::LENGTH_NOT_ENOUGH;
 const RUNTIME_SCRATCH_BUFFER_SIZE: usize = 512;
 const RUNTIME_SCRATCH_SLOT_SIZE: usize = 8 + RUNTIME_SCRATCH_BUFFER_SIZE;
 const RUNTIME_SCRATCH_SIZE: usize = RUNTIME_SCRATCH_SLOT_SIZE * 2;
+const RUNTIME_EXACT_READ_CACHE_CAPACITY: usize = 256;
+const RUNTIME_EXACT_READ_CACHE_ENTRY_SIZE: usize = 56 + RUNTIME_EXACT_READ_CACHE_CAPACITY;
+const RUNTIME_EXACT_READ_CACHE_WAYS: usize = 4;
+// Base header: round-robin word, last-entry pointer and saved s11. The hot
+// header additionally saves s10/s9/s8/s7/s6/s5 for a register-resident
+// most-recent window.
+const RUNTIME_EXACT_READ_CACHE_BASE_HEADER_SIZE: usize = 24;
+const RUNTIME_EXACT_READ_CACHE_HOT_HEADER_SIZE: usize = 72;
+// Static exact-read sites needed to amortize the hot header's entry/exit work.
+// The ordinary four-way cache remains enabled below this threshold.
+const RUNTIME_EXACT_READ_HOT_SITE_THRESHOLD: usize = 48;
 const RUNTIME_EXPR_TEMP_SLOTS: usize = 16;
 const RUNTIME_EXPR_TEMP_SIZE: usize = RUNTIME_EXPR_TEMP_SLOTS * 8;
 const _: () = assert!(RUNTIME_EXPR_TEMP_SLOTS >= 4);
@@ -336,6 +347,10 @@ fn is_v014_runtime_helper(func: &str) -> bool {
             | "__c256_require_u128_sum2_products_lte"
             | "__c256_require_u128_sum2_products_eq"
             | "__ckb_cell_data_size"
+            | "__ckb_cell_data_equal"
+            | "__ckb_source_bytes_equal"
+            | "__ckb_source_bytes_equal_memory"
+            | "__ckb_source_bytes_zero"
             | "__ckb_cell_count"
             | "__ckb_cell_has_type"
             | "__ckb_cell_data_u8"
@@ -394,6 +409,47 @@ fn is_v014_runtime_helper(func: &str) -> bool {
             | "__novaseal_bip340_require_signature"
             | "__novaseal_bip340_require_signature_from_cell_dep"
     )
+}
+
+fn is_cached_exact_read_helper(func: &str) -> bool {
+    matches!(
+        func,
+        "__ckb_cell_data_u8"
+            | "__ckb_cell_data_u32_le"
+            | "__ckb_cell_data_u64_le"
+            | "__ckb_witness_u8"
+            | "__ckb_witness_u32_le"
+            | "__ckb_witness_u64_le"
+            | "__ckb_cell_lock_u8"
+            | "__ckb_cell_type_u8"
+    )
+}
+
+fn is_source_view_helper(func: &str) -> bool {
+    matches!(
+        func,
+        "__ckb_source_input"
+            | "__ckb_source_output"
+            | "__ckb_source_cell_dep"
+            | "__ckb_source_header_dep"
+            | "__ckb_source_group_input"
+            | "__ckb_source_group_output"
+    )
+}
+
+fn is_terminal_scalar_runtime_helper(func: &str) -> bool {
+    is_cached_exact_read_helper(func)
+        || is_source_view_helper(func)
+        || matches!(
+            func,
+            "__ckb_witness_count"
+                | "__ckb_witness_size"
+                | "__ckb_cell_count"
+                | "__ckb_cell_has_type"
+                | "__ckb_cell_data_size"
+                | "__ckb_cell_lock_size"
+                | "__ckb_cell_type_size"
+        )
 }
 
 fn is_ckb_fixed_hash_helper(func: &str) -> bool {
@@ -610,6 +666,99 @@ fn fixed_scalar_operand_width(operand: &IrOperand) -> Option<usize> {
         IrOperand::Const(IrConst::U32(_)) => Some(4),
         IrOperand::Const(IrConst::U64(_)) => Some(8),
         _ => None,
+    }
+}
+
+fn simple_scalar_operand(operand: &IrOperand) -> bool {
+    match operand {
+        IrOperand::Const(IrConst::Bool(_) | IrConst::U8(_) | IrConst::U16(_) | IrConst::U32(_) | IrConst::U64(_)) => true,
+        IrOperand::Var(var) => matches!(var.ty, IrType::Bool | IrType::U8 | IrType::U16 | IrType::U32 | IrType::I32 | IrType::U64),
+        _ => false,
+    }
+}
+
+fn body_var_use_count(body: &IrBody, var_id: usize) -> usize {
+    body.blocks
+        .iter()
+        .map(|block| {
+            block.instructions.iter().map(|instruction| instruction_var_use_count(instruction, var_id)).sum::<usize>()
+                + terminator_var_use_count(&block.terminator, var_id)
+        })
+        .sum()
+}
+
+fn operand_var_use_count(operand: &IrOperand, var_id: usize) -> usize {
+    usize::from(matches!(operand, IrOperand::Var(var) if var.id == var_id))
+}
+
+fn operands_var_use_count<'a>(operands: impl IntoIterator<Item = &'a IrOperand>, var_id: usize) -> usize {
+    operands.into_iter().map(|operand| operand_var_use_count(operand, var_id)).sum()
+}
+
+fn create_pattern_var_use_count(pattern: &CreatePattern, var_id: usize) -> usize {
+    operands_var_use_count(pattern.fields.iter().map(|(_, operand)| operand), var_id)
+        + pattern.lock.as_ref().map_or(0, |operand| operand_var_use_count(operand, var_id))
+}
+
+fn instruction_var_use_count(instruction: &IrInstruction, var_id: usize) -> usize {
+    match instruction {
+        IrInstruction::LoadConst { .. } | IrInstruction::LoadVar { .. } | IrInstruction::ReadRef { .. } => 0,
+        IrInstruction::StoreVar { src, .. }
+        | IrInstruction::Unary { operand: src, .. }
+        | IrInstruction::FieldAccess { obj: src, .. }
+        | IrInstruction::Length { operand: src, .. }
+        | IrInstruction::TypeHash { operand: src, .. }
+        | IrInstruction::CollectionCapacity { collection: src, .. }
+        | IrInstruction::CollectionClear { collection: src }
+        | IrInstruction::CollectionReverse { collection: src }
+        | IrInstruction::CollectionPop { collection: src, .. }
+        | IrInstruction::EnumTag { operand: src, .. }
+        | IrInstruction::EnumPayload { operand: src, .. }
+        | IrInstruction::Consume { operand: src }
+        | IrInstruction::Destroy { operand: src, .. }
+        | IrInstruction::Claim { receipt: src, .. }
+        | IrInstruction::Settle { operand: src, .. }
+        | IrInstruction::Move { src, .. } => operand_var_use_count(src, var_id),
+        IrInstruction::Binary { left, right, .. }
+        | IrInstruction::Index { arr: left, idx: right, .. }
+        | IrInstruction::CollectionPush { collection: left, value: right }
+        | IrInstruction::CollectionExtend { collection: left, slice: right }
+        | IrInstruction::CollectionContains { collection: left, value: right, .. }
+        | IrInstruction::CollectionRemove { collection: left, index: right, .. }
+        | IrInstruction::CollectionInsert { collection: left, index: right, .. }
+        | IrInstruction::CollectionSet { collection: left, index: right, .. }
+        | IrInstruction::CollectionTruncate { collection: left, len: right }
+        | IrInstruction::CellMetadataEquality { left, right, .. } => {
+            operand_var_use_count(left, var_id) + operand_var_use_count(right, var_id)
+        }
+        IrInstruction::CollectionNew { capacity, .. } => capacity.as_ref().map_or(0, |operand| operand_var_use_count(operand, var_id)),
+        IrInstruction::CollectionSwap { collection, left, right } => {
+            operand_var_use_count(collection, var_id) + operand_var_use_count(left, var_id) + operand_var_use_count(right, var_id)
+        }
+        IrInstruction::BoundedCellLoad { index, .. } => operand_var_use_count(index, var_id),
+        IrInstruction::BoundedPlanLoad { plan, index, .. } => {
+            operand_var_use_count(plan, var_id) + operand_var_use_count(index, var_id)
+        }
+        IrInstruction::BoundedOutputVerify { index, pattern, .. } => {
+            operand_var_use_count(index, var_id) + create_pattern_var_use_count(pattern, var_id)
+        }
+        IrInstruction::Call { args, .. } => operands_var_use_count(args, var_id),
+        IrInstruction::Tuple { fields, .. } | IrInstruction::EnumConstruct { fields, .. } => operands_var_use_count(fields, var_id),
+        IrInstruction::Create { pattern, .. } | IrInstruction::CreateUnique { pattern, .. } => {
+            create_pattern_var_use_count(pattern, var_id)
+        }
+        IrInstruction::Transfer { operand, to, .. } => operand_var_use_count(operand, var_id) + operand_var_use_count(to, var_id),
+        IrInstruction::ReplaceUnique { operand, pattern, .. } => {
+            operand_var_use_count(operand, var_id) + create_pattern_var_use_count(pattern, var_id)
+        }
+        IrInstruction::BoundedOutputEnd { index } => operand_var_use_count(index, var_id),
+    }
+}
+
+fn terminator_var_use_count(terminator: &IrTerminator, var_id: usize) -> usize {
+    match terminator {
+        IrTerminator::Return(Some(operand)) | IrTerminator::Branch { cond: operand, .. } => operand_var_use_count(operand, var_id),
+        IrTerminator::Return(None) | IrTerminator::Jump(_) => 0,
     }
 }
 
@@ -856,6 +1005,9 @@ pub struct CodeGenerator {
     options: CodegenOptions,
     assembly: Vec<String>,
     current_function: Option<String>,
+    current_function_owns_exact_read_cache: bool,
+    module_uses_exact_read_cache: bool,
+    module_uses_exact_read_hot_cache: bool,
     frame_size: usize,
     next_virtual_output: usize,
     /// Stack-frame start offset for runtime collection buffers.
@@ -892,9 +1044,22 @@ pub struct CodeGenerator {
     param_vars: BTreeSet<usize>,
     /// Schema pointer slots backed by a VM-loaded cell buffer size word.
     schema_pointer_size_offsets: HashMap<usize, usize>,
+    /// Exact schema sizes established by unconditional entry-prelude loads.
+    /// These facts dominate every emitted IR block until the size slot is
+    /// reused by another syscall.
+    dominant_schema_exact_sizes: HashMap<usize, usize>,
+    /// Exact schema sizes established within the block currently being
+    /// emitted. They are cleared at every block boundary.
+    block_schema_exact_sizes: HashMap<usize, usize>,
+    /// Minimum schema sizes established within the block currently being
+    /// emitted. They are cleared at every block boundary.
+    block_schema_min_sizes: HashMap<usize, usize>,
     /// Exact widths of locally constructed fixed schema values and their
     /// aliases. External Cells and unknown returned pointers never enter this map.
     local_schema_value_widths: HashMap<usize, usize>,
+    /// Boolean temporaries consumed only by their defining block terminator.
+    /// These can lower directly to a branch without a stack round trip.
+    branch_only_vars: BTreeSet<usize>,
     /// Fixed-byte parameter pointer slots backed by a separate ABI length word.
     fixed_byte_param_size_offsets: HashMap<usize, usize>,
     /// Fixed-width aggregate pointer slots backed by ABI bytes, keyed by IR variable id.
@@ -928,6 +1093,10 @@ pub struct CodeGenerator {
     cell_buffer_offsets: HashMap<usize, usize>,
     /// Per-CKB-runtime cell size words keyed by IR variable id.
     cell_buffer_size_offsets: HashMap<usize, usize>,
+    /// Entry-owned source-bound read window shared by nested exact Cell-data,
+    /// Script and witness scalar helpers. `s11` addresses the four-way cache;
+    /// `s10..s5` hold the validated most-recent window.
+    exact_read_cache_offset: Option<usize>,
     /// Authoritative Cell locations resolved before backend storage layout.
     cell_bindings: Vec<IrCellBinding>,
     cell_locations_by_local: HashMap<usize, (u64, usize)>,
@@ -1070,6 +1239,9 @@ impl CodeGenerator {
             options,
             assembly: Vec::new(),
             current_function: None,
+            current_function_owns_exact_read_cache: false,
+            module_uses_exact_read_cache: false,
+            module_uses_exact_read_hot_cache: false,
             frame_size: 16,
             next_virtual_output: 0,
             collection_region_start: 0,
@@ -1089,7 +1261,11 @@ impl CodeGenerator {
             schema_pointer_vars: BTreeSet::new(),
             param_vars: BTreeSet::new(),
             schema_pointer_size_offsets: HashMap::new(),
+            dominant_schema_exact_sizes: HashMap::new(),
+            block_schema_exact_sizes: HashMap::new(),
+            block_schema_min_sizes: HashMap::new(),
             local_schema_value_widths: HashMap::new(),
+            branch_only_vars: BTreeSet::new(),
             fixed_byte_param_size_offsets: HashMap::new(),
             aggregate_pointer_sources: HashMap::new(),
             tuple_call_return_vars: HashMap::new(),
@@ -1107,6 +1283,7 @@ impl CodeGenerator {
             pure_const_returns: HashMap::new(),
             cell_buffer_offsets: HashMap::new(),
             cell_buffer_size_offsets: HashMap::new(),
+            exact_read_cache_offset: None,
             cell_bindings: Vec::new(),
             cell_locations_by_local: HashMap::new(),
             dynamic_value_size_offsets: HashMap::new(),
@@ -1189,6 +1366,22 @@ impl CodeGenerator {
         self.enum_fixed_sizes = ir.enum_fixed_sizes.clone();
         self.enum_layouts = ir.enum_layouts.clone();
         self.pure_const_returns = collect_pure_const_returns(ir);
+        let exact_read_sites = ir
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                IrItem::Action(entry) => Some(&entry.body),
+                IrItem::Lock(entry) => Some(&entry.body),
+                IrItem::PureFn(entry) => Some(&entry.body),
+                _ => None,
+            })
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.instructions)
+            .filter(|instruction| matches!(instruction, IrInstruction::Call { func, .. } if is_cached_exact_read_helper(func)))
+            .count();
+        self.module_uses_exact_read_cache = exact_read_sites > 0;
+        self.module_uses_exact_read_hot_cache =
+            self.options.opt_level > 0 && exact_read_sites >= RUNTIME_EXACT_READ_HOT_SITE_THRESHOLD;
         self.auto_aggregate_runtime_helpers_by_action = auto_lowered_aggregate_runtime_helpers_by_action(ir);
         for item in &ir.items {
             if let IrItem::TypeDef(type_def) = item {
@@ -1245,6 +1438,10 @@ impl CodeGenerator {
         self.emit_process_failure_helper();
         self.emit_const_data_pool();
 
+        if self.options.opt_level > 0 {
+            eliminate_immediate_stack_reloads(&mut self.assembly);
+        }
+
         let generated = match format {
             ArtifactFormat::RiscvAssembly => GeneratedArtifact { bytes: self.assembly.join("\n").into_bytes(), machine_layout: None },
             ArtifactFormat::RiscvElf => {
@@ -1260,7 +1457,7 @@ impl CodeGenerator {
     fn emit_header(&mut self) {
         self.assembly.push("# CellScript Generated Assembly".to_string());
         self.assembly.push(format!("# opt_level={}, debug={}", self.options.opt_level, self.options.debug));
-        self.assembly.push(".option arch, +rv64imac".to_string());
+        self.assembly.push(".option arch, +rv64imac_zbb".to_string());
         self.assembly.push("".to_string());
     }
 
@@ -1495,6 +1692,7 @@ impl CodeGenerator {
 
     fn generate_action(&mut self, action: &IrAction) -> Result<()> {
         self.current_function = Some(action.name.clone());
+        self.current_function_owns_exact_read_cache = true;
         self.current_state_transition_edges = action.state_transition_edges.clone();
         self.bind_readonly_schema_params = true;
         self.fail_handler_codes.clear();
@@ -1527,6 +1725,7 @@ impl CodeGenerator {
         self.emit_shared_epilogue();
 
         self.current_function = None;
+        self.current_function_owns_exact_read_cache = false;
         self.current_state_transition_edges.clear();
         self.bind_readonly_schema_params = false;
         self.schema_pointer_vars.clear();
@@ -1578,6 +1777,7 @@ impl CodeGenerator {
 
     fn generate_pure_fn(&mut self, function: &IrPureFn) -> Result<()> {
         self.current_function = Some(function.name.clone());
+        self.current_function_owns_exact_read_cache = false;
         self.bind_readonly_schema_params = false;
         self.fail_handler_codes.clear();
         self.prepare_function_layout(&function.body, &function.params);
@@ -1631,6 +1831,7 @@ impl CodeGenerator {
 
     fn generate_lock(&mut self, lock: &IrLock) -> Result<()> {
         self.current_function = Some(lock.name.clone());
+        self.current_function_owns_exact_read_cache = true;
         self.bind_readonly_schema_params = true;
         self.current_lock_entry = true;
         self.fail_handler_codes.clear();
@@ -1662,6 +1863,7 @@ impl CodeGenerator {
         self.emit_shared_epilogue();
 
         self.current_function = None;
+        self.current_function_owns_exact_read_cache = false;
         self.bind_readonly_schema_params = false;
         self.current_lock_entry = false;
         self.schema_pointer_vars.clear();
@@ -2576,6 +2778,11 @@ impl CodeGenerator {
                 RUNTIME_CELL_BUFFER_SIZE,
             );
             self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
+            if let Some(type_name) = self.consume_type_names.get(&var_id).cloned()
+                && let Some(expected_size) = self.type_fixed_sizes.get(&type_name).copied()
+            {
+                self.emit_dominating_schema_exact_size_check(size_offset, expected_size, &type_name);
+            }
             self.emit_sp_addi("t0", buffer_offset);
             self.emit_stack_store("t0", var_id * 8);
             if pattern.operation == "destroy" {
@@ -2611,6 +2818,11 @@ impl CodeGenerator {
                 RUNTIME_CELL_BUFFER_SIZE,
             );
             self.emit_return_on_syscall_error(CellScriptRuntimeError::SyscallFailed);
+            if let Some(type_name) = named_type_name(&dest.ty)
+                && let Some(expected_size) = self.type_fixed_sizes.get(type_name).copied()
+            {
+                self.emit_dominating_schema_exact_size_check(size_offset, expected_size, type_name);
+            }
             self.emit_sp_addi("t0", buffer_offset);
             self.emit_stack_store("t0", dest.id * 8);
             return Ok(());
@@ -2770,19 +2982,91 @@ impl CodeGenerator {
     }
 
     fn generate_block(&mut self, block: &IrBlock, fallthrough: Option<BlockId>) -> Result<()> {
+        self.block_schema_exact_sizes.clear();
+        self.block_schema_min_sizes.clear();
         self.emit_label(&self.block_label(block.id));
 
-        for instruction in &block.instructions {
+        let fused = block.instructions.last().is_some_and(|instruction| self.can_fuse_branch(instruction, &block.terminator));
+        let instruction_count = block.instructions.len().saturating_sub(usize::from(fused));
+        for instruction in &block.instructions[..instruction_count] {
             self.generate_instruction(instruction)?;
+        }
+        if fused {
+            self.try_emit_fused_branch(
+                block.instructions.last().expect("fused branch has a defining instruction"),
+                &block.terminator,
+                fallthrough,
+            )?;
         }
 
         if let Some(error) = block.runtime_error {
             self.emit_process_failure(error);
-        } else {
+        } else if !fused {
             self.generate_terminator(&block.terminator, fallthrough)?;
         }
 
         Ok(())
+    }
+
+    fn can_fuse_branch(&self, instruction: &IrInstruction, terminator: &IrTerminator) -> bool {
+        if self.options.opt_level == 0 {
+            return false;
+        }
+        let IrInstruction::Binary { dest, op, left, right } = instruction else {
+            return false;
+        };
+        let IrTerminator::Branch { cond: IrOperand::Var(cond), .. } = terminator else {
+            return false;
+        };
+        dest.id == cond.id
+            && self.branch_only_vars.contains(&dest.id)
+            && matches!(dest.ty, IrType::Bool)
+            && simple_scalar_operand(left)
+            && simple_scalar_operand(right)
+            && matches!(op, BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge)
+    }
+
+    fn try_emit_fused_branch(
+        &mut self,
+        instruction: &IrInstruction,
+        terminator: &IrTerminator,
+        fallthrough: Option<BlockId>,
+    ) -> Result<bool> {
+        let IrInstruction::Binary { dest, op, left, right } = instruction else {
+            return Ok(false);
+        };
+        let IrTerminator::Branch { cond: IrOperand::Var(cond), then_block, else_block } = terminator else {
+            return Ok(false);
+        };
+        if !self.can_fuse_branch(instruction, terminator) || dest.id != cond.id {
+            return Ok(false);
+        }
+
+        self.emit_operand_to_register("t0", left);
+        self.emit_operand_to_register("t1", right);
+        let signed = binary_operands_signed_i32(left, right);
+        let (true_branch, false_branch) = match op {
+            BinaryOp::Eq => ("beq t0, t1", "bne t0, t1"),
+            BinaryOp::Ne => ("bne t0, t1", "beq t0, t1"),
+            BinaryOp::Lt if signed => ("blt t0, t1", "bge t0, t1"),
+            BinaryOp::Lt => ("bltu t0, t1", "bgeu t0, t1"),
+            BinaryOp::Le if signed => ("bge t1, t0", "blt t1, t0"),
+            BinaryOp::Le => ("bgeu t1, t0", "bltu t1, t0"),
+            BinaryOp::Gt if signed => ("blt t1, t0", "bge t1, t0"),
+            BinaryOp::Gt => ("bltu t1, t0", "bgeu t1, t0"),
+            BinaryOp::Ge if signed => ("bge t0, t1", "blt t0, t1"),
+            BinaryOp::Ge => ("bgeu t0, t1", "bltu t0, t1"),
+            _ => return Ok(false),
+        };
+        if Some(*then_block) == fallthrough {
+            self.emit(format!("{false_branch}, {}", self.block_label(*else_block)));
+        } else if Some(*else_block) == fallthrough {
+            self.emit(format!("{true_branch}, {}", self.block_label(*then_block)));
+        } else {
+            self.emit(format!("{false_branch}, {}", self.block_label(*else_block)));
+            self.emit_jump_to_block(*then_block, fallthrough);
+        }
+        Ok(true)
     }
 
     fn generate_instruction(&mut self, instruction: &IrInstruction) -> Result<()> {
@@ -3913,6 +4197,44 @@ impl CodeGenerator {
             _ => None,
         }
     }
+}
+
+/// Preserve the authoritative stack value while avoiding an immediately
+/// redundant memory read. This deliberately crosses comments only, never a
+/// label, directive, branch, call, or other instruction.
+fn eliminate_immediate_stack_reloads(assembly: &mut [String]) {
+    for store_index in 0..assembly.len() {
+        let Some((source, offset)) = stack_slot_access(&assembly[store_index], "sd") else {
+            continue;
+        };
+        let Some(load_index) = ((store_index + 1)..assembly.len()).find(|index| {
+            let line = assembly[*index].trim();
+            !line.is_empty() && !line.starts_with('#')
+        }) else {
+            continue;
+        };
+        let Some((dest, load_offset)) = stack_slot_access(&assembly[load_index], "ld") else {
+            continue;
+        };
+        if offset != load_offset {
+            continue;
+        }
+        assembly[load_index] = if source == dest { String::new() } else { format!("    mv {dest}, {source}") };
+    }
+}
+
+fn stack_slot_access(line: &str, expected_opcode: &str) -> Option<(String, i64)> {
+    let clean = strip_comment(line)?;
+    let mut parts = clean.splitn(2, char::is_whitespace);
+    if parts.next()? != expected_opcode {
+        return None;
+    }
+    let args = parts.next()?.split(',').map(str::trim).collect::<Vec<_>>();
+    if args.len() != 2 || parse_register(args[0]).is_err() {
+        return None;
+    }
+    let (offset, base) = memory_operand_offset_and_base(args[1])?;
+    (base == "sp").then(|| (args[0].to_string(), offset))
 }
 
 fn with_codegen_code(error: CompileError, code: &'static str) -> CompileError {

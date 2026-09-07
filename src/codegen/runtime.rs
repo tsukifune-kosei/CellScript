@@ -6,6 +6,8 @@ use super::*;
 enum RuntimeByteSource {
     CellData,
     Witness,
+    CellLock,
+    CellType,
 }
 
 /// Keep the legacy in-memory artifact unchanged; both transaction byte
@@ -17,6 +19,21 @@ enum RuntimeHashInput {
     PrefixedTransaction,
     Segments,
 }
+
+const BLAKE2B_SIGMA: [[usize; 16]; 12] = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
+    [11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4],
+    [7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8],
+    [9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13],
+    [2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9],
+    [12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11],
+    [13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10],
+    [6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5],
+    [10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0],
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
+];
 
 #[derive(Clone, Copy)]
 struct OrderMasterDataOffsets {
@@ -489,6 +506,10 @@ impl CodeGenerator {
             ("__c256_require_u128_sum2_products_lte", "C256 u128 product-sum <= requirement"),
             ("__c256_require_u128_sum2_products_eq", "C256 u128 product-sum == requirement"),
             ("__ckb_cell_data_size", "SourceView cell data byte length"),
+            ("__ckb_cell_data_equal", "exact equality of two complete SourceView Cell data payloads"),
+            ("__ckb_source_bytes_equal", "exact equality of two bounded byte ranges from CKB syscall sources"),
+            ("__ckb_source_bytes_equal_memory", "exact equality of a bounded CKB source range and fixed in-memory bytes"),
+            ("__ckb_source_bytes_zero", "exact all-zero check over a bounded CKB source range"),
             ("__ckb_cell_count", "SourceView complete cell-source cardinality"),
             ("__ckb_cell_has_type", "SourceView optional Type Script presence"),
             ("__ckb_cell_data_u32_le", "SourceView cell data little-endian u32 read"),
@@ -745,16 +766,28 @@ impl CodeGenerator {
                 "__c256_require_u128_sum2_products_lte" => self.emit_runtime_c256_sum2_product_requirement_helper(name, detail, false),
                 "__c256_require_u128_sum2_products_eq" => self.emit_runtime_c256_sum2_product_requirement_helper(name, detail, true),
                 "__ckb_cell_data_size" => self.emit_runtime_cell_data_size_helper(enabled),
+                "__ckb_cell_data_equal" => self.emit_runtime_cell_data_equal_helper(enabled),
+                "__ckb_source_bytes_equal" => self.emit_runtime_source_bytes_equal_helper(enabled),
+                "__ckb_source_bytes_equal_memory" => self.emit_runtime_source_bytes_equal_memory_helper(enabled),
+                "__ckb_source_bytes_zero" => self.emit_runtime_source_bytes_zero_helper(enabled),
                 "__ckb_cell_count" => self.emit_runtime_cell_probe_helper(name, true, enabled),
                 "__ckb_cell_has_type" => self.emit_runtime_cell_probe_helper(name, false, enabled),
                 "__ckb_cell_data_u8" => self.emit_runtime_exact_byte_word_helper(name, RuntimeByteSource::CellData, 1, enabled),
                 "__ckb_cell_lock_size" => self.emit_runtime_cell_script_read(name, CKB_CELL_FIELD_LOCK, false, enabled),
                 "__ckb_cell_type_size" => self.emit_runtime_cell_script_read(name, CKB_CELL_FIELD_TYPE, false, enabled),
-                "__ckb_cell_lock_u8" => self.emit_runtime_cell_script_read(name, CKB_CELL_FIELD_LOCK, true, enabled),
-                "__ckb_cell_type_u8" => self.emit_runtime_cell_script_read(name, CKB_CELL_FIELD_TYPE, true, enabled),
+                "__ckb_cell_lock_u8" => {
+                    self.emit_runtime_exact_byte_word_helper(name, RuntimeByteSource::CellLock, 1, enabled)
+                }
+                "__ckb_cell_type_u8" => {
+                    self.emit_runtime_exact_byte_word_helper(name, RuntimeByteSource::CellType, 1, enabled)
+                }
                 "__ckb_input_since_at" => self.emit_runtime_input_since_at(enabled),
-                "__ckb_cell_data_u32_le" => self.emit_runtime_cell_data_word_le_helper(name, detail, 4, enabled),
-                "__ckb_cell_data_u64_le" => self.emit_runtime_cell_data_word_le_helper(name, detail, 8, enabled),
+                "__ckb_cell_data_u32_le" => {
+                    self.emit_runtime_exact_byte_word_helper(name, RuntimeByteSource::CellData, 4, enabled)
+                }
+                "__ckb_cell_data_u64_le" => {
+                    self.emit_runtime_exact_byte_word_helper(name, RuntimeByteSource::CellData, 8, enabled)
+                }
                 "__dao_accumulated_rate" => self.emit_runtime_dao_accumulated_rate_helper(enabled),
                 "__dao_input_accumulated_rate" => self.emit_runtime_dao_input_accumulated_rate_helper(enabled),
                 "__dao_has_dao_type" => self.emit_runtime_dao_type_classifier_helper(enabled),
@@ -810,6 +843,31 @@ impl CodeGenerator {
                     }
                 }
             }
+        }
+
+        if enabled && referenced_helpers.iter().any(|helper| is_cached_exact_read_helper(helper)) {
+            self.emit_runtime_exact_read_cached();
+        }
+
+        let needs_blake2b_compress = referenced_helpers.iter().any(|helper| {
+            matches!(
+                helper.as_str(),
+                "__ckb_hash_chain"
+                    | "__ckb_hash_blake2b"
+                    | "__ckb_hash_pair"
+                    | "__ckb_hash_data_packed"
+                    | "__ckb_hash_blake2b_var"
+                    | "__ckb_hash_blake2b_packed"
+                    | "__ckb_cell_data_hash"
+                    | "__ckb_cell_data_blake2b_span"
+                    | "__ckb_witness_blake2b_span"
+                    | "__ckb_raw_transaction_hash_without_cell_deps"
+                    | "__ckb_transaction_blake2b_gather"
+                    | "__ckb_witness_blake2b_select_chunks"
+            )
+        });
+        if enabled && needs_blake2b_compress {
+            self.emit_runtime_blake2b_compress();
         }
 
         if referenced_helpers.contains("__ckb_hash_chain") {
@@ -868,11 +926,11 @@ impl CodeGenerator {
         self.emit(format!("srli {0}, {0}, 32", register));
     }
 
-    fn emit_sha256_rotr(&mut self, dest: &str, source: &str, shift: u8, scratch: &str) {
-        self.emit(format!("srli {}, {}, {}", dest, source, shift));
-        self.emit(format!("slli {}, {}, {}", scratch, source, 32 - shift));
-        self.emit_u32_normalize(scratch);
-        self.emit(format!("or {}, {}, {}", dest, dest, scratch));
+    fn emit_sha256_rotr(&mut self, dest: &str, source: &str, shift: u8, _scratch: &str) {
+        self.emit(format!("roriw {dest}, {source}, {shift}"));
+        // RORIW sign-extends bit 31; the SHA state is maintained as a
+        // zero-extended u32-in-u64 so later logical shifts remain exact.
+        self.emit_u32_normalize(dest);
     }
 
     fn emit_runtime_sha256_surface(&mut self, enabled: bool) {
@@ -920,14 +978,12 @@ impl CodeGenerator {
         ];
         self.emit_label("__cellscript_sha256_compress");
         self.emit("# cellscript abi: SHA-256 compression; a0=state[8] u32-in-u64, a1=schedule[64] u32-in-u64");
-        self.emit("addi sp, sp, -112");
-        self.emit("sd ra, 104(sp)");
-        self.emit("sd a0, 64(sp)");
-        self.emit("sd a1, 72(sp)");
-        for index in 0..8 {
-            self.emit(format!("ld t0, {}(a0)", index * 8));
-            self.emit(format!("sd t0, {}(sp)", index * 8));
-        }
+        self.emit("addi sp, sp, -32");
+        self.emit("sd ra, 0(sp)");
+        self.emit("sd s1, 8(sp)");
+        self.emit("sd s2, 16(sp)");
+        self.emit("mv s1, a0");
+        self.emit("mv s2, a1");
         for index in 16..64 {
             self.emit(format!("ld t0, {}(a1)", (index - 15) * 8));
             self.emit_sha256_rotr("t1", "t0", 7, "t2");
@@ -949,81 +1005,61 @@ impl CodeGenerator {
             self.emit_u32_normalize("t1");
             self.emit(format!("sd t1, {}(a1)", index * 8));
         }
-        for (round, constant) in K.iter().enumerate() {
-            self.emit("ld t0, 32(sp)");
-            self.emit_sha256_rotr("t1", "t0", 6, "t2");
-            self.emit_sha256_rotr("t3", "t0", 11, "t2");
-            self.emit("xor t1, t1, t3");
-            self.emit_sha256_rotr("t3", "t0", 25, "t2");
-            self.emit("xor t1, t1, t3");
-            self.emit("ld t2, 40(sp)");
-            self.emit("and t2, t0, t2");
-            self.emit("xori t3, t0, -1");
-            self.emit_u32_normalize("t3");
-            self.emit("ld t4, 48(sp)");
-            self.emit("and t3, t3, t4");
-            self.emit("xor t2, t2, t3");
-            self.emit("ld t3, 56(sp)");
-            self.emit("add t3, t3, t1");
-            self.emit("add t3, t3, t2");
-            self.emit(format!("li t1, {}", constant));
-            self.emit("add t3, t3, t1");
-            self.emit(format!("ld t1, {}(a1)", round * 8));
-            self.emit("add t3, t3, t1");
-            self.emit_u32_normalize("t3");
-            self.emit("sd t3, 80(sp)");
-
-            self.emit("ld t0, 0(sp)");
-            self.emit_sha256_rotr("t1", "t0", 2, "t2");
-            self.emit_sha256_rotr("t3", "t0", 13, "t2");
-            self.emit("xor t1, t1, t3");
-            self.emit_sha256_rotr("t3", "t0", 22, "t2");
-            self.emit("xor t1, t1, t3");
-            self.emit("ld t3, 8(sp)");
-            self.emit("and t2, t0, t3");
-            self.emit("ld t4, 16(sp)");
-            self.emit("and t5, t0, t4");
-            self.emit("xor t2, t2, t5");
-            self.emit("and t5, t3, t4");
-            self.emit("xor t2, t2, t5");
-            self.emit("add t1, t1, t2");
-            self.emit_u32_normalize("t1");
-            self.emit("sd t1, 88(sp)");
-
-            self.emit("ld t0, 48(sp)");
-            self.emit("sd t0, 56(sp)");
-            self.emit("ld t0, 40(sp)");
-            self.emit("sd t0, 48(sp)");
-            self.emit("ld t0, 32(sp)");
-            self.emit("sd t0, 40(sp)");
-            self.emit("ld t0, 24(sp)");
-            self.emit("ld t1, 80(sp)");
-            self.emit("add t0, t0, t1");
-            self.emit_u32_normalize("t0");
-            self.emit("sd t0, 32(sp)");
-            self.emit("ld t0, 16(sp)");
-            self.emit("sd t0, 24(sp)");
-            self.emit("ld t0, 8(sp)");
-            self.emit("sd t0, 16(sp)");
-            self.emit("ld t0, 0(sp)");
-            self.emit("sd t0, 8(sp)");
-            self.emit("ld t1, 80(sp)");
-            self.emit("ld t2, 88(sp)");
-            self.emit("add t1, t1, t2");
-            self.emit_u32_normalize("t1");
-            self.emit("sd t1, 0(sp)");
+        let mut state = ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"];
+        for (index, register) in state.iter().enumerate() {
+            self.emit(format!("ld {register}, {}(s1)", index * 8));
         }
-        self.emit("ld a0, 64(sp)");
-        for index in 0..8 {
-            self.emit(format!("ld t0, {}(a0)", index * 8));
-            self.emit(format!("ld t1, {}(sp)", index * 8));
-            self.emit("add t0, t0, t1");
+        for (round, constant) in K.iter().enumerate() {
+            let [a, b, c, d, e, f, g, h] = state;
+
+            self.emit_sha256_rotr("t0", e, 6, "t1");
+            self.emit_sha256_rotr("t2", e, 11, "t1");
+            self.emit("xor t0, t0, t2");
+            self.emit_sha256_rotr("t2", e, 25, "t1");
+            self.emit("xor t0, t0, t2");
+            self.emit(format!("and t3, {e}, {f}"));
+            self.emit(format!("xori t2, {e}, -1"));
+            self.emit_u32_normalize("t2");
+            self.emit(format!("and t2, t2, {g}"));
+            self.emit("xor t3, t3, t2");
+            self.emit(format!("add t4, {h}, t0"));
+            self.emit("add t4, t4, t3");
+            self.emit(format!("li t6, {constant}"));
+            self.emit("add t4, t4, t6");
+            self.emit(format!("ld t6, {}(s2)", round * 8));
+            self.emit("add t4, t4, t6");
+            self.emit_u32_normalize("t4");
+
+            self.emit_sha256_rotr("t0", a, 2, "t1");
+            self.emit_sha256_rotr("t2", a, 13, "t1");
+            self.emit("xor t0, t0, t2");
+            self.emit_sha256_rotr("t2", a, 22, "t1");
+            self.emit("xor t0, t0, t2");
+            self.emit(format!("and t3, {a}, {b}"));
+            self.emit(format!("and t5, {a}, {c}"));
+            self.emit("xor t3, t3, t5");
+            self.emit(format!("and t5, {b}, {c}"));
+            self.emit("xor t3, t3, t5");
+            self.emit("add t5, t0, t3");
+            self.emit_u32_normalize("t5");
+
+            self.emit(format!("add {d}, {d}, t4"));
+            self.emit_u32_normalize(d);
+            self.emit(format!("add {h}, t4, t5"));
+            self.emit_u32_normalize(h);
+            state = [h, a, b, c, d, e, f, g];
+        }
+        for (index, register) in state.iter().enumerate() {
+            self.emit(format!("ld t0, {}(s1)", index * 8));
+            self.emit(format!("add t0, t0, {register}"));
             self.emit_u32_normalize("t0");
-            self.emit(format!("sd t0, {}(a0)", index * 8));
+            self.emit(format!("sd t0, {}(s1)", index * 8));
         }
         self.emit("li a0, 0");
-        self.emit("ld ra, 104(sp)");
-        self.emit("addi sp, sp, 112");
+        self.emit("ld ra, 0(sp)");
+        self.emit("ld s1, 8(sp)");
+        self.emit("ld s2, 16(sp)");
+        self.emit("addi sp, sp, 32");
         self.emit("ret");
     }
 
@@ -1351,21 +1387,6 @@ impl CodeGenerator {
             0x1f83d9abfb41bd6b,
             0x5be0cd19137e2179,
         ];
-        const SIGMA: [[usize; 16]; 12] = [
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-            [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
-            [11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4],
-            [7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8],
-            [9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13],
-            [2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9],
-            [12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11],
-            [13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10],
-            [6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5],
-            [10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0],
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-            [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
-        ];
-
         const H_BASE: usize = 0;
         const V_BASE: usize = 64;
         const M_BASE: usize = 192;
@@ -1381,14 +1402,16 @@ impl CodeGenerator {
         const PREFIX: usize = 392;
         const PREFIX_LEN: usize = 400;
         const READ_LEN: usize = 408;
-        let frame = if segments {
-            432
+        let (frame, saved_ra) = if segments {
+            // The segmented reader owns slot 424 for its per-segment READ
+            // length. Keep the return address in a distinct aligned trailer.
+            (448, 440)
         } else if prefixed {
-            416
+            (432, 424)
         } else if streaming {
-            400
+            (400, 392)
         } else {
-            384
+            (384, 376)
         };
 
         let personal0 = u64::from_le_bytes(*b"ckb-defa");
@@ -1396,6 +1419,7 @@ impl CodeGenerator {
         let h = [IV[0] ^ 0x01010020, IV[1], IV[2], IV[3], IV[4], IV[5], IV[6] ^ personal0, IV[7] ^ personal1];
 
         self.emit_large_addi("sp", "sp", -frame);
+        self.emit_stack_store("ra", saved_ra);
         if segments {
             // a0=checked descriptors, a1=count, a2=index, a3=source,
             // a4=syscall, a5=out[32], a6=checked total concatenated length.
@@ -1455,17 +1479,16 @@ impl CodeGenerator {
         self.emit_stack_store("t2", CHUNK);
         let zero_loop = self.fresh_label("blake2b_var_zero_loop");
         let zero_done = self.fresh_label("blake2b_var_zero_done");
-        self.emit("li t0, 0");
+        // The message frame is 8-byte aligned. Clear it a machine word at a
+        // time: every non-final block is overwritten by the source read, but
+        // this bounded 16-store loop is still substantially cheaper than the
+        // former 128-iteration byte loop and keeps final-block padding exact.
+        self.emit_sp_addi("t0", M_BASE);
+        self.emit_sp_addi("t1", M_BASE + 128);
         self.emit_label(&zero_loop);
-        self.emit("li t1, 128");
-        self.emit("sltu t2, t0, t1");
-        self.emit(format!("beqz t2, {}", zero_done));
-        self.emit(format!("li t3, {}", M_BASE));
-        self.emit("add t3, sp, t3");
-        self.emit("add t3, t3, t0");
-        self.emit("sb zero, 0(t3)");
-        self.emit("addi t0, t0, 1");
-        self.emit(format!("j {}", zero_loop));
+        self.emit("sd zero, 0(t0)");
+        self.emit("addi t0, t0, 8");
+        self.emit(format!("bne t0, t1, {}", zero_loop));
         self.emit_label(&zero_done);
 
         if segments {
@@ -1530,6 +1553,7 @@ impl CodeGenerator {
             self.emit(format!("bltu t0, t1, {failure}"));
             self.emit(format!("j {next}"));
             self.emit_label(&failure);
+            self.emit_stack_load("ra", saved_ra);
             self.emit_large_addi("sp", "sp", frame);
             self.emit(format!("li a0, {}", CellScriptRuntimeError::SyscallFailed.code()));
             self.emit("ret");
@@ -1580,24 +1604,8 @@ impl CodeGenerator {
         self.emit_stack_store("t5", V_BASE + 14 * 8);
         self.emit_label(&not_final_label);
 
-        for round in SIGMA {
-            self.emit_blake2b_g(V_BASE, M_BASE, 0, 4, 8, 12, round[0], round[1]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 1, 5, 9, 13, round[2], round[3]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 2, 6, 10, 14, round[4], round[5]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 3, 7, 11, 15, round[6], round[7]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 0, 5, 10, 15, round[8], round[9]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 1, 6, 11, 12, round[10], round[11]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 2, 7, 8, 13, round[12], round[13]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 3, 4, 9, 14, round[14], round[15]);
-        }
-        for index in 0..8 {
-            self.emit_stack_load("t0", H_BASE + index * 8);
-            self.emit_stack_load("t1", V_BASE + index * 8);
-            self.emit("xor t0, t0, t1");
-            self.emit_stack_load("t1", V_BASE + (index + 8) * 8);
-            self.emit("xor t0, t0, t1");
-            self.emit_stack_store("t0", H_BASE + index * 8);
-        }
+        self.emit("mv a0, sp");
+        self.emit("call __cellscript_blake2b_compress");
         self.emit_stack_load("t0", POS);
         self.emit_stack_load("t1", CHUNK);
         self.emit("add t0, t0, t1");
@@ -1611,6 +1619,7 @@ impl CodeGenerator {
             self.emit_stack_load("t0", H_BASE + index * 8);
             self.emit(format!("sd t0, {}(t6)", index * 8));
         }
+        self.emit_stack_load("ra", saved_ra);
         self.emit_large_addi("sp", "sp", frame);
         self.emit("li a0, 0");
         self.emit("ret");
@@ -1751,6 +1760,9 @@ impl CodeGenerator {
         let (syscall, error) = match source {
             RuntimeByteSource::CellData => (abi.load_cell_data, CellScriptRuntimeError::CellLoadFailed),
             RuntimeByteSource::Witness => (abi.load_witness, CellScriptRuntimeError::SyscallFailed),
+            RuntimeByteSource::CellLock | RuntimeByteSource::CellType => {
+                unreachable!("Script fields do not use the CellData/Witness span-hash ABI")
+            }
         };
         self.emit_large_addi("sp", "sp", -FRAME);
         self.emit_stack_store("ra", RA);
@@ -1826,31 +1838,20 @@ impl CodeGenerator {
             0x1f83d9abfb41bd6b,
             0x5be0cd19137e2179,
         ];
-        const SIGMA: [[usize; 16]; 12] = [
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-            [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
-            [11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4],
-            [7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8],
-            [9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13],
-            [2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9],
-            [12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11],
-            [13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10],
-            [6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5],
-            [10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0],
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-            [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
-        ];
-
         const H_BASE: usize = 0;
         const V_BASE: usize = 64;
         const M_BASE: usize = 192;
-        const FRAME: usize = 320;
+        const RA: usize = 320;
+        const OUT: usize = 328;
+        const FRAME: usize = 336;
 
         let personal0 = u64::from_le_bytes(*b"ckb-defa");
         let personal1 = u64::from_le_bytes(*b"ult-hash");
         let h = [IV[0] ^ 0x01010020, IV[1], IV[2], IV[3], IV[4], IV[5], IV[6] ^ personal0, IV[7] ^ personal1];
 
         self.emit_large_addi("sp", "sp", -(FRAME as i64));
+        self.emit_stack_store("ra", RA);
+        self.emit_stack_store("a1", OUT);
         for (index, value) in h.iter().enumerate() {
             self.emit_blake2b_store_const(*value, H_BASE + index * 8);
         }
@@ -1874,29 +1875,14 @@ impl CodeGenerator {
         self.emit("xori t0, t0, -1");
         self.emit_stack_store("t0", V_BASE + 14 * 8);
 
-        for round in SIGMA {
-            self.emit_blake2b_g(V_BASE, M_BASE, 0, 4, 8, 12, round[0], round[1]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 1, 5, 9, 13, round[2], round[3]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 2, 6, 10, 14, round[4], round[5]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 3, 7, 11, 15, round[6], round[7]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 0, 5, 10, 15, round[8], round[9]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 1, 6, 11, 12, round[10], round[11]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 2, 7, 8, 13, round[12], round[13]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 3, 4, 9, 14, round[14], round[15]);
-        }
-
-        for index in 0..8 {
-            self.emit_stack_load("t0", H_BASE + index * 8);
-            self.emit_stack_load("t1", V_BASE + index * 8);
-            self.emit("xor t0, t0, t1");
-            self.emit_stack_load("t1", V_BASE + (index + 8) * 8);
-            self.emit("xor t0, t0, t1");
-            self.emit_stack_store("t0", H_BASE + index * 8);
-        }
+        self.emit("mv a0, sp");
+        self.emit("call __cellscript_blake2b_compress");
+        self.emit_stack_load("a1", OUT);
         for index in 0..4 {
             self.emit_stack_load("t0", H_BASE + index * 8);
             self.emit(format!("sd t0, {}(a1)", index * 8));
         }
+        self.emit_stack_load("ra", RA);
         self.emit_large_addi("sp", "sp", FRAME as i64);
         self.emit("li a0, 0");
         self.emit("ret");
@@ -1921,31 +1907,20 @@ impl CodeGenerator {
             0x1f83d9abfb41bd6b,
             0x5be0cd19137e2179,
         ];
-        const SIGMA: [[usize; 16]; 12] = [
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-            [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
-            [11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4],
-            [7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8],
-            [9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13],
-            [2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9],
-            [12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11],
-            [13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10],
-            [6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5],
-            [10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0],
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-            [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
-        ];
-
         const H_BASE: usize = 0;
         const V_BASE: usize = 64;
         const M_BASE: usize = 192;
-        const FRAME: usize = 320;
+        const RA: usize = 320;
+        const OUT: usize = 328;
+        const FRAME: usize = 336;
 
         let personal0 = u64::from_le_bytes(*b"ckb-defa");
         let personal1 = u64::from_le_bytes(*b"ult-hash");
         let h = [IV[0] ^ 0x01010020, IV[1], IV[2], IV[3], IV[4], IV[5], IV[6] ^ personal0, IV[7] ^ personal1];
 
         self.emit_large_addi("sp", "sp", -(FRAME as i64));
+        self.emit_stack_store("ra", RA);
+        self.emit_stack_store("a2", OUT);
         for (index, value) in h.iter().enumerate() {
             self.emit_blake2b_store_const(*value, H_BASE + index * 8);
         }
@@ -1972,29 +1947,14 @@ impl CodeGenerator {
         self.emit("xori t0, t0, -1");
         self.emit_stack_store("t0", V_BASE + 14 * 8);
 
-        for round in SIGMA {
-            self.emit_blake2b_g(V_BASE, M_BASE, 0, 4, 8, 12, round[0], round[1]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 1, 5, 9, 13, round[2], round[3]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 2, 6, 10, 14, round[4], round[5]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 3, 7, 11, 15, round[6], round[7]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 0, 5, 10, 15, round[8], round[9]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 1, 6, 11, 12, round[10], round[11]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 2, 7, 8, 13, round[12], round[13]);
-            self.emit_blake2b_g(V_BASE, M_BASE, 3, 4, 9, 14, round[14], round[15]);
-        }
-
-        for index in 0..8 {
-            self.emit_stack_load("t0", H_BASE + index * 8);
-            self.emit_stack_load("t1", V_BASE + index * 8);
-            self.emit("xor t0, t0, t1");
-            self.emit_stack_load("t1", V_BASE + (index + 8) * 8);
-            self.emit("xor t0, t0, t1");
-            self.emit_stack_store("t0", H_BASE + index * 8);
-        }
+        self.emit("mv a0, sp");
+        self.emit("call __cellscript_blake2b_compress");
+        self.emit_stack_load("a2", OUT);
         for index in 0..4 {
             self.emit_stack_load("t0", H_BASE + index * 8);
             self.emit(format!("sd t0, {}(a2)", index * 8));
         }
+        self.emit_stack_load("ra", RA);
         self.emit_large_addi("sp", "sp", FRAME as i64);
         self.emit("li a0, 0");
         self.emit("ret");
@@ -2022,64 +1982,89 @@ impl CodeGenerator {
         self.emit_stack_store("t0", stack_offset);
     }
 
-    fn emit_blake2b_rotr(&mut self, register: &str, bits: usize) {
-        self.emit(format!("srli t1, {}, {}", register, bits));
-        self.emit(format!("slli {}, {}, {}", register, register, 64 - bits));
-        self.emit(format!("or {}, {}, t1", register, register));
+    /// Shared BLAKE2b compression over one caller-owned state frame.
+    ///
+    /// `a0` points to the common `[h(64), v(128), m(128)]` layout used by
+    /// fixed, variable, transaction-span, prefixed-span, and gather hashing.
+    /// The caller initializes counters/final flags and retains ownership of
+    /// the frame; this leaf helper performs only the twelve rounds and the
+    /// final `h ^= v[0..8] ^ v[8..16]` merge.
+    fn emit_runtime_blake2b_compress(&mut self) {
+        const H_BASE: usize = 0;
+        const V_BASE: usize = 64;
+        const M_BASE: usize = 192;
+        const V_REGISTERS: [&str; 16] =
+            ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "t0", "t1", "t2", "t3", "t4", "t5", "t6", "ra"];
+        self.emit_global("__cellscript_blake2b_compress");
+        self.emit_label("__cellscript_blake2b_compress");
+        self.emit(
+            "# cellscript abi: shared BLAKE2b compression; a0=caller state frame; clobbers caller-saved registers; preserves s1-s3",
+        );
+        self.emit("addi sp, sp, -32");
+        self.emit("sd ra, 0(sp)");
+        self.emit("sd s1, 8(sp)");
+        self.emit("sd s2, 16(sp)");
+        self.emit("sd s3, 24(sp)");
+        self.emit("mv s1, a0");
+        for (index, register) in V_REGISTERS.iter().enumerate() {
+            self.emit(format!("ld {register}, {}(s1)", V_BASE + index * 8));
+        }
+        for round in BLAKE2B_SIGMA {
+            self.emit_blake2b_register_g(&V_REGISTERS, M_BASE, 0, 4, 8, 12, round[0], round[1]);
+            self.emit_blake2b_register_g(&V_REGISTERS, M_BASE, 1, 5, 9, 13, round[2], round[3]);
+            self.emit_blake2b_register_g(&V_REGISTERS, M_BASE, 2, 6, 10, 14, round[4], round[5]);
+            self.emit_blake2b_register_g(&V_REGISTERS, M_BASE, 3, 7, 11, 15, round[6], round[7]);
+            self.emit_blake2b_register_g(&V_REGISTERS, M_BASE, 0, 5, 10, 15, round[8], round[9]);
+            self.emit_blake2b_register_g(&V_REGISTERS, M_BASE, 1, 6, 11, 12, round[10], round[11]);
+            self.emit_blake2b_register_g(&V_REGISTERS, M_BASE, 2, 7, 8, 13, round[12], round[13]);
+            self.emit_blake2b_register_g(&V_REGISTERS, M_BASE, 3, 4, 9, 14, round[14], round[15]);
+        }
+        for index in 0..8 {
+            self.emit(format!("ld s2, {}(s1)", H_BASE + index * 8));
+            self.emit(format!("xor s2, s2, {}", V_REGISTERS[index]));
+            self.emit(format!("xor s2, s2, {}", V_REGISTERS[index + 8]));
+            self.emit(format!("sd s2, {}(s1)", H_BASE + index * 8));
+        }
+        self.emit("ld ra, 0(sp)");
+        self.emit("ld s1, 8(sp)");
+        self.emit("ld s2, 16(sp)");
+        self.emit("ld s3, 24(sp)");
+        self.emit("addi sp, sp, 32");
+        self.emit("ret");
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn emit_blake2b_g(&mut self, v_base: usize, m_base: usize, a: usize, b: usize, c: usize, d: usize, mx: usize, my: usize) {
-        let va = v_base + a * 8;
-        let vb = v_base + b * 8;
-        let vc = v_base + c * 8;
-        let vd = v_base + d * 8;
-        let vmx = m_base + mx * 8;
-        let vmy = m_base + my * 8;
+    fn emit_blake2b_register_g(
+        &mut self,
+        v: &[&str; 16],
+        m_base: usize,
+        a: usize,
+        b: usize,
+        c: usize,
+        d: usize,
+        mx: usize,
+        my: usize,
+    ) {
+        self.emit(format!("add {}, {}, {}", v[a], v[a], v[b]));
+        self.emit(format!("ld s2, {}(s1)", m_base + mx * 8));
+        self.emit(format!("add {}, {}, s2", v[a], v[a]));
+        self.emit(format!("xor {}, {}, {}", v[d], v[d], v[a]));
+        self.emit_blake2b_register_rotr(v[d], 32);
+        self.emit(format!("add {}, {}, {}", v[c], v[c], v[d]));
+        self.emit(format!("xor {}, {}, {}", v[b], v[b], v[c]));
+        self.emit_blake2b_register_rotr(v[b], 24);
+        self.emit(format!("add {}, {}, {}", v[a], v[a], v[b]));
+        self.emit(format!("ld s2, {}(s1)", m_base + my * 8));
+        self.emit(format!("add {}, {}, s2", v[a], v[a]));
+        self.emit(format!("xor {}, {}, {}", v[d], v[d], v[a]));
+        self.emit_blake2b_register_rotr(v[d], 16);
+        self.emit(format!("add {}, {}, {}", v[c], v[c], v[d]));
+        self.emit(format!("xor {}, {}, {}", v[b], v[b], v[c]));
+        self.emit_blake2b_register_rotr(v[b], 63);
+    }
 
-        self.emit_stack_load("t0", va);
-        self.emit_stack_load("t1", vb);
-        self.emit("add t0, t0, t1");
-        self.emit_stack_load("t1", vmx);
-        self.emit("add t0, t0, t1");
-        self.emit_stack_store("t0", va);
-        self.emit_stack_load("t0", vd);
-        self.emit_stack_load("t1", va);
-        self.emit("xor t0, t0, t1");
-        self.emit_blake2b_rotr("t0", 32);
-        self.emit_stack_store("t0", vd);
-
-        self.emit_stack_load("t0", vc);
-        self.emit_stack_load("t1", vd);
-        self.emit("add t0, t0, t1");
-        self.emit_stack_store("t0", vc);
-        self.emit_stack_load("t0", vb);
-        self.emit_stack_load("t1", vc);
-        self.emit("xor t0, t0, t1");
-        self.emit_blake2b_rotr("t0", 24);
-        self.emit_stack_store("t0", vb);
-
-        self.emit_stack_load("t0", va);
-        self.emit_stack_load("t1", vb);
-        self.emit("add t0, t0, t1");
-        self.emit_stack_load("t1", vmy);
-        self.emit("add t0, t0, t1");
-        self.emit_stack_store("t0", va);
-        self.emit_stack_load("t0", vd);
-        self.emit_stack_load("t1", va);
-        self.emit("xor t0, t0, t1");
-        self.emit_blake2b_rotr("t0", 16);
-        self.emit_stack_store("t0", vd);
-
-        self.emit_stack_load("t0", vc);
-        self.emit_stack_load("t1", vd);
-        self.emit("add t0, t0, t1");
-        self.emit_stack_store("t0", vc);
-        self.emit_stack_load("t0", vb);
-        self.emit_stack_load("t1", vc);
-        self.emit("xor t0, t0, t1");
-        self.emit_blake2b_rotr("t0", 63);
-        self.emit_stack_store("t0", vb);
+    fn emit_blake2b_register_rotr(&mut self, register: &str, bits: usize) {
+        self.emit(format!("rori {register}, {register}, {bits}"));
     }
 
     fn emit_runtime_witness_count_helper(&mut self, enabled: bool) {
@@ -2125,8 +2110,7 @@ impl CodeGenerator {
         self.emit("li a1, 0");
         self.emit(format!("j {done}"));
         self.emit_label(&failed);
-        self.emit("li a0, 0");
-        self.emit(format!("li a1, {}", CellScriptRuntimeError::SyscallFailed.code()));
+        self.emit_process_failure(CellScriptRuntimeError::SyscallFailed);
         self.emit_label(&done);
         self.emit_stack_load("ra", RA);
         self.emit(format!("addi sp, sp, {FRAME}"));
@@ -2135,90 +2119,271 @@ impl CodeGenerator {
 
     fn emit_runtime_exact_byte_word_helper(&mut self, symbol: &str, source: RuntimeByteSource, width: usize, enabled: bool) {
         debug_assert!(matches!(width, 1 | 4 | 8));
-        const OFFSET: usize = 0;
-        const SIZE: usize = 8;
-        const BUFFER: usize = 16;
-        const RA: usize = 24;
-        const FRAME: usize = 32;
         self.emit_global(symbol);
         self.emit_label(symbol);
-        self.emit(format!("# cellscript abi: a0=SourceView, a1=offset; exactly {width} little-endian bytes; a0=value, a1=error"));
+        self.emit(format!(
+            "# cellscript abi: a0=SourceView, a1=offset, a2=function-local read cache; exactly {width} little-endian bytes"
+        ));
         if !enabled {
             self.emit_fail(CellScriptRuntimeError::SyscallFailed);
             return;
         }
-        let invalid = self.fresh_label("exact_word_invalid_source");
-        let ready = self.fresh_label("exact_word_source_ready");
-        let failed = self.fresh_label("exact_word_read_failed");
-        let done = self.fresh_label("exact_word_done");
+        let kind = match source {
+            RuntimeByteSource::CellData => 0,
+            RuntimeByteSource::Witness => 1,
+            RuntimeByteSource::CellLock => 2,
+            RuntimeByteSource::CellType => 3,
+        };
+        // The entry function keeps the most-recent validated source window in
+        // callee-saved registers. Small scalar reads can therefore avoid both
+        // the four-way metadata scan and its generic width dispatch.
+        if self.module_uses_exact_read_hot_cache && width <= 4 {
+            let slow = self.fresh_label("exact_read_scalar_slow");
+            self.emit(format!("beqz s10, {slow}"));
+            self.emit(format!("bne s9, a0, {slow}"));
+            self.emit(format!("li t0, {kind}"));
+            self.emit(format!("bne s8, t0, {slow}"));
+            self.emit(format!("bltu a1, s7, {slow}"));
+            self.emit("sub t4, a1, s7");
+            self.emit(format!("bltu s6, t4, {slow}"));
+            self.emit("sub t1, s6, t4");
+            self.emit(format!("li t2, {width}"));
+            self.emit(format!("bltu t1, t2, {slow}"));
+            self.emit("add t0, s5, t4");
+            self.emit("lbu a0, 0(t0)");
+            for byte in 1..width {
+                self.emit(format!("lbu t1, {byte}(t0)"));
+                self.emit(format!("slli t1, t1, {}", byte * 8));
+                self.emit("or a0, a0, t1");
+            }
+            self.emit("li a1, 0");
+            self.emit("ret");
+            self.emit_label(&slow);
+        }
+        self.emit(format!("li a3, {width}"));
+        self.emit(format!("li a4, {kind}"));
+        self.emit("j __cellscript_exact_read_cached");
+    }
+
+    fn emit_runtime_exact_read_cached(&mut self) {
+        const VIEW: usize = 0;
+        const START: usize = 8;
+        const LEN: usize = 16;
+        const VALID: usize = 24;
+        const KIND: usize = 32;
+        const WIDTH: usize = 40;
+        const CACHE_BASE: usize = 48;
+        const BUFFER: usize = 56;
+        const CAPACITY: usize = RUNTIME_EXACT_READ_CACHE_CAPACITY;
+        const LAST: usize = 8;
+        let scan = self.fresh_label("exact_read_cache_scan");
+        let miss = self.fresh_label("exact_read_cache_miss");
+        let source_ready = self.fresh_label("exact_read_source_ready");
+        let cell_data_syscall = self.fresh_label("exact_read_cell_data_syscall");
+        let witness_syscall = self.fresh_label("exact_read_witness_syscall");
+        let lock_syscall = self.fresh_label("exact_read_lock_syscall");
+        let type_syscall = self.fresh_label("exact_read_type_syscall");
+        let syscall_ready = self.fresh_label("exact_read_syscall_ready");
+        let syscall_status_ok = self.fresh_label("exact_read_syscall_status_ok");
+        let len_ready = self.fresh_label("exact_read_cache_len_ready");
+        let load = self.fresh_label("exact_read_cache_load");
+        let load1 = self.fresh_label("exact_read_u8");
+        let load4 = self.fresh_label("exact_read_u32");
+        let load8 = self.fresh_label("exact_read_u64");
+        let success = self.fresh_label("exact_read_success");
+        let invalid = self.fresh_label("exact_read_invalid_source");
+        let failed = self.fresh_label("exact_read_failed");
+        let failed_witness = self.fresh_label("exact_read_failed_witness");
         let abi = self.runtime_abi();
-        self.emit(format!("addi sp, sp, -{FRAME}"));
-        self.emit_stack_store("ra", RA);
-        self.emit_stack_store("a1", OFFSET);
+
+        self.emit_global("__cellscript_exact_read_cached");
+        self.emit_label("__cellscript_exact_read_cached");
+        self.emit(format!(
+            "# cellscript abi: four-way source-bound {CAPACITY}-byte exact-read windows; a0=view,a1=offset,a2=cache,a3=width,a4=kind"
+        ));
+        if self.module_uses_exact_read_hot_cache {
+            self.emit(format!("beqz s10, {scan}"));
+            self.emit(format!("bne s9, a0, {scan}"));
+            self.emit(format!("bne s8, a4, {scan}"));
+            self.emit(format!("bltu a1, s7, {scan}"));
+            self.emit("sub t4, a1, s7");
+            self.emit(format!("bltu s6, t4, {scan}"));
+            self.emit("sub t1, s6, t4");
+            self.emit(format!("bltu t1, a3, {scan}"));
+            self.emit("mv a6, s10");
+            self.emit(format!("j {load}"));
+        } else {
+            self.emit(format!("ld a6, {LAST}(a2)"));
+            self.emit(format!("beqz a6, {scan}"));
+            self.emit(format!("ld t0, {VALID}(a6)"));
+            self.emit(format!("beqz t0, {scan}"));
+            self.emit(format!("ld t0, {VIEW}(a6)"));
+            self.emit(format!("bne t0, a0, {scan}"));
+            self.emit(format!("ld t0, {KIND}(a6)"));
+            self.emit(format!("bne t0, a4, {scan}"));
+            self.emit(format!("ld t0, {START}(a6)"));
+            self.emit(format!("bltu a1, t0, {scan}"));
+            self.emit("sub t4, a1, t0");
+            self.emit(format!("ld t1, {LEN}(a6)"));
+            self.emit(format!("bltu t1, t4, {scan}"));
+            self.emit("sub t1, t1, t4");
+            self.emit(format!("bltu t1, a3, {scan}"));
+            self.emit(format!("j {load}"));
+        }
+
+        self.emit_label(&scan);
+        for way in 0..RUNTIME_EXACT_READ_CACHE_WAYS {
+            let next = self.fresh_label("exact_read_cache_next_way");
+            self.emit(format!("addi a6, a2, {}", self.exact_read_cache_header_size() + way * RUNTIME_EXACT_READ_CACHE_ENTRY_SIZE));
+            self.emit(format!("ld t0, {VALID}(a6)"));
+            self.emit(format!("beqz t0, {next}"));
+            self.emit(format!("ld t0, {VIEW}(a6)"));
+            self.emit(format!("bne t0, a0, {next}"));
+            self.emit(format!("ld t0, {KIND}(a6)"));
+            self.emit(format!("bne t0, a4, {next}"));
+            self.emit(format!("ld t0, {START}(a6)"));
+            self.emit(format!("bltu a1, t0, {next}"));
+            self.emit("sub t4, a1, t0");
+            self.emit(format!("ld t1, {LEN}(a6)"));
+            self.emit(format!("bltu t1, t4, {next}"));
+            self.emit("sub t1, t1, t4");
+            self.emit(format!("bltu t1, a3, {next}"));
+            self.emit(format!("sd a6, {LAST}(a2)"));
+            if self.module_uses_exact_read_hot_cache {
+                self.emit("mv s10, a6");
+                self.emit("mv s9, a0");
+                self.emit("mv s8, a4");
+                self.emit(format!("ld s7, {START}(a6)"));
+                self.emit(format!("ld s6, {LEN}(a6)"));
+                self.emit(format!("addi s5, a6, {BUFFER}"));
+            }
+            self.emit(format!("j {load}"));
+            self.emit_label(&next);
+        }
+        self.emit(format!("j {miss}"));
+
+        self.emit_label(&miss);
+        self.emit("ld t0, 0(a2)");
+        self.emit("addi t1, t0, 1");
+        self.emit(format!("li t2, {}", RUNTIME_EXACT_READ_CACHE_WAYS - 1));
+        self.emit("and t1, t1, t2");
+        self.emit("sd t1, 0(a2)");
+        self.emit(format!("li t2, {RUNTIME_EXACT_READ_CACHE_ENTRY_SIZE}"));
+        self.emit("mul t1, t0, t2");
+        self.emit("add a6, a2, t1");
+        self.emit(format!("addi a6, a6, {}", self.exact_read_cache_header_size()));
+        self.emit(format!("sd zero, {VALID}(a6)"));
+        self.emit(format!("sd a0, {VIEW}(a6)"));
+        self.emit(format!("sd a1, {START}(a6)"));
+        self.emit(format!("sd a4, {KIND}(a6)"));
+        self.emit(format!("sd a3, {WIDTH}(a6)"));
+        self.emit(format!("sd a2, {CACHE_BASE}(a6)"));
         self.emit_decode_source_view_to_t1_t2(&invalid);
-        // Decoding clobbers t0..t6; the requested offset lives on the stack.
-        // Neither syscall accepts a HeaderDep here. Witnesses also have no
-        // CellDep source; absolute Output is a supported witness-vector alias.
         for allowed in
             [CKB_SOURCE_INPUT, CKB_SOURCE_OUTPUT, CKB_SOURCE_GROUP_FLAG | CKB_SOURCE_INPUT, CKB_SOURCE_GROUP_FLAG | CKB_SOURCE_OUTPUT]
         {
             self.emit(format!("li t0, {allowed}"));
-            self.emit(format!("beq t0, t2, {ready}"));
+            self.emit(format!("beq t0, t2, {source_ready}"));
         }
-        if matches!(source, RuntimeByteSource::CellData) {
-            self.emit(format!("li t0, {CKB_SOURCE_CELL_DEP}"));
-            self.emit(format!("beq t0, t2, {ready}"));
-        }
+        self.emit(format!("li t0, {CKB_SOURCE_CELL_DEP}"));
+        self.emit(format!("bne t0, t2, {invalid}"));
+        self.emit(format!("ld t0, {KIND}(a6)"));
+        self.emit("li t3, 1");
+        self.emit(format!("beq t0, t3, {invalid}"));
+
+        self.emit_label(&source_ready);
+        self.emit(format!("li t0, {CAPACITY}"));
+        self.emit(format!("sd t0, {LEN}(a6)"));
+        self.emit(format!("addi a0, a6, {BUFFER}"));
+        self.emit(format!("addi a1, a6, {LEN}"));
+        self.emit(format!("ld a2, {START}(a6)"));
+        self.emit("mv a3, t1");
+        self.emit("mv a4, t2");
+        self.emit(format!("ld t0, {KIND}(a6)"));
+        self.emit(format!("beqz t0, {cell_data_syscall}"));
+        self.emit("li t3, 1");
+        self.emit(format!("beq t0, t3, {witness_syscall}"));
+        self.emit("li t3, 2");
+        self.emit(format!("beq t0, t3, {lock_syscall}"));
+        self.emit("li t3, 3");
+        self.emit(format!("beq t0, t3, {type_syscall}"));
         self.emit(format!("j {invalid}"));
-        self.emit_label(&ready);
-        self.emit(format!("li t0, {width}"));
-        self.emit_stack_store("t0", SIZE);
-        self.emit(format!("addi a0, sp, {BUFFER}"));
-        self.emit(format!("addi a1, sp, {SIZE}"));
-        self.emit_stack_load("a2", OFFSET);
-        self.emit("addi a3, t1, 0");
-        self.emit("addi a4, t2, 0");
-        self.emit(format!(
-            "li a7, {}",
-            match source {
-                RuntimeByteSource::CellData => abi.load_cell_data,
-                RuntimeByteSource::Witness => abi.load_witness,
-            }
-        ));
+        self.emit_label(&cell_data_syscall);
+        self.emit(format!("li a7, {}", abi.load_cell_data));
+        self.emit(format!("j {syscall_ready}"));
+        self.emit_label(&witness_syscall);
+        self.emit(format!("li a7, {}", abi.load_witness));
+        self.emit(format!("j {syscall_ready}"));
+        self.emit_label(&lock_syscall);
+        self.emit(format!("li a5, {CKB_CELL_FIELD_LOCK}"));
+        self.emit(format!("li a7, {}", abi.load_cell_by_field));
+        self.emit(format!("j {syscall_ready}"));
+        self.emit_label(&type_syscall);
+        self.emit(format!("li a5, {CKB_CELL_FIELD_TYPE}"));
+        self.emit(format!("li a7, {}", abi.load_cell_by_field));
+        self.emit_label(&syscall_ready);
         self.emit("ecall");
-        self.emit(format!("bnez a0, {failed}"));
-        // Raw syscalls report SUCCESS for short reads too. The returned length
-        // is the full remaining length, not necessarily the number copied.
-        self.emit_stack_load("t0", SIZE);
-        self.emit(format!("li t1, {width}"));
-        self.emit(format!("bltu t0, t1, {failed}"));
-        self.emit("li a0, 0");
-        for byte in 0..width {
-            self.emit_stack_load_byte("t0", BUFFER + byte);
-            if byte != 0 {
-                self.emit(format!("slli t0, t0, {}", byte * 8));
-            }
-            self.emit("or a0, a0, t0");
+        self.emit(format!("beqz a0, {syscall_status_ok}"));
+        self.emit(format!("li t0, {CKB_LENGTH_NOT_ENOUGH}"));
+        self.emit(format!("bne a0, t0, {failed}"));
+        self.emit_label(&syscall_status_ok);
+        self.emit(format!("ld t0, {LEN}(a6)"));
+        self.emit(format!("li t1, {CAPACITY}"));
+        self.emit(format!("bltu t0, t1, {len_ready}"));
+        self.emit("mv t0, t1");
+        self.emit_label(&len_ready);
+        self.emit(format!("sd t0, {LEN}(a6)"));
+        self.emit(format!("ld a3, {WIDTH}(a6)"));
+        self.emit(format!("bltu t0, a3, {failed}"));
+        self.emit("li t1, 1");
+        self.emit(format!("sd t1, {VALID}(a6)"));
+        self.emit(format!("ld t2, {CACHE_BASE}(a6)"));
+        self.emit(format!("sd a6, {LAST}(t2)"));
+        if self.module_uses_exact_read_hot_cache {
+            self.emit("mv s10, a6");
+            self.emit(format!("ld s9, {VIEW}(a6)"));
+            self.emit(format!("ld s8, {KIND}(a6)"));
+            self.emit(format!("ld s7, {START}(a6)"));
+            self.emit(format!("ld s6, {LEN}(a6)"));
+            self.emit(format!("addi s5, a6, {BUFFER}"));
         }
-        self.emit("li a1, 0");
-        self.emit(format!("j {done}"));
-        self.emit_label(&invalid);
-        self.emit("li a0, 0");
-        self.emit(format!("li a1, {}", CellScriptRuntimeError::CkbSourceViewInvalid.code()));
-        self.emit(format!("j {done}"));
-        self.emit_label(&failed);
-        self.emit("li a0, 0");
-        self.emit(format!(
-            "li a1, {}",
-            match source {
-                RuntimeByteSource::CellData => CellScriptRuntimeError::CellLoadFailed.code(),
-                RuntimeByteSource::Witness => CellScriptRuntimeError::SyscallFailed.code(),
+        self.emit("li t4, 0");
+
+        self.emit_label(&load);
+        self.emit(format!("addi t0, a6, {BUFFER}"));
+        self.emit("add t0, t0, t4");
+        self.emit("li t1, 1");
+        self.emit(format!("beq a3, t1, {load1}"));
+        self.emit("li t1, 4");
+        self.emit(format!("beq a3, t1, {load4}"));
+        self.emit(format!("j {load8}"));
+        self.emit_label(&load1);
+        self.emit("lbu a0, 0(t0)");
+        self.emit(format!("j {success}"));
+        for (label, width) in [(&load4, 4usize), (&load8, 8usize)] {
+            self.emit_label(label);
+            self.emit("li a0, 0");
+            for byte in 0..width {
+                self.emit(format!("lbu t1, {byte}(t0)"));
+                if byte != 0 {
+                    self.emit(format!("slli t1, t1, {}", byte * 8));
+                }
+                self.emit("or a0, a0, t1");
             }
-        ));
-        self.emit_label(&done);
-        self.emit_stack_load("ra", RA);
-        self.emit(format!("addi sp, sp, {FRAME}"));
+            self.emit(format!("j {success}"));
+        }
+        self.emit_label(&success);
+        self.emit("li a1, 0");
         self.emit("ret");
+
+        self.emit_label(&invalid);
+        self.emit_process_failure(CellScriptRuntimeError::CkbSourceViewInvalid);
+        self.emit_label(&failed);
+        self.emit(format!("ld t0, {KIND}(a6)"));
+        self.emit(format!("bnez t0, {failed_witness}"));
+        self.emit_process_failure(CellScriptRuntimeError::CellLoadFailed);
+        self.emit_label(&failed_witness);
+        self.emit_process_failure(CellScriptRuntimeError::SyscallFailed);
     }
 
     /// a0=absolute CellDep index, a1=argc (0..=4), a2..a5=bytes (0..=255).
@@ -2457,12 +2622,9 @@ impl CodeGenerator {
         self.emit("li a1, 0");
         self.emit(format!("j {done}"));
         self.emit_label(&invalid);
-        self.emit("li a0, 0");
-        self.emit(format!("li a1, {}", CellScriptRuntimeError::CkbSourceViewInvalid.code()));
-        self.emit(format!("j {done}"));
+        self.emit_process_failure(CellScriptRuntimeError::CkbSourceViewInvalid);
         self.emit_label(&failed);
-        self.emit("li a0, 0");
-        self.emit(format!("li a1, {}", CellScriptRuntimeError::CellLoadFailed.code()));
+        self.emit_process_failure(CellScriptRuntimeError::CellLoadFailed);
         self.emit_label(&done);
         self.emit_stack_load("ra", RA);
         self.emit(format!("addi sp, sp, {FRAME}"));
@@ -2529,8 +2691,7 @@ impl CodeGenerator {
         self.emit("# cellscript abi: witness byte size via LOAD_WITNESS");
         self.emit("# cellscript abi: args a0=SourceView; returns a0=size, a1=0 on success, a1=error_code on failure");
         if !enabled {
-            self.emit(format!("li a1, {}", CellScriptRuntimeError::SyscallFailed.code()));
-            self.emit("ret");
+            self.emit_process_failure(CellScriptRuntimeError::SyscallFailed);
             return;
         }
         let invalid = self.fresh_label("witness_size_source_invalid");
@@ -2561,16 +2722,10 @@ impl CodeGenerator {
         self.emit(format!("j {}", done));
 
         self.emit_label(&invalid);
-        self.emit(format!("li a1, {}", CellScriptRuntimeError::CkbSourceViewInvalid.code()));
-        self.emit(format!("ld ra, {}(sp)", RA_OFFSET));
-        self.emit(format!("addi sp, sp, {}", FRAME_SIZE));
-        self.emit("ret");
+        self.emit_process_failure(CellScriptRuntimeError::CkbSourceViewInvalid);
 
         self.emit_label(&failed);
-        self.emit(format!("li a1, {}", CellScriptRuntimeError::SyscallFailed.code()));
-        self.emit(format!("ld ra, {}(sp)", RA_OFFSET));
-        self.emit(format!("addi sp, sp, {}", FRAME_SIZE));
-        self.emit("ret");
+        self.emit_process_failure(CellScriptRuntimeError::SyscallFailed);
 
         self.emit_label(&done);
         self.emit(format!("ld a0, {}(sp)", SIZE_OFFSET));
@@ -2989,28 +3144,20 @@ impl CodeGenerator {
         self.emit_label(symbol);
         self.emit(format!("# cellscript abi: CKB SourceView helper ({})", detail));
         if !enabled {
-            self.emit(format!("li a0, {}", CellScriptRuntimeError::SyscallFailed.code()));
-            self.emit("addi a1, a0, 0");
-            self.emit("ret");
+            self.emit_process_failure(CellScriptRuntimeError::SyscallFailed);
             return;
         }
         let invalid = self.fresh_label("source_view_index_invalid");
-        let done = self.fresh_label("source_view_encoded");
         // Bits at or above the shift would carry into the view tag and
         // silently re-route the request to another source family.
-        self.emit(format!("li t1, {}", CKB_SOURCE_VIEW_SHIFT));
-        self.emit("sltu t2, a0, t1");
-        self.emit(format!("beqz t2, {}", invalid));
+        self.emit("srli t1, a0, 32");
+        self.emit(format!("bnez t1, {}", invalid));
         self.emit(format!("li t0, {}", source_view));
-        self.emit("mul t0, t0, t1");
+        self.emit("slli t0, t0, 32");
         self.emit("add a0, a0, t0");
-        self.emit("li a1, 0");
-        self.emit(format!("j {}", done));
-        self.emit_label(&invalid);
-        self.emit("li a0, 0");
-        self.emit(format!("li a1, {}", CellScriptRuntimeError::CkbSourceViewInvalid.code()));
-        self.emit_label(&done);
         self.emit("ret");
+        self.emit_label(&invalid);
+        self.emit_process_failure(CellScriptRuntimeError::CkbSourceViewInvalid);
     }
 
     fn emit_runtime_ckb_since_epoch_helper(&mut self, symbol: &str, relative: bool, detail: &str, enabled: bool) {
@@ -3064,26 +3211,30 @@ impl CodeGenerator {
 
     pub(super) fn emit_decode_source_view_to_t1_t2(&mut self, invalid_label: &str) {
         let done = self.fresh_label("source_view_decoded");
-        self.emit(format!("li t6, {}", CKB_SOURCE_VIEW_SHIFT));
-        self.emit("div t0, a0, t6");
-        self.emit("rem t1, a0, t6");
-        for (view, source) in [
-            (CKB_SOURCE_VIEW_INPUT, CKB_SOURCE_INPUT),
-            (CKB_SOURCE_VIEW_OUTPUT, CKB_SOURCE_OUTPUT),
-            (CKB_SOURCE_VIEW_CELL_DEP, CKB_SOURCE_CELL_DEP),
-            (CKB_SOURCE_VIEW_HEADER_DEP, CKB_SOURCE_HEADER_DEP),
-            (CKB_SOURCE_VIEW_GROUP_INPUT, CKB_SOURCE_GROUP_FLAG | CKB_SOURCE_INPUT),
-            (CKB_SOURCE_VIEW_GROUP_OUTPUT, CKB_SOURCE_GROUP_FLAG | CKB_SOURCE_OUTPUT),
-        ] {
-            let next = self.fresh_label("source_view_next");
-            self.emit(format!("li t5, {}", view));
-            self.emit("sub t4, t0, t5");
-            self.emit(format!("bnez t4, {}", next));
-            self.emit(format!("li t2, {}", source));
-            self.emit(format!("j {}", done));
-            self.emit_label(&next);
-        }
-        self.emit(format!("j {}", invalid_label));
+        debug_assert_eq!(CKB_SOURCE_VIEW_SHIFT, 1u64 << 32);
+        // SourceView is a pair of u32 values, not an arithmetic quotient.
+        // Shifts avoid a wide immediate plus the VM's expensive DIV/REM path.
+        self.emit("srli t0, a0, 32");
+        self.emit("slli t1, a0, 32");
+        self.emit("srli t1, t1, 32");
+        debug_assert_eq!(
+            [CKB_SOURCE_VIEW_INPUT, CKB_SOURCE_VIEW_OUTPUT, CKB_SOURCE_VIEW_CELL_DEP, CKB_SOURCE_VIEW_HEADER_DEP],
+            [CKB_SOURCE_INPUT, CKB_SOURCE_OUTPUT, CKB_SOURCE_CELL_DEP, CKB_SOURCE_HEADER_DEP]
+        );
+        debug_assert_eq!(CKB_SOURCE_VIEW_GROUP_INPUT, 5);
+        debug_assert_eq!(CKB_SOURCE_VIEW_GROUP_OUTPUT, 6);
+        let direct = self.fresh_label("source_view_direct");
+        self.emit(format!("beqz t0, {}", invalid_label));
+        self.emit("li t5, 4");
+        self.emit(format!("bgeu t5, t0, {}", direct));
+        self.emit("li t5, 6");
+        self.emit(format!("bltu t5, t0, {}", invalid_label));
+        self.emit("addi t2, t0, -4");
+        self.emit(format!("li t5, {}", CKB_SOURCE_GROUP_FLAG));
+        self.emit("or t2, t2, t5");
+        self.emit(format!("j {}", done));
+        self.emit_label(&direct);
+        self.emit("mv t2, t0");
         self.emit_label(&done);
     }
 
@@ -3091,11 +3242,9 @@ impl CodeGenerator {
         let done = self.fresh_label("input_source_view_decoded");
         self.emit_decode_source_view_to_t1_t2(invalid_label);
         self.emit(format!("li t0, {}", CKB_SOURCE_INPUT));
-        self.emit("sub t3, t2, t0");
-        self.emit(format!("beqz t3, {}", done));
+        self.emit(format!("beq t2, t0, {}", done));
         self.emit(format!("li t0, {}", CKB_SOURCE_GROUP_FLAG | CKB_SOURCE_INPUT));
-        self.emit("sub t3, t2, t0");
-        self.emit(format!("beqz t3, {}", done));
+        self.emit(format!("beq t2, t0, {}", done));
         self.emit(format!("j {}", invalid_label));
         self.emit_label(&done);
     }
@@ -6238,8 +6387,7 @@ impl CodeGenerator {
         self.emit("li a1, 0");
         self.emit(format!("j {done}"));
         self.emit_label(&invalid);
-        self.emit("li a0, 0");
-        self.emit(format!("li a1, {}", CellScriptRuntimeError::CkbSourceViewInvalid.code()));
+        self.emit_process_failure(CellScriptRuntimeError::CkbSourceViewInvalid);
         self.emit_label(&done);
         self.emit_stack_load("ra", RA);
         self.emit(format!("addi sp, sp, {FRAME}"));
@@ -6251,9 +6399,7 @@ impl CodeGenerator {
         self.emit_label("__ckb_cell_data_size");
         self.emit("# cellscript abi: CKB SourceView LOAD_CELL_DATA size probe");
         if !enabled {
-            self.emit(format!("li a0, {}", CellScriptRuntimeError::SyscallFailed.code()));
-            self.emit("addi a1, a0, 0");
-            self.emit("ret");
+            self.emit_process_failure(CellScriptRuntimeError::SyscallFailed);
             return;
         }
         let invalid = self.fresh_label("source_view_invalid");
@@ -6283,16 +6429,536 @@ impl CodeGenerator {
         self.emit("li a1, 0");
         self.emit(format!("j {}", done));
         self.emit_label(&invalid);
-        self.emit(format!("li a0, {}", CellScriptRuntimeError::CkbSourceViewInvalid.code()));
-        self.emit("addi a1, a0, 0");
-        self.emit(format!("j {}", done));
+        self.emit_process_failure(CellScriptRuntimeError::CkbSourceViewInvalid);
         self.emit_label(&failed);
-        self.emit(format!("li a0, {}", CellScriptRuntimeError::CkbSourceViewInvalid.code()));
-        self.emit("addi a1, a0, 0");
+        self.emit_process_failure(CellScriptRuntimeError::CellLoadFailed);
         self.emit_label(&done);
         self.emit("ld ra, 40(sp)");
         self.emit("addi sp, sp, 48");
         self.emit("ret");
+    }
+
+    fn emit_runtime_cell_data_equal_helper(&mut self, enabled: bool) {
+        const VIEW_A: usize = 0;
+        const VIEW_B: usize = 8;
+        const LENGTH: usize = 16;
+        const INDEX_A: usize = 24;
+        const SOURCE_A: usize = 32;
+        const INDEX_B: usize = 40;
+        const SOURCE_B: usize = 48;
+        const OFFSET: usize = 56;
+        const CHUNK: usize = 64;
+        const LOAD_LENGTH_A: usize = 72;
+        const LOAD_LENGTH_B: usize = 80;
+        const BUFFER_A: usize = 88;
+        const BUFFER_B: usize = 344;
+        const RA: usize = 600;
+        const FRAME: i64 = 608;
+        const CAPACITY: u64 = 256;
+
+        self.emit_global("__ckb_cell_data_equal");
+        self.emit_label("__ckb_cell_data_equal");
+        self.emit("# cellscript abi: a0/a1=SourceView pair; exact complete Cell-data equality; returns a0=bool,a1=status");
+        if !enabled {
+            self.emit("li a0, 0");
+            self.emit(format!("li a1, {}", CellScriptRuntimeError::SyscallFailed.code()));
+            self.emit("ret");
+            return;
+        }
+
+        let size_a_ok = self.fresh_label("cell_data_equal_size_a_ok");
+        let size_b_ok = self.fresh_label("cell_data_equal_size_b_ok");
+        let mismatch = self.fresh_label("cell_data_equal_mismatch");
+        let invalid = self.fresh_label("cell_data_equal_invalid_source");
+        let loop_label = self.fresh_label("cell_data_equal_loop");
+        let chunk_ready = self.fresh_label("cell_data_equal_chunk_ready");
+        let load_a_status_ok = self.fresh_label("cell_data_equal_load_a_status_ok");
+        let load_b_status_ok = self.fresh_label("cell_data_equal_load_b_status_ok");
+        let success = self.fresh_label("cell_data_equal_success");
+        let failed = self.fresh_label("cell_data_equal_failed");
+        let propagated = self.fresh_label("cell_data_equal_propagated_status");
+        let done = self.fresh_label("cell_data_equal_done");
+        let abi = self.runtime_abi();
+
+        self.emit_large_addi("sp", "sp", -FRAME);
+        self.emit_stack_store("a0", VIEW_A);
+        self.emit_stack_store("a1", VIEW_B);
+        self.emit_stack_store("ra", RA);
+
+        self.emit_stack_load("a0", VIEW_A);
+        self.emit("call __ckb_cell_data_size");
+        self.emit(format!("beqz a1, {size_a_ok}"));
+        self.emit(format!("j {propagated}"));
+        self.emit_label(&size_a_ok);
+        self.emit_stack_store("a0", LENGTH);
+        self.emit_stack_load("a0", VIEW_B);
+        self.emit("call __ckb_cell_data_size");
+        self.emit(format!("beqz a1, {size_b_ok}"));
+        self.emit(format!("j {propagated}"));
+        self.emit_label(&size_b_ok);
+        self.emit_stack_load("t0", LENGTH);
+        self.emit(format!("bne t0, a0, {mismatch}"));
+
+        self.emit_stack_load("a0", VIEW_A);
+        self.emit_decode_source_view_to_t1_t2(&invalid);
+        self.emit_stack_store("t1", INDEX_A);
+        self.emit_stack_store("t2", SOURCE_A);
+        self.emit_stack_load("a0", VIEW_B);
+        self.emit_decode_source_view_to_t1_t2(&invalid);
+        self.emit_stack_store("t1", INDEX_B);
+        self.emit_stack_store("t2", SOURCE_B);
+        self.emit_stack_store("zero", OFFSET);
+
+        self.emit_label(&loop_label);
+        self.emit_stack_load("t0", OFFSET);
+        self.emit_stack_load("t1", LENGTH);
+        self.emit(format!("beq t0, t1, {success}"));
+        self.emit("sub t1, t1, t0");
+        self.emit(format!("li t2, {CAPACITY}"));
+        self.emit(format!("bltu t1, t2, {chunk_ready}"));
+        self.emit("mv t1, t2");
+        self.emit_label(&chunk_ready);
+        self.emit_stack_store("t1", CHUNK);
+
+        self.emit_stack_store("t1", LOAD_LENGTH_A);
+        self.emit_sp_addi("a0", BUFFER_A);
+        self.emit_sp_addi("a1", LOAD_LENGTH_A);
+        self.emit_stack_load("a2", OFFSET);
+        self.emit_stack_load("a3", INDEX_A);
+        self.emit_stack_load("a4", SOURCE_A);
+        self.emit(format!("li a7, {}", abi.load_cell_data));
+        self.emit("ecall");
+        self.emit(format!("beqz a0, {load_a_status_ok}"));
+        self.emit(format!("li t0, {CKB_LENGTH_NOT_ENOUGH}"));
+        self.emit(format!("beq a0, t0, {load_a_status_ok}"));
+        self.emit(format!("j {failed}"));
+        self.emit_label(&load_a_status_ok);
+        self.emit_stack_load("t0", LOAD_LENGTH_A);
+        self.emit_stack_load("t1", CHUNK);
+        self.emit(format!("bltu t0, t1, {failed}"));
+
+        self.emit_stack_store("t1", LOAD_LENGTH_B);
+        self.emit_sp_addi("a0", BUFFER_B);
+        self.emit_sp_addi("a1", LOAD_LENGTH_B);
+        self.emit_stack_load("a2", OFFSET);
+        self.emit_stack_load("a3", INDEX_B);
+        self.emit_stack_load("a4", SOURCE_B);
+        self.emit(format!("li a7, {}", abi.load_cell_data));
+        self.emit("ecall");
+        self.emit(format!("beqz a0, {load_b_status_ok}"));
+        self.emit(format!("li t0, {CKB_LENGTH_NOT_ENOUGH}"));
+        self.emit(format!("beq a0, t0, {load_b_status_ok}"));
+        self.emit(format!("j {failed}"));
+        self.emit_label(&load_b_status_ok);
+        self.emit_stack_load("t0", LOAD_LENGTH_B);
+        self.emit_stack_load("t1", CHUNK);
+        self.emit(format!("bltu t0, t1, {failed}"));
+
+        self.emit_sp_addi("a0", BUFFER_A);
+        self.emit_sp_addi("a1", BUFFER_B);
+        self.emit_stack_load("a2", CHUNK);
+        self.emit("call __cellscript_memcmp_fixed");
+        self.emit(format!("bnez a0, {mismatch}"));
+        self.emit_stack_load("t0", OFFSET);
+        self.emit_stack_load("t1", CHUNK);
+        self.emit("add t0, t0, t1");
+        self.emit_stack_store("t0", OFFSET);
+        self.emit(format!("j {loop_label}"));
+
+        self.emit_label(&success);
+        self.emit("li a0, 1");
+        self.emit("li a1, 0");
+        self.emit(format!("j {done}"));
+        self.emit_label(&mismatch);
+        self.emit("li a0, 0");
+        self.emit("li a1, 0");
+        self.emit(format!("j {done}"));
+        self.emit_label(&invalid);
+        self.emit("li a0, 0");
+        self.emit(format!("li a1, {}", CellScriptRuntimeError::CkbSourceViewInvalid.code()));
+        self.emit(format!("j {done}"));
+        self.emit_label(&failed);
+        self.emit("li a0, 0");
+        self.emit(format!("li a1, {}", CellScriptRuntimeError::CellLoadFailed.code()));
+        self.emit(format!("j {done}"));
+        self.emit_label(&propagated);
+        self.emit("li a0, 0");
+        self.emit_label(&done);
+        self.emit_stack_load("ra", RA);
+        self.emit_large_addi("sp", "sp", FRAME);
+        self.emit("ret");
+    }
+
+    fn emit_runtime_source_bytes_equal_helper(&mut self, enabled: bool) {
+        const LEFT_VIEW: usize = 0;
+        const LEFT_BASE: usize = 8;
+        const RIGHT_VIEW: usize = 16;
+        const RIGHT_BASE: usize = 24;
+        const LENGTH: usize = 32;
+        const LEFT_KIND: usize = 40;
+        const RIGHT_KIND: usize = 48;
+        const LEFT_INDEX: usize = 56;
+        const LEFT_SOURCE: usize = 64;
+        const RIGHT_INDEX: usize = 72;
+        const RIGHT_SOURCE: usize = 80;
+        const CURSOR: usize = 88;
+        const CHUNK: usize = 96;
+        const LEFT_LOAD_LENGTH: usize = 104;
+        const RIGHT_LOAD_LENGTH: usize = 112;
+        const LEFT_BUFFER: usize = 120;
+        const RIGHT_BUFFER: usize = 376;
+        const RA: usize = 632;
+        const FRAME: i64 = 640;
+        const CAPACITY: u64 = 256;
+
+        self.emit_global("__ckb_source_bytes_equal");
+        self.emit_label("__ckb_source_bytes_equal");
+        self.emit(
+            "# cellscript abi: a0/a1=left SourceView/base, a2/a3=right SourceView/base, a4=len, a5/a6=source kinds; returns a0=bool,a1=status",
+        );
+        if !enabled {
+            self.emit("li a0, 0");
+            self.emit(format!("li a1, {}", CellScriptRuntimeError::SyscallFailed.code()));
+            self.emit("ret");
+            return;
+        }
+
+        let invalid = self.fresh_label("source_bytes_equal_invalid");
+        let loop_label = self.fresh_label("source_bytes_equal_loop");
+        let chunk_ready = self.fresh_label("source_bytes_equal_chunk_ready");
+        let mismatch = self.fresh_label("source_bytes_equal_mismatch");
+        let failed = self.fresh_label("source_bytes_equal_failed");
+        let success = self.fresh_label("source_bytes_equal_success");
+        let done = self.fresh_label("source_bytes_equal_done");
+
+        self.emit_large_addi("sp", "sp", -FRAME);
+        for (register, offset) in [
+            ("a0", LEFT_VIEW),
+            ("a1", LEFT_BASE),
+            ("a2", RIGHT_VIEW),
+            ("a3", RIGHT_BASE),
+            ("a4", LENGTH),
+            ("a5", LEFT_KIND),
+            ("a6", RIGHT_KIND),
+            ("ra", RA),
+        ] {
+            self.emit_stack_store(register, offset);
+        }
+
+        self.emit_stack_load("a0", LEFT_VIEW);
+        self.emit_decode_source_view_to_t1_t2(&invalid);
+        self.emit_stack_store("t1", LEFT_INDEX);
+        self.emit_stack_store("t2", LEFT_SOURCE);
+        self.emit_stack_load("a0", RIGHT_VIEW);
+        self.emit_decode_source_view_to_t1_t2(&invalid);
+        self.emit_stack_store("t1", RIGHT_INDEX);
+        self.emit_stack_store("t2", RIGHT_SOURCE);
+        self.emit_stack_store("zero", CURSOR);
+
+        self.emit_label(&loop_label);
+        self.emit_stack_load("t0", CURSOR);
+        self.emit_stack_load("t1", LENGTH);
+        self.emit(format!("beq t0, t1, {success}"));
+        self.emit("sub t1, t1, t0");
+        self.emit(format!("li t2, {CAPACITY}"));
+        self.emit(format!("bltu t1, t2, {chunk_ready}"));
+        self.emit("mv t1, t2");
+        self.emit_label(&chunk_ready);
+        self.emit_stack_store("t1", CHUNK);
+
+        self.emit_runtime_source_range_load(
+            LEFT_KIND,
+            LEFT_INDEX,
+            LEFT_SOURCE,
+            LEFT_BASE,
+            CURSOR,
+            CHUNK,
+            LEFT_LOAD_LENGTH,
+            LEFT_BUFFER,
+            &invalid,
+            &failed,
+        );
+        self.emit_runtime_source_range_load(
+            RIGHT_KIND,
+            RIGHT_INDEX,
+            RIGHT_SOURCE,
+            RIGHT_BASE,
+            CURSOR,
+            CHUNK,
+            RIGHT_LOAD_LENGTH,
+            RIGHT_BUFFER,
+            &invalid,
+            &failed,
+        );
+
+        self.emit_sp_addi("a0", LEFT_BUFFER);
+        self.emit_sp_addi("a1", RIGHT_BUFFER);
+        self.emit_stack_load("a2", CHUNK);
+        self.emit("call __cellscript_memcmp_fixed");
+        self.emit(format!("bnez a0, {mismatch}"));
+        self.emit_stack_load("t0", CURSOR);
+        self.emit_stack_load("t1", CHUNK);
+        self.emit("add t0, t0, t1");
+        self.emit_stack_store("t0", CURSOR);
+        self.emit(format!("j {loop_label}"));
+
+        self.emit_label(&success);
+        self.emit("li a0, 1");
+        self.emit("li a1, 0");
+        self.emit(format!("j {done}"));
+        self.emit_label(&mismatch);
+        self.emit("li a0, 0");
+        self.emit("li a1, 0");
+        self.emit(format!("j {done}"));
+        self.emit_label(&invalid);
+        self.emit("li a0, 0");
+        self.emit(format!("li a1, {}", CellScriptRuntimeError::CkbSourceViewInvalid.code()));
+        self.emit(format!("j {done}"));
+        self.emit_label(&failed);
+        self.emit("li a0, 0");
+        self.emit(format!("li a1, {}", CellScriptRuntimeError::CellLoadFailed.code()));
+        self.emit_label(&done);
+        self.emit_stack_load("ra", RA);
+        self.emit_large_addi("sp", "sp", FRAME);
+        self.emit("ret");
+    }
+
+    fn emit_runtime_source_bytes_equal_memory_helper(&mut self, enabled: bool) {
+        const VIEW: usize = 0;
+        const BASE: usize = 8;
+        const MEMORY: usize = 16;
+        const LENGTH: usize = 24;
+        const KIND: usize = 32;
+        const INDEX: usize = 40;
+        const SOURCE: usize = 48;
+        const CURSOR: usize = 56;
+        const CHUNK: usize = 64;
+        const LOAD_LENGTH: usize = 72;
+        const BUFFER: usize = 80;
+        const RA: usize = 336;
+        const FRAME: i64 = 352;
+        const CAPACITY: u64 = 256;
+
+        self.emit_global("__ckb_source_bytes_equal_memory");
+        self.emit_label("__ckb_source_bytes_equal_memory");
+        self.emit("# cellscript abi: a0/a1=SourceView/base, a2=trusted fixed-byte pointer, a3=len, a4=source kind; returns a0=bool,a1=status");
+        if !enabled {
+            self.emit("li a0, 0");
+            self.emit(format!("li a1, {}", CellScriptRuntimeError::SyscallFailed.code()));
+            self.emit("ret");
+            return;
+        }
+
+        let invalid = self.fresh_label("source_memory_equal_invalid");
+        let failed = self.fresh_label("source_memory_equal_failed");
+        let loop_label = self.fresh_label("source_memory_equal_loop");
+        let chunk_ready = self.fresh_label("source_memory_equal_chunk_ready");
+        let mismatch = self.fresh_label("source_memory_equal_mismatch");
+        let success = self.fresh_label("source_memory_equal_success");
+        let done = self.fresh_label("source_memory_equal_done");
+
+        self.emit_large_addi("sp", "sp", -FRAME);
+        for (register, offset) in [("a0", VIEW), ("a1", BASE), ("a2", MEMORY), ("a3", LENGTH), ("a4", KIND), ("ra", RA)] {
+            self.emit_stack_store(register, offset);
+        }
+        self.emit_stack_load("a0", VIEW);
+        self.emit_decode_source_view_to_t1_t2(&invalid);
+        self.emit_stack_store("t1", INDEX);
+        self.emit_stack_store("t2", SOURCE);
+        self.emit_stack_store("zero", CURSOR);
+
+        self.emit_label(&loop_label);
+        self.emit_stack_load("t0", CURSOR);
+        self.emit_stack_load("t1", LENGTH);
+        self.emit(format!("beq t0, t1, {success}"));
+        self.emit("sub t1, t1, t0");
+        self.emit(format!("li t2, {CAPACITY}"));
+        self.emit(format!("bltu t1, t2, {chunk_ready}"));
+        self.emit("mv t1, t2");
+        self.emit_label(&chunk_ready);
+        self.emit_stack_store("t1", CHUNK);
+        self.emit_runtime_source_range_load(KIND, INDEX, SOURCE, BASE, CURSOR, CHUNK, LOAD_LENGTH, BUFFER, &invalid, &failed);
+        self.emit_sp_addi("a0", BUFFER);
+        self.emit_stack_load("a1", MEMORY);
+        self.emit_stack_load("t0", CURSOR);
+        self.emit("add a1, a1, t0");
+        self.emit_stack_load("a2", CHUNK);
+        self.emit("call __cellscript_memcmp_fixed");
+        self.emit(format!("bnez a0, {mismatch}"));
+        self.emit_stack_load("t0", CURSOR);
+        self.emit_stack_load("t1", CHUNK);
+        self.emit("add t0, t0, t1");
+        self.emit_stack_store("t0", CURSOR);
+        self.emit(format!("j {loop_label}"));
+
+        self.emit_label(&success);
+        self.emit("li a0, 1");
+        self.emit("li a1, 0");
+        self.emit(format!("j {done}"));
+        self.emit_label(&mismatch);
+        self.emit("li a0, 0");
+        self.emit("li a1, 0");
+        self.emit(format!("j {done}"));
+        self.emit_label(&invalid);
+        self.emit("li a0, 0");
+        self.emit(format!("li a1, {}", CellScriptRuntimeError::CkbSourceViewInvalid.code()));
+        self.emit(format!("j {done}"));
+        self.emit_label(&failed);
+        self.emit("li a0, 0");
+        self.emit(format!("li a1, {}", CellScriptRuntimeError::CellLoadFailed.code()));
+        self.emit_label(&done);
+        self.emit_stack_load("ra", RA);
+        self.emit_large_addi("sp", "sp", FRAME);
+        self.emit("ret");
+    }
+
+    fn emit_runtime_source_bytes_zero_helper(&mut self, enabled: bool) {
+        const VIEW: usize = 0;
+        const BASE: usize = 8;
+        const LENGTH: usize = 16;
+        const KIND: usize = 24;
+        const INDEX: usize = 32;
+        const SOURCE: usize = 40;
+        const CURSOR: usize = 48;
+        const CHUNK: usize = 56;
+        const LOAD_LENGTH: usize = 64;
+        const BUFFER: usize = 72;
+        const RA: usize = 328;
+        const FRAME: i64 = 336;
+        const CAPACITY: u64 = 256;
+
+        self.emit_global("__ckb_source_bytes_zero");
+        self.emit_label("__ckb_source_bytes_zero");
+        self.emit("# cellscript abi: a0/a1=SourceView/base, a2=len, a3=source kind; returns a0=bool,a1=status");
+        if !enabled {
+            self.emit("li a0, 0");
+            self.emit(format!("li a1, {}", CellScriptRuntimeError::SyscallFailed.code()));
+            self.emit("ret");
+            return;
+        }
+
+        let invalid = self.fresh_label("source_zero_invalid");
+        let failed = self.fresh_label("source_zero_failed");
+        let loop_label = self.fresh_label("source_zero_loop");
+        let chunk_ready = self.fresh_label("source_zero_chunk_ready");
+        let mismatch = self.fresh_label("source_zero_mismatch");
+        let success = self.fresh_label("source_zero_success");
+        let done = self.fresh_label("source_zero_done");
+
+        self.emit_large_addi("sp", "sp", -FRAME);
+        for (register, offset) in [("a0", VIEW), ("a1", BASE), ("a2", LENGTH), ("a3", KIND), ("ra", RA)] {
+            self.emit_stack_store(register, offset);
+        }
+        self.emit_stack_load("a0", VIEW);
+        self.emit_decode_source_view_to_t1_t2(&invalid);
+        self.emit_stack_store("t1", INDEX);
+        self.emit_stack_store("t2", SOURCE);
+        self.emit_stack_store("zero", CURSOR);
+
+        self.emit_label(&loop_label);
+        self.emit_stack_load("t0", CURSOR);
+        self.emit_stack_load("t1", LENGTH);
+        self.emit(format!("beq t0, t1, {success}"));
+        self.emit("sub t1, t1, t0");
+        self.emit(format!("li t2, {CAPACITY}"));
+        self.emit(format!("bltu t1, t2, {chunk_ready}"));
+        self.emit("mv t1, t2");
+        self.emit_label(&chunk_ready);
+        self.emit_stack_store("t1", CHUNK);
+        self.emit_runtime_source_range_load(KIND, INDEX, SOURCE, BASE, CURSOR, CHUNK, LOAD_LENGTH, BUFFER, &invalid, &failed);
+        self.emit_sp_addi("a0", BUFFER);
+        self.emit_stack_load("a1", CHUNK);
+        self.emit("call __cellscript_memzero_fixed");
+        self.emit(format!("bnez a0, {mismatch}"));
+        self.emit_stack_load("t0", CURSOR);
+        self.emit_stack_load("t1", CHUNK);
+        self.emit("add t0, t0, t1");
+        self.emit_stack_store("t0", CURSOR);
+        self.emit(format!("j {loop_label}"));
+
+        self.emit_label(&success);
+        self.emit("li a0, 1");
+        self.emit("li a1, 0");
+        self.emit(format!("j {done}"));
+        self.emit_label(&mismatch);
+        self.emit("li a0, 0");
+        self.emit("li a1, 0");
+        self.emit(format!("j {done}"));
+        self.emit_label(&invalid);
+        self.emit("li a0, 0");
+        self.emit(format!("li a1, {}", CellScriptRuntimeError::CkbSourceViewInvalid.code()));
+        self.emit(format!("j {done}"));
+        self.emit_label(&failed);
+        self.emit("li a0, 0");
+        self.emit(format!("li a1, {}", CellScriptRuntimeError::CellLoadFailed.code()));
+        self.emit_label(&done);
+        self.emit_stack_load("ra", RA);
+        self.emit_large_addi("sp", "sp", FRAME);
+        self.emit("ret");
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_runtime_source_range_load(
+        &mut self,
+        kind_offset: usize,
+        index_offset: usize,
+        source_offset: usize,
+        base_offset: usize,
+        cursor_offset: usize,
+        chunk_offset: usize,
+        load_length_offset: usize,
+        buffer_offset: usize,
+        invalid: &str,
+        failed: &str,
+    ) {
+        let data = self.fresh_label("source_range_data");
+        let witness = self.fresh_label("source_range_witness");
+        let lock = self.fresh_label("source_range_lock");
+        let script = self.fresh_label("source_range_script");
+        let status = self.fresh_label("source_range_status");
+        let status_ok = self.fresh_label("source_range_status_ok");
+        let abi = self.runtime_abi();
+
+        self.emit_stack_load("t0", kind_offset);
+        self.emit(format!("beqz t0, {data}"));
+        self.emit("li t1, 1");
+        self.emit(format!("beq t0, t1, {witness}"));
+        self.emit("li t1, 2");
+        self.emit(format!("beq t0, t1, {lock}"));
+        self.emit("li t1, 3");
+        self.emit(format!("bne t0, t1, {invalid}"));
+        self.emit(format!("li a5, {CKB_CELL_FIELD_TYPE}"));
+        self.emit(format!("j {script}"));
+
+        self.emit_label(&lock);
+        self.emit(format!("li a5, {CKB_CELL_FIELD_LOCK}"));
+        self.emit_label(&script);
+        self.emit(format!("li a7, {}", abi.load_cell_by_field));
+        self.emit(format!("j {status}"));
+        self.emit_label(&witness);
+        self.emit(format!("li a7, {}", abi.load_witness));
+        self.emit(format!("j {status}"));
+        self.emit_label(&data);
+        self.emit(format!("li a7, {}", abi.load_cell_data));
+
+        self.emit_label(&status);
+        self.emit_stack_load("t0", chunk_offset);
+        self.emit_stack_store("t0", load_length_offset);
+        self.emit_sp_addi("a0", buffer_offset);
+        self.emit_sp_addi("a1", load_length_offset);
+        self.emit_stack_load("a2", base_offset);
+        self.emit_stack_load("t0", cursor_offset);
+        self.emit("add a2, a2, t0");
+        self.emit_stack_load("a3", index_offset);
+        self.emit_stack_load("a4", source_offset);
+        self.emit("ecall");
+        self.emit(format!("beqz a0, {status_ok}"));
+        self.emit(format!("li t0, {CKB_LENGTH_NOT_ENOUGH}"));
+        self.emit(format!("bne a0, t0, {failed}"));
+        self.emit_label(&status_ok);
+        self.emit_stack_load("t0", load_length_offset);
+        self.emit_stack_load("t1", chunk_offset);
+        self.emit(format!("bltu t0, t1, {failed}"));
     }
 
     fn emit_runtime_bounded_cell_dep_data_hash_requirement_helper(&mut self, enabled: bool) {
@@ -6498,74 +7164,6 @@ impl CodeGenerator {
         self.emit_label(&done);
         self.emit("ld ra, 72(sp)");
         self.emit("addi sp, sp, 80");
-        self.emit("ret");
-    }
-
-    fn emit_runtime_cell_data_word_le_helper(&mut self, symbol: &str, detail: &str, width: usize, enabled: bool) {
-        self.emit_global(symbol);
-        self.emit_label(symbol);
-        self.emit(format!("# cellscript abi: {} via LOAD_CELL_DATA offset argument", detail));
-        if !enabled {
-            self.emit(format!("li a0, {}", CellScriptRuntimeError::SyscallFailed.code()));
-            self.emit("addi a1, a0, 0");
-            self.emit("ret");
-            return;
-        }
-        let invalid = self.fresh_label("source_view_invalid");
-        let done = self.fresh_label("cell_data_u64_done");
-        let failed = self.fresh_label("cell_data_u64_failed");
-        let loaded = self.fresh_label("cell_data_u64_loaded");
-        let ready = self.fresh_label("cell_data_u64_ready");
-        let abi = self.runtime_abi();
-        self.emit("addi sp, sp, -64");
-        self.emit("sd ra, 56(sp)");
-        self.emit("# cellscript abi: save requested data offset");
-        self.emit("sd a1, 8(sp)");
-        self.emit_decode_source_view_to_t1_t2(&invalid);
-        self.emit(format!("li t0, {}", width));
-        self.emit("sd t0, 16(sp)");
-        self.emit("addi a0, sp, 24");
-        self.emit("addi a1, sp, 16");
-        self.emit("ld a2, 8(sp)");
-        self.emit("addi a3, t1, 0");
-        self.emit("addi a4, t2, 0");
-        self.emit(format!("li a7, {}", abi.load_cell_data));
-        self.emit("ecall");
-        self.emit(format!("beqz a0, {}", loaded));
-        self.emit(format!("j {}", failed));
-        self.emit_label(&loaded);
-        self.emit_label(&ready);
-        if width == 4 {
-            self.emit("li a0, 0");
-            for byte_index in 0..4 {
-                self.emit(format!("lbu t0, {}(sp)", 24 + byte_index));
-                if byte_index != 0 {
-                    self.emit(format!("slli t0, t0, {}", byte_index * 8));
-                }
-                self.emit("or a0, a0, t0");
-            }
-        } else {
-            self.emit("li a0, 0");
-            for byte_index in 0..8 {
-                self.emit(format!("lbu t0, {}(sp)", 24 + byte_index));
-                if byte_index != 0 {
-                    self.emit(format!("slli t0, t0, {}", byte_index * 8));
-                }
-                self.emit("or a0, a0, t0");
-            }
-        }
-        self.emit("li a1, 0");
-        self.emit(format!("j {}", done));
-        self.emit_label(&invalid);
-        self.emit(format!("li a0, {}", CellScriptRuntimeError::CkbSourceViewInvalid.code()));
-        self.emit("addi a1, a0, 0");
-        self.emit(format!("j {}", done));
-        self.emit_label(&failed);
-        self.emit(format!("li a0, {}", CellScriptRuntimeError::CellLoadFailed.code()));
-        self.emit("addi a1, a0, 0");
-        self.emit_label(&done);
-        self.emit("ld ra, 56(sp)");
-        self.emit("addi sp, sp, 64");
         self.emit("ret");
     }
 

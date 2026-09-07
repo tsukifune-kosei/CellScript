@@ -3,7 +3,7 @@
 This directory is organized by document role. Keep new docs in the smallest
 stable category that matches how readers should use them.
 
-The experimental `0.26b` implementation uses metadata schema 66. The finalized
+The experimental `0.26b` implementation uses metadata schema 67. The finalized
 0.26 release record below remains the historical schema 62 contract.
 
 ## Stable Tutorials

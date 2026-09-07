@@ -222,11 +222,11 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v27-verifier-failure";
-pub const METADATA_SCHEMA_VERSION: u32 = 66;
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v30-economic-vm2-final";
+pub const METADATA_SCHEMA_VERSION: u32 = 67;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
-pub const CONSTRAINTS_METADATA_SCHEMA_VERSION: u32 = 3;
+pub const CONSTRAINTS_METADATA_SCHEMA_VERSION: u32 = 4;
 /// Maximum UTF-8 source bytes accepted by a single compiler input.
 ///
 /// This is a process-safety boundary shared by native, LSP, and WASM callers.
@@ -250,7 +250,9 @@ const CKB_TYPE_ID_CODE_HASH: [u8; 32] =
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b'T', b'Y', b'P', b'E', b'_', b'I', b'D'];
 const CKB_TYPE_ID_ABI: &str = "ckb-type-id-v1";
 const CKB_TYPE_ID_HASH_TYPE: &str = "type";
-const CKB_DEFAULT_SCRIPT_HASH_TYPE: &str = "data1";
+const CKB_DEFAULT_SCRIPT_HASH_TYPE: &str = "data2";
+const CKB_MINIMUM_VM_VERSION: u8 = 2;
+const CKB_RISCV_ISA: &str = "rv64imac_zbb";
 const CKB_TYPE_ID_ARGS_SOURCE: &str = "first-input-output-index";
 const CKB_TYPE_ID_GROUP_RULE: &str = "at-most-one-input-and-one-output";
 const CKB_TYPE_ID_BUILDER: &str = "ckb_apply_type_id_script_to_output_molecule";
@@ -319,6 +321,9 @@ impl TargetProfile {
                 output_data_abi: "ckb-outputs-and-outputs-data-index-aligned".to_string(),
                 capacity_floor_abi: "ckb-output-capacity-floor-shannons".to_string(),
                 type_id_abi: CKB_TYPE_ID_ABI.to_string(),
+                minimum_vm_version: CKB_MINIMUM_VM_VERSION,
+                riscv_isa: CKB_RISCV_ISA.to_string(),
+                deployment_hash_types: vec![CKB_DEFAULT_SCRIPT_HASH_TYPE.to_string()],
                 tx_version: 0,
             },
         }
@@ -843,6 +848,12 @@ pub struct CkbProfileAbiContractMetadata {
     pub output_data_abi: String,
     pub capacity_floor_abi: String,
     pub type_id_abi: String,
+    #[serde(default)]
+    pub minimum_vm_version: u8,
+    #[serde(default)]
+    pub riscv_isa: String,
+    #[serde(default)]
+    pub deployment_hash_types: Vec<String>,
     pub tx_version: u32,
 }
 
@@ -1088,6 +1099,12 @@ pub struct TargetProfileMetadata {
     pub capacity_floor_abi: String,
     #[serde(default)]
     pub type_id_abi: String,
+    #[serde(default)]
+    pub minimum_vm_version: u8,
+    #[serde(default)]
+    pub riscv_isa: String,
+    #[serde(default)]
+    pub deployment_hash_types: Vec<String>,
     #[serde(default)]
     pub tx_version: u32,
 }
@@ -1989,6 +2006,7 @@ fn validate_target_profile_metadata(metadata: &CompileMetadata, artifact_format:
         ("output_data_abi", actual.output_data_abi.as_str(), expected.output_data_abi.as_str()),
         ("capacity_floor_abi", actual.capacity_floor_abi.as_str(), expected.capacity_floor_abi.as_str()),
         ("type_id_abi", actual.type_id_abi.as_str(), expected.type_id_abi.as_str()),
+        ("riscv_isa", actual.riscv_isa.as_str(), expected.riscv_isa.as_str()),
     ];
     for (field, actual, expected) in mismatches {
         if actual != expected {
@@ -2001,6 +2019,24 @@ fn validate_target_profile_metadata(metadata: &CompileMetadata, artifact_format:
                 artifact_format.display_name()
             )));
         }
+    }
+    if actual.minimum_vm_version != expected.minimum_vm_version {
+        return Err(CompileError::without_span(format!(
+            "metadata target_profile.minimum_vm_version '{}' does not match expected '{}' for profile '{}' and {} artifact",
+            actual.minimum_vm_version,
+            expected.minimum_vm_version,
+            profile.name(),
+            artifact_format.display_name()
+        )));
+    }
+    if actual.deployment_hash_types != expected.deployment_hash_types {
+        return Err(CompileError::without_span(format!(
+            "metadata target_profile.deployment_hash_types {:?} does not match expected {:?} for profile '{}' and {} artifact",
+            actual.deployment_hash_types,
+            expected.deployment_hash_types,
+            profile.name(),
+            artifact_format.display_name()
+        )));
     }
     if actual.tx_version != expected.tx_version {
         return Err(CompileError::without_span(format!(
@@ -2477,6 +2513,9 @@ fn ckb_constraints(
             output_data_abi: metadata.target_profile.output_data_abi.clone(),
             capacity_floor_abi: metadata.target_profile.capacity_floor_abi.clone(),
             type_id_abi: metadata.target_profile.type_id_abi.clone(),
+            minimum_vm_version: metadata.target_profile.minimum_vm_version,
+            riscv_isa: metadata.target_profile.riscv_isa.clone(),
+            deployment_hash_types: metadata.target_profile.deployment_hash_types.clone(),
             tx_version: metadata.target_profile.tx_version,
         },
         hash_domain: "ckb-packed-molecule-blake2b".to_string(),
@@ -2493,7 +2532,7 @@ fn ckb_constraints(
             declared_hash_type: None,
             type_id_hash_type: CKB_TYPE_ID_HASH_TYPE.to_string(),
             supported_hash_types: ckb_supported_hash_types(),
-            status: "builder-must-preserve-script-hash-type".to_string(),
+            status: "builder-must-use-data2-for-vm2-zbb-artifact".to_string(),
         },
         dep_group_manifest: CkbDepGroupManifestMetadata {
             source: "not-declared".to_string(),
@@ -2692,6 +2731,7 @@ fn apply_manifest_deploy_metadata(metadata: &mut CompileMetadata, manifest: &Pac
 
     if let Some(hash_type) = ckb_manifest.hash_type.as_deref() {
         validate_ckb_hash_type(hash_type)?;
+        validate_ckb_generated_artifact_hash_type(hash_type)?;
         ckb_constraints.hash_type_policy.source = "Cell.toml deploy.ckb.hash_type".to_string();
         ckb_constraints.hash_type_policy.declared_hash_type = Some(hash_type.to_string());
         ckb_constraints.hash_type_policy.status = "manifest-declared-builder-must-match".to_string();
@@ -3027,6 +3067,17 @@ fn validate_ckb_hash_type(hash_type: &str) -> Result<()> {
         Ok(())
     } else {
         Err(CompileError::without_span(format!("unsupported CKB hash_type '{}'; expected one of data, type, data1, data2", hash_type)))
+    }
+}
+
+fn validate_ckb_generated_artifact_hash_type(hash_type: &str) -> Result<()> {
+    if hash_type == CKB_DEFAULT_SCRIPT_HASH_TYPE {
+        Ok(())
+    } else {
+        Err(CompileError::without_span(format!(
+            "CKB VM{} / {} CellScript artifacts require deploy.ckb.hash_type = '{}'; '{}' selects a VM that does not guarantee the emitted ISA",
+            CKB_MINIMUM_VM_VERSION, CKB_RISCV_ISA, CKB_DEFAULT_SCRIPT_HASH_TYPE, hash_type
+        )))
     }
 }
 
@@ -3954,6 +4005,7 @@ fn is_known_ckb_runtime_syscall(syscall: &str) -> bool {
             | "SOURCE_VIEW"
             | "CKB_SINCE_ENCODING"
             | "LOAD_CELL_BY_FIELD+LOAD_CELL_DATA"
+            | "LOAD_CELL_BY_FIELD+LOAD_CELL_DATA+LOAD_WITNESS"
             | "LOAD_INPUT_BY_FIELD/SOURCE_VIEW"
             | "LOAD_SCRIPT+LOAD_CELL_BY_FIELD"
             | "LOAD_SCRIPT+LOAD_CELL_BY_FIELD+LOAD_CELL_DATA"
@@ -4001,6 +4053,7 @@ fn ckb_runtime_syscall_allows_source(syscall: &str, source: &str) -> bool {
         }
         "CKB_SINCE_ENCODING" => source == "Expression",
         "LOAD_CELL_BY_FIELD+LOAD_CELL_DATA" => source == "SourceView",
+        "LOAD_CELL_BY_FIELD+LOAD_CELL_DATA+LOAD_WITNESS" => source == "SourceView",
         "LOAD_INPUT_BY_FIELD/SOURCE_VIEW" => source == "Input/Output",
         "LOAD_SCRIPT+LOAD_CELL_BY_FIELD" => source == "CurrentScript/Output",
         "LOAD_SCRIPT+LOAD_CELL_BY_FIELD+LOAD_CELL_DATA" => source == "CurrentScript/Input/GroupInput/GroupOutput",
@@ -7030,10 +7083,14 @@ fn prepare_compile_ir(
     } else {
         ir::generate(lowering_ast)?
     };
-    let ir = match entry_scope {
+    let mut ir = match entry_scope {
         Some(scope) => scope_ir_to_entry(&ir, scope)?,
         None => ir,
     };
+    if options.opt_level > 0 {
+        ir::optimize_exact_cell_data_equality(&mut ir);
+        ir::optimize_source_byte_equality(&mut ir);
+    }
     executable_surface::validate_ir_module(&ir)?;
     Ok((optimized_ast, ir))
 }
@@ -17130,6 +17187,10 @@ fn body_ckb_runtime_features(
                             | "__ckb_cell_data_hash"
                             | "__ckb_cell_data_hash_at"
                             | "__ckb_cell_data_size"
+                            | "__ckb_cell_data_equal"
+                            | "__ckb_source_bytes_equal"
+                            | "__ckb_source_bytes_equal_memory"
+                            | "__ckb_source_bytes_zero"
                             | "__ckb_cell_count"
                             | "__ckb_cell_has_type"
                             | "__ckb_cell_data_u8"
@@ -17180,6 +17241,10 @@ fn body_ckb_runtime_features(
                         func.as_str(),
                         "__ckb_cell_data_hash"
                             | "__ckb_cell_data_hash_at"
+                            | "__ckb_cell_data_equal"
+                            | "__ckb_source_bytes_equal"
+                            | "__ckb_source_bytes_equal_memory"
+                            | "__ckb_source_bytes_zero"
                             | "__ckb_cell_data_u8"
                             | "__ckb_cell_data_u32_le"
                             | "__ckb_cell_data_u64_le"
@@ -17977,6 +18042,27 @@ fn ckb_v014_runtime_access(func: &str) -> Option<(&'static str, &'static str, &'
         }
         "__ckb_witness_blake2b_span" => Some(("witness-blake2b-span", "LOAD_WITNESS", "Witness", "witness::blake2b_span")),
         "__ckb_cell_data_size" => Some(("cell-data-size", "LOAD_CELL_DATA", "SourceView", "ckb::cell_data_size")),
+        "__ckb_cell_data_equal" => {
+            Some(("cell-data-equality", "LOAD_CELL_DATA", "SourceView", "optimized exact Cell-data equality loop"))
+        }
+        "__ckb_source_bytes_equal" => Some((
+            "source-byte-range-equality",
+            "LOAD_CELL_BY_FIELD+LOAD_CELL_DATA+LOAD_WITNESS",
+            "SourceView",
+            "optimized exact CKB source byte-range equality loop",
+        )),
+        "__ckb_source_bytes_equal_memory" => Some((
+            "source-byte-range-memory-equality",
+            "LOAD_CELL_BY_FIELD+LOAD_CELL_DATA+LOAD_WITNESS",
+            "SourceView",
+            "optimized CKB source byte-range to fixed-memory equality loop",
+        )),
+        "__ckb_source_bytes_zero" => Some((
+            "source-byte-range-zero",
+            "LOAD_CELL_BY_FIELD+LOAD_CELL_DATA+LOAD_WITNESS",
+            "SourceView",
+            "optimized exact all-zero CKB source byte-range loop",
+        )),
         "__ckb_cell_lock_size" => Some(("cell-lock-script-size", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::cell_lock_size")),
         "__ckb_cell_type_size" => Some(("cell-type-script-size", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::cell_type_size")),
         "__ckb_cell_lock_u8" => Some(("cell-lock-script-byte", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::cell_lock_u8")),
@@ -24803,10 +24889,12 @@ action bad(token: Token) {
         let result = compile(U64_DIVISION_PROGRAM, CompileOptions::default()).unwrap();
         let asm = String::from_utf8(result.artifact_bytes.clone()).unwrap();
 
-        assert!(asm.contains("divu t0, t0, t1"), "u64 return division should lower to unsigned divu:\n{}", asm);
-        assert!(asm.contains("divu t1, t3, t1"), "u64 assertion expression should lower to unsigned divu:\n{}", asm);
+        assert!(
+            asm.matches("divu t0, t0, t1").count() >= 2,
+            "u64 return and assertion divisions should lower to unsigned divu:\n{}",
+            asm
+        );
         assert!(!asm.contains("div t0, t0, t1"), "u64 return division regressed to signed div:\n{}", asm);
-        assert!(!asm.contains("div t1, t3, t1"), "u64 assertion expression regressed to signed div:\n{}", asm);
     }
 
     #[test]
@@ -25556,8 +25644,8 @@ action grant(read config: Config, token: Token) -> Grant {
             asm
         );
         assert!(
-            asm.matches("# cellscript abi: bounds check Config.threshold required=8").count() >= 2,
-            "duplicate read_refs should each have a schema bounds check:\n{}",
+            asm.matches("# cellscript abi: exact size check Config expected=8").count() >= 2,
+            "duplicate read_refs should each have an exact schema-size check:\n{}",
             asm
         );
     }
@@ -28353,6 +28441,9 @@ action get_marker(snapshot: Big) -> [u8; 1] {
         assert_eq!(result.metadata.target_profile.artifact_packaging.as_str(), "ckb-elf");
         assert_eq!(result.metadata.target_profile.header_abi.as_str(), "ckb-header");
         assert_eq!(result.metadata.target_profile.scheduler_abi.as_str(), "none");
+        assert_eq!(result.metadata.target_profile.minimum_vm_version, 2);
+        assert_eq!(result.metadata.target_profile.riscv_isa, "rv64imac_zbb");
+        assert_eq!(result.metadata.target_profile.deployment_hash_types, ["data2"]);
         assert_eq!(result.metadata.artifact_hash.as_deref(), Some(crate::hex_encode(&result.artifact_hash).as_str()));
         assert_eq!(result.metadata.artifact_size_bytes, Some(result.artifact_bytes.len()));
         assert!(result.metadata.source_hash.is_some());
@@ -28696,7 +28787,7 @@ entry = "src/main.cell"
 target_profile = "ckb"
 
 [deploy.ckb]
-hash_type = "data1"
+hash_type = "data2"
 out_point = "0x1111111111111111111111111111111111111111111111111111111111111111:0"
 dep_type = "code"
 data_hash = "0x2222222222222222222222222222222222222222222222222222222222222222"
@@ -28725,8 +28816,11 @@ action add(a: u64, b: u64) -> u64 {
         let result = compile_path(root, CompileOptions::default()).unwrap();
         let ckb = result.metadata.constraints.ckb.as_ref().expect("ckb constraints");
         assert_eq!(ckb.hash_type_policy.source, "Cell.toml deploy.ckb.hash_type");
-        assert_eq!(ckb.hash_type_policy.declared_hash_type.as_deref(), Some("data1"));
+        assert_eq!(ckb.hash_type_policy.declared_hash_type.as_deref(), Some("data2"));
         assert_eq!(ckb.hash_type_policy.status, "manifest-declared-builder-must-match");
+        assert_eq!(ckb.profile_abi_contract.minimum_vm_version, 2);
+        assert_eq!(ckb.profile_abi_contract.riscv_isa, "rv64imac_zbb");
+        assert_eq!(ckb.profile_abi_contract.deployment_hash_types, ["data2"]);
         assert_eq!(ckb.dep_group_manifest.source, "Cell.toml deploy.ckb");
         assert!(ckb.dep_group_manifest.dep_group_supported);
         assert_eq!(ckb.dep_group_manifest.declared_cell_deps.len(), 2);
@@ -28940,6 +29034,46 @@ action add(a: u64, b: u64) -> u64 {
 
         let err = compile_path(root, CompileOptions::default()).unwrap_err();
         assert!(err.message.contains("unsupported CKB hash_type 'unsupported'"), "unexpected error: {}", err.message);
+    }
+
+    #[test]
+    fn ckb_deploy_manifest_rejects_pre_vm2_hash_type_for_generated_artifact() {
+        let dir = tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+edition = "2026"
+name = "vm1_deploy_manifest"
+version = "0.1.0"
+entry = "src/main.cell"
+
+[build]
+target_profile = "ckb"
+
+[deploy.ckb]
+hash_type = "data1"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/main.cell"),
+            r#"
+module vm1_deploy_manifest
+
+action add(a: u64, b: u64) -> u64 {
+    verification
+        a + b
+}
+"#,
+        )
+        .unwrap();
+
+        let err = compile_path(root, CompileOptions::default()).unwrap_err();
+        assert!(err.message.contains("require deploy.ckb.hash_type = 'data2'"), "unexpected error: {}", err.message);
+        assert!(err.message.contains("rv64imac_zbb"), "unexpected error: {}", err.message);
     }
 
     #[test]
@@ -35959,9 +36093,8 @@ action close(item: Item) {
         let result = compile(source, CompileOptions::default()).unwrap();
         let assembly = String::from_utf8(result.artifact_bytes).unwrap();
         assert!(
-            assembly.contains(
-                "# cellscript abi: expected field Item.state offset=0 size=1\n    ld t4, 0(sp)\n    li t1, 0\n    lbu t2, 0(t4)"
-            ),
+            assembly.contains("# cellscript abi: fixed-byte scalar field Named(\"Item\").state offset=0 size=1")
+                && assembly.contains("lbu t2, 0(t4)"),
             "one-byte no-payload enum comparisons must load the field discriminant, not the pointer/length representation:\n{assembly}"
         );
     }

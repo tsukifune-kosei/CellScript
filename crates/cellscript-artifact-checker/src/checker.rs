@@ -322,6 +322,7 @@ fn validate_metadata_binding(
     source_map: &SourceArtifactMap,
 ) -> Result<(), CheckerError> {
     crate::policy::validate_policy_metadata(metadata, &record.typed_semantics)?;
+    validate_ckb_vm2_target_contract(metadata)?;
     let artifact_hash = hex_encode(&ckb_blake2b256(artifact));
     if artifact_hash != record.artifact_hash || artifact.len() as u64 != record.artifact_size_bytes {
         return Err(CheckerError::new(
@@ -513,6 +514,33 @@ fn validate_metadata_binding(
         return Err(CheckerError::new(
             CheckerRejectionCode::V2416SourceMapInvalid,
             "source map identity does not bind to record, artifact, and source set",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_ckb_vm2_target_contract(metadata: &Value) -> Result<(), CheckerError> {
+    let deployment_hash_types = metadata
+        .pointer("/target_profile/deployment_hash_types")
+        .and_then(Value::as_array)
+        .filter(|values| values.len() == 1)
+        .and_then(|values| values[0].as_str());
+    let constraints_hash_types = metadata
+        .pointer("/constraints/ckb/profile_abi_contract/deployment_hash_types")
+        .and_then(Value::as_array)
+        .filter(|values| values.len() == 1)
+        .and_then(|values| values[0].as_str());
+    if json_u64(metadata, &["target_profile", "minimum_vm_version"]) != Some(2)
+        || json_string(metadata, &["target_profile", "riscv_isa"]) != Some("rv64imac_zbb")
+        || deployment_hash_types != Some("data2")
+        || json_u64(metadata, &["constraints", "ckb", "profile_abi_contract", "minimum_vm_version"]) != Some(2)
+        || json_string(metadata, &["constraints", "ckb", "profile_abi_contract", "riscv_isa"]) != Some("rv64imac_zbb")
+        || constraints_hash_types != Some("data2")
+        || json_string(metadata, &["constraints", "ckb", "hash_type_policy", "default_script_hash_type"]) != Some("data2")
+    {
+        return Err(CheckerError::new(
+            CheckerRejectionCode::V2410MetadataBindingMismatch,
+            "compile metadata does not bind the CKB VM2, rv64imac_zbb, data2 deployment contract",
         ));
     }
     Ok(())

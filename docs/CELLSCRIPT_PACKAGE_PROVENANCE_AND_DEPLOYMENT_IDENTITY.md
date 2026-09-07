@@ -373,7 +373,7 @@ token = { version = "0.3.0", git = "https://github.com/cellscript/token", tag = 
 target_profile = "ckb"
 
 [deploy.ckb]
-hash_type = "data1"
+hash_type = "data2"
 dep_type = "code"
 
 [[deploy.ckb.cell_deps]]
@@ -578,7 +578,7 @@ RPC; a returned `tx_hash` alone is not sufficient chain evidence.
 
 2. resolve live input + build_deploy_transaction(spec)
    → verifies mainnet genesis and a live pure-capacity input
-   → headless builder computes TYPE_ID args or immutable data1 hash, code_hash,
+   → headless builder computes the immutable data2 hash, code_hash,
      occupied capacity, change output locally
    → returns (TransactionView, ResolvedDeployEvidence)
    → evidence already contains: code_hash, hash_type, type_id_args,
@@ -649,7 +649,7 @@ script_role = "type"
 tx_hash = "0xaaaa..."
 output_index = 0
 code_hash = "0xbbbb..."
-hash_type = "data1"
+hash_type = "data2"
 dep_type = "code"
 out_point = "0xaaaa...:0"
 data_hash = "0xcccc..."
@@ -880,7 +880,7 @@ wallet signing:
 cellscript-deploy --rpc <MAINNET_RPC> --json build-deploy \
   --artifact <ARTIFACT_ELF> \
   --lock-arg <SECP_BLAKE160> \
-  --hash-type data1 \
+  --hash-type data2 \
   --capacity-out-point 0x<LIVE_PURE_CAPACITY_TX_HASH>:<INDEX>
 ```
 
@@ -928,7 +928,7 @@ script_role = "type"
 tx_hash = "0xaaaa..."
 output_index = 0
 code_hash = "0xbbbb..."
-hash_type = "data1"
+hash_type = "data2"
 dep_type = "code"
 out_point = "0xaaaa...:0"
 data_hash = "0xcccc..."

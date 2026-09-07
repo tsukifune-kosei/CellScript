@@ -506,7 +506,10 @@ fn instruction_is_allowed(word: u32) -> bool {
             // `sltiu rd, rs, 1`; arbitrary SLTIU immediates are not part of
             // the current CellScript machine surface.
             3 => word >> 20 == 1,
-            5 => matches!(funct6, 0 | 0x10),
+            // RV64I logical/arithmetic shifts plus the exact Zbb RORI funct6
+            // used by the VM2 Blake2b backend. Other bitmanip immediates stay
+            // outside the independently checked machine surface.
+            5 => matches!(funct6, 0 | 0x10 | 0x18),
             _ => false,
         },
         0x17 | 0x37 => true,
@@ -514,7 +517,7 @@ fn instruction_is_allowed(word: u32) -> bool {
         0x1b => match funct3 {
             0 => true,
             1 => funct7 == 0,
-            5 => matches!(funct7, 0 | 0x20),
+            5 => matches!(funct7, 0 | 0x20 | 0x30),
             _ => false,
         },
         0x23 => matches!(funct3, 0..=3),
@@ -627,5 +630,21 @@ mod tests {
     fn allowlist_accepts_only_the_emitted_sltiu_seqz_form() {
         assert!(instruction_is_allowed(0x0015_3e13));
         assert!(!instruction_is_allowed(0x0025_3e13));
+    }
+
+    #[test]
+    fn allowlist_accepts_rori_but_rejects_neighboring_reserved_shift_immediate() {
+        // rori s3, s3, 32 (funct6=0b011000, shamt=32).
+        assert!(instruction_is_allowed(0x6209_d993));
+        // Same registers/shamt under the next, unallocated funct6.
+        assert!(!instruction_is_allowed(0x6609_d993));
+    }
+
+    #[test]
+    fn allowlist_accepts_roriw_but_rejects_neighboring_reserved_shift_immediate() {
+        // roriw s3, s3, 17 (funct7=0b0110000, shamt=17).
+        assert!(instruction_is_allowed(0x6119_d99b));
+        // Same registers/shamt under the next, unallocated funct7.
+        assert!(!instruction_is_allowed(0x6319_d99b));
     }
 }

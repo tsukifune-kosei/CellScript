@@ -143,7 +143,7 @@ impl CodeGenerator {
         let current_hash_size_offset = self.runtime_scratch2_size_offset();
         let current_hash_buffer_offset = self.runtime_scratch2_buffer_offset();
         self.emit("li t0, 32");
-        self.emit_stack_store("t0", current_hash_size_offset);
+        self.emit_schema_size_store("t0", current_hash_size_offset);
         self.emit_sp_addi("a0", current_hash_buffer_offset);
         self.emit_sp_addi("a1", current_hash_size_offset);
         self.emit("li a2, 0");
@@ -289,7 +289,7 @@ impl CodeGenerator {
         self.emit("sltu t2, t0, t3");
         self.emit(format!("bnez t2, {}", found_label));
         self.emit_stack_store("zero", dest.id * 8);
-        self.emit_stack_store("zero", element_size_offset);
+        self.emit_schema_size_store("zero", element_size_offset);
         self.emit_stack_store("zero", found.id * 8);
         self.emit(format!("j {}", done));
 
@@ -301,7 +301,7 @@ impl CodeGenerator {
         self.emit("add t4, t4, t2");
         self.emit_stack_store("t4", dest.id * 8);
         self.emit(format!("li t1, {}", element_width));
-        self.emit_stack_store("t1", element_size_offset);
+        self.emit_schema_size_store("t1", element_size_offset);
         self.emit("li t1, 1");
         self.emit_stack_store("t1", found.id * 8);
         self.emit_label(&done);
@@ -336,7 +336,7 @@ impl CodeGenerator {
         let current_hash_size_offset = self.runtime_scratch2_size_offset();
         let current_hash_buffer_offset = self.runtime_scratch2_buffer_offset();
         self.emit("li t0, 32");
-        self.emit_stack_store("t0", current_hash_size_offset);
+        self.emit_schema_size_store("t0", current_hash_size_offset);
         self.emit_sp_addi("a0", current_hash_buffer_offset);
         self.emit_sp_addi("a1", current_hash_size_offset);
         self.emit("li a2, 0");
@@ -468,17 +468,14 @@ impl CodeGenerator {
             "# cellscript abi: verify mutate output {} {} Input#{} == Output#{} size=32",
             pattern.ty, field_name, pattern.input_index, pattern.output_index
         ));
-        self.emit_sp_addi("t4", input_buffer_offset);
-        self.emit_sp_addi("t5", output_buffer_offset);
-        for byte_index in 0..32 {
-            self.emit(format!("lbu t0, {}(t4)", byte_index));
-            self.emit(format!("lbu t1, {}(t5)", byte_index));
-            self.emit("sub t2, t0, t1");
-            let ok_label = self.fresh_label("mutate_identity_byte_ok");
-            self.emit(format!("beqz t2, {}", ok_label));
-            self.emit_process_failure(error);
-            self.emit_label(&ok_label);
-        }
+        self.emit_sp_addi("a0", input_buffer_offset);
+        self.emit_sp_addi("a1", output_buffer_offset);
+        self.emit("li a2, 32");
+        self.emit("call __cellscript_memcmp_fixed");
+        let ok_label = self.fresh_label("mutate_identity_hash_ok");
+        self.emit(format!("beqz a0, {}", ok_label));
+        self.emit_fail(error);
+        self.emit_label(&ok_label);
     }
 
     pub(super) fn emit_cell_metadata_equality(&mut self, left: &IrOperand, right: &IrOperand, field: CellMetadataField) -> Result<()> {
@@ -537,17 +534,14 @@ impl CodeGenerator {
             right_index,
             width
         ));
-        self.emit_sp_addi("t4", left_buffer_offset);
-        self.emit_sp_addi("t5", right_buffer_offset);
-        for byte_index in 0..width {
-            self.emit(format!("lbu t0, {}(t4)", byte_index));
-            self.emit(format!("lbu t1, {}(t5)", byte_index));
-            self.emit("sub t2, t0, t1");
-            let ok_label = self.fresh_label("cell_metadata_byte_ok");
-            self.emit(format!("beqz t2, {}", ok_label));
-            self.emit_process_failure(mismatch_error);
-            self.emit_label(&ok_label);
-        }
+        self.emit_sp_addi("a0", left_buffer_offset);
+        self.emit_sp_addi("a1", right_buffer_offset);
+        self.emit(format!("li a2, {}", width));
+        self.emit("call __cellscript_memcmp_fixed");
+        let ok_label = self.fresh_label("cell_metadata_equal");
+        self.emit(format!("beqz a0, {}", ok_label));
+        self.emit_fail(mismatch_error);
+        self.emit_label(&ok_label);
         Ok(())
     }
 
@@ -974,7 +968,7 @@ impl CodeGenerator {
                 output_start_offset,
             );
             self.emit(format!("li t0, {}", width));
-            self.emit_stack_store("t0", len_offset);
+            self.emit_schema_size_store("t0", len_offset);
         } else {
             self.emit_dynamic_table_field_span_to_stack(
                 input_size_offset,
@@ -2467,6 +2461,28 @@ impl CodeGenerator {
             }
             self.emit(format!("or {}, {}, {}", dest_reg, dest_reg, scratch_reg));
         }
+    }
+
+    /// Load a fixed-width scalar from schema bytes. Cell data retained in a
+    /// compiler-owned frame buffer starts at an eight-byte-aligned address, so
+    /// an aligned u64 field can use one native load. Pointers without that
+    /// provenance, narrower scalars, and unaligned fields keep the bytewise
+    /// little-endian path.
+    pub(super) fn emit_schema_scalar_load(
+        &mut self,
+        schema_var_id: usize,
+        base_reg: &str,
+        dest_reg: &str,
+        scratch_reg: &str,
+        offset: usize,
+        width: usize,
+    ) {
+        if width == 8 && offset.is_multiple_of(8) && self.cell_buffer_offsets.contains_key(&schema_var_id) {
+            self.emit(format!("# cellscript abi: aligned u64 schema load var{} offset={}", schema_var_id, offset));
+            self.emit_memory_load_with_avoid("ld", dest_reg, base_reg, offset, &[dest_reg, base_reg]);
+            return;
+        }
+        self.emit_unaligned_scalar_load(base_reg, dest_reg, scratch_reg, offset, width);
     }
 
     pub(super) fn emit_sign_extend_i32(&mut self, register: &str) {

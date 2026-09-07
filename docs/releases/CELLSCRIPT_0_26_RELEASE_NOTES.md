@@ -1,8 +1,8 @@
 # CellScript 0.26 Release Notes
 
 **Status**: unreleased 0.26 implementation record. The bounded-runtime baseline
-comes from `nightly-0.26`; the major assembler optimization below is implemented
-on `0.26b` at `38d4b844459d6bc26ea668aeacb977114e42fe80`. This document does
+comes from `nightly-0.26`; the economic-backend closure below is implemented
+on `0.26b`. This document does
 not claim that the experimental branch is a stable or production-ready release.
 
 0.26 turns the narrow fixed-width bounded Cell lifecycle shape from a 0.25
@@ -10,11 +10,12 @@ fail-closed placeholder into an executable CKB Type Script contract. This is
 not generic Cell collection support: source selection, encoding, ordering,
 identity, and resource bounds are deliberately closed.
 
-On `0.26b`, the shared assembler also makes deployed contracts substantially
-smaller without requiring source rewrites or a new witness ABI. The audited
-transfer relation shrinks from **7,824 to 3,392 bytes (-56.65%)**. Its tested
-high-level relation syntax still produces exactly the same ELF as its explicit
-consume/create expansion.
+On `0.26b`, the shared backend makes deployed contracts substantially smaller
+and cheaper to execute without requiring source rewrites or a new witness ABI.
+The first layout change shrank the audited transfer relation from **7,824 to
+3,392 bytes (-56.65%)**; the completed tranche also closes the three original
+matched Rust byte counterexamples and the real Spore transaction-cycle
+counterexample described below.
 
 The branch also adds a bounded `trusted-external` boundary for real CKB
 verifiers reached through EXEC or SPAWN/WAIT. This is an experimental branch
@@ -82,8 +83,9 @@ declaration. It then binds that sequence to `trusted-external` ProofPlan evidenc
 and the existing typed-to-machine record. Mutations of the hash, declaration,
 evidence tier, sequence, or sidecar copies fail closed.
 
-This change advances compile metadata from schema 65 to **66** and typed
-semantics from v7 to **v8**. See
+Trusted-external support advanced compile metadata from schema 65 to 66 and
+typed semantics from v7 to **v8**. The later VM2 deployment contract advances
+compile metadata again to **67** and constraints metadata to **4**. See
 [Trusted External Verifiers](../CELLSCRIPT_TRUSTED_EXTERNAL_VERIFIERS.md) for the
 source calls, manifest schema, exact boundary, and deployment checklist.
 
@@ -100,21 +102,113 @@ the same Agent bytes and agreed on 131 added transactions (11 accepted, 120
 rejected), including per-byte mutations of immutable Agent state.
 
 That corpus remains finite comparison evidence, not a proof of the Agent's
-internals or a production release certificate. It also supplies an important
-cost counterexample: CellScript Spore plus the shared Agent measured 169,584
-bytes versus 119,800 bytes for the smallest measured frozen Rust Spore plus the
-same Agent (**41.6% larger**), and the positive CellScript transactions used
-**3.372–3.703x** the cycles of the fastest measured Rust variant. The compact
-ELF improvement is real, but it does not imply universal byte or cycle
-superiority. Cost claims remain attached to exact contracts, toolchains, and
-fixtures.
+internals or a production release certificate. It first exposed a serious cost
+counterexample: before the complete backend work, CellScript Spore plus the
+shared Agent was 41.6% larger and the positive transactions used 3.372-3.703x
+the cycles of the fastest measured Rust variant. Keeping that negative result
+made it possible to optimize the actual bottlenecks instead of generalizing
+from the small transfer sample.
 
-## Major Backend Optimization: Compact ELF and Immediate Encoding
+After the complete tranche, the CellScript Spore ELF is **53,000 bytes** versus
+**66,840 bytes** for the matched Rust `z-fat` ELF; both execute the same
+52,960-byte Agent dependency. Across the same 131 paired cases, all outcomes
+remain equal. Each of the 11 accepting paths now uses fewer transaction cycles
+than Rust: ratios range from 0.883 to 0.972, with **2,976,826 versus 3,163,715
+cycles in aggregate (5.9% less)**. Rejected cases still require attribution to
+the real Agent code hash where the mutation is intended for Agent enforcement.
+This reverses the recorded Spore cost counterexample for the exact matched
+variant; it is not a universal language theorem.
+
+## Major Backend Optimization
 
 This is an assembler-layer improvement shared by Edition 2026 and the
 experimental authoring route. It removes file padding and unnecessary
 constant-materialization instructions; it does not remove verification checks,
 weaken policy, or depend on 16-bit compressed instructions.
+
+### Economic Backend Closure and VM2 Deployment Contract
+
+The compact ELF change removed a fixed file-format tax. It was necessary but
+not sufficient: tightly written Rust still won the byte comparison in the
+pool-merge, schema-roll and ownership-Lock corpus, and the original Spore port
+remained much slower. The completed tranche attacks repeated machine work at
+the layer that owns it:
+
+| Layer | Optimization | Preserved safety condition |
+| --- | --- | --- |
+| IR | Fold exact source/source, source/memory and source/zero byte loops only when their structured operands and complete bounds are proven | No source-text or action-name matching; unrecognized loops keep the general lowering |
+| Schema | Reuse dominating exact-size facts and native aligned u64 loads | Unknown alignment or a reused size slot keeps the checked bytewise path |
+| Calls | Eliminate immediate stack reloads and fuse branch-only comparisons | No optimization crosses a label, call, branch or mutable memory boundary |
+| Runtime | Share memcpy/memcmp/memzero and exact-read windows; keep the last profitable window in callee-saved registers | Cache key includes complete SourceView and byte kind; every hit rechecks start, length and requested width |
+| CKB source ABI | Decode the two u32 SourceView halves with shifts instead of wide division/remainder | Invalid tags and indexes at or above 2^32 still terminate fail closed |
+| Hashes | Keep BLAKE2b/SHA-256 state in registers and use Zbb `rori`/`roriw` | The independent checker accepts only the exact rotate encodings; neighboring reserved encodings reject |
+| Failure path | Scalar syscall helpers terminate internally after invalid source or syscall failure | Callers cannot mistake an error code for a valid scalar value |
+
+The register read-window optimization is profitability gated. The ordinary
+four-way source-bound cache is always used when exact reads are present; the
+larger `s10..s5` hot window is enabled only for modules with enough static
+exact-read sites to amortize its prologue, epilogue and code-size cost. This
+keeps the Spore win without charging the smaller Fiber verifier for an
+unprofitable fixed setup.
+
+#### Matched measurements after closure
+
+All sizes below are complete stripped ELF sizes and all cycles are real CKB-VM
+positive executions. Each row compares the same accepted/rejected behavior;
+Rust uses `no_std`, `ckb-std`, size optimization and LTO as recorded by its
+fixture.
+
+| Workload | CellScript / Rust bytes | CellScript / Rust cycles | Result |
+| --- | ---: | ---: | --- |
+| Pool merge | 2,512 / 2,816 | 6,000 / 9,232 | CS -10.8% bytes, -35.0% cycles |
+| Schema roll | 2,272 / 2,760 | 8,661 / 10,350 | CS -17.7% bytes, -16.3% cycles |
+| Ownership Lock | 2,232 / 2,304 | 5,583 / 6,333 | CS -3.1% bytes, -11.8% cycles |
+| Spore, excluding the same shared Agent | 53,000 / 66,840 | 2,976,826 / 3,163,715 across 11 accepted transactions | CS -20.7% bytes, -5.9% aggregate cycles |
+| Fiber commitment | 63,336 / 69,176 | 591,187,239 / 597,093,558 across the 256-path sample | CS -8.4% bytes, lower transaction aggregate |
+
+Fiber's whole-transaction rows include an external signature verifier. Merely
+changing the principal ELF changes the raw transaction hash and signature;
+the same logical path varied by roughly 40,000 cycles across byte-identical
+semantics, which is larger than the remaining per-row deltas. Therefore the
+aggregate is reported as transaction-level evidence, while individual Fiber
+rows are not mislabelled as isolated principal-Script measurements. The Spore
+corpus uses one frozen real Agent on both sides and all 11 accepting rows win
+individually after closure.
+
+These measurements support a bounded conclusion: across the checked small,
+medium, real-Spore and large-Fiber workload spectrum, the current CellScript
+artifacts are smaller and the measured positive aggregate is no worse than the
+qualified Rust references. They do not prove that every future CellScript
+program beats every Rust implementation. A new workload remains capable of
+finding a new counterexample, and `tests/cost_corpus.rs` keeps the existing
+ones as executable budgets.
+
+#### Why Data2 is now mandatory
+
+`rori` and `roriw` are RISC-V Zbb instructions. In CKB, the Script `hash_type`
+selects the CKB-VM instruction version for data-hash deployments; `data1` does
+not guarantee VM2/Zbb, while `data2` does. The compiler therefore emits and
+binds one explicit contract:
+
+```text
+minimum_vm_version = 2
+riscv_isa = "rv64imac_zbb"
+deployment_hash_types = ["data2"]
+```
+
+The same values appear in `target_profile` and the CKB constraints profile.
+The compiler default changes from `data1` to `data2`; a package declaring
+`deploy.ckb.hash_type = "data"` or `"data1"` is rejected. External CellDeps
+retain their own declared hash types because their bytes, not the generated
+CellScript ELF, determine their VM requirement. The independent artifact
+checker rejects a bundle whose metadata weakens VM2, Zbb or Data2 after the
+artifact and sidecars are produced.
+
+This is a deployment compatibility change. Existing Data1 code Cells are not
+silently upgraded: rebuild the ELF and all sidecars, deploy the new bytes under
+Data2, and update every code hash, dependency and acceptance fixture. Running a
+new Zbb artifact through an old Data1 Script is unsupported and is deliberately
+blocked before deployment metadata is accepted.
 
 ### Compact ELF layout: save 3,968 bytes before the first instruction
 
@@ -236,15 +330,30 @@ execution costs. All 17 matched VM cases retain their outcomes: three accept
 and fourteen reject. Failed-case zero cycles are unavailable-accounting
 placeholders, not measured zero-cost rejection.
 
-The committed iCKB matrix comparison, from benchmark pin `48a20271` to
-`2133dd06`, confirms 37 positive transaction savings of 2,132–4,578 cycles
-each, **96,037 total**. The original side also saves 42,504 cycles across those
-transactions; auxiliary Script changes affect both sides. All **187
-differential rows** (37 accepting, 150 rejecting) retain their acceptance and
-failure-mode labels. Two wrong-xUDT-args negatives report -52 instead of 48;
-they still reject. The **218-test suite** and the 187-row differential matrix
-are distinct counts. These are bounded runtime results, not a claim of
-identical error ordering or a substitute for the release gate.
+The committed iCKB matrix at benchmark pin `10f0914` was regenerated by 187
+single-process differential replays and then rerun read-only. All **187 rows**
+(37 accepting, 150 rejecting) retain their acceptance, result and failure-mode
+labels. Every accepting row is faster: **805,060 CellScript cycles versus
+1,952,526 original-contract cycles**, a 1,147,466-cycle transaction aggregate
+difference. Auxiliary Scripts are part of both sides, so this is not an
+isolated principal-Script attribution. The **218-test suite** and the 187-row
+differential matrix are distinct counts. These are bounded runtime results,
+not a universal cost theorem or a substitute for the release gate.
+
+The production CKB acceptance transaction recipe is also rebound as one
+closed set: all **60 scoped action/Lock artifacts** now name their final VM2
+data hashes, with **417 exact code-hash references** updated across the stored
+transactions, CellDeps and case records. All **253 Script selectors** that use
+those generated hashes are upgraded from Data1 to Data2; external dependencies
+retain their own hash types. The recipe also recomputes **143 embedded full
+Script-hash payload occurrences across 30 generated identities**. These values
+appear inside witnesses and Cell data, so they must change when either the code
+hash or hash type changes even though the surrounding transaction shape does
+not. Stateful acceptance refuses to replay if any compiled artifact differs
+from that audited recipe, and fixture tests reject a generated VM2 hash paired
+with any selector other than Data2. The clean production replay passes all
+**43 action cases, 17 Lock cases and 26 stateful scenarios / 46 committed
+steps**, including seven end-to-end lifecycles and 19 action-branch scenarios.
 
 Multi-action economics also change after removing per-file padding: the four
 scoped action ELFs now sum to **9,568 bytes**, versus **10,640** for the shared
@@ -295,8 +404,8 @@ cargo test --locked -p cellscript --test artifact_checker --test authoring_repla
 ```
 
 These checks do not replace the `backend`, `dev`, `ci`, or `release` gates.
-The documented stateful-recipe and WASM release blockers remain separate;
-smaller on-chain ELF files do not close them.
+The WASM release blocker remains separate; smaller on-chain ELF files do not
+close it.
 
 ## Dynamic Group Input Consumption
 
@@ -375,11 +484,12 @@ boundary is
 `cellscript-typed-semantics-v3`, including dedicated bounded Cell load, plan
 load, output verification, and output-end operations.
 
-The experimental `0.26b` branch separately advances metadata to schema 66,
+The experimental `0.26b` branch separately advances metadata to schema 67,
 lowering records to v6, typed semantics to v8, and source maps to v2; see the
 [branch evidence policy](../CELLSCRIPT_GATE_POLICY.md#026b-semantic-foundation-evidence).
-The trusted-external record introduces the v8/schema-66 step; the assembler
-optimization does not itself introduce those schema changes.
+The trusted-external record introduced the v8/schema-66 step; the economic
+backend's VM2/Zbb/Data2 deployment contract advances the outer metadata schema
+to 67 and constraints metadata to schema 4.
 
 Merge readiness requires:
 

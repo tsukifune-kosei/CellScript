@@ -2,6 +2,18 @@ use super::*;
 
 impl CodeGenerator {
     pub(super) fn emit_loaded_schema_bounds_check(&mut self, size_offset: usize, required_size: usize, context: &str) {
+        let known_exact =
+            self.dominant_schema_exact_sizes.get(&size_offset).or_else(|| self.block_schema_exact_sizes.get(&size_offset)).copied();
+        let known_min = self.block_schema_min_sizes.get(&size_offset).copied().unwrap_or(0);
+        if known_exact.is_some_and(|size| size >= required_size) || known_min >= required_size {
+            self.emit(format!("# cellscript abi: bounds check {} required={} elided by proven size", context, required_size));
+            // The removed guard used to end a machine block. Preserve a zero-byte
+            // layout boundary so long runs of proven field accesses remain
+            // independently auditable without paying for a synthetic branch.
+            let boundary = self.fresh_label("schema_proof_boundary");
+            self.emit_label(&boundary);
+            return;
+        }
         self.emit(format!("# cellscript abi: bounds check {} required={}", context, required_size));
         let ok_label = self.fresh_label("schema_bounds_ok");
         self.emit_stack_load("a0", size_offset);
@@ -10,9 +22,19 @@ impl CodeGenerator {
         self.emit(format!("beqz a0, {}", ok_label));
         self.emit_fail(CellScriptRuntimeError::BoundsCheckFailed);
         self.emit_label(&ok_label);
+        self.block_schema_min_sizes
+            .entry(size_offset)
+            .and_modify(|known| *known = (*known).max(required_size))
+            .or_insert(required_size);
     }
 
     pub(super) fn emit_loaded_schema_exact_size_check(&mut self, size_offset: usize, expected_size: usize, context: &str) {
+        let known_exact =
+            self.dominant_schema_exact_sizes.get(&size_offset).or_else(|| self.block_schema_exact_sizes.get(&size_offset)).copied();
+        if known_exact == Some(expected_size) {
+            self.emit(format!("# cellscript abi: exact size check {} expected={} elided by proven size", context, expected_size));
+            return;
+        }
         self.emit(format!("# cellscript abi: exact size check {} expected={}", context, expected_size));
         let ok_label = self.fresh_label("schema_size_ok");
         self.emit_stack_load("a0", size_offset);
@@ -23,6 +45,19 @@ impl CodeGenerator {
         self.emit(format!("beqz a0, {}", ok_label));
         self.emit_fail(CellScriptRuntimeError::ExactSizeMismatch);
         self.emit_label(&ok_label);
+        self.block_schema_exact_sizes.insert(size_offset, expected_size);
+        self.block_schema_min_sizes.insert(size_offset, expected_size);
+    }
+
+    pub(super) fn emit_dominating_schema_exact_size_check(&mut self, size_offset: usize, expected_size: usize, context: &str) {
+        self.emit_loaded_schema_exact_size_check(size_offset, expected_size, context);
+        self.dominant_schema_exact_sizes.insert(size_offset, expected_size);
+    }
+
+    pub(super) fn invalidate_schema_size_facts(&mut self, size_offset: usize) {
+        self.dominant_schema_exact_sizes.remove(&size_offset);
+        self.block_schema_exact_sizes.remove(&size_offset);
+        self.block_schema_min_sizes.remove(&size_offset);
     }
 
     pub(super) fn emit_molecule_table_field_bounds_to_t5(
@@ -690,7 +725,7 @@ impl CodeGenerator {
             IrOperand::Const(IrConst::Address(bytes)) | IrOperand::Const(IrConst::Hash(bytes)) => {
                 self.emit(format!("# cellscript abi: store fixed-byte const size={}", width));
                 self.emit(format!("li t0, {}", width));
-                self.emit_stack_store("t0", size_offset);
+                self.emit_schema_size_store("t0", size_offset);
                 for (i, byte) in bytes.iter().enumerate() {
                     self.emit(format!("li t0, {}", byte));
                     if buffer_offset + i <= 2047 {
@@ -705,7 +740,7 @@ impl CodeGenerator {
             IrOperand::Const(IrConst::U128(value)) => {
                 self.emit(format!("# cellscript abi: store u128 const size={}", width));
                 self.emit(format!("li t0, {}", width));
-                self.emit_stack_store("t0", size_offset);
+                self.emit_schema_size_store("t0", size_offset);
                 for (i, byte) in value.to_le_bytes().iter().enumerate() {
                     self.emit(format!("li t0, {}", byte));
                     self.emit_stack_store_byte("t0", buffer_offset + i);
@@ -714,7 +749,7 @@ impl CodeGenerator {
             IrOperand::Const(IrConst::Array(values)) => {
                 self.emit(format!("# cellscript abi: store fixed-byte array const size={}", width));
                 self.emit(format!("li t0, {}", width));
-                self.emit_stack_store("t0", size_offset);
+                self.emit_schema_size_store("t0", size_offset);
                 for (i, value) in values.iter().enumerate() {
                     if let IrConst::U8(byte) = value {
                         self.emit(format!("li t0, {}", byte));
@@ -923,7 +958,7 @@ impl CodeGenerator {
         }
         self.emit(format!("# cellscript abi: expected field {} offset={} size={}", context, source.layout.offset, width));
         self.emit_stack_load("t4", source.obj_var_id * 8);
-        self.emit_unaligned_scalar_load("t4", "t1", "t2", source.layout.offset, width);
+        self.emit_schema_scalar_load(source.obj_var_id, "t4", "t1", "t2", source.layout.offset, width);
     }
 
     pub(super) fn emit_prepare_schema_field_source(&mut self, source: &SchemaFieldValueSource, width: usize) {

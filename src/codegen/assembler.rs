@@ -137,6 +137,7 @@ enum Instruction {
     Add { rd: u8, rs1: u8, rs2: u8 },
     Sub { rd: u8, rs1: u8, rs2: u8 },
     And { rd: u8, rs1: u8, rs2: u8 },
+    Andi { rd: u8, rs1: u8, imm: i64 },
     Or { rd: u8, rs1: u8, rs2: u8 },
     Xor { rd: u8, rs1: u8, rs2: u8 },
     Mul { rd: u8, rs1: u8, rs2: u8 },
@@ -161,6 +162,8 @@ enum Instruction {
     Slli { rd: u8, rs1: u8, shamt: i64 },
     Srai { rd: u8, rs1: u8, shamt: i64 },
     Srli { rd: u8, rs1: u8, shamt: i64 },
+    Rori { rd: u8, rs1: u8, shamt: i64 },
+    Roriw { rd: u8, rs1: u8, shamt: i64 },
     Sll { rd: u8, rs1: u8, rs2: u8 },
     Srl { rd: u8, rs1: u8, rs2: u8 },
     Sra { rd: u8, rs1: u8, rs2: u8 },
@@ -1033,6 +1036,11 @@ fn parse_instruction(line: &str) -> Result<Instruction> {
             rs1: parse_register(arg(&args, 1)?)?,
             rs2: parse_register(arg(&args, 2)?)?,
         }),
+        "andi" => Ok(Instruction::Andi {
+            rd: parse_register(arg(&args, 0)?)?,
+            rs1: parse_register(arg(&args, 1)?)?,
+            imm: parse_immediate(arg(&args, 2)?)?,
+        }),
         "or" => Ok(Instruction::Or {
             rd: parse_register(arg(&args, 0)?)?,
             rs1: parse_register(arg(&args, 1)?)?,
@@ -1131,6 +1139,16 @@ fn parse_instruction(line: &str) -> Result<Instruction> {
             shamt: parse_immediate(arg(&args, 2)?)?,
         }),
         "srli" => Ok(Instruction::Srli {
+            rd: parse_register(arg(&args, 0)?)?,
+            rs1: parse_register(arg(&args, 1)?)?,
+            shamt: parse_immediate(arg(&args, 2)?)?,
+        }),
+        "rori" => Ok(Instruction::Rori {
+            rd: parse_register(arg(&args, 0)?)?,
+            rs1: parse_register(arg(&args, 1)?)?,
+            shamt: parse_immediate(arg(&args, 2)?)?,
+        }),
+        "roriw" => Ok(Instruction::Roriw {
             rd: parse_register(arg(&args, 0)?)?,
             rs1: parse_register(arg(&args, 1)?)?,
             shamt: parse_immediate(arg(&args, 2)?)?,
@@ -1251,6 +1269,7 @@ fn encode_instruction(
         Instruction::And { rd, rs1, rs2 } => {
             out.extend_from_slice(&encode_r_type(0x33, *rd, 0b111, *rs1, *rs2, 0b0000000).to_le_bytes())
         }
+        Instruction::Andi { rd, rs1, imm } => out.extend_from_slice(&encode_i_type(0x13, *rd, 0b111, *rs1, *imm)?.to_le_bytes()),
         Instruction::Or { rd, rs1, rs2 } => {
             out.extend_from_slice(&encode_r_type(0x33, *rd, 0b110, *rs1, *rs2, 0b0000000).to_le_bytes())
         }
@@ -1312,6 +1331,20 @@ fn encode_instruction(
                 return Err(CompileError::new("srli shift amount must be in 0..=63", crate::error::Span::default()));
             }
             out.extend_from_slice(&encode_i_type(0x13, *rd, 0b101, *rs1, *shamt)?.to_le_bytes());
+        }
+        Instruction::Rori { rd, rs1, shamt } => {
+            if !(0..=63).contains(shamt) {
+                return Err(CompileError::new("rori shift amount must be in 0..=63", crate::error::Span::default()));
+            }
+            let imm = (0b011000_i64 << 6) | *shamt;
+            out.extend_from_slice(&encode_i_type(0x13, *rd, 0b101, *rs1, imm)?.to_le_bytes());
+        }
+        Instruction::Roriw { rd, rs1, shamt } => {
+            if !(0..=31).contains(shamt) {
+                return Err(CompileError::new("roriw shift amount must be in 0..=31", crate::error::Span::default()));
+            }
+            let imm = (0b0110000_i64 << 5) | *shamt;
+            out.extend_from_slice(&encode_i_type(0x1b, *rd, 0b101, *rs1, imm)?.to_le_bytes());
         }
         Instruction::Sll { rd, rs1, rs2 } => {
             out.extend_from_slice(&encode_r_type(0x33, *rd, 0b001, *rs1, *rs2, 0b0000000).to_le_bytes())
@@ -1952,6 +1985,10 @@ pub(super) fn is_runtime_scalar_failclosed_call(func: &str) -> bool {
             | "__ckb_cell_unoccupied_capacity"
             | "__ckb_cell_output_index"
             | "__ckb_cell_data_size"
+            | "__ckb_cell_data_equal"
+            | "__ckb_source_bytes_equal"
+            | "__ckb_source_bytes_equal_memory"
+            | "__ckb_source_bytes_zero"
             | "__ckb_cell_count"
             | "__ckb_cell_has_type"
             | "__ckb_cell_data_u8"
@@ -2027,6 +2064,7 @@ mod tests {
         ("add", "add t0, a0, a1"),
         ("addi", "addi t0, t0, -1"),
         ("and", "and t2, a0, a1"),
+        ("andi", "andi t2, a0, 7"),
         ("beq", "beq a0, a1, branch_target"),
         ("bge", "bge a0, a1, branch_target"),
         ("bgeu", "bgeu a0, a1, branch_target"),
@@ -2053,6 +2091,8 @@ mod tests {
         ("rem", "rem t6, a0, a1"),
         ("remu", "remu t6, a0, a1"),
         ("ret", "ret"),
+        ("rori", "rori s3, s3, 32"),
+        ("roriw", "roriw s3, s3, 17"),
         ("sb", "sb t1, 8(sp)"),
         ("sd", "sd t0, 0(sp)"),
         ("seqz", "seqz s4, a0"),
@@ -2076,7 +2116,6 @@ mod tests {
     const INTENTIONALLY_UNSUPPORTED_INTERNAL_ASSEMBLER_MNEMONICS: &[(&str, &str)] = &[
         ("addiw", "addiw a0, a0, 1"),
         ("addw", "addw a0, a0, a1"),
-        ("andi", "andi a0, a0, 1"),
         ("amoadd.w", "amoadd.w a0, a1, (a2)"),
         ("auipc", "auipc a0, 0"),
         ("ble", "ble a0, a1, target"),
@@ -2604,6 +2643,50 @@ mod tests {
                 "    or t6, t6, t2",
             ]
         );
+    }
+
+    #[test]
+    fn aligned_cell_buffer_u64_load_uses_one_native_instruction() {
+        let mut generator = CodeGenerator::new(CodegenOptions::default());
+        generator.cell_buffer_offsets.insert(7, 64);
+
+        generator.emit_schema_scalar_load(7, "t4", "t0", "t2", 8, 8);
+
+        assert_eq!(generator.assembly, vec!["    # cellscript abi: aligned u64 schema load var7 offset=8", "    ld t0, 8(t4)"]);
+    }
+
+    #[test]
+    fn unaligned_or_unproven_schema_u64_load_stays_bytewise() {
+        let mut unaligned = CodeGenerator::new(CodegenOptions::default());
+        unaligned.cell_buffer_offsets.insert(7, 64);
+        unaligned.emit_schema_scalar_load(7, "t4", "t0", "t2", 1, 8);
+        assert_eq!(unaligned.assembly.iter().filter(|line| line.contains("lbu t2")).count(), 8);
+        assert!(!unaligned.assembly.iter().any(|line| line.contains("ld t0")));
+
+        let mut unproven = CodeGenerator::new(CodegenOptions::default());
+        unproven.emit_schema_scalar_load(7, "t4", "t0", "t2", 0, 8);
+        assert_eq!(unproven.assembly.iter().filter(|line| line.contains("lbu t2")).count(), 8);
+        assert!(!unproven.assembly.iter().any(|line| line.contains("ld t0")));
+    }
+
+    #[test]
+    fn schema_size_facts_elide_only_until_the_size_slot_is_reused() {
+        let mut generator = CodeGenerator::new(CodegenOptions::default());
+
+        generator.emit_dominating_schema_exact_size_check(80, 8, "Token");
+        let after_first_check = generator.assembly.len();
+        generator.emit_loaded_schema_exact_size_check(80, 8, "Token");
+        generator.emit_loaded_schema_bounds_check(80, 8, "Token.amount");
+        assert_eq!(
+            generator.assembly.len(),
+            after_first_check + 3,
+            "only evidence comments and a zero-byte block boundary should remain"
+        );
+        assert!(generator.assembly.last().is_some_and(|line| line.contains("schema_proof_boundary")));
+
+        generator.invalidate_schema_size_facts(80);
+        generator.emit_loaded_schema_bounds_check(80, 8, "Token.amount reloaded");
+        assert!(generator.assembly.len() > after_first_check + 2, "a reused size slot must be checked again");
     }
 
     #[test]

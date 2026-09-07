@@ -369,7 +369,7 @@ fn build_reports(artifacts: &[ArtifactRecord]) -> Value {
                 "artifact_path":artifact.path, "metadata_sidecar":format!("{}.meta.json", artifact.path.display()),
                 "artifact_packaging":"ckb-elf", "artifact_size_bytes":artifact.bytes.len(),
                 "artifact_hash_algorithm":"ckb-blake2b256", "deployable_elf_hash":artifact.data_hash,
-                "artifact_sha256":artifact.sha256, "deployment_hash_type_used_by_gate":"data1",
+                "artifact_sha256":artifact.sha256, "deployment_hash_type_used_by_gate":"data2",
                 "verify_artifact_status":"passed", "verify_target_profile":"ckb", "elf_entry_abi_status":"passed",
                 "abi_trailer_stripped":true, "onchain_deployments":[]
             })
@@ -670,6 +670,22 @@ mod tests {
 
     #[test]
     fn transaction_recipe_fixture_is_native_v023() {
+        fn assert_generated_scripts_use_data2(value: &Value, generated_hashes: &BTreeSet<String>) -> usize {
+            match value {
+                Value::Array(values) => values.iter().map(|value| assert_generated_scripts_use_data2(value, generated_hashes)).sum(),
+                Value::Object(object) => {
+                    let current = usize::from(
+                        object.get("code_hash").and_then(Value::as_str).is_some_and(|hash| generated_hashes.contains(hash)),
+                    );
+                    if current == 1 {
+                        assert_eq!(object.get("hash_type").and_then(Value::as_str), Some("data2"));
+                    }
+                    current + object.values().map(|value| assert_generated_scripts_use_data2(value, generated_hashes)).sum::<usize>()
+                }
+                _ => 0,
+            }
+        }
+
         let fixture: Value = serde_json::from_str(include_str!("../fixtures/ckb_acceptance/transactions-v0.23.json")).unwrap();
         assert_eq!(fixture["schema"], "cellscript-ckb-acceptance-transaction-recipes-v0.23");
         assert_eq!(fixture["action_cases"].as_array().unwrap().len(), 43);
@@ -677,10 +693,16 @@ mod tests {
         assert_eq!(fixture["stateful_scenarios"].as_array().unwrap().len(), 26);
 
         let action_cases = fixture["action_cases"].as_array().unwrap();
+        let generated_hashes = action_cases
+            .iter()
+            .chain(fixture["lock_cases"].as_array().unwrap())
+            .map(|case| case["artifact_data_hash"].as_str().unwrap().to_owned())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(assert_generated_scripts_use_data2(&fixture, &generated_hashes), 253);
         for (name, expected_hash) in [
-            ("timelock.cell:create_absolute_lock", "0xc459ccb8a33150347738731204e6ba4e8e115960ce34aed91ba92106764a03e1"),
-            ("timelock.cell:extend_lock", "0x786f0d5cb7f10365b34e9ebe6b2a3e83460b2dd3394035661efe5d3cd026378a"),
-            ("timelock.cell:batch_create_locks", "0x7dea84e5d78838e3a75a86af457057064eee553ec554f24e60077fa7228fc068"),
+            ("timelock.cell:create_absolute_lock", "0x047295a7622cdc1e76e19d9956c430f700c81992039ef5b918d117b05ebe6eb4"),
+            ("timelock.cell:extend_lock", "0x3977ba8c42ce473d302ef75fa0aac1365eba1315cc593a9bca9b671de2225f48"),
+            ("timelock.cell:batch_create_locks", "0xcc476ecba2e606e892c7bbe3770f5b3e3ef38919d10fa89d58787f4bc38d07ae"),
         ] {
             let case = action_cases.iter().find(|case| case["name"] == name).unwrap();
             assert_eq!(case["artifact_data_hash"], expected_hash, "stale audited artifact identity for {name}");

@@ -1,0 +1,9 @@
+module corpus::nft_lock
+
+resource Nft has store {
+    owner: Address,
+}
+
+lock owner_guard(protected cell: Nft, witness claimed: Address) -> bool {
+    require claimed == cell.owner
+}

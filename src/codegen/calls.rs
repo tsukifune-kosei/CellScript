@@ -378,6 +378,9 @@ impl CodeGenerator {
         if self.emit_runtime_witness_hash_call(dest, func, args)? {
             return Ok(());
         }
+        if self.emit_runtime_source_memory_equality_call(dest, func, args)? {
+            return Ok(());
+        }
 
         let abi = self.callable_abis.get(func).cloned();
         let outgoing_stack_arg_bytes = align_stack_arg_bytes(call_abi_arg_count(abi.as_ref(), args).saturating_sub(8) * 8);
@@ -401,12 +404,23 @@ impl CodeGenerator {
             self.emit(format!("# cellscript abi: reserve {} bytes for outgoing stack call arguments", outgoing_stack_arg_bytes));
             self.emit_large_addi("sp", "sp", -(outgoing_stack_arg_bytes as i64));
         }
+        if is_cached_exact_read_helper(func) {
+            if !self.module_uses_exact_read_cache {
+                self.emit_fail(CellScriptRuntimeError::SyscallFailed);
+                return Ok(());
+            }
+            self.emit("mv a2, s11");
+        }
         self.emit(format!("call {}", func));
         if outgoing_stack_arg_bytes > 0 {
             self.emit_large_addi("sp", "sp", outgoing_stack_arg_bytes as i64);
         }
 
-        if is_runtime_scalar_failclosed_call(func) {
+        // Exact cached reads terminate inside their shared runtime helper on
+        // any invalid source or syscall failure. Successful calls therefore
+        // return only the scalar value in a0 and need no per-call status
+        // branch. Other scalar runtime helpers retain the a1 status ABI.
+        if is_runtime_scalar_failclosed_call(func) && !is_terminal_scalar_runtime_helper(func) {
             let ok_label = self.fresh_label("runtime_scalar_ok");
             self.emit("# cellscript abi: scalar runtime helper status check (a1 == 0)");
             self.emit(format!("beqz a1, {}", ok_label));
@@ -483,6 +497,53 @@ impl CodeGenerator {
         Ok(())
     }
 
+    fn emit_runtime_source_memory_equality_call(&mut self, dest: Option<&IrVar>, func: &str, args: &[IrOperand]) -> Result<bool> {
+        if func != "__ckb_source_bytes_equal_memory" {
+            return Ok(false);
+        }
+        let Some(dest) = dest else {
+            self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+            return Ok(true);
+        };
+        let [view, base, memory, length, kind] = args else {
+            self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+            return Ok(true);
+        };
+        if dest.ty != IrType::Bool {
+            self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+            return Ok(true);
+        }
+        let Some(width) = (match memory {
+            IrOperand::Var(var) => self.fixed_byte_like_width(&var.ty),
+            IrOperand::Const(_) => operand_fixed_byte_width(memory),
+        }) else {
+            self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+            return Ok(true);
+        };
+        let Some(source) = self.expected_fixed_byte_source(memory, width) else {
+            self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+            return Ok(true);
+        };
+        self.emit_prepare_fixed_byte_source(&source, width, "source byte-range memory operand");
+        self.emit_operand_to_register("a0", view);
+        self.emit_operand_to_register("a1", base);
+        if !self.emit_fixed_byte_source_pointer_or_const_to("a2", &source) {
+            self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+            return Ok(true);
+        }
+        self.emit_operand_to_register("a3", length);
+        self.emit_operand_to_register("a4", kind);
+        self.emit("call __ckb_source_bytes_equal_memory");
+        let ok = self.fresh_label("source_memory_equal_status_ok");
+        self.emit("# cellscript abi: source-memory equality status check (a1 == 0)");
+        self.emit(format!("beqz a1, {ok}"));
+        self.emit("addi a0, a1, 0");
+        self.emit_process_failure_status();
+        self.emit_label(&ok);
+        self.emit_stack_store("a0", dest.id * 8);
+        Ok(true)
+    }
+
     fn emit_runtime_current_script_hash_call(&mut self, dest: Option<&IrVar>, func: &str, args: &[IrOperand]) -> Result<bool> {
         if func != "__ckb_current_script_hash" {
             return Ok(false);
@@ -506,7 +567,7 @@ impl CodeGenerator {
 
         self.emit("# cellscript abi: load current script hash into addressable Hash");
         self.emit("li t0, 32");
-        self.emit_stack_store("t0", size_offset);
+        self.emit_schema_size_store("t0", size_offset);
         self.emit_sp_addi("a0", buffer_offset);
         self.emit_sp_addi("a1", size_offset);
         self.emit("call __ckb_current_script_hash");
@@ -542,7 +603,7 @@ impl CodeGenerator {
 
         self.emit("# cellscript abi: load SourceView input OutPoint tx hash into addressable Hash");
         self.emit("li t0, 32");
-        self.emit_stack_store("t0", size_offset);
+        self.emit_schema_size_store("t0", size_offset);
         self.emit_operand_to_register("a0", &args[0]);
         self.emit_sp_addi("a1", buffer_offset);
         self.emit_sp_addi("a2", size_offset);
@@ -589,7 +650,7 @@ impl CodeGenerator {
 
         self.emit("# cellscript abi: load SourceView ScriptRef hash field into addressable Hash");
         self.emit("li t0, 32");
-        self.emit_stack_store("t0", size_offset);
+        self.emit_schema_size_store("t0", size_offset);
         self.emit_operand_to_register("a0", &args[0]);
         self.emit_sp_addi("a1", buffer_offset);
         self.emit_sp_addi("a2", size_offset);
@@ -626,7 +687,7 @@ impl CodeGenerator {
 
         self.emit("# cellscript abi: load 32 bytes from SourceView cell data into addressable Hash");
         self.emit("li t0, 32");
-        self.emit_stack_store("t0", size_offset);
+        self.emit_schema_size_store("t0", size_offset);
         self.emit_operand_to_register("a0", &args[0]);
         self.emit_operand_to_register("a1", &args[1]);
         self.emit_sp_addi("a2", buffer_offset);
@@ -752,7 +813,7 @@ impl CodeGenerator {
 
         self.emit("# cellscript abi: load witness hash into addressable Hash");
         self.emit("li t0, 32");
-        self.emit_stack_store("t0", size_offset);
+        self.emit_schema_size_store("t0", size_offset);
         self.emit_operand_to_register("a0", &args[0]);
         self.emit_sp_addi("a1", buffer_offset);
         self.emit(format!("call {}", func));

@@ -611,7 +611,7 @@ fn validate_build_reports(report: &Map<String, Value>, compile_only: bool) -> Re
             ("vm_profile", json!("ckb-vm")),
             ("artifact_format", json!("riscv64-elf")),
             ("artifact_hash_algorithm", json!("ckb-blake2b256")),
-            ("deployment_hash_type_used_by_gate", json!("data1")),
+            ("deployment_hash_type_used_by_gate", json!("data2")),
             ("verify_artifact_status", json!("passed")),
             ("verify_target_profile", json!("ckb")),
             ("elf_entry_abi_status", json!("passed")),

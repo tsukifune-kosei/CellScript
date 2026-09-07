@@ -2,6 +2,47 @@
 
 ## 0.26b - Experimental semantic-foundation branch
 
+- Complete the 0.26 economic-backend tranche across layout, code generation,
+  runtime access and cryptographic kernels. In addition to the compact ELF and
+  small-`li` work below, the backend now shares byte primitives, removes
+  dominated schema checks and immediate stack reloads, folds exact byte loops
+  structurally in IR, uses source-bound four-way read windows with a
+  profitability-gated register hot window, decodes `SourceView` with shifts
+  instead of DIV/REM, keeps hash state in registers, and emits VM2 Zbb
+  `rori`/`roriw` rotations. These transformations preserve bounds, source kind,
+  exact length and fail-closed syscall handling; they do not delete semantic
+  obligations or match business/action names.
+
+  The matched three-scenario corpus is now smaller and faster than its
+  size-tuned Rust references in every row: pool merge 2,512/2,816 bytes and
+  6,000/9,232 cycles, schema roll 2,272/2,760 bytes and 8,661/10,350 cycles,
+  ownership Lock 2,232/2,304 bytes and 5,583/6,333 cycles (CellScript/Rust).
+  The real Spore+Agent closure runs the same 52,960-byte Agent ELF in 131 paired
+  transactions; the current CellScript Spore ELF is 53,000 bytes versus 66,840
+  for the matched Rust `z-fat` build, and every one of its 11 accepting paths
+  is faster (2.8-11.7%, 5.9% aggregate). The Fiber commitment ELF is 63,336
+  bytes versus 69,176 for Rust `z-thin`; all 256 accepted paths preserve
+  behavior and the transaction-level aggregate remains lower, while individual
+  rows include signature-dependent cycle variance and are not presented as
+  isolated Script-group measurements. These are finite, reproducible corpus
+  results, not a theorem that arbitrary CellScript beats arbitrary Rust.
+
+  Because Zbb rotations require CKB-VM2, generated artifacts now declare
+  `minimum_vm_version = 2`, `riscv_isa = rv64imac_zbb`, and the deployable
+  `data2` hash type in both target and constraints metadata. `data2` is the new
+  compiler default; a package that declares `deploy.ckb.hash_type = data` or
+  `data1` fails closed. The independent checker rejects metadata that weakens
+  the VM/ISA/hash-type binding. Advance compile metadata to schema 67,
+  constraints metadata to schema 4, and the artifact cache identity to v30.
+  Rebind the production CKB transaction recipe for all 60 scoped action/Lock
+  artifacts, updating 417 exact code-hash references to the final VM2 output
+  and upgrading all 253 generated-Script selectors from `data1` to `data2`.
+  Rebind 143 embedded full-Script-hash payload occurrences across 30 generated
+  identities as well: changing both code bytes and hash type changes the CKB
+  Script identity carried inside witnesses and Cell data, not only the outer
+  transaction selector.
+  See [0.26 Economics and VM2](docs/releases/CELLSCRIPT_0_26_RELEASE_NOTES.md#economic-backend-closure-and-vm2-deployment-contract).
+
 - Add bounded, explicit trusted-external verifier delegation. New
   `trusted_exec_cell_dep_u8_args`, `trusted_exec_cell_dep_hex4`, and
   `trusted_spawn_wait_cell_dep_hex4` source intrinsics require a compile-time
@@ -16,7 +57,8 @@
   and trusted calls cannot mix within one scope. Advance compile metadata to
   schema 66 and typed semantics to v8 with a separate
   `trusted-external` evidence tier and an explicit
-  `compiler_proves_internal_semantics = false` boundary. The independent
+  `compiler_proves_internal_semantics = false` boundary. Compile metadata is
+  now schema 67 after the later VM2 deployment-contract addition. The independent
   checker requires one ordered source/hash/delegate sequence over the same
   CellDep operand and cross-checks runtime, constraints, typed semantics,
   ProofPlan, and machine lowering. Real CKB-VM tests prove exact-hash EXEC and
@@ -39,9 +81,9 @@
   with a checked sum and output lock binding, a two-field schema-roll
   successor with one updated field, and an ownership-claim Lock — each
   compiled on both sides with VM accept/reject parity, byte sizes, cycles
-  and a growth budget. Hand-written Rust references built with the audited
-  profile stay smaller on bytes (1.01-1.41x) while CellScript consistently
-  uses fewer cycles (13-24% less on the measured positives). Deployed sizes
+  and a growth budget. After the complete economic-backend tranche, CellScript
+  is smaller on bytes (0.82-0.97x) and uses fewer cycles (12-35% less on the
+  measured positives) in all three rows. Deployed sizes
   of the real DAO, secp256k1, secp-data and xUDT system scripts are printed
   as context with their different feature scopes called out; they are not
   matched comparisons.
@@ -56,9 +98,11 @@
   instructions, 41.92% below the matched 5,840-byte Rust sample. The measured
   relation and explicit expansion remain byte-identical at O0–O3. All 187
   committed iCKB differential matrix rows retain their acceptance outcomes;
-  the separately reported suite has 218 tests. The 37 positive matrix rows save
-  96,037 transaction cycles in total, including shared auxiliary Script
-  improvements; two rejecting rows change their first reported exit code.
+  the separately reported suite has 218 tests. After the complete economic
+  tranche and a fresh single-process replay, all 37 positive rows remain faster:
+  805,060 CellScript cycles versus 1,952,526 original-contract cycles, a
+  1,147,466-cycle transaction aggregate difference. These rows include shared
+  auxiliary Scripts and are not isolated principal-Script measurements.
   Replace the size test's requirement that Rust remain smaller with an
   absolute CellScript byte budget. See the
   [0.26 release notes](docs/releases/CELLSCRIPT_0_26_RELEASE_NOTES.md#major-backend-optimization-compact-elf-and-immediate-encoding)
@@ -104,16 +148,14 @@
   metadata-only path must be trimmed or gated before the release gate's
   WASM bundle check can pass.
 
-- Rebind the audited CKB acceptance recipes to the current artifact
-  identities (sixty case hashes, the dependency table, embedded code-hash
-  references and the checker's pinned timelock identities) following the
-  established refresh precedent. The live devnet replay now executes every
-  token.cell action case end to end. It then stops at
-  nft.cell:create_collection, whose recipe transaction fails with
-  `CellLoadFailed` against the freshly compiled artifact: the 0.26b tranches
-  changed its bytes while the pre-extracted recipe still encodes the old
-  entry contract. Recipe regeneration against the current contract is
-  tracked work; the clean-source stateful gate stage remains blocked on it.
+- Rebind the audited CKB acceptance recipes to the current artifact and CKB
+  Script identities following the established refresh precedent. This closes
+  all three identity layers together: sixty case artifacts and 417 exact
+  code-hash references, 253 generated-Script selectors upgraded to `data2`,
+  and 143 embedded full-Script-hash payload occurrences across 30 identities.
+  External dependency selectors and identities remain unchanged. The clean
+  production replay passes all 43 action cases, 17 Lock cases and 26 stateful
+  scenarios / 46 committed steps, including all seven end-to-end lifecycles.
 
 - Fail closed when a runtime `source::*` view index reaches the 32-bit index
   space. The generated SourceView helper previously added an unchecked index
@@ -229,9 +271,12 @@
 
 ## 0.26.0 - Unreleased
 
-- Record the major ELF-size optimization implemented on the `0.26b` branch:
-  compact payload alignment and shorter `li` encodings cut the audited
-  relation artifact by 56.65%, without changing its source or witness ABI.
+- Record the economic-backend optimization implemented on the `0.26b` branch:
+  compact payload alignment, shorter constants, shared runtime operations,
+  structured IR folds, cached exact reads, cheaper SourceView decoding and
+  VM2 Zbb hash rotations make every matched three-scenario corpus row both
+  smaller and faster than its size-tuned Rust reference, without changing its
+  source or witness ABI. Generated artifacts now require `data2`/CKB-VM2.
   The [0.26 release notes](docs/releases/CELLSCRIPT_0_26_RELEASE_NOTES.md)
   explain the byte savings and evidence limits. This is branch implementation
   evidence, not a stable-release or `nightly-0.26` availability claim.

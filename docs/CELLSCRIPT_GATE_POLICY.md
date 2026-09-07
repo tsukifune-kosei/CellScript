@@ -259,7 +259,7 @@ CKB-VM execution, deployment, and chain evidence.
 
 ### 0.26b semantic-foundation evidence
 
-The `0.26b` experimental branch advances compile metadata to schema 66,
+The `0.26b` experimental branch advances compile metadata to schema 67,
 verified lowering records to v6, typed semantics to v8, and source maps to v2.
 Typed semantics embeds `cellscript-semantic-foundation-v3`, whose canonical
 records cover a bounded provenance DAG, entry selection, role binding, Cell
@@ -277,6 +277,11 @@ CellDep-load, exact data-hash check, and EXEC or SPAWN/WAIT delegation sequence,
 the manifest claim matches exactly, and
 `compiler_proves_internal_semantics = false`. Raw or undeclared external calls
 remain production blockers.
+The target and constraints records additionally bind
+`minimum_vm_version = 2`, `riscv_isa = "rv64imac_zbb"`, and
+`deployment_hash_types = ["data2"]`. The independent checker rejects any
+bundle that weakens this generated-artifact deployment contract. Constraints
+metadata is schema 4.
 Executable `require`/`enforce` claims additionally bind canonical condition
 text to one condition-provenance node, the ordered typed success/failure
 branch, and the exact fail-closed runtime error. Mutation tests reject broken
@@ -639,7 +644,7 @@ CellScriptBuildReport {
   artifact_hash_algorithm = "ckb-blake2b256"
   deployable_elf_hash
   artifact_sha256
-  deployment_hash_type_used_by_gate = "data1"
+  deployment_hash_type_used_by_gate = "data2"
   verify_artifact_status = "passed"
   verify_target_profile = "ckb"
   elf_entry_abi_status = "passed"

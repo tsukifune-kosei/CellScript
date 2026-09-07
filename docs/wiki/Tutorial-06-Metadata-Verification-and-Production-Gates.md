@@ -25,7 +25,7 @@ The profile combines that with independently versioned target,
 primitive-assurance, entry payload, witness placement, and metadata-schema
 axes. Verification rejects a sidecar whose profile does not resolve from those
 inputs; it never guesses another contract. Current `0.26b` outputs use metadata
-schema 66, source schema 2, artifact schema 1, and constraints schema 3.
+schema 67, source schema 2, artifact schema 1, and constraints schema 4.
 Metadata includes canonical `public_interface` / `interface_hash` and
 `typed_semantics` / `typed_semantics_hash` pairs. Typed semantics v6 embeds the
 semantic-foundation v2 record and resolved fixed-Cell binding tables. Registry,
@@ -253,7 +253,7 @@ records the exact `identity(...)` condition declared by the same resource.
 No proof may source authority from a container or another Cell type.
 
 Top-level `enum_layouts` for concrete payload ADTs first appeared in schema 53
-and remain in current metadata schema 66 on the experimental `0.26b` branch. Audit the
+and remain in current metadata schema 67 on the experimental `0.26b` branch. Audit the
 `packed-tagged-union-v1` layout, one-byte tag, sequential variant tags, packed
 field offsets, encoded size, ownership, storage, and ABI together. A
 `linear-cell-handle` field is exactly eight bytes and forces
@@ -292,7 +292,7 @@ emit runtime error 24 in permissive artifacts and stop at E2105 under the
 production policy; a static `N` alone is never evidence that a scan ran.
 
 The validity record first appeared in schema 55 during the 0.22 line and is
-retained by current metadata schema 66 on the experimental `0.26b` branch as
+retained by current metadata schema 67 on the experimental `0.26b` branch as
 `types[].validity_predicates`. Review each predicate's
 `expression`, `dependencies`, `evidence_tier`,
 `runtime_checked_on_create`, `create_paths_selected`,

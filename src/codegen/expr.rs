@@ -96,10 +96,12 @@ impl CodeGenerator {
             return Ok(());
         }
 
-        self.emit_expected_operand_to_t1(left);
-        self.emit_stack_store("t1", dest.id * 8);
-        self.emit_expected_operand_to_t1(right);
-        self.emit_stack_load("t0", dest.id * 8);
+        // Both operands are already materialized by the typed IR at this
+        // program point. Loading them directly avoids recursively rebuilding
+        // expression provenance (which is reserved for prelude checks) and
+        // avoids using the destination stack slot as a temporary.
+        self.emit_operand_to_register("t0", left);
+        self.emit_operand_to_register("t1", right);
 
         if matches!(op, BinaryOp::Div | BinaryOp::Mod) {
             let divisor_ok = self.fresh_label("scalar_divisor_nonzero");
@@ -685,10 +687,7 @@ impl CodeGenerator {
         let Some(source) = self.expected_fixed_byte_source(obj, parent_width) else {
             return false;
         };
-        if is_fixed_scalar_ir_type(&dest.ty) {
-            let Some(width) = layout_fixed_scalar_width(&layout) else {
-                return false;
-            };
+        if let Some(width) = layout_fixed_scalar_width(&layout) {
             self.emit(format!("# field access .{field}"));
             self.emit(format!(
                 "# cellscript abi: fixed aggregate field {}.{} offset={} size={}",
@@ -795,7 +794,7 @@ impl CodeGenerator {
                 self.emit_loaded_schema_exact_size_check(size_offset, expected_size, type_name);
                 self.emit_loaded_schema_bounds_check(size_offset, layout.offset + width, &format!("{}.{}", type_name, field));
                 if layout_fixed_scalar_width(&layout).is_some() {
-                    self.emit_unaligned_scalar_load("t4", "t0", "t2", layout.offset, width);
+                    self.emit_schema_scalar_load(var.id, "t4", "t0", "t2", layout.offset, width);
                 } else {
                     self.emit(format!("addi t0, t4, {}", layout.offset));
                 }
@@ -819,7 +818,7 @@ impl CodeGenerator {
                 return false;
             }
             if layout_fixed_scalar_width(&layout).is_some() {
-                self.emit_unaligned_scalar_load("t4", "t0", "t2", layout.offset, width);
+                self.emit_schema_scalar_load(var.id, "t4", "t0", "t2", layout.offset, width);
             } else {
                 self.emit(format!("addi t0, t4, {}", layout.offset));
             }
@@ -857,7 +856,7 @@ impl CodeGenerator {
         self.emit("add t0, t4, t5");
         self.emit("sub t1, t6, t5");
         self.emit_stack_store("t0", dest.id * 8);
-        self.emit_stack_store("t1", dest_size_offset);
+        self.emit_schema_size_store("t1", dest_size_offset);
         true
     }
 

@@ -6,6 +6,24 @@ impl CodeGenerator {
         self.emit_stack_store("ra", self.frame_size - 8);
         self.emit_stack_store("fp", self.frame_size - 16);
         self.emit_sp_addi("fp", self.frame_size);
+        if let Some(cache_offset) = self.exact_read_cache_offset {
+            self.emit_stack_store("zero", cache_offset);
+            self.emit_stack_store("zero", cache_offset + 8);
+            self.emit_stack_store("s11", cache_offset + 16);
+            if self.module_uses_exact_read_hot_cache {
+                for (index, register) in ["s10", "s9", "s8", "s7", "s6", "s5"].iter().enumerate() {
+                    self.emit_stack_store(register, cache_offset + 24 + index * 8);
+                }
+            }
+            let header_size = self.exact_read_cache_header_size();
+            for way in 0..RUNTIME_EXACT_READ_CACHE_WAYS {
+                self.emit_stack_store("zero", cache_offset + header_size + way * RUNTIME_EXACT_READ_CACHE_ENTRY_SIZE + 24);
+            }
+            self.emit_sp_addi("s11", cache_offset);
+            if self.module_uses_exact_read_hot_cache {
+                self.emit("li s10, 0");
+            }
+        }
     }
 
     pub(super) fn emit_epilogue(&mut self) {
@@ -77,6 +95,14 @@ impl CodeGenerator {
     }
 
     pub(super) fn emit_epilogue_body(&mut self) {
+        if let Some(cache_offset) = self.exact_read_cache_offset {
+            if self.module_uses_exact_read_hot_cache {
+                for (index, register) in ["s10", "s9", "s8", "s7", "s6", "s5"].iter().enumerate().rev() {
+                    self.emit_stack_load(register, cache_offset + 24 + index * 8);
+                }
+            }
+            self.emit_stack_load("s11", cache_offset + 16);
+        }
         self.emit_stack_load("ra", self.frame_size - 8);
         self.emit_stack_load("fp", self.frame_size - 16);
         self.emit_large_addi("sp", "sp", self.frame_size as i64);
@@ -216,6 +242,7 @@ impl CodeGenerator {
         self.named_var_offsets.clear();
         self.cell_buffer_offsets.clear();
         self.cell_buffer_size_offsets.clear();
+        self.exact_read_cache_offset = None;
         self.dynamic_value_size_offsets.clear();
         self.empty_molecule_vector_vars.clear();
         self.constructed_byte_vectors.clear();
@@ -233,7 +260,22 @@ impl CodeGenerator {
         self.output_param_ids.clear();
         self.mutate_param_ids.clear();
         self.schema_pointer_size_offsets.clear();
+        self.dominant_schema_exact_sizes.clear();
+        self.block_schema_exact_sizes.clear();
+        self.block_schema_min_sizes.clear();
         self.local_schema_value_widths.clear();
+        self.branch_only_vars = body
+            .blocks
+            .iter()
+            .filter_map(|block| match (block.instructions.last(), &block.terminator) {
+                (Some(IrInstruction::Binary { dest, .. }), IrTerminator::Branch { cond: IrOperand::Var(cond), .. })
+                    if dest.id == cond.id && body_var_use_count(body, dest.id) == 1 =>
+                {
+                    Some(dest.id)
+                }
+                _ => None,
+            })
+            .collect();
         self.fixed_byte_param_size_offsets.clear();
         self.param_type_hash_pointer_offsets.clear();
         self.param_type_hash_size_offsets.clear();
@@ -604,6 +646,13 @@ impl CodeGenerator {
             next_cell_slot += 16;
         }
 
+        if self.current_function_owns_exact_read_cache && self.module_uses_exact_read_cache {
+            next_cell_slot = align_up(next_cell_slot, 8);
+            self.exact_read_cache_offset = Some(next_cell_slot);
+            next_cell_slot +=
+                self.exact_read_cache_header_size() + RUNTIME_EXACT_READ_CACHE_WAYS * RUNTIME_EXACT_READ_CACHE_ENTRY_SIZE;
+        }
+
         let collection_slot_size = 8 + RUNTIME_COLLECTION_BUFFER_SIZE;
         let collection_count = body
             .blocks
@@ -615,6 +664,14 @@ impl CodeGenerator {
         next_cell_slot += collection_count * collection_slot_size;
 
         self.frame_size = align_frame(next_cell_slot + RUNTIME_EXPR_TEMP_SIZE + RUNTIME_SCRATCH_SIZE + 16);
+    }
+
+    pub(super) fn exact_read_cache_header_size(&self) -> usize {
+        if self.module_uses_exact_read_hot_cache {
+            RUNTIME_EXACT_READ_CACHE_HOT_HEADER_SIZE
+        } else {
+            RUNTIME_EXACT_READ_CACHE_BASE_HEADER_SIZE
+        }
     }
 
     pub(super) fn runtime_expr_temp_offset(&self, depth: usize) -> usize {
@@ -644,10 +701,15 @@ impl CodeGenerator {
 
     pub(super) fn emit_store_data_args_at(&mut self, max_bytes: usize, size_offset: usize, buffer_offset: usize) {
         self.emit(format!("li t0, {}", max_bytes));
-        self.emit_stack_store("t0", size_offset);
+        self.emit_schema_size_store("t0", size_offset);
         self.emit_sp_addi("a0", buffer_offset);
         self.emit_sp_addi("a1", size_offset);
         self.emit("li a2, 0");
+    }
+
+    pub(super) fn emit_schema_size_store(&mut self, src: &str, size_offset: usize) {
+        self.invalidate_schema_size_facts(size_offset);
+        self.emit_stack_store(src, size_offset);
     }
 
     pub(super) fn emit_load_cell_data_syscall(&mut self, reason: &str, source: u64, index: usize) {

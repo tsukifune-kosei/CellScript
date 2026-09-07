@@ -111,6 +111,24 @@ impl Fixture {
 }
 
 #[test]
+fn checker_rejects_vm2_isa_or_data2_contract_tampering() {
+    let valid = Fixture::new();
+    for pointer in ["/target_profile/minimum_vm_version", "/constraints/ckb/profile_abi_contract/minimum_vm_version"] {
+        let mut changed = valid.clone();
+        *changed.metadata.pointer_mut(pointer).unwrap() = Value::from(1);
+        assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+    }
+
+    let mut changed = valid.clone();
+    changed.metadata["target_profile"]["riscv_isa"] = Value::String("rv64imac".to_string());
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let mut changed = valid.clone();
+    changed.metadata["target_profile"]["deployment_hash_types"] = serde_json::json!(["data1"]);
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+}
+
+#[test]
 fn terminal_verifier_failures_reject_hash_rebound_machine_and_record_mutations() {
     let source = "module fatal_checker\naction main(value: u64) { verification require value > 0 }";
     for edition in [cellscript::CellScriptEdition::Edition2026, NEXT_EDITION] {

@@ -27,48 +27,16 @@ mod ckb_script_runner;
 use ckb_script_runner::{build_simple_fixture, deterministic_always_success_lock_hash, execute_cellscript_script};
 
 const RUST_CKB_TARGET: &str = "riscv64imac-unknown-none-elf";
-const GROWTH_BUDGET_PERCENT: u64 = 300;
+const PARITY_BUDGET_PERCENT: u64 = 100;
 
-const NFT_LOCK: &str = r#"
-module corpus::nft_lock
-resource Nft has store { owner: Address }
-
-lock owner_guard(protected cell: Nft, witness claimed: Address) -> bool {
-    require claimed == cell.owner
-}
-"#;
-
-const POOL_MERGE: &str = r#"
-module corpus::merge
-resource Token has store, consume, create { amount: u64 }
-
-action merge(input left: Token, input right: Token, witness recipient: Address) -> merged: Token {
-    require left.amount > 0
-    require right.amount > 0
-    require left.amount <= 18446744073709551615 - right.amount
-    consume left
-    consume right
-    create merged = Token { amount: left.amount + right.amount } with_lock(recipient)
-}
-"#;
-
-const SCHEMA_ROLL: &str = r#"
-module corpus::roll
-resource Note has store, replace, relock { owner: Address, amount: u64 }
-
-action roll(input note: Note) -> next: Note {
-    replace note -> next {
-        data = same except { amount = note.amount + 1 }
-        lock = same
-        capacity = same
-        identity = same
-    }
-}
-"#;
+const NFT_LOCK: &str = include_str!("fixtures/cost_corpus/nft_lock.cell");
+const POOL_MERGE: &str = include_str!("fixtures/cost_corpus/pool_merge.cell");
+const SCHEMA_ROLL: &str = include_str!("fixtures/cost_corpus/schema_roll.cell");
 
 fn options() -> CompileOptions {
     CompileOptions {
         edition: CellScriptEdition::Edition2027,
+        opt_level: 3,
         target: Some("riscv64-elf".to_string()),
         target_profile: Some("ckb".to_string()),
         ..Default::default()
@@ -78,6 +46,20 @@ fn options() -> CompileOptions {
 fn compile_cellscript(source: &str) -> CompileResult {
     compile_with_executable_surface_policy(source, options(), ExecutableSurfacePolicy::DenyFailClosed)
         .unwrap_or_else(|error| panic!("corpus source must compile: {error}\n{source}"))
+}
+
+fn maybe_dump_cellscript_assembly(scenario: &str, source: &str) {
+    if env::var_os("CELLSCRIPT_COST_CORPUS_DUMP_ASM").is_none() {
+        return;
+    }
+    let mut assembly_options = options();
+    assembly_options.target = Some("riscv64-asm".to_string());
+    let result = compile_with_executable_surface_policy(source, assembly_options, ExecutableSurfacePolicy::DenyFailClosed)
+        .unwrap_or_else(|error| panic!("corpus assembly must compile: {error}\n{source}"));
+    let assembly = String::from_utf8(result.artifact_bytes).expect("generated assembly is UTF-8");
+    eprintln!("[cost-corpus-asm-begin] {scenario}");
+    eprintln!("{assembly}");
+    eprintln!("[cost-corpus-asm-end] {scenario}");
 }
 
 fn repo_root() -> PathBuf {
@@ -128,7 +110,7 @@ fn build_rust_reference(repo: &std::path::Path, temp_root: &std::path::Path, bin
     stripped
 }
 
-fn assert_growth_budget(scenario: &str, cellscript: &CompileResult, rust_stripped: &PathBuf) -> (u64, u64) {
+fn assert_byte_parity(scenario: &str, cellscript: &CompileResult, rust_stripped: &PathBuf) -> (u64, u64) {
     let cellscript_bytes = strip_vm_abi_trailer(&cellscript.artifact_bytes).len() as u64;
     let rust_bytes = fs::metadata(rust_stripped).expect("stripped metadata").len();
     eprintln!(
@@ -136,8 +118,8 @@ fn assert_growth_budget(scenario: &str, cellscript: &CompileResult, rust_strippe
         cellscript_bytes as f64 / rust_bytes as f64
     );
     assert!(
-        cellscript_bytes * 100 <= rust_bytes * GROWTH_BUDGET_PERCENT,
-        "{scenario} artifact grew past the growth budget: {cellscript_bytes} vs {rust_bytes} bytes"
+        cellscript_bytes * 100 <= rust_bytes * PARITY_BUDGET_PERCENT,
+        "{scenario} artifact exceeds the matched stripped Rust reference: {cellscript_bytes} vs {rust_bytes} bytes"
     );
     (cellscript_bytes, rust_bytes)
 }
@@ -173,8 +155,10 @@ fn matched_cost_corpus_compiles_runs_and_stays_within_budget() {
 
     // --- Pool merge (two inputs, checked sum, output lock binding) ---
     let merge = compile_cellscript(POOL_MERGE);
+    maybe_dump_cellscript_assembly("pool-merge", POOL_MERGE);
     let merge_rust = build_rust_reference(&repo, temp.path(), "pool-merge");
-    assert_growth_budget("pool-merge", &merge, &merge_rust);
+    assert_byte_parity("pool-merge", &merge, &merge_rust);
+    let merge_rust_elf = fs::read(&merge_rust).expect("read rust ref");
     let recipient = deterministic_always_success_lock_hash();
     let merge_witness = witness_for(&merge, &[EntryWitnessArg::Address(recipient)]);
     for (amounts, output, expected_ok) in [(&[3u64, 4][..], 7, true), (&[3, 4][..], 8, false), (&[0, 4][..], 4, false)] {
@@ -186,18 +170,21 @@ fn matched_cost_corpus_compiles_runs_and_stays_within_budget() {
         }
         fixture.outputs[0].data = token_data(output);
         let cs = execute_cellscript_script(strip_vm_abi_trailer(&merge.artifact_bytes), &fixture);
-        let rust = execute_cellscript_script(&fs::read(&merge_rust).expect("read rust ref"), &fixture);
+        let rust = execute_cellscript_script(&merge_rust_elf, &fixture);
         assert_eq!(cs.exit_code == 0, expected_ok, "cellscript merge {amounts:?}->{output}");
         assert_eq!(rust.exit_code == 0, expected_ok, "rust merge {amounts:?}->{output}");
         if expected_ok {
             eprintln!("[cost-corpus] pool-merge positive cycles: cellscript={} rust={}", cs.cycles, rust.cycles);
+            assert!(cs.cycles <= rust.cycles, "pool-merge cycles exceed matched Rust: {} vs {}", cs.cycles, rust.cycles);
         }
     }
 
     // --- Schema roll (two-field successor with one updated field) ---
     let roll = compile_cellscript(SCHEMA_ROLL);
+    maybe_dump_cellscript_assembly("schema-roll", SCHEMA_ROLL);
     let roll_rust = build_rust_reference(&repo, temp.path(), "schema-roll");
-    assert_growth_budget("schema-roll", &roll, &roll_rust);
+    assert_byte_parity("schema-roll", &roll, &roll_rust);
+    let roll_rust_elf = fs::read(&roll_rust).expect("read rust ref");
     let owner = deterministic_always_success_lock_hash();
     for (input_amount, output_amount, expected_ok) in [(7u64, 8, true), (7, 7, false), (7, 9, false)] {
         let mut fixture = build_simple_fixture(Bytes::default(), 1, 1);
@@ -205,19 +192,22 @@ fn matched_cost_corpus_compiles_runs_and_stays_within_budget() {
         fixture.inputs[0].data = note_data(owner, input_amount);
         fixture.outputs[0].data = note_data(owner, output_amount);
         let cs = execute_cellscript_script(strip_vm_abi_trailer(&roll.artifact_bytes), &fixture);
-        let rust = execute_cellscript_script(&fs::read(&roll_rust).expect("read rust ref"), &fixture);
+        let rust = execute_cellscript_script(&roll_rust_elf, &fixture);
         assert_eq!(cs.exit_code == 0, expected_ok, "cellscript roll {input_amount}->{output_amount}");
         assert_eq!(rust.exit_code == 0, expected_ok, "rust roll {input_amount}->{output_amount}");
         if expected_ok {
             eprintln!("[cost-corpus] schema-roll positive cycles: cellscript={} rust={}", cs.cycles, rust.cycles);
+            assert!(cs.cycles <= rust.cycles, "schema-roll cycles exceed matched Rust: {} vs {}", cs.cycles, rust.cycles);
         }
     }
 
     // --- NFT ownership lock (script args, data owner, witness claim) ---
     let nft = compile_cellscript(NFT_LOCK);
+    maybe_dump_cellscript_assembly("nft-lock", NFT_LOCK);
     let nft_rust = build_rust_reference(&repo, temp.path(), "nft-lock");
-    assert_growth_budget("nft-lock", &nft, &nft_rust);
-    let run_lock_pair = |data_owner: [u8; 32], elf: &[u8], witness: &Bytes| -> bool {
+    assert_byte_parity("nft-lock", &nft, &nft_rust);
+    let nft_rust_elf = fs::read(&nft_rust).expect("read rust ref");
+    let run_lock_pair = |data_owner: [u8; 32], elf: &[u8], witness: &Bytes| {
         let mut context = Context::new_with_deterministic_rng();
         let code = context.deploy_cell(Bytes::copy_from_slice(elf));
         let script = context
@@ -232,7 +222,7 @@ fn matched_cost_corpus_compiles_runs_and_stays_within_budget() {
             .witness(witness.clone().pack())
             .build();
         let completed = context.complete_tx(transaction);
-        context.verify_tx(&completed, 20_000_000).is_ok()
+        context.verify_tx(&completed, 20_000_000)
     };
     for (data_owner, claimed, expected_ok) in [
         (owner, owner, true),
@@ -256,7 +246,7 @@ fn matched_cost_corpus_compiles_runs_and_stays_within_budget() {
         ),
     ] {
         let nft_witness = witness_for(&nft, &[EntryWitnessArg::Address(claimed)]);
-        let cs_ok = run_lock_pair(data_owner, strip_vm_abi_trailer(&nft.artifact_bytes), &nft_witness);
+        let cs = run_lock_pair(data_owner, strip_vm_abi_trailer(&nft.artifact_bytes), &nft_witness);
         let rust_witness = packed::WitnessArgs::new_builder()
             .input_type(
                 Some({
@@ -270,9 +260,15 @@ fn matched_cost_corpus_compiles_runs_and_stays_within_budget() {
             )
             .build()
             .as_bytes();
-        let rust_ok = run_lock_pair(data_owner, &fs::read(&nft_rust).expect("read rust ref"), &rust_witness);
-        assert_eq!(cs_ok, expected_ok, "cellscript nft lock outcome");
-        assert_eq!(rust_ok, expected_ok, "rust nft lock outcome");
+        let rust = run_lock_pair(data_owner, &nft_rust_elf, &rust_witness);
+        assert_eq!(cs.is_ok(), expected_ok, "cellscript nft lock outcome");
+        assert_eq!(rust.is_ok(), expected_ok, "rust nft lock outcome");
+        if expected_ok {
+            let cs_cycles = cs.expect("positive CellScript lock cycles");
+            let rust_cycles = rust.expect("positive Rust lock cycles");
+            eprintln!("[cost-corpus] nft-lock positive cycles: cellscript={cs_cycles} rust={rust_cycles}");
+            assert!(cs_cycles <= rust_cycles, "nft-lock cycles exceed matched Rust: {cs_cycles} vs {rust_cycles}");
+        }
     }
 
     // --- Real on-chain system scripts, deployed sizes for context only ---

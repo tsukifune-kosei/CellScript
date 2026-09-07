@@ -1,0 +1,15 @@
+module corpus::roll
+
+resource Note has store, replace, relock {
+    owner: Address,
+    amount: u64,
+}
+
+action roll(input note: Note) -> next: Note {
+    replace note -> next {
+        data = same except { amount = note.amount + 1 }
+        lock = same
+        capacity = same
+        identity = same
+    }
+}

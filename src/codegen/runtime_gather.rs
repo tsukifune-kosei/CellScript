@@ -59,6 +59,8 @@ impl CodeGenerator {
     /// cursor persists between blocks. All working registers are caller-saved;
     /// syscalls cannot invalidate the saved cursor or requested read length.
     pub(super) fn emit_runtime_blake2b_segment_block(&mut self) {
+        const FRAME: usize = 448;
+        const RA: usize = 440;
         const M: usize = 192;
         const PTR: usize = 320;
         const CHUNK: usize = 352;
@@ -106,6 +108,7 @@ impl CodeGenerator {
         self.emit("add t3, t3, t4"); // pointer/offset plus segment cursor
         self.emit("ld t4, 16(t2)");
         self.emit(format!("beqz t4, {memory}"));
+
         self.emit_sp_addi("a0", M);
         self.emit("add a0, a0, t0");
         self.emit_sp_addi("a1", SIZE);
@@ -145,7 +148,8 @@ impl CodeGenerator {
         self.emit_stack_store("zero", OFFSET);
         self.emit(format!("j {scan}"));
         self.emit_label(&failed);
-        self.emit_large_addi("sp", "sp", 432);
+        self.emit_stack_load("ra", RA);
+        self.emit_large_addi("sp", "sp", FRAME as i64);
         self.emit(format!("li a0, {}", CellScriptRuntimeError::SyscallFailed.code()));
         self.emit("ret");
         self.emit_label(&done);

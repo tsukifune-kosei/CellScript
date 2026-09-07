@@ -38,7 +38,7 @@ are not implementation of a required supported feature.
 | Requirement | Required implementation and evidence | Current disposition |
 |---|---|---|
 | Complete authoring language | Shared declarations, expressions, statements, types, and full callable bodies; meaningful edits and readable diagnostics on the adopted corpus. | Shared kernel, optional marker and ordinary-action `replace` successor relations are implemented; remaining relation forms, acknowledgements and corpus evaluation are pending. |
-| No 2026 feature regression | Positive and negative cross-edition source, typed obligation, format, artifact, and runtime checks for the feature families below. | Dedicated differential tests, the cross-edition syntax matrix and the 2026 `replace`-as-identifier boundary pass the 2026-09-06 `dev` gate; `ci`, full `backend` and release evidence remain pending. |
+| No 2026 feature regression | Positive and negative cross-edition source, typed obligation, format, artifact, and runtime checks for the feature families below. | Dedicated differential tests, the cross-edition syntax matrix and the 2026 `replace`-as-identifier boundary pass the 2026-09-06 `dev` gate; `ci` and release evidence remain pending. |
 | Direct semantic elaboration | Structured relation nodes with spans, typed schema resolution, and checked lowering; no generated preview4 text reparsing. | Implemented for `replace`: parser, AST, type checking and IR elaborate the relation directly, including concrete-schema `same except`; other constructor forms remain pending. |
 | Path-sensitive successor relations | Assigned/preserved fields, identity, lock, capacity and output correspondence compose inside ordinary `if`/`match`; every accepting path accounts for roles. | Implemented for authoring relations: source-level completeness (conditional skip, double disposal and loop disposal rejected) and relations in each branch of an `if` compile and validate after sibling arms stopped reusing non-dominating schema-field materializations. |
 | `same except` and upgrades | Concrete schema identity, exhaustive expansion, reproducible focused acknowledgement, changed/stale/missing acknowledgement rejection, no implicit repin. | `data = same except` expands against the resolved concrete schema with unknown/duplicate-field rejection; the schema acknowledgement workflow remains pending. |
@@ -57,7 +57,7 @@ are not implementation of a required supported feature.
 | Independent artifact checking | Version and validate any new records, recompute identities, bind selected entries/relations/dispatch to machine evidence, and add adversarial mutations. | Typed policy, declaration/ABI and builder parameter projection checks implemented. Trusted-external records are independently bound to an ordered same-CellDep hash-check/delegation sequence with mutation negatives; independent policy selector/adapter machine proof remains pending. |
 | Language services and products | Parser, recovering diagnostics, formatter, LSP, editor, native CLI, WASM, package loading, public interfaces and builders agree. | Shared parser diagnostics, formatter round-trip, syntax matrix and VS Code snippet cover `replace`; trusted external calls use ordinary call formatting plus LSP completions and package-manifest loading. The fresh WASM bundle exceeds its enforced budget, and complete browser/public-interface closure remains pending. |
 | Reproducibility and compatibility | Source/cache/profile versions, package locks, mixed editions, interfaces and deployment changes are explicit and reproducible. | Source/cache identity advanced; later ABI/dispatch/schema migration pending. |
-| Production acceptance | Applicable `dev`, `ci`, `backend` and clean-source release evidence, exact artifacts, runtime negatives, cycle/size/capacity measurements and required independent review. | The 2026-09-06 `dev` gate passes for the relation tranche. Full `backend` remains blocked at the documented stateful NFT recipe boundary, the release WASM rebuild exceeds budget, and `ci`, release and independent-review evidence remain pending. |
+| Production acceptance | Applicable `dev`, `ci`, `backend` and clean-source release evidence, exact artifacts, runtime negatives, cycle/size/capacity measurements and required independent review. | The relation and economic backend tranches pass their focused VM, parity, checker and cost-corpus suites. Clean-source production acceptance passes 43 action cases, 17 Lock cases and all 26 stateful scenarios / 46 committed steps after the three-layer identity rebind. The release WASM rebuild exceeds budget, and `ci`, release and independent-review evidence remain pending. |
 
 The target includes all A1-A6 contracts, all acceptance fixtures in the authoring
 target, and the applicable RFC gates. This checklist does not remove their
@@ -282,7 +282,7 @@ whole WitnessArgs limit is 4,096 bytes with at most eight records. Host and CKB
 adapter codecs are independently implemented; placement preserves other fields,
 rejects occupied `input_type`, and must occur before signing.
 
-Metadata schema 66, `cellscript-typed-semantics-v8` and
+Metadata schema 67, `cellscript-typed-semantics-v8` and
 `cellscript-semantic-foundation-v3` bind the declared policy, selector provenance,
 resource layout, variant payload schemas, fixed counts and ordered common
 checks. Lowering record v6 includes separate terminal-failure sites and requires the exact new
@@ -496,36 +496,35 @@ qualified diagnostic change, not identical exit-code evidence or a new
 production-equivalence claim. The earlier source-pin and
 submodule-publication limitations continue to apply.
 
-### Acceptance recipe rebind and stateful diagnosis
+### Acceptance recipe identity closure
 
 The audited transaction recipes (`transactions-v0.23.json`) still recorded the
 pre-0.26b artifact identities, so the CKB acceptance live replay aborted at
 its first `artifact_data_hash` comparison. Following the established refresh
-precedent, all sixty action/lock case hashes, the recipe dependency table and
-every embedded code-hash reference were rebound to the freshly compiled
-artifact identities, and the checker's three pinned timelock identities were
-updated to match. After the rebind, the live devnet replay gets
-substantially further: every `token.cell` action case (mint, transfer, merge,
-burn) replays its initial cells, commits its valid transaction, and rejects
-its malformed variant against the real deployed policy bytes.
+precedent, the rebind closes three distinct CKB identity layers as one audited
+set:
 
-The replay then stops at `nft.cell:create_collection`. Its valid transaction
-fails dry-run at `Inputs[0].Lock` with runtime error 3
-(`CellLoadFailed`) from the freshly compiled `create_collection` artifact,
-which the recipe deliberately installs as the initial cell's lock. The
-artifact identity changed from `a34564aa…` (the last audited full-pass
-compile) to `13754faa…` under the 0.26b tranches, so the recipe's fixed
-witness and output layout encode the pre-0.26b entry contract while the
-rebound dep deploys current bytes. The harness's rebind and devnet logic are
-unchanged since that last full pass, and the surrounding transaction shape is
-preserved, so this is a genuine compiler-versus-recipe semantic gap on the
-0.26b line, exposed now because the earlier stages no longer stop it. No
-recipe regeneration tooling exists; the fixture has been hand-maintained
-since the tooling migration, and hand-forging replacement transactions would
-fabricate audited evidence. Regenerating the recipe set against the current
-entry contract with a real devnet extraction is therefore tracked work, and
-the backend gate's clean-source stateful stage remains blocked on it with
-this concrete diagnosis.
+- all sixty action/Lock case artifacts and 417 exact code-hash references name
+  the final VM2 output;
+- all 253 Script selectors that reference generated artifacts use Data2, while
+  external dependencies retain their original hash type;
+- 143 embedded full-Script-hash payload occurrences across 30 generated
+  identities are recomputed from the final code hash, Data2 tag and empty
+  args.
+
+The third layer is necessary because the recipes carry complete Script hashes
+inside witnesses and Cell data as resource identities. Updating an outer
+`code_hash` and selector does not update those values. The intermediate replay
+therefore passed every `token.cell` action but stopped at
+`nft.cell:create_collection` with `CellLoadFailed`: the transaction selected
+the new Data2 artifact while its payload still named the old Data1 Script.
+Recomputing these values from the last full-pass recipe preserves transaction
+shape and business payloads while changing only the cryptographically derived
+identity bytes. The clean-source production replay accepts the rebound set and
+passes all 43 action cases, 17 Lock cases and 26 stateful scenarios / 46
+committed steps. Its seven end-to-end lifecycles and 19 action-branch scenarios
+all commit their valid transactions and retain their required negative
+rejections.
 
 ### Compact deployed ELF layout and immediate encoding
 
@@ -537,9 +536,10 @@ now starts at 128, while the LOAD segment still starts at file offset 0 with
 A shared size/encoding classifier selects single ADDI or representable LUI
 forms for `li`, saving another 464 bytes in the audited relation. Its ELF
 drops from 7,824 to 3,392 bytes; the token-transfer example drops to 2,576.
-All 37 recorded positive iCKB transactions use 2,132–4,578 fewer cycles,
-including shared auxiliary Script improvements; these are transaction-level
-measurements, not isolated principal-script savings. The
+After the complete economic tranche, all 37 recorded positive iCKB transactions
+remain faster: 805,060 CellScript cycles versus 1,952,526 original-contract
+cycles in aggregate. These rows include shared auxiliary Script work and are
+transaction-level measurements, not isolated principal-Script savings. The
 [0.26 release notes](releases/CELLSCRIPT_0_26_RELEASE_NOTES.md#major-backend-optimization-compact-elf-and-immediate-encoding)
 give the byte decomposition, matched Rust scope, and multi-action comparison.
 The start trampoline keeps its fixed 20-byte ABI shape; the independent
@@ -559,21 +559,20 @@ fixtures and must agree on every accept/reject outcome.
 
 | Scenario | CellScript | stripped Rust | ratio | cycles CS / Rust |
 | --- | ---: | ---: | ---: | ---: |
-| Pool merge (2-in, checked sum, lock binding) | 3,984 B | 2,816 B | 1.41x | 6,993 / 9,232 |
-| Schema roll (2 fields, one updated) | 3,760 B | 2,760 B | 1.36x | 9,019 / 10,350 |
-| Ownership-claim Lock | 2,328 B | 2,304 B | 1.01x | - |
+| Pool merge (2-in, checked sum, lock binding) | 2,512 B | 2,816 B | 0.89x | 6,000 / 9,232 |
+| Schema roll (2 fields, one updated) | 2,272 B | 2,760 B | 0.82x | 8,661 / 10,350 |
+| Ownership-claim Lock | 2,232 B | 2,304 B | 0.97x | 5,583 / 6,333 |
 
-Reading: against tight hand-written references, CellScript currently costs
-1.0-1.4x the deployed bytes but consistently fewer cycles (13-24% less on
-the measured positives). The earlier audited transfer sample against an
-ordinary Rust reference was smaller on bytes as well; the corpus shows that
-byte advantage is not universal, while the cycle advantage held everywhere
-measured so far. Real system-script deployments for context: DAO 7,896 B,
+Reading: the original corpus exposed three byte-size counterexamples against
+tight hand-written references. The complete economic-backend tranche closes
+all three while preserving the same VM accept/reject fixtures, and also lowers
+the measured positive cycles. Real system-script deployments for context: DAO 7,896 B,
 secp256k1 sighash 52,048 B, secp-data 1,048,576 B, xUDT (iCKB original)
 33,696 B — different feature scopes, not matched comparisons. The corpus is
-cost evidence for named samples, not an equivalence claim; the audit's
-remaining size work (redundant checks, stack-offset materialization,
-compressed encodings) is the path to closing the byte gap.
+cost evidence for named samples, not a theorem about arbitrary future programs.
+The full mechanisms, Spore/Fiber measurements, and mandatory VM2/Data2
+deployment contract are recorded in the
+[0.26 release notes](releases/CELLSCRIPT_0_26_RELEASE_NOTES.md#economic-backend-closure-and-vm2-deployment-contract).
 
 ### WASM playground bundle budget
 
