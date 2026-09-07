@@ -28,6 +28,17 @@ The slice has the development source identity
 `cellscript-source-semantics-2027-0.30-dev1`; it does not reuse or redefine the
 recorded `authoring1` identity and is not the final 0.30 grammar identity.
 
+The first #24 runtime-view tranche is specified by the
+[0.30 CKB runtime-view matrix](CELLSCRIPT_0_30_CKB_RUNTIME_VIEW_MATRIX.md).
+Metadata schema 68 binds `cellscript-ckb-runtime-view-v1`. Typed Cell views now
+expose occupied/unoccupied capacity, consensus data hashes and input `since`;
+typed HeaderDep views expose all three fields admitted by CKB's
+`LOAD_HEADER_BY_FIELD`; and complete Script hashes are separated from code and
+args hashes. CKB-VM tests cover a nonzero epoch, the derived epoch-start block,
+one-past-last HeaderDep failure, and CellDep data-hash substitution. The matrix
+also records the still-open witness, full-header, dynamic-index, checker,
+builder, measurement, and release evidence.
+
 The goal is business-scenario coverage comparable to hand-written Rust CKB
 Scripts for a defined, bounded portfolio. It is not unrestricted Rust language
 parity. CellScript should cover the common validation, state-transition,

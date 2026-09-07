@@ -9,7 +9,7 @@
 
 use ckb_testtool::ckb_types::{
     bytes::Bytes,
-    core::{DepType, HeaderBuilder, TransactionBuilder},
+    core::{DepType, EpochNumberWithFraction, HeaderBuilder, TransactionBuilder},
     packed,
     prelude::*,
 };
@@ -262,6 +262,15 @@ pub struct FixtureCell {
     pub data: Bytes,
 }
 
+/// Header fields that are exposed by CKB's `LOAD_HEADER_BY_FIELD` syscall.
+#[derive(Debug, Clone, Copy)]
+pub struct FixtureHeaderContext {
+    pub number: u64,
+    pub epoch_number: u64,
+    pub epoch_index: u64,
+    pub epoch_length: u64,
+}
+
 /// A complete CKB VM fixture for script execution.
 #[derive(Debug, Clone)]
 pub struct CkbVmFixture {
@@ -283,6 +292,9 @@ pub struct CkbVmFixture {
     /// Header deps to include in the transaction.
     /// Each entry is a 32-byte DAO field (packed Byte32) for the header.
     pub header_dao_fields: Vec<[u8; 32]>,
+    /// Optional per-header number and epoch fields. Missing entries retain the
+    /// historical all-zero header used by existing fixtures.
+    pub header_contexts: Vec<FixtureHeaderContext>,
     /// Whether to link input cells with their block headers.
     /// If true, input[i] is linked to header_dao_fields[i]'s block.
     pub link_inputs_to_headers: bool,
@@ -384,9 +396,18 @@ pub fn execute_cellscript_script(elf_bytes: &[u8], fixture: &CkbVmFixture) -> Ck
     let header_hashes: Vec<packed::Byte32> = fixture
         .header_dao_fields
         .iter()
-        .map(|dao_bytes| {
+        .enumerate()
+        .map(|(index, dao_bytes)| {
             let dao_packed: packed::Byte32 = dao_bytes.pack();
-            let header = HeaderBuilder::default().number(0u64).dao(dao_packed).build();
+            let mut builder = HeaderBuilder::default().number(0u64).dao(dao_packed);
+            if let Some(header) = fixture.header_contexts.get(index) {
+                builder = builder.number(header.number).epoch(EpochNumberWithFraction::new(
+                    header.epoch_number,
+                    header.epoch_index,
+                    header.epoch_length,
+                ));
+            }
+            let header = builder.build();
             let hash = header.hash();
             context.insert_header(header);
             hash
@@ -487,6 +508,7 @@ pub fn build_simple_fixture(script_args: Bytes, input_count: usize, output_count
         cell_deps: Vec::new(),
         witnesses: Vec::new(),
         header_dao_fields: Vec::new(),
+        header_contexts: Vec::new(),
         link_inputs_to_headers: false,
     }
 }
@@ -522,6 +544,7 @@ pub fn build_dao_fixture(script_args: Bytes, accumulated_rate: u64, input_count:
         cell_deps: Vec::new(),
         witnesses: Vec::new(),
         header_dao_fields: vec![dao_field],
+        header_contexts: Vec::new(),
         link_inputs_to_headers: true,
     }
 }
@@ -544,6 +567,7 @@ pub fn build_dao_data_fixture(script_args: Bytes, input_data: Vec<Bytes>, output
         cell_deps: Vec::new(),
         witnesses: Vec::new(),
         header_dao_fields: Vec::new(),
+        header_contexts: Vec::new(),
         link_inputs_to_headers: false,
     }
 }

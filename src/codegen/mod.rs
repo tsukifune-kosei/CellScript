@@ -2223,8 +2223,8 @@ impl CodeGenerator {
                         };
                         self.prelude_u64_value_sources.insert(dest.id, PreludeU64ValueSource::Min { left: Box::new(left), right });
                     }
-                    IrInstruction::Call { dest: Some(dest), func, args }
-                        if dest.ty == IrType::U64 && is_runtime_header_u64_call(func) && args.is_empty() =>
+                    IrInstruction::Call { dest: Some(dest), func, .. }
+                        if dest.ty == IrType::U64 && is_runtime_header_u64_call(func) =>
                     {
                         self.prelude_u64_value_sources.insert(dest.id, PreludeU64ValueSource::StackVar(dest.id));
                     }

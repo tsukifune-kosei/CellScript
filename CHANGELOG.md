@@ -18,6 +18,16 @@
   to `project-source-set-v31-0.30-dev1-script-hash`; the final 0.30 source
   identity remains gated on the complete adopted grammar.
 
+- Establish `cellscript-ckb-runtime-view-v1` in compile metadata schema 68.
+  Typed Cell views add occupied/unoccupied capacity, consensus data hash, and
+  input `since`; typed HeaderDep views add the three CKB
+  `LOAD_HEADER_BY_FIELD` epoch fields with exact 8-byte reads and stable errors;
+  and `ScriptView` now keeps complete Script hash separate from raw code/args
+  hashes. Real CKB-VM tests cover nonzero epoch values, derived epoch-start
+  block number, one-past-last HeaderDep rejection, and CellDep data-hash
+  substitution. Advance the artifact cache identity to
+  `project-source-set-v32-0.30-dev1-runtime-view-v1`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

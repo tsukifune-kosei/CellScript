@@ -293,10 +293,12 @@ whole WitnessArgs limit is 4,096 bytes with at most eight records. Host and CKB
 adapter codecs are independently implemented; placement preserves other fields,
 rejects occupied `input_type`, and must occur before signing.
 
-Metadata schema 67, `cellscript-typed-semantics-v8` and
+Metadata schema 68, `cellscript-typed-semantics-v8` and
 `cellscript-semantic-foundation-v3` bind the declared policy, selector provenance,
 resource layout, variant payload schemas, fixed counts and ordered common
-checks. Lowering record v6 includes separate terminal-failure sites and requires the exact new
+checks. Runtime metadata also binds `cellscript-ckb-runtime-view-v1`, the
+closed typed CKB view contract used by 0.30 runtime field access. Lowering
+record v6 includes separate terminal-failure sites and requires the exact new
 nested versions. The parser-free checker also derives builder encoding flags
 and parameter order/source/type from the typed record. This is not independent
 proof of machine scanner/adapter dataflow or deployment authentication.

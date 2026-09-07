@@ -281,6 +281,19 @@ artifact worker. A `structurally_verified` checker level records checker
 version, policy, and report hash, but remains distinct from source equivalence,
 CKB-VM execution, deployment, and chain evidence.
 
+### 0.30 typed CKB runtime-view evidence
+
+The `0.30` development branch advances compile metadata to schema 68 and binds
+`runtime.ckb_runtime_view_contract = cellscript-ckb-runtime-view-v1`. The first
+runtime-view tranche adds fixed-width Input, Output, CellDep, HeaderDep,
+OutPoint, and Script field reads. The CKB-VM regression uses a nonzero header
+epoch and block number, checks occupied/unoccupied capacity arithmetic and
+CellDep data hashes, and requires stable fail-closed exits for substituted data
+and a one-past-last HeaderDep index. This is executable evidence for the listed
+closed fields only; it does not complete the wider 0.30 runtime-view, temporal,
+authorization, or release portfolio. The authoritative field and exclusion
+matrix is [the 0.30 CKB runtime-view matrix](CELLSCRIPT_0_30_CKB_RUNTIME_VIEW_MATRIX.md).
+
 ### 0.26b semantic-foundation evidence
 
 The `0.26b` experimental branch advances compile metadata to schema 67,

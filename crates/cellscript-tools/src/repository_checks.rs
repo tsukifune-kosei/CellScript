@@ -265,7 +265,7 @@ pub fn check_doc_status(root: &Path) -> Result<()> {
     check_document_contract(
         root,
         "docs/skills/cellscript-metadata-audit/SKILL.md",
-        &[schema_number.as_str(), "0.26 development line", "generic_instantiations"],
+        &[schema_number.as_str(), "`0.30` development branch", "generic_instantiations"],
         &["current 0.24 development line", "metadata schema 57"],
         &mut failures,
     )?;

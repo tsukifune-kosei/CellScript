@@ -222,11 +222,12 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v31-0.30-dev1-script-hash";
-pub const METADATA_SCHEMA_VERSION: u32 = 67;
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v32-0.30-dev1-runtime-view-v1";
+pub const METADATA_SCHEMA_VERSION: u32 = 68;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
 pub const CONSTRAINTS_METADATA_SCHEMA_VERSION: u32 = 4;
+pub const CKB_RUNTIME_VIEW_CONTRACT: &str = "cellscript-ckb-runtime-view-v1";
 /// Maximum UTF-8 source bytes accepted by a single compiler input.
 ///
 /// This is a process-safety boundary shared by native, LSP, and WASM callers.
@@ -932,6 +933,8 @@ pub struct RuntimeMetadata {
     pub vm_target: String,
     pub vm_version: String,
     pub syscall_abi: String,
+    #[serde(default)]
+    pub ckb_runtime_view_contract: String,
     pub vm_abi: VmAbiMetadata,
     pub pure_elf_runner: String,
     pub ckb_runtime_required: bool,
@@ -1193,6 +1196,12 @@ pub fn validate_compile_metadata(metadata: &CompileMetadata, artifact_format: Ar
         return Err(CompileError::without_span(format!(
             "metadata compiler_version '{}' does not match current compiler '{}'",
             metadata.compiler_version, VERSION
+        )));
+    }
+    if metadata.runtime.ckb_runtime_view_contract != CKB_RUNTIME_VIEW_CONTRACT {
+        return Err(CompileError::without_span(format!(
+            "metadata runtime.ckb_runtime_view_contract '{}' does not match current contract '{}'",
+            metadata.runtime.ckb_runtime_view_contract, CKB_RUNTIME_VIEW_CONTRACT
         )));
     }
     #[cfg(not(feature = "wasm"))]
@@ -3998,6 +4007,7 @@ fn is_known_ckb_runtime_syscall(syscall: &str) -> bool {
             | "LOAD_CELL_BY_FIELD"
             | "LOAD_CELL_DATA"
             | "LOAD_HEADER"
+            | "LOAD_HEADER_BY_FIELD"
             | "LOAD_INPUT_BY_FIELD"
             | "LOAD_SCRIPT"
             | "LOAD_SCRIPT_HASH"
@@ -4043,6 +4053,7 @@ fn ckb_runtime_syscall_allows_source(syscall: &str, source: &str) -> bool {
             matches!(source, "Input" | "Output" | "GroupInput" | "GroupOutput" | "SourceView" | "GroupInput/GroupOutput")
         }
         "LOAD_HEADER" => matches!(source, "HeaderDep" | "Input/GroupInput" | "Input/HeaderDep"),
+        "LOAD_HEADER_BY_FIELD" => source == "HeaderDep",
         "LOAD_INPUT_BY_FIELD" => matches!(source, "GroupInput" | "SourceView" | "Input/GroupInput"),
         "LOAD_SCRIPT" | "LOAD_SCRIPT_HASH" => source == "CurrentScript",
         "CKB_SIGHASH_ALL" => source == "GroupInput",
@@ -8253,6 +8264,7 @@ fn compile_metadata_from_ir(
             vm_target: "CKB-VM compatible RISC-V 64 IMC+B+MOP".to_string(),
             vm_version: "VERSION2".to_string(),
             syscall_abi: "CKB store_data ABI: A0=buffer, A1=size pointer, A2=offset, A3=index, A4=source".to_string(),
+            ckb_runtime_view_contract: CKB_RUNTIME_VIEW_CONTRACT.to_string(),
             vm_abi: VmAbiMetadata {
                 format: "molecule".to_string(),
                 version: MOLECULE_VM_ABI_VERSION,
@@ -17017,13 +17029,22 @@ fn body_ckb_runtime_features(
                 ir::IrInstruction::Call { func, .. } if func == "__env_current_timepoint" => {
                     features.insert("load-header-timepoint".to_string());
                 }
-                ir::IrInstruction::Call { func, .. } if func == "__ckb_header_epoch_number" => {
+                ir::IrInstruction::Call { func, .. }
+                    if matches!(func.as_str(), "__ckb_header_epoch_number" | "__ckb_header_dep_epoch_number") =>
+                {
                     features.insert("ckb-header-epoch-number".to_string());
                 }
-                ir::IrInstruction::Call { func, .. } if func == "__ckb_header_epoch_start_block_number" => {
+                ir::IrInstruction::Call { func, .. }
+                    if matches!(
+                        func.as_str(),
+                        "__ckb_header_epoch_start_block_number" | "__ckb_header_dep_epoch_start_block_number"
+                    ) =>
+                {
                     features.insert("ckb-header-epoch-start-block-number".to_string());
                 }
-                ir::IrInstruction::Call { func, .. } if func == "__ckb_header_epoch_length" => {
+                ir::IrInstruction::Call { func, .. }
+                    if matches!(func.as_str(), "__ckb_header_epoch_length" | "__ckb_header_dep_epoch_length") =>
+                {
                     features.insert("ckb-header-epoch-length".to_string());
                 }
                 ir::IrInstruction::Call { func, .. } if func == "__ckb_input_since" => {
@@ -17864,6 +17885,18 @@ fn ckb_v014_runtime_access(func: &str) -> Option<(&'static str, &'static str, &'
         "__ckb_source_output" => Some(("source-output", "SOURCE_VIEW", "Output", "source::output")),
         "__ckb_source_cell_dep" => Some(("source-cell-dep", "SOURCE_VIEW", "CellDep", "source::cell_dep")),
         "__ckb_source_header_dep" => Some(("source-header-dep", "SOURCE_VIEW", "HeaderDep", "source::header_dep")),
+        "__ckb_header_dep_epoch_number" => {
+            Some(("header-dep-epoch-number", "LOAD_HEADER_BY_FIELD", "HeaderDep", "HeaderDepView.epoch_number"))
+        }
+        "__ckb_header_dep_epoch_start_block_number" => Some((
+            "header-dep-epoch-start-block-number",
+            "LOAD_HEADER_BY_FIELD",
+            "HeaderDep",
+            "HeaderDepView.epoch_start_block_number",
+        )),
+        "__ckb_header_dep_epoch_length" => {
+            Some(("header-dep-epoch-length", "LOAD_HEADER_BY_FIELD", "HeaderDep", "HeaderDepView.epoch_length"))
+        }
         "__ckb_source_group_input" => Some(("source-group-input", "SOURCE_VIEW", "GroupInput", "source::group_input")),
         "__ckb_source_group_output" => Some(("source-group-output", "SOURCE_VIEW", "GroupOutput", "source::group_output")),
         "__ckb_since_epoch_absolute" => {
@@ -35034,15 +35067,18 @@ action inspect() -> u64 {
         let input = ckb::input<Token>(0)
         let output = ckb::group_output<Token>(0)
         let dep = ckb::cell_dep(0)
+        let header = ckb::header_dep(0)
         let witness_args = witness::args(0)
         let out_point = ckb::input_out_point(input)
         let lock = ckb::lock_script(input)
         require lock.args_empty || lock.hash_type <= 4
-        return input.capacity + output.output_index + dep.data_size + witness_args.size + out_point.index
+        require dep.data_hash == dep.data_hash
+        return input.capacity + input.occupied_capacity + input.unoccupied_capacity + input.since + output.output_index + dep.data_size + witness_args.size + out_point.index + header.epoch_number + header.epoch_start_block_number + header.epoch_length
 }
 "#;
 
         let result = compile(program, CompileOptions::default()).unwrap();
+        assert_eq!(result.metadata.runtime.ckb_runtime_view_contract, crate::CKB_RUNTIME_VIEW_CONTRACT);
         assert!(result.metadata.runtime.transaction_view_handles.iter().any(|handle| {
             handle.handle_type == "InputView<Token>"
                 && handle.source == "Input"
@@ -35060,15 +35096,28 @@ action inspect() -> u64 {
         let asm = String::from_utf8(result.artifact_bytes).unwrap();
         for helper in [
             "__ckb_cell_capacity",
+            "__ckb_cell_occupied_capacity",
+            "__ckb_cell_unoccupied_capacity",
             "__ckb_cell_output_index",
             "__ckb_cell_data_size",
+            "__ckb_cell_data_hash_field",
             "__ckb_witness_size",
             "__ckb_input_out_point_index",
+            "__ckb_input_since_at",
+            "__ckb_header_dep_epoch_number",
+            "__ckb_header_dep_epoch_start_block_number",
+            "__ckb_header_dep_epoch_length",
             "__ckb_cell_lock_args_empty",
             "__ckb_cell_lock_hash_type",
         ] {
             assert!(asm.contains(helper), "typed transaction view did not retain runtime helper {helper}:\n{asm}");
         }
+
+        let mut tampered = result.metadata.clone();
+        tampered.runtime.ckb_runtime_view_contract = "cellscript-ckb-runtime-view-v0".to_string();
+        let error = crate::validate_compile_metadata(&tampered, result.artifact_format)
+            .expect_err("runtime-view contract downgrade must fail");
+        assert!(error.message.contains("ckb_runtime_view_contract"), "{error}");
     }
 
     #[test]

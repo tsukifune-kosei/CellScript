@@ -3,10 +3,11 @@
 This directory is organized by document role. Keep new docs in the smallest
 stable category that matches how readers should use them.
 
-The experimental `0.26b` implementation uses metadata schema 67. The existing
-unreleased 0.26 implementation record below retains the historical schema 62
-baseline; its contents may be folded into 0.30 without publishing a stable 0.26
-release.
+The active `0.30` implementation uses metadata schema 68; its first runtime
+matrix is [`cellscript-ckb-runtime-view-v1`](CELLSCRIPT_0_30_CKB_RUNTIME_VIEW_MATRIX.md).
+The experimental `0.26b` baseline used schema 67. The existing unreleased 0.26
+implementation record below retains the historical schema 62 baseline; its
+contents may be folded into 0.30 without publishing a stable 0.26 release.
 
 ## Stable Tutorials
 
@@ -76,6 +77,9 @@ High-value active references include:
 - [CELLSCRIPT_0_30_CAPABILITY_CLOSURE_RFC.md](CELLSCRIPT_0_30_CAPABILITY_CLOSURE_RFC.md)
   for the proposed direct 0.25-to-0.30 release path, issue coverage, missing
   work owners, bounded Rust-comparable business portfolio, and release gates
+- [CELLSCRIPT_0_30_CKB_RUNTIME_VIEW_MATRIX.md](CELLSCRIPT_0_30_CKB_RUNTIME_VIEW_MATRIX.md)
+  for typed CKB transaction-view fields, bounded syscall families, stable
+  failures, executable evidence, and the remaining issue #24 work
 - [CELLSCRIPT_AUTHORING_TARGET.md](CELLSCRIPT_AUTHORING_TARGET.md) for the
   adopted 2026-style authoring direction, shared-policy multi-action contracts,
   schema review, authorization boundaries, and required acceptance examples

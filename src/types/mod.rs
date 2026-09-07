@@ -6172,20 +6172,34 @@ impl<'a> TypeChecker<'a> {
                 let base_name = name.split('<').next().unwrap_or(name.as_str());
                 if matches!(base_name, CKB_INPUT_VIEW_TYPE | CKB_OUTPUT_VIEW_TYPE | CKB_CELL_DEP_VIEW_TYPE) {
                     return match field {
-                        "capacity" | "data_size" => Ok(Type::U64),
+                        "capacity" | "occupied_capacity" | "unoccupied_capacity" | "data_size" => Ok(Type::U64),
                         "output_index" if base_name == CKB_OUTPUT_VIEW_TYPE => Ok(Type::U64),
                         "lock_hash" | "type_hash" => Ok(Type::Named(CKB_SCRIPT_HASH_TYPE.to_string())),
+                        "data_hash" => Ok(Type::Hash),
                         "lock" | "type" | "type_script" => Ok(Type::Named(CKB_SCRIPT_VIEW_TYPE.to_string())),
                         "out_point" if base_name == CKB_INPUT_VIEW_TYPE => Ok(Type::Named(CKB_OUT_POINT_TYPE.to_string())),
+                        "since" if base_name == CKB_INPUT_VIEW_TYPE => Ok(Type::U64),
                         _ => Err(CompileError::new(
                             format!(
-                                "unknown transaction-view field '{}'; expected capacity, data_size, lock_hash, type_hash, lock, type_script{}",
+                                "unknown transaction-view field '{}'; expected capacity, occupied_capacity, unoccupied_capacity, data_size, data_hash, lock_hash, type_hash, lock, type_script{}",
                                 field,
                                 match base_name {
-                                    CKB_INPUT_VIEW_TYPE => ", or out_point",
+                                    CKB_INPUT_VIEW_TYPE => ", out_point, or since",
                                     CKB_OUTPUT_VIEW_TYPE => ", or output_index",
                                     _ => "",
                                 }
+                            ),
+                            span,
+                        )),
+                    };
+                }
+                if base_name == CKB_HEADER_DEP_VIEW_TYPE {
+                    return match field {
+                        "epoch_number" | "epoch_start_block_number" | "epoch_length" => Ok(Type::U64),
+                        _ => Err(CompileError::new(
+                            format!(
+                                "unknown HeaderDepView field '{}'; expected epoch_number, epoch_start_block_number, or epoch_length",
+                                field
                             ),
                             span,
                         )),
@@ -6210,7 +6224,8 @@ impl<'a> TypeChecker<'a> {
                 }
                 if base_name == CKB_SCRIPT_VIEW_TYPE {
                     return match field {
-                        "hash" | "code_hash" | "args_hash" => Ok(Type::Named(CKB_SCRIPT_HASH_TYPE.to_string())),
+                        "hash" => Ok(Type::Named(CKB_SCRIPT_HASH_TYPE.to_string())),
+                        "code_hash" | "args_hash" => Ok(Type::Hash),
                         "hash_type" => Ok(Type::U64),
                         "args_empty" => Ok(Type::Bool),
                         _ => Err(CompileError::new(
@@ -10049,16 +10064,55 @@ action inspect() -> u64 {
         let input = ckb::input<Token>(0)
         let output = ckb::output<Token>(0)
         let dep = ckb::cell_dep(0)
+        let header = ckb::header_dep(0)
         let witness_args = witness::args(0)
         let out_point = input.out_point
         let lock = input.lock
         require lock.args_empty || lock.hash_type <= 4
-        return input.capacity + output.output_index + dep.data_size + witness_args.size + out_point.index
+        require dep.data_hash == dep.data_hash
+        return input.capacity + input.occupied_capacity + input.unoccupied_capacity + input.since + output.output_index + dep.data_size + witness_args.size + out_point.index + header.epoch_number + header.epoch_start_block_number + header.epoch_length
 }
 "#,
         );
 
         check(&module).unwrap();
+    }
+
+    #[test]
+    fn script_view_hash_domains_are_not_interchangeable() {
+        let module = source_module(
+            r#"
+module test
+
+resource Token has store { amount: u64 }
+
+action inspect() -> bool {
+    verification
+        let input = ckb::input<Token>(0)
+        let script = input.lock
+        let complete: ScriptHash = script.hash
+        let code: Hash = script.code_hash
+        let args: Hash = script.args_hash
+        return complete.0 == code.0 || code == args
+}
+"#,
+        );
+        check(&module).unwrap();
+
+        let confused = source_module(
+            r#"
+module test
+
+resource Token has store { amount: u64 }
+
+action inspect() -> ScriptHash {
+    verification
+        return ckb::input<Token>(0).lock.code_hash
+}
+"#,
+        );
+        let err = check(&confused).unwrap_err();
+        assert!(err.message.contains("return type mismatch") && err.message.contains("Hash"), "unexpected error: {}", err.message);
     }
 
     #[test]
