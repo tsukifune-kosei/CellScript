@@ -23,8 +23,9 @@ pub mod policy_witness;
 mod protocol_bundle;
 
 pub use protocol_bundle::{
-    materialize_protocol_bundle_report, protocol_bundle_dry_run_evidence, ProtocolBundleDryRunEvidence,
-    ProtocolBundleGroupDryRunEvidence, ProtocolBundleIndexBinding, ProtocolBundleMaterializationEvidence,
+    materialize_protocol_bundle_report, protocol_bundle_dry_run_evidence, protocol_bundle_live_resolution_evidence,
+    ProtocolBundleDryRunEvidence, ProtocolBundleGroupDryRunEvidence, ProtocolBundleIndexBinding, ProtocolBundleLiveInputEvidence,
+    ProtocolBundleLiveInputExpectation, ProtocolBundleLiveResolutionEvidence, ProtocolBundleMaterializationEvidence,
     ProtocolBundleScriptGroupEvidence,
 };
 
@@ -1524,6 +1525,14 @@ impl<'a> CkbSdkAcceptance<'a> {
         protocol_bundle_dry_run_evidence(tx, materialization, &estimate)
     }
 
+    pub fn verify_protocol_bundle_live_inputs(
+        &self,
+        tx: &TransactionView,
+        materialization: &ProtocolBundleMaterializationEvidence,
+    ) -> Result<ProtocolBundleLiveResolutionEvidence> {
+        verify_protocol_bundle_live_inputs_with_client(self.client, tx, materialization)
+    }
+
     pub fn test_tx_pool_accept(&self, tx: &TransactionView) -> std::result::Result<EntryCompleted, ckb_sdk::RpcError> {
         self.client.test_tx_pool_accept(to_rpc_transaction(tx), Some(OutputsValidator::Passthrough))
     }
@@ -1860,6 +1869,17 @@ impl CellScriptAdapter {
         protocol_bundle_dry_run_evidence(tx, materialization, &estimate)
     }
 
+    /// Resolve every input through `get_live_cell`, verify the exact expected
+    /// CellOutput/data and network identity, and replace skeleton-sourced
+    /// capacity/fee claims with live node evidence.
+    pub fn verify_protocol_bundle_live_inputs(
+        &self,
+        tx: &TransactionView,
+        materialization: &ProtocolBundleMaterializationEvidence,
+    ) -> Result<ProtocolBundleLiveResolutionEvidence> {
+        verify_protocol_bundle_live_inputs_with_client(&self.client, tx, materialization)
+    }
+
     /// Test tx-pool acceptance for a transaction.
     pub fn test_tx_pool_accept(&self, tx: &TransactionView) -> std::result::Result<EntryCompleted, ckb_sdk::RpcError> {
         self.client.test_tx_pool_accept(to_rpc_transaction(tx), Some(OutputsValidator::Passthrough))
@@ -1929,6 +1949,32 @@ impl CellScriptAdapter {
     }
 
     // ---- Internal helpers ----
+}
+
+fn verify_protocol_bundle_live_inputs_with_client(
+    client: &CkbRpcClient,
+    tx: &TransactionView,
+    materialization: &ProtocolBundleMaterializationEvidence,
+) -> Result<ProtocolBundleLiveResolutionEvidence> {
+    let consensus = client.get_consensus()?;
+    let observed_chain_id = consensus.id;
+    let observed_genesis_hash = format!("0x{}", hex::encode(consensus.genesis_hash.as_bytes()));
+    let mut live_inputs = Vec::with_capacity(tx.inputs().len());
+    for (index, input) in tx.inputs().into_iter().enumerate() {
+        let response = client.get_live_cell(input.previous_output().into(), true)?;
+        if response.status != "live" {
+            bail!("ProtocolBundle input {index} is not live (status: {})", response.status);
+        }
+        let cell = response.cell.ok_or_else(|| anyhow::anyhow!("ProtocolBundle live input {index} response omitted the cell"))?;
+        let output: CellOutput = cell.output.into();
+        let data = cell
+            .data
+            .ok_or_else(|| anyhow::anyhow!("ProtocolBundle live input {index} response omitted cell data"))?
+            .content
+            .into_bytes();
+        live_inputs.push((output, data));
+    }
+    protocol_bundle_live_resolution_evidence(tx, materialization, &observed_chain_id, &observed_genesis_hash, &live_inputs)
 }
 
 pub fn sample_resolved_action_tx() -> ResolvedActionTx {

@@ -228,8 +228,10 @@ Molecule transaction with exact raw/full hashes, size, capacity/fee evidence,
 and global/group-relative indexes sharing one transaction-byte identity.
 The adapter can also bind a successful node `estimate_cycles` result to every
 direct group under that byte identity while retaining the aggregate cycles and
-truthfully leaving per-group cycles unattributed. Builder-derived claims, live
-Cell resolution, independently measured per-group execution, and the remaining
+truthfully leaving per-group cycles unattributed. Exact-chain live input
+resolution now verifies each ordered OutPoint, packed CellOutput, data,
+capacity, and fee before dry-run. Builder-derived claims, live deployment
+resolution, independently measured per-group execution, and the remaining
 runtime-adapter work remain required before issue #9 is complete. See
 [CellScript ProtocolBundle v1](CELLSCRIPT_PROTOCOL_BUNDLE.md).
 

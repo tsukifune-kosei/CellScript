@@ -1007,7 +1007,9 @@ Successful reports with concrete input, output-data, and witness fields can be
 materialized by `cellscript-ckb-adapter` into one packed transaction with
 byte-identical per-group attribution. A node `estimate_cycles` result can then
 bind aggregate acceptance to every direct group without inventing unavailable
-per-group cycle counts.
+per-group cycle counts. Exact-chain live input resolution separately verifies
+that each OutPoint, CellOutput, data payload, capacity, and resulting fee still
+matches the materialized bundle.
 | `cellc publish` / `cellc publish --offline` / `cellc registry add` / `cellc registry edit --yank` | Public publish plus explicit local/offline registry metadata flow; public registry policy makes bare `cellc publish` an authenticated registry write, with Git/static metadata retained for audit and fallback |
 | `cellc auth capability create/submit/revoke` / public registry write API / non-CellScript artifact install | Typed wallet-rooted publication policy and future-facing artifact profiles; fail-closed where unsupported |
 

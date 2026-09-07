@@ -49,10 +49,22 @@ pub struct ProtocolBundleScriptGroupEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleLiveInputExpectation {
+    pub index: u32,
+    pub out_point_tx_hash: String,
+    pub out_point_index: u32,
+    pub capacity_shannons: u64,
+    pub cell_output_hash: String,
+    pub data_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProtocolBundleMaterializationEvidence {
     pub schema: &'static str,
     pub state: &'static str,
     pub bundle_hash: String,
+    pub network_chain_id: String,
+    pub network_genesis_hash: String,
     pub raw_transaction_hash: String,
     pub serialized_transaction_hash: String,
     pub serialized_transaction_size_bytes: usize,
@@ -61,6 +73,7 @@ pub struct ProtocolBundleMaterializationEvidence {
     pub occupied_output_capacity_shannons: u64,
     pub fee_shannons: u64,
     pub capacity_source: &'static str,
+    pub live_input_expectations: Vec<ProtocolBundleLiveInputExpectation>,
     pub transaction_serialization: &'static str,
     pub script_groups: Vec<ProtocolBundleScriptGroupEvidence>,
     pub ckb_vm_execution: &'static str,
@@ -94,6 +107,33 @@ pub struct ProtocolBundleDryRunEvidence {
     pub chain_evidence: &'static str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleLiveInputEvidence {
+    pub index: u32,
+    pub out_point_tx_hash: String,
+    pub out_point_index: u32,
+    pub capacity_shannons: u64,
+    pub cell_output_hash: String,
+    pub data_hash: String,
+    pub status: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleLiveResolutionEvidence {
+    pub schema: &'static str,
+    pub state: &'static str,
+    pub bundle_hash: String,
+    pub raw_transaction_hash: String,
+    pub network_chain_id: String,
+    pub network_genesis_hash: String,
+    pub inputs: Vec<ProtocolBundleLiveInputEvidence>,
+    pub input_capacity_shannons: u64,
+    pub output_capacity_shannons: u64,
+    pub fee_shannons: u64,
+    pub capacity_source: &'static str,
+    pub chain_evidence: &'static str,
+}
+
 #[derive(Debug, Deserialize)]
 struct ReportWire {
     schema: String,
@@ -108,10 +148,18 @@ struct ReportWire {
 #[derive(Debug, Deserialize)]
 struct BundleWire {
     schema: String,
+    network: NetworkWire,
     artifacts: Vec<ArtifactWire>,
     transaction: TransactionWire,
     #[serde(default)]
     roles: Vec<RoleWire>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NetworkWire {
+    chain_id: String,
+    genesis_hash: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -258,6 +306,10 @@ pub fn materialize_protocol_bundle_report(bytes: &[u8]) -> Result<(TransactionVi
         bail!("ProtocolBundle materialization supports only transaction version 0");
     }
 
+    if bundle.network.chain_id.trim().is_empty() {
+        bail!("ProtocolBundle network chain_id must not be empty");
+    }
+    require_hash32("ProtocolBundle network genesis_hash", &bundle.network.genesis_hash)?;
     let (tx, capacities) = materialize_transaction(&bundle.transaction)?;
     let packed_transaction = tx.data();
     let serialized = packed_transaction.as_slice();
@@ -271,6 +323,8 @@ pub fn materialize_protocol_bundle_report(bytes: &[u8]) -> Result<(TransactionVi
             schema: PROTOCOL_BUNDLE_MATERIALIZATION_SCHEMA,
             state: "MaterializedProtocolBundleTx",
             bundle_hash: report.bundle_hash,
+            network_chain_id: bundle.network.chain_id,
+            network_genesis_hash: bundle.network.genesis_hash,
             raw_transaction_hash,
             serialized_transaction_hash,
             serialized_transaction_size_bytes: serialized.len(),
@@ -279,12 +333,95 @@ pub fn materialize_protocol_bundle_report(bytes: &[u8]) -> Result<(TransactionVi
             occupied_output_capacity_shannons: capacities.occupied_output,
             fee_shannons: capacities.fee,
             capacity_source: "bundle-skeleton-not-live-resolved",
+            live_input_expectations: capacities.live_input_expectations,
             transaction_serialization: "verified",
             script_groups,
             ckb_vm_execution: "not-executed",
             chain_evidence: "not-executed",
         },
     ))
+}
+
+/// Verify materialized ProtocolBundle input expectations against live Cell
+/// outputs already fetched from a node with data included.
+///
+/// The caller is responsible for rejecting non-live RPC statuses. This pure
+/// boundary verifies the connected chain identity, exact transaction identity,
+/// input ordering, packed CellOutput/data hashes, capacities, and resulting
+/// fee before it emits live-resolution evidence.
+pub fn protocol_bundle_live_resolution_evidence(
+    tx: &TransactionView,
+    materialization: &ProtocolBundleMaterializationEvidence,
+    observed_chain_id: &str,
+    observed_genesis_hash: &str,
+    live_inputs: &[(CellOutput, Bytes)],
+) -> Result<ProtocolBundleLiveResolutionEvidence> {
+    validate_materialized_transaction(tx, materialization, "live resolution")?;
+    if observed_chain_id != materialization.network_chain_id || observed_genesis_hash != materialization.network_genesis_hash {
+        bail!("connected CKB network identity does not match the ProtocolBundle materialization");
+    }
+    if live_inputs.len() != materialization.live_input_expectations.len() || live_inputs.len() != tx.inputs().len() {
+        bail!("live input evidence does not cover every transaction input exactly once");
+    }
+    let transaction_inputs = tx.inputs();
+    let mut inputs = Vec::with_capacity(live_inputs.len());
+    let mut input_capacity_shannons = 0u64;
+    for (position, ((output, data), expected)) in live_inputs.iter().zip(materialization.live_input_expectations.iter()).enumerate() {
+        let index = u32::try_from(position).context("live input index does not fit in u32")?;
+        if expected.index != index {
+            bail!("live input expectation order is not canonical at index {index}");
+        }
+        let out_point = transaction_inputs
+            .get(position)
+            .ok_or_else(|| anyhow::anyhow!("transaction input {position} disappeared during live resolution"))?
+            .previous_output();
+        let out_point_tx_hash = format!("0x{}", hex::encode(out_point.tx_hash().as_slice()));
+        let out_point_index: u32 = out_point.index().unpack();
+        if out_point_tx_hash != expected.out_point_tx_hash || out_point_index != expected.out_point_index {
+            bail!("live input expectation at index {index} is bound to another OutPoint");
+        }
+        let capacity_shannons: u64 = output.capacity().unpack();
+        let cell_output_hash = hash_hex(output.as_slice());
+        let data_hash = hash_hex(data);
+        if capacity_shannons != expected.capacity_shannons
+            || cell_output_hash != expected.cell_output_hash
+            || data_hash != expected.data_hash
+        {
+            bail!("live Cell at input index {index} differs from the ProtocolBundle expectation");
+        }
+        input_capacity_shannons = input_capacity_shannons
+            .checked_add(capacity_shannons)
+            .ok_or_else(|| anyhow::anyhow!("live input capacity total overflow"))?;
+        inputs.push(ProtocolBundleLiveInputEvidence {
+            index,
+            out_point_tx_hash,
+            out_point_index,
+            capacity_shannons,
+            cell_output_hash,
+            data_hash,
+            status: "live-verified",
+        });
+    }
+    let fee_shannons = input_capacity_shannons
+        .checked_sub(materialization.output_capacity_shannons)
+        .ok_or_else(|| anyhow::anyhow!("live input capacity is below materialized output capacity"))?;
+    if fee_shannons != materialization.fee_shannons {
+        bail!("live input capacities produce a different fee from the materialized ProtocolBundle");
+    }
+    Ok(ProtocolBundleLiveResolutionEvidence {
+        schema: "cellscript-protocol-bundle-live-resolution-v1",
+        state: "LiveResolvedProtocolBundleTx",
+        bundle_hash: materialization.bundle_hash.clone(),
+        raw_transaction_hash: materialization.raw_transaction_hash.clone(),
+        network_chain_id: observed_chain_id.to_string(),
+        network_genesis_hash: observed_genesis_hash.to_string(),
+        inputs,
+        input_capacity_shannons,
+        output_capacity_shannons: materialization.output_capacity_shannons,
+        fee_shannons,
+        capacity_source: "live-node",
+        chain_evidence: "live-cell-resolution-uncommitted",
+    })
 }
 
 /// Bind a successful node `estimate_cycles` response to the exact packed
@@ -301,16 +438,11 @@ pub fn protocol_bundle_dry_run_evidence(
     materialization: &ProtocolBundleMaterializationEvidence,
     estimate: &EstimateCycles,
 ) -> Result<ProtocolBundleDryRunEvidence> {
+    validate_materialized_transaction(tx, materialization, "dry-run")?;
     let packed_transaction = tx.data();
     let serialized = packed_transaction.as_slice();
-    let serialized_hash = hash_hex(serialized);
-    let raw_hash = format!("0x{}", hex::encode(tx.hash().as_slice()));
-    if serialized_hash != materialization.serialized_transaction_hash
-        || raw_hash != materialization.raw_transaction_hash
-        || serialized.len() != materialization.serialized_transaction_size_bytes
-    {
-        bail!("ProtocolBundle dry-run transaction does not match materialization evidence");
-    }
+    let serialized_hash = materialization.serialized_transaction_hash.clone();
+    let raw_hash = materialization.raw_transaction_hash.clone();
     if materialization.transaction_serialization != "verified" {
         bail!("ProtocolBundle transaction serialization is not verified");
     }
@@ -353,6 +485,24 @@ pub fn protocol_bundle_dry_run_evidence(
         tx_pool_acceptance: false,
         chain_evidence: "node-dry-run-uncommitted",
     })
+}
+
+fn validate_materialized_transaction(
+    tx: &TransactionView,
+    materialization: &ProtocolBundleMaterializationEvidence,
+    operation: &str,
+) -> Result<()> {
+    let packed_transaction = tx.data();
+    let serialized = packed_transaction.as_slice();
+    let serialized_hash = hash_hex(serialized);
+    let raw_hash = format!("0x{}", hex::encode(tx.hash().as_slice()));
+    if serialized_hash != materialization.serialized_transaction_hash
+        || raw_hash != materialization.raw_transaction_hash
+        || serialized.len() != materialization.serialized_transaction_size_bytes
+    {
+        bail!("ProtocolBundle {operation} transaction does not match materialization evidence");
+    }
+    Ok(())
 }
 
 fn validate_report_boundary(report: &ReportWire) -> Result<()> {
@@ -424,6 +574,7 @@ struct CapacityEvidence {
     output: u64,
     occupied_output: u64,
     fee: u64,
+    live_input_expectations: Vec<ProtocolBundleLiveInputExpectation>,
 }
 
 fn materialize_transaction(transaction: &TransactionWire) -> Result<(TransactionView, CapacityEvidence)> {
@@ -438,6 +589,7 @@ fn materialize_transaction(transaction: &TransactionWire) -> Result<(Transaction
     let mut builder = TransactionBuilder::default();
     let mut seen_inputs = HashSet::new();
     let mut input_capacity = 0u64;
+    let mut live_input_expectations = Vec::with_capacity(transaction.inputs.len());
     for (index, cell) in transaction.inputs.iter().enumerate() {
         require_hash32(&format!("inputs[{index}].cell_commitment"), &cell.cell_commitment)?;
         let out_point = cell.out_point.as_ref().ok_or_else(|| anyhow::anyhow!("inputs[{index}] is missing concrete out_point"))?;
@@ -447,6 +599,24 @@ fn materialize_transaction(transaction: &TransactionWire) -> Result<(Transaction
         }
         let input = CellInput::new_builder().previous_output(packed_out_point).since(cell.since.unwrap_or(0)).build();
         builder.input(input);
+        let input_data = Bytes::from(parse_hex(
+            &format!("inputs[{index}].data"),
+            cell.data.as_deref().ok_or_else(|| anyhow::anyhow!("inputs[{index}] is missing exact live Cell data"))?,
+        )?);
+        let mut expected_output =
+            CellOutput::new_builder().capacity(cell.capacity).lock(parse_script(&format!("inputs[{index}].lock"), &cell.lock)?);
+        if let Some(type_script) = &cell.type_script {
+            expected_output = expected_output.type_(Some(parse_script(&format!("inputs[{index}].type"), type_script)?).pack());
+        }
+        let expected_output = expected_output.build();
+        live_input_expectations.push(ProtocolBundleLiveInputExpectation {
+            index: u32::try_from(index).context("ProtocolBundle input index does not fit in u32")?,
+            out_point_tx_hash: out_point.tx_hash.clone(),
+            out_point_index: out_point.index,
+            capacity_shannons: cell.capacity,
+            cell_output_hash: hash_hex(expected_output.as_slice()),
+            data_hash: hash_hex(&input_data),
+        });
         input_capacity = input_capacity
             .checked_add(cell.capacity)
             .ok_or_else(|| anyhow::anyhow!("ProtocolBundle input capacity total overflow"))?;
@@ -497,7 +667,13 @@ fn materialize_transaction(transaction: &TransactionWire) -> Result<(Transaction
         .ok_or_else(|| anyhow::anyhow!("ProtocolBundle output capacity {output_capacity} exceeds input capacity {input_capacity}"))?;
     Ok((
         builder.build(),
-        CapacityEvidence { input: input_capacity, output: output_capacity, occupied_output: occupied_output_capacity, fee },
+        CapacityEvidence {
+            input: input_capacity,
+            output: output_capacity,
+            occupied_output: occupied_output_capacity,
+            fee,
+            live_input_expectations,
+        },
     ))
 }
 
@@ -921,5 +1097,40 @@ mod tests {
         let changed = transaction.as_advanced_builder().set_witnesses(vec![Bytes::from_static(b"changed").pack()]).build();
         let error = protocol_bundle_dry_run_evidence(&changed, &materialization, &estimate).unwrap_err().to_string();
         assert!(error.contains("does not match materialization evidence"), "{error}");
+    }
+
+    #[test]
+    fn live_resolution_replaces_skeleton_capacity_with_exact_node_cells() {
+        let report = report();
+        let (transaction, materialization) = materialize_protocol_bundle_report(&serde_json::to_vec(&report).unwrap()).unwrap();
+        let lock: ScriptWire = serde_json::from_value(report["bundle"]["transaction"]["inputs"][0]["lock"].clone()).unwrap();
+        let type_script: ScriptWire = serde_json::from_value(report["bundle"]["transaction"]["inputs"][0]["type"].clone()).unwrap();
+        let live_output = CellOutput::new_builder()
+            .capacity(120_000_000_000u64)
+            .lock(parse_script("live.lock", &lock).unwrap())
+            .type_(Some(parse_script("live.type", &type_script).unwrap()).pack())
+            .build();
+        let live_inputs = vec![(live_output.clone(), Bytes::new())];
+        let genesis_hash = format!("0x{}", "0".repeat(64));
+
+        let evidence =
+            protocol_bundle_live_resolution_evidence(&transaction, &materialization, "ckb-testnet", &genesis_hash, &live_inputs)
+                .unwrap();
+        assert_eq!(evidence.capacity_source, "live-node");
+        assert_eq!(evidence.fee_shannons, 20_000_000_000);
+        assert_eq!(evidence.inputs[0].status, "live-verified");
+
+        let error =
+            protocol_bundle_live_resolution_evidence(&transaction, &materialization, "ckb-mainnet", &genesis_hash, &live_inputs)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("network identity"), "{error}");
+
+        let changed_inputs = vec![(live_output, Bytes::from_static(b"changed"))];
+        let error =
+            protocol_bundle_live_resolution_evidence(&transaction, &materialization, "ckb-testnet", &genesis_hash, &changed_inputs)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("differs from the ProtocolBundle expectation"), "{error}");
     }
 }

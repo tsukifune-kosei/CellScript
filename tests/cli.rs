@@ -2590,6 +2590,8 @@ lock authorize(witness approved: bool) -> bool {
     assert_eq!(materialization.state, "MaterializedProtocolBundleTx");
     assert_eq!(materialization.transaction_serialization, "verified");
     assert_eq!(materialization.script_groups.len(), 3);
+    assert_eq!(materialization.live_input_expectations.len(), 1);
+    assert_eq!(materialization.capacity_source, "bundle-skeleton-not-live-resolved");
     assert!(materialization
         .script_groups
         .iter()

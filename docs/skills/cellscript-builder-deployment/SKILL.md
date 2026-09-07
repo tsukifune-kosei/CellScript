@@ -53,3 +53,6 @@ Validation defaults:
 - use `CkbSdkAcceptance::dry_run_protocol_bundle` for node execution of those
   exact bytes; retain its aggregate cycles, null per-group cycles, uncommitted
   state, and separately unobserved spawned-verifier status.
+- call `verify_protocol_bundle_live_inputs` before relying on input capacities
+  or fee evidence; require exact chain identity and `live-node` capacity source,
+  and remember that a successful query is still uncommitted state.

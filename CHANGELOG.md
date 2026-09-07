@@ -242,6 +242,15 @@
   unobserved. Tx-pool and committed-chain evidence are not inferred from the
   dry-run.
 
+- Add fail-closed ProtocolBundle live-input resolution. The adapter verifies
+  the connected chain ID and genesis hash, queries every input with full cell
+  data, requires `live` status, and compares the ordered OutPoint, packed
+  CellOutput hash, data hash, capacity, and resulting fee against the exact
+  materialization. The new
+  `cellscript-protocol-bundle-live-resolution-v1` record upgrades
+  `capacity_source` from the bundle skeleton to `live-node` while remaining
+  explicit that this is uncommitted state.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

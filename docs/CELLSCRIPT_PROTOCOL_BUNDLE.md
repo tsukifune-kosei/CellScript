@@ -164,6 +164,16 @@ bind their exact code CellDep but are not misreported as direct CKB Script
 Groups. Input capacity and the resulting fee are sourced from the bundle
 skeleton until live Cell resolution verifies them.
 
+`CkbSdkAcceptance::verify_protocol_bundle_live_inputs` first checks the
+connected node's chain ID and genesis hash, then resolves every transaction
+input with `get_live_cell(..., true)`. Each Cell must still be live and its
+packed `CellOutput`, data hash, capacity, OutPoint, and order must match the
+hash-bound materialization expectation. The resulting
+`cellscript-protocol-bundle-live-resolution-v1` record changes
+`capacity_source` to `live-node` and recomputes the fee from verified live
+inputs. This is uncommitted live-state evidence; the Cell can still be spent
+before submission.
+
 `CkbSdkAcceptance::dry_run_protocol_bundle` sends that exact packed transaction
 to CKB `estimate_cycles`. A successful response emits
 `cellscript-protocol-bundle-dry-run-v1`: every direct Lock/Type group is marked
@@ -188,7 +198,7 @@ byte-exact transaction while preserving the offline report unchanged.
 The next bundle phases must add, without weakening this hash boundary:
 
 - derivation of transaction claims from admitted builder manifests and live
-  Cell/deployment resolution;
+  deployment resolution;
 - revalidation of the packed transaction view against every artifact's builder
   assumptions;
 - per-Script-Group CKB-VM execution over byte-identical transaction bytes;

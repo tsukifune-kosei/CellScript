@@ -144,6 +144,14 @@ execution. Its CKB-VM and chain evidence fields therefore remain
 `not-executed`; input capacity and fee remain skeleton-sourced until live Cell
 resolution.
 
+`verify_protocol_bundle_live_inputs()` upgrades those skeleton claims through
+the node. It rejects a chain ID or genesis mismatch, non-live input, missing
+cell data, reordered OutPoint, or any difference in packed CellOutput, data,
+capacity, or fee. The resulting
+`cellscript-protocol-bundle-live-resolution-v1` evidence uses
+`capacity_source = live-node`. It is still uncommitted state and must be
+refreshed before signing/submission when freshness matters.
+
 `CkbSdkAcceptance::dry_run_protocol_bundle()` and the equivalent
 `CellScriptAdapter` method call CKB `estimate_cycles` with that exact
 transaction. A successful result produces
