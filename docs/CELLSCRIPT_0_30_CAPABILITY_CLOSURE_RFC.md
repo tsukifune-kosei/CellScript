@@ -218,7 +218,10 @@ The Phase 0 and offline composition core now use
 ELF through the standalone checker and detects the complete documented
 ownership, placement, witness, dependency, Script/resource identity, capacity,
 fee/change, network/profile, signature-domain, and out-of-range index conflict
-matrix. The emitted evidence truthfully leaves transaction serialization,
+matrix. Action entries now bind their generated builder manifest and exact
+selected-action projection, and the same skeleton is validated against every
+artifact's metadata builder assumptions with `PB212` for missing or invalid
+evidence. The emitted evidence truthfully leaves transaction serialization,
 CKB-VM execution, and chain evidence unexecuted. Builder-derived claims, one
 concrete Molecule transaction, per-group execution, and runtime-adapter work
 remain required before issue #9 is complete. See

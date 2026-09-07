@@ -8,15 +8,19 @@ Status: 0.30 development contract for issue
 `cellscript-protocol-bundle-v1` is an off-chain composition object for two or
 more independently compiled CKB Script artifacts. The offline checker:
 
-1. loads each referenced ELF, compile metadata, lowering record, and source
-   map from a path confined to the input document's directory;
+1. loads each referenced ELF, compile metadata, lowering record, source map,
+   and action-builder manifest from paths confined to the input document's
+   directory;
 2. admits every artifact through `cellscript-artifact-checker` and the current
    metadata validator;
 3. binds the selected entry, package/lock identity, exact ELF hash, interface,
-   typed semantics, target profile, deployment, and code CellDep;
+   typed semantics, target profile, deployment, code CellDep, and generated
+   builder projection;
 4. merges explicitly named input, output, witness, CellDep, HeaderDep, fee,
-   and change claims against one deterministic transaction skeleton; and
-5. emits a stable bundle hash, conflict report, and runtime evidence template.
+   and change claims against one deterministic transaction skeleton;
+5. validates that same skeleton and its explicit builder-assumption evidence
+   against every admitted artifact's compile metadata; and
+6. emits a stable bundle hash, conflict report, and runtime evidence template.
 
 This layer does not link ELF files, merge their trust boundaries, call one CKB
 Script from another, query RPC, sign, submit, or claim CKB-VM/chain evidence.
@@ -59,6 +63,11 @@ The top-level input contains:
 Every artifact record names a package coordinate and exact `Cell.lock` node
 identity, one selected action/lock/function, the Script role (`lock`, `type`,
 or `spawned-verifier`), four checked artifact files, and one exact deployment.
+Action entries must also supply the `cellscript-generated-action-builder-v0.23-edition-2026`
+manifest emitted by `cellc gen-builder`. Its metadata/artifact/compiler/profile
+identities, runtime contract, structural manifests, and selected action
+projection must agree with the admitted metadata. Lock entries may omit it
+because the current generated builder surface is action-oriented.
 For `data`, `data1`, and `data2` deployments, the Script code hash must equal
 the checked ELF's CKB hash. A `type` deployment binds the separately supplied
 Type-hash identity. All deployments must use a hash type admitted by the
@@ -102,6 +111,7 @@ chooses a winner:
 | `PB209` | profile/version | Target, VM, source encoding, or ABI profile hashes disagree |
 | `PB210` | signature policy | Signing domains disagree for one witness field |
 | `PB211` | skeleton binding | A claimed global index does not exist |
+| `PB212` | builder validation | The shared transaction skeleton or supplied evidence violates an artifact's metadata builder assumptions |
 
 Malformed schemas, unknown fields, duplicate artifact/claim identities,
 unknown artifact references, non-canonical hashes, escaped paths, over-budget
@@ -115,24 +125,27 @@ cellc protocol bundle check protocol-bundle.json --json
 cellc protocol bundle check protocol-bundle.json --output build/protocol-bundle.report.json
 ```
 
-On success, `status` is `ok`, `conflicts` is empty, and
-`evidence.structural_verification` is `verified`. On conflict, the command
-exits unsuccessfully after writing the requested report so tooling can inspect
-the complete conflict set. No signing or network operation occurs.
+On success, `status` is `ok`, `conflicts` is empty,
+`evidence.structural_verification` is `verified`, and every
+`evidence.metadata_transaction_validation` entry is `ok`. On conflict, the
+command exits unsuccessfully after writing the requested report so tooling can
+inspect the complete conflict set. No signing or network operation occurs.
 
 ## Evidence tiers and remaining phases
 
-The v1 offline report retains the standalone checker report for every
-artifact. `transaction_serialization`, `ckb_vm_execution`, and
-`chain_evidence` remain `not-executed`, with no exact transaction hash. This is
-the Phase 0 format/threat-model contract and the deterministic core of Phase 1
+The v1 offline report retains the standalone checker report and metadata
+transaction-validation report for every artifact. Generated action-builder
+manifests are admitted and exact selected-action projections are checked.
+`transaction_serialization`, `ckb_vm_execution`, and `chain_evidence` remain
+`not-executed`, with no exact transaction hash. This is the Phase 0
+format/threat-model contract plus the builder-contract portion of Phase 1
 offline composition.
 
 The next bundle phases must add, without weakening this hash boundary:
 
-- builder-manifest-derived claims and a fully materialized Molecule
-  transaction;
-- validation of that same transaction against every artifact's builder
+- derivation of transaction claims from admitted builder manifests and a fully
+  materialized Molecule transaction;
+- revalidation of the packed transaction view against every artifact's builder
   assumptions;
 - per-Script-Group CKB-VM execution over byte-identical transaction bytes;
 - occupied-capacity, fee, change, serialized-size, and aggregate/per-group
@@ -143,4 +156,3 @@ The next bundle phases must add, without weakening this hash boundary:
 Until those phases land, this report is offline structural evidence. It is not
 a submission-ready transaction or a statement that all participating Scripts
 accepted one concrete transaction.
-

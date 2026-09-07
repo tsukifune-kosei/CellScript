@@ -6,8 +6,9 @@
 //! work. It deliberately does not link ELF files or model calls between CKB
 //! Scripts.
 
+use crate::assumptions::validate_transaction_against_metadata;
 use crate::error::{CompileError, Result};
-use crate::{ckb_blake2b256, hex_encode, validate_artifact_metadata, CompileMetadata};
+use crate::{ckb_blake2b256, hex_encode, validate_artifact_metadata, CompileMetadata, TxValidationReport};
 use cellscript_artifact_checker::{canonical_hash, check_bundle, CheckerBudgets, CheckerReport, EvidenceState};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -66,6 +67,8 @@ pub struct ProtocolArtifactFiles {
     pub metadata: String,
     pub lowering_record: String,
     pub source_map: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builder_manifest: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -259,6 +262,8 @@ pub struct ProtocolTransactionSkeleton {
     pub header_deps: Vec<String>,
     pub fee_policy_hash: String,
     pub change_policy_hash: String,
+    #[serde(default)]
+    pub builder_assumption_evidence: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -299,6 +304,8 @@ pub struct ProtocolArtifactIdentity {
     pub source_map_hash: String,
     pub interface_hash: String,
     pub target_profile_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builder_manifest_hash: Option<String>,
     pub verified_bundle_id: String,
 }
 
@@ -332,6 +339,7 @@ pub struct ProtocolBundleEvidenceTemplate {
     pub schema: String,
     pub structural_verification: EvidenceState,
     pub artifact_admission: BTreeMap<String, CheckerReport>,
+    pub metadata_transaction_validation: BTreeMap<String, TxValidationReport>,
     pub transaction_serialization: EvidenceState,
     pub ckb_vm_execution: EvidenceState,
     pub chain_evidence: EvidenceState,
@@ -368,8 +376,13 @@ pub fn check_protocol_bundle(input: &ProtocolBundleInput, base: &Path) -> Result
 
     let mut identities = Vec::with_capacity(input.artifacts.len());
     let mut reports = BTreeMap::new();
+    let mut metadata_validation = BTreeMap::new();
+    let transaction_value = serde_json::to_value(&input.transaction).map_err(|error| {
+        CompileError::without_span(format!("failed to materialize ProtocolBundle transaction validation view: {error}"))
+    })?;
     for artifact in &input.artifacts {
-        let (identity, report) = admit_artifact(artifact, &base)?;
+        let (identity, report, metadata) = admit_artifact(artifact, &base)?;
+        metadata_validation.insert(artifact.id.clone(), validate_transaction_against_metadata(&metadata, &transaction_value));
         reports.insert(artifact.id.clone(), report);
         identities.push(identity);
     }
@@ -387,7 +400,21 @@ pub fn check_protocol_bundle(input: &ProtocolBundleInput, base: &Path) -> Result
         policies: input.policies.clone(),
     };
     canonicalize_bundle(&mut bundle);
-    let conflicts = detect_conflicts(&bundle)?;
+    let mut conflicts = detect_conflicts(&bundle)?;
+    for (artifact, validation) in &metadata_validation {
+        if validation.status != "ok" {
+            push_conflict(
+                &mut conflicts,
+                "PB212",
+                "builder-validation",
+                format!("artifact:{artifact}"),
+                vec![artifact.clone()],
+                format!("candidate transaction violates {} metadata builder assumption(s)", validation.violations.len()),
+            );
+        }
+    }
+    conflicts.sort();
+    conflicts.dedup();
     let bundle_hash = canonical_hash(PROTOCOL_BUNDLE_HASH_DOMAIN, &bundle)
         .map_err(|error| CompileError::without_span(format!("failed to hash ProtocolBundle: {error}")))?;
     let status = if conflicts.is_empty() { "ok" } else { "failed" };
@@ -401,6 +428,7 @@ pub fn check_protocol_bundle(input: &ProtocolBundleInput, base: &Path) -> Result
             schema: PROTOCOL_BUNDLE_EVIDENCE_SCHEMA.to_string(),
             structural_verification: if status == "ok" { EvidenceState::Verified } else { EvidenceState::NotProvided },
             artifact_admission: reports,
+            metadata_transaction_validation: metadata_validation,
             transaction_serialization: EvidenceState::NotExecuted,
             ckb_vm_execution: EvidenceState::NotExecuted,
             chain_evidence: EvidenceState::NotExecuted,
@@ -591,7 +619,7 @@ fn confined_path(base: &Path, value: &str, label: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn admit_artifact(input: &ProtocolArtifactInput, base: &Path) -> Result<(ProtocolArtifactIdentity, CheckerReport)> {
+fn admit_artifact(input: &ProtocolArtifactInput, base: &Path) -> Result<(ProtocolArtifactIdentity, CheckerReport, CompileMetadata)> {
     let artifact_path = confined_path(base, &input.files.artifact, "artifact")?;
     let metadata_path = confined_path(base, &input.files.metadata, "metadata")?;
     let lowering_path = confined_path(base, &input.files.lowering_record, "lowering record")?;
@@ -656,6 +684,14 @@ fn admit_artifact(input: &ProtocolArtifactInput, base: &Path) -> Result<(Protoco
     let verified_bundle_id = metadata.verified_artifact.verified_bundle_id.clone().ok_or_else(|| {
         CompileError::without_span(format!("ProtocolBundle artifact '{}' metadata has no verified_bundle_id", input.id))
     })?;
+    if input.entry.kind == ProtocolEntryKind::Action && input.files.builder_manifest.is_none() {
+        return Err(CompileError::without_span(format!(
+            "ProtocolBundle action artifact '{}' requires a generated builder manifest",
+            input.id
+        )));
+    }
+    let builder_manifest_hash =
+        input.files.builder_manifest.as_deref().map(|path| validate_builder_manifest(input, &metadata, base, path)).transpose()?;
     Ok((
         ProtocolArtifactIdentity {
             id: input.id.clone(),
@@ -674,10 +710,109 @@ fn admit_artifact(input: &ProtocolArtifactInput, base: &Path) -> Result<(Protoco
             source_map_hash: report.source_map_hash.clone(),
             interface_hash: metadata.interface_hash.clone(),
             target_profile_hash,
+            builder_manifest_hash,
             verified_bundle_id,
         },
         report,
+        metadata,
     ))
+}
+
+fn validate_builder_manifest(input: &ProtocolArtifactInput, metadata: &CompileMetadata, base: &Path, path: &str) -> Result<String> {
+    let path = confined_path(base, path, "builder manifest")?;
+    let bytes = read_bounded_file(&path, MAX_METADATA_BYTES, "builder manifest")?;
+    let manifest: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+        CompileError::without_span(format!("failed to parse ProtocolBundle builder manifest '{}': {}", path.display(), error))
+    })?;
+    if manifest.get("schema").and_then(serde_json::Value::as_str) != Some("cellscript-generated-action-builder-v0.23-edition-2026") {
+        return Err(CompileError::without_span(format!(
+            "ProtocolBundle artifact '{}' builder manifest has an unsupported schema",
+            input.id
+        )));
+    }
+    let expected_metadata_hash = hex_encode(&ckb_blake2b256(
+        &serde_json::to_vec(metadata)
+            .map_err(|error| CompileError::without_span(format!("failed to hash metadata for builder validation: {error}")))?,
+    ));
+    let checks = [
+        ("metadata_hash", Some(expected_metadata_hash.as_str())),
+        ("artifact_hash", metadata.artifact_hash.as_deref()),
+        ("compiler_version", Some(metadata.compiler_version.as_str())),
+        ("target_profile", Some(metadata.target_profile.name.as_str())),
+    ];
+    for (field, expected) in checks {
+        if manifest.get(field).and_then(serde_json::Value::as_str) != expected {
+            return Err(CompileError::without_span(format!(
+                "ProtocolBundle artifact '{}' builder manifest field '{}' does not match checked metadata",
+                input.id, field
+            )));
+        }
+    }
+    let structural_checks = [
+        ("edition", serde_json::to_value(metadata.edition)),
+        ("metadata_schema_version", serde_json::to_value(metadata.metadata_schema_version)),
+        ("compatibility_profile", serde_json::to_value(&metadata.compatibility_profile)),
+        ("molecule_schema_manifest", serde_json::to_value(&metadata.molecule_schema_manifest)),
+        ("cell_data_codec_manifest", serde_json::to_value(&metadata.cell_data_codec_manifest)),
+        ("transaction_view_handles", serde_json::to_value(&metadata.runtime.transaction_view_handles)),
+        ("signing_message_domains", serde_json::to_value(&metadata.runtime.signing_message_domains)),
+    ];
+    for (field, expected) in structural_checks {
+        let expected = expected.map_err(|error| {
+            CompileError::without_span(format!("failed to project metadata field '{field}' for builder validation: {error}"))
+        })?;
+        if manifest.get(field) != Some(&expected) {
+            return Err(CompileError::without_span(format!(
+                "ProtocolBundle artifact '{}' builder manifest field '{}' does not match checked metadata",
+                input.id, field
+            )));
+        }
+    }
+    if manifest.pointer("/runtime_contract/runtime_access_provenance").and_then(serde_json::Value::as_str)
+        != Some(metadata.runtime.ckb_runtime_access_provenance_contract.as_str())
+    {
+        return Err(CompileError::without_span(format!(
+            "ProtocolBundle artifact '{}' builder runtime-access provenance does not match checked metadata",
+            input.id
+        )));
+    }
+    if input.entry.kind == ProtocolEntryKind::Action {
+        let action = metadata.actions.iter().find(|action| action.name == input.entry.name).ok_or_else(|| {
+            CompileError::without_span(format!("ProtocolBundle artifact '{}' selected action disappeared from metadata", input.id))
+        })?;
+        let projected = manifest
+            .get("actions")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|actions| {
+                actions.iter().find(|candidate| candidate.get("name").and_then(serde_json::Value::as_str) == Some(&input.entry.name))
+            })
+            .ok_or_else(|| {
+                CompileError::without_span(format!(
+                    "ProtocolBundle artifact '{}' builder manifest does not expose selected action '{}'",
+                    input.id, input.entry.name
+                ))
+            })?;
+        let action_checks = [
+            ("params", serde_json::to_value(&action.params)),
+            ("created_outputs", serde_json::to_value(action.create_set.len())),
+            ("mutated_outputs", serde_json::to_value(action.mutate_set.len())),
+            ("runtime_input_requirements", serde_json::to_value(action.transaction_runtime_input_requirements.len())),
+            ("runtime_accesses", serde_json::to_value(&action.ckb_runtime_accesses)),
+        ];
+        for (field, expected) in action_checks {
+            let expected = expected.map_err(|error| {
+                CompileError::without_span(format!("failed to project action field '{field}' for builder validation: {error}"))
+            })?;
+            if projected.get(field) != Some(&expected) {
+                return Err(CompileError::without_span(format!(
+                    "ProtocolBundle artifact '{}' builder action '{}' field '{}' does not match checked metadata",
+                    input.id, input.entry.name, field
+                )));
+            }
+        }
+    }
+    canonical_hash("cellscript-generated-action-builder-v0.23-edition-2026", &manifest)
+        .map_err(|error| CompileError::without_span(format!("failed to hash builder manifest for '{}': {error}", input.id)))
 }
 
 fn validate_entry(input: &ProtocolArtifactInput, metadata: &CompileMetadata) -> Result<()> {
@@ -1268,6 +1403,7 @@ mod tests {
             source_map_hash: raw_hash("e"),
             interface_hash: raw_hash("f"),
             target_profile_hash: raw_hash("1"),
+            builder_manifest_hash: None,
             verified_bundle_id: raw_hash("2"),
         }
     }
@@ -1313,6 +1449,7 @@ mod tests {
                 header_deps: vec![hash("9")],
                 fee_policy_hash: hash("a"),
                 change_policy_hash: hash("b"),
+                builder_assumption_evidence: BTreeMap::new(),
             },
             roles: Vec::new(),
             witnesses: Vec::new(),

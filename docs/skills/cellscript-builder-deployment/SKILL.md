@@ -39,6 +39,9 @@ Validation defaults:
   materialised `ActionPlan` JSON consumed by the Rust adapter;
 - run `cellc deploy plan --json` for deployment planning;
 - run `cellc tx validate --json` against concrete transaction evidence.
-- use `cellc protocol bundle check --json` to admit independent ELF artifacts
-  and reject offline role/index/witness/dependency/policy conflicts before
-  signing; treat its transaction, CKB-VM, and chain evidence as unexecuted.
+- use `cellc protocol bundle check --json` to admit independent ELF artifacts;
+  provide the generated builder manifest for every action entry and explicit
+  `builder_assumption_evidence` required by each artifact's metadata;
+- reject offline role/index/witness/dependency/policy conflicts and `PB212`
+  metadata-assumption failures before signing; treat transaction
+  serialization, CKB-VM, and chain evidence as unexecuted.

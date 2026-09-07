@@ -2395,9 +2395,13 @@ action settle() -> bool {
             r#"
 module protocol::token
 
-action transfer() -> bool {
+resource Token has store, create {
+    amount: u64
+}
+
+action transfer() -> Token {
     verification
-        true
+        create Token { amount: 1 }
 }
 "#,
         ),
@@ -2415,6 +2419,7 @@ lock authorize(witness approved: bool) -> bool {
     ];
 
     let mut artifact_hashes = std::collections::BTreeMap::new();
+    let mut metadata_values = std::collections::BTreeMap::new();
     for (name, source) in sources {
         let source_path = root.join(format!("{name}.cell"));
         let artifact_path = root.join(format!("{name}.elf"));
@@ -2429,6 +2434,19 @@ lock authorize(witness approved: bool) -> bool {
         let metadata: serde_json::Value =
             serde_json::from_slice(&std::fs::read(root.join(format!("{name}.elf.meta.json"))).unwrap()).unwrap();
         artifact_hashes.insert(name, metadata["artifact_hash"].as_str().unwrap().to_string());
+        metadata_values.insert(name, metadata);
+    }
+    for (name, action) in [("order", "settle"), ("token", "transfer")] {
+        let generated = Command::new(env!("CARGO_BIN_EXE_cellc"))
+            .args(["gen-builder", "--metadata"])
+            .arg(root.join(format!("{name}.elf.meta.json")))
+            .args(["--target", "typescript"])
+            .args(["--action", action, "--output"])
+            .arg(root.join(format!("{name}-builder")))
+            .arg("--json")
+            .output()
+            .unwrap();
+        assert!(generated.status.success(), "{}", String::from_utf8_lossy(&generated.stderr));
     }
 
     let network = serde_json::json!({
@@ -2437,7 +2455,7 @@ lock authorize(witness approved: bool) -> bool {
     });
     let artifact = |id: &str, entry_kind: &str, entry_name: &str, role: &str, dep_byte: &str| {
         let artifact_hash = artifact_hashes[id].clone();
-        serde_json::json!({
+        let mut artifact = serde_json::json!({
             "id": id,
             "package_coordinate": format!("example/{id}@1.0.0"),
             "lock_node_id": format!("{id}@1.0.0|path:{id}|env=default|features=default"),
@@ -2462,7 +2480,11 @@ lock authorize(witness approved: bool) -> bool {
                     "dep_type": "code",
                 },
             },
-        })
+        });
+        if entry_kind == "action" {
+            artifact["files"]["builder_manifest"] = serde_json::json!(format!("{id}-builder/cellscript-builder-manifest.json"));
+        }
+        artifact
     };
     let order = artifact("order", "action", "settle", "type", "1");
     let token = artifact("token", "action", "transfer", "type", "2");
@@ -2482,6 +2504,35 @@ lock authorize(witness approved: bool) -> bool {
             "type": ty,
         })
     };
+    let mut builder_assumption_evidence = serde_json::Map::new();
+    for metadata in metadata_values.values() {
+        let Some(assumptions) = metadata["runtime"]["builder_assumptions"].as_array() else {
+            continue;
+        };
+        for assumption in assumptions {
+            if assumption["kind"] != "capacity_policy" {
+                continue;
+            }
+            let assumption_id = assumption["assumption_id"].as_str().unwrap();
+            builder_assumption_evidence.insert(
+                assumption_id.to_string(),
+                serde_json::json!({
+                    "assumption_id": assumption_id,
+                    "kind": assumption["kind"].clone(),
+                    "origin": assumption["origin"].clone(),
+                    "feature": assumption["feature"].clone(),
+                    "proof_plan_status": assumption["proof_plan_status"].clone(),
+                    "evidence": {
+                        "outputs": [{ "index": 0, "capacity": 900 }],
+                        "occupied_capacity_shannons": 900,
+                        "tx_size_bytes": 1,
+                        "under_capacity_output_indexes": [],
+                    },
+                }),
+            );
+        }
+    }
+    assert!(!builder_assumption_evidence.is_empty(), "the creating action must expose a capacity-policy assumption");
     let mut manifest = serde_json::json!({
         "schema": "cellscript-protocol-bundle-input-v1",
         "network": network,
@@ -2495,6 +2546,7 @@ lock authorize(witness approved: bool) -> bool {
             "header_deps": [],
             "fee_policy_hash": format!("0x{}", "6".repeat(64)),
             "change_policy_hash": format!("0x{}", "7".repeat(64)),
+            "builder_assumption_evidence": builder_assumption_evidence,
         },
         "roles": [
             {
@@ -2531,7 +2583,21 @@ lock authorize(witness approved: bool) -> bool {
     let first: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
     assert_eq!(first["status"], "ok");
     assert_eq!(first["bundle"]["artifacts"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        first["bundle"]["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|artifact| artifact.get("builder_manifest_hash").is_some())
+            .count(),
+        2
+    );
     assert_eq!(first["evidence"]["structural_verification"], "verified");
+    assert!(first["evidence"]["metadata_transaction_validation"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|validation| validation["status"] == "ok"));
     assert_eq!(first["evidence"]["ckb_vm_execution"], "not-executed");
     assert_eq!(first["conflicts"], serde_json::json!([]));
 
@@ -2547,6 +2613,47 @@ lock authorize(witness approved: bool) -> bool {
     assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
     let second: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
     assert_eq!(first["bundle_hash"], second["bundle_hash"]);
+
+    let valid_builder_evidence = manifest["transaction"]["builder_assumption_evidence"].clone();
+    manifest["transaction"]["builder_assumption_evidence"] = serde_json::json!({});
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    let validation_path = root.join("protocol-builder-validation.json");
+    let validation_conflict = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .args(["protocol", "bundle", "check"])
+        .arg(&manifest_path)
+        .arg("--output")
+        .arg(&validation_path)
+        .output()
+        .unwrap();
+    assert!(!validation_conflict.status.success(), "missing builder evidence must fail before signing");
+    let validation_report: serde_json::Value = serde_json::from_slice(&std::fs::read(validation_path).unwrap()).unwrap();
+    assert!(validation_report["conflicts"].as_array().unwrap().iter().any(|conflict| conflict["code"] == "PB212"));
+    assert_eq!(validation_report["evidence"]["metadata_transaction_validation"]["token"]["status"], "failed");
+    manifest["transaction"]["builder_assumption_evidence"] = valid_builder_evidence;
+
+    let builder_manifest_path = root.join("order-builder/cellscript-builder-manifest.json");
+    let mut builder_manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(&builder_manifest_path).unwrap()).unwrap();
+    let created_outputs = {
+        let settle = builder_manifest["actions"].as_array_mut().unwrap().iter_mut().find(|action| action["name"] == "settle").unwrap();
+        let created_outputs = settle["created_outputs"].clone();
+        settle["created_outputs"] = serde_json::json!(created_outputs.as_u64().unwrap() + 1);
+        created_outputs
+    };
+    std::fs::write(&builder_manifest_path, serde_json::to_vec_pretty(&builder_manifest).unwrap()).unwrap();
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    let tampered_builder = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .args(["protocol", "bundle", "check"])
+        .arg(&manifest_path)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(!tampered_builder.status.success(), "tampered builder projections must fail artifact admission");
+    let diagnostics =
+        format!("{}{}", String::from_utf8_lossy(&tampered_builder.stdout), String::from_utf8_lossy(&tampered_builder.stderr));
+    assert!(diagnostics.contains("builder action 'settle' field 'created_outputs'"), "unexpected diagnostics: {diagnostics}");
+    let settle = builder_manifest["actions"].as_array_mut().unwrap().iter_mut().find(|action| action["name"] == "settle").unwrap();
+    settle["created_outputs"] = created_outputs;
+    std::fs::write(&builder_manifest_path, serde_json::to_vec_pretty(&builder_manifest).unwrap()).unwrap();
 
     let authorization = manifest["roles"].as_array_mut().unwrap().iter_mut().find(|role| role["artifact"] == "auth").unwrap();
     authorization["ownership"] = serde_json::json!("exclusive");

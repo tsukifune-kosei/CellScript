@@ -211,9 +211,15 @@
   fee/change, network/profile, signing-domain, and missing-index conflicts with
   stable `PB200`-`PB211` codes. A real three-artifact order/token/authorization
   CLI fixture proves canonical order independence and fail-before-signing
-  conflict output. Runtime transaction serialization, per-Script-Group CKB-VM
-  execution, RPC/signing/submission, and chain evidence remain explicitly
-  unexecuted until the later #9 phases.
+  conflict output. The Phase 1 builder-contract slice additionally requires a
+  generated builder manifest for action entries, checks its identities,
+  runtime contract, structural manifests, and selected-action projection
+  against admitted metadata, and validates the shared skeleton plus explicit
+  builder-assumption evidence against every artifact. Missing or invalid
+  builder evidence reports `PB212`; a tampered builder projection fails
+  artifact admission. Runtime transaction serialization, per-Script-Group
+  CKB-VM execution, RPC/signing/submission, and chain evidence remain
+  explicitly unexecuted until the later #9 phases.
 
 ## 0.26b - Experimental semantic-foundation branch
 

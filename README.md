@@ -979,7 +979,7 @@ the manual, CI, recovery, and external-wallet path.
 | `cellc explain graph` | Derive a cyclic ProtocolGraph audit view from compile metadata |
 | `cellc tx validate` | Validate transaction JSON shape against builder assumptions before signing |
 | `cellc tx solve` | Emit a deterministic transaction template from metadata |
-| `cellc protocol bundle check` | Independently admit multiple ELF artifacts, merge one offline transaction skeleton, and reject Script/index/witness/dependency/policy conflicts before signing |
+| `cellc protocol bundle check` | Independently admit multiple ELF artifacts and action-builder manifests, validate one shared offline skeleton against every artifact's metadata assumptions, and reject composition conflicts before signing |
 | `cellc deploy plan` | Emit a reproducible deployment plan |
 | `cellc deploy verify` / `deploy diff` / `deploy lock-deps` | Verify, compare, and lock deployment metadata |
 | `cellc proof-diff` / `profile` / `tx trace` / `audit-bundle` | Emit v0.16 audit and debug reports |
