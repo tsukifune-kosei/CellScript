@@ -298,6 +298,11 @@ impl StdLib {
                 params: vec![("duration".to_string(), IrType::Named("EpochDuration".to_string()))],
                 return_type: Some(IrType::U64),
             },
+            StdFunction {
+                name: "ckb_timestamp_millis_to_u64".to_string(),
+                params: vec![("timestamp".to_string(), IrType::Named("TimestampMillis".to_string()))],
+                return_type: Some(IrType::U64),
+            },
             StdFunction { name: "ckb_current_role".to_string(), params: vec![], return_type: Some(IrType::U64) },
             StdFunction {
                 name: "ckb_cell_capacity".to_string(),

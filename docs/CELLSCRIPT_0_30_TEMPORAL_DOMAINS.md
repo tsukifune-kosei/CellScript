@@ -3,9 +3,9 @@
 ## Status
 
 **Status: implemented additive Phase 1 contract for typed HeaderDep epoch
-fields, all six RFC0017 `Since` mode/metric domains, checked decoding, and
-checked whole-epoch duration arithmetic. This document does not close issue
-#12 or the 0.30 release gate.**
+fields, fixed-size full-header block/timestamp reads, all six RFC0017 `Since`
+mode/metric domains, checked decoding, and checked whole-epoch duration
+arithmetic. This document does not close issue #12 or the 0.30 release gate.**
 
 The normative chain behavior comes from
 [CKB RFC 0017](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0017-tx-valid-since/0017-tx-valid-since.md).
@@ -24,6 +24,7 @@ meanings.
 | `EpochDuration` | Whole-epoch interval bounded to the 24-bit CKB epoch-number domain | checked 8-byte scalar |
 | `BlockNumber` | Epoch start block number returned by a HeaderDep field read | checked 8-byte scalar |
 | `EpochLength` | Epoch length returned by a HeaderDep field read | checked 8-byte scalar |
+| `TimestampMillis` | CKB header timestamp in milliseconds | checked 8-byte scalar |
 | `EncodedSince` | Opaque, undecoded `since` read from `InputView.since` | exact CKB `u64` wire bits |
 | `DecodedSince` | Validated RFC0017 value retaining its wire tag | exact CKB `u64` wire bits |
 | `AbsoluteBlockSince` | Absolute block-number `Since` | exact CKB `u64` wire bits |
@@ -91,6 +92,8 @@ let raw_epoch: u64 = ckb::epoch_number_to_u64(header.epoch_number)
 let raw_duration: u64 = ckb::epoch_duration_to_u64(ckb::epoch_duration(5))
 let raw_start: u64 = ckb::block_number_to_u64(header.epoch_start_block_number)
 let raw_length: u64 = ckb::epoch_length_to_u64(header.epoch_length)
+let raw_block: u64 = ckb::block_number_to_u64(header.block_number)
+let raw_timestamp: u64 = ckb::timestamp_millis_to_u64(header.timestamp)
 ```
 
 Whole-epoch arithmetic uses an explicit duration domain:
@@ -107,6 +110,14 @@ revalidate their typed operands at the runtime boundary and use stable error 20,
 `numeric-or-discriminant-invalid`, on failure. `EpochNumber` and
 `EpochDuration` remain distinct source and IR types; ordinary numeric operators
 and mixed-domain comparisons do not erase that distinction.
+
+`HeaderDepView.block_number` and `.timestamp` use CKB's full `LOAD_HEADER`
+syscall because the field syscall exposes only the three epoch projections.
+The runtime loads the complete fixed 208-byte Molecule `Header`, requires that
+exact returned length, then reads RawHeader `number` at byte offset 16 or
+`timestamp` at byte offset 8. Header timestamps are milliseconds, while
+RFC0017 timestamp-Since payloads are seconds, so `TimestampMillis` cannot be
+compared to either timestamp-Since domain without an explicit conversion path.
 
 The conversion calls survive typed IR and typed-semantics records as named
 runtime operations. The machine ABI carries every implemented temporal value
@@ -139,7 +150,8 @@ ordering is wrong, checked decoding and narrowing, HeaderDep temporal reads,
 reserved-bit rejection, scalar bounds, timestamp multiplication overflow, and
 malformed zero-length constructor rejection. The same CKB-VM fixture covers
 duration construction, addition, subtraction, overflow, and underflow.
-Type-checker tests reject
+It also checks nonzero full-header block and timestamp values against a
+`ckb-testtool` Header. Type-checker tests reject
 absolute/relative mixing, block/epoch/timestamp mixing, and implicit comparison
 with raw integers. The standalone checker rejects typed-semantics mutations
 that change either mode or metric on a comparison operand.
@@ -148,8 +160,6 @@ that change either mode or metric on a comparison operand.
 
 The following work remains before the temporal issue can close:
 
-- typed timestamp and whole-block readers backed by a bounded full-header
-  decoding contract where CKB field syscalls do not expose those values;
 - migration warnings, a mechanical migration action, and old-edition package
   interoperation tests;
 - explicit constructor/decoder requirements in exported package-interface

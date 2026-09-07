@@ -67,6 +67,16 @@
   error 20, `numeric-or-discriminant-invalid`. Advance the artifact cache
   identity to `project-source-set-v35-0.30-dev1-epoch-duration`.
 
+- Complete the typed HeaderDep temporal readers that CKB does not expose via
+  `LOAD_HEADER_BY_FIELD`. `HeaderDepView.block_number` returns `BlockNumber`
+  and `HeaderDepView.timestamp` returns the distinct `TimestampMillis` domain.
+  The runtime loads the fixed 208-byte Molecule `Header`, requires the exact
+  size, and reads the official RawHeader offsets 16 and 8 respectively;
+  missing headers retain error 45 and malformed lengths use error 4. Tests bind
+  those constants to `ckb-types`, execute nonzero values in CKB-VM, and keep
+  milliseconds distinct from timestamp-Since seconds. Advance the artifact
+  cache identity to `project-source-set-v36-0.30-dev1-full-header-time`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

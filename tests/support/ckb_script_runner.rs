@@ -266,6 +266,7 @@ pub struct FixtureCell {
 #[derive(Debug, Clone, Copy)]
 pub struct FixtureHeaderContext {
     pub number: u64,
+    pub timestamp: u64,
     pub epoch_number: u64,
     pub epoch_index: u64,
     pub epoch_length: u64,
@@ -401,7 +402,7 @@ pub fn execute_cellscript_script(elf_bytes: &[u8], fixture: &CkbVmFixture) -> Ck
             let dao_packed: packed::Byte32 = dao_bytes.pack();
             let mut builder = HeaderBuilder::default().number(0u64).dao(dao_packed);
             if let Some(header) = fixture.header_contexts.get(index) {
-                builder = builder.number(header.number).epoch(EpochNumberWithFraction::new(
+                builder = builder.number(header.number).timestamp(header.timestamp).epoch(EpochNumberWithFraction::new(
                     header.epoch_number,
                     header.epoch_index,
                     header.epoch_length,

@@ -50,7 +50,7 @@ field-specific terminal error.
 | `ckb::output<T>(i)` | Output | `capacity`, `occupied_capacity`, `unoccupied_capacity`, `data_size`, `data_hash`, `lock_hash`, `type_hash`, `lock`, `type_script`, `output_index` | `OutputView<T>` | Same scalar/hash bounds; output index is derived from the closed source view. |
 | `ckb::group_output<T>(i)` | GroupOutput | Same field set as `OutputView<T>` | `OutputView<T>` | Same fixed widths; current Script-group-relative index. |
 | `ckb::cell_dep(i)` | CellDep | `capacity`, `occupied_capacity`, `unoccupied_capacity`, `data_size`, `data_hash`, `lock_hash`, `type_hash`, `lock`, `type_script` | `CellDepView` | Same fixed widths. Resolved dep position is runtime evidence; original DepGroup/OutPoint identity remains builder or manifest evidence. |
-| `ckb::header_dep(i)` | HeaderDep | `epoch_number: EpochNumber`, `epoch_start_block_number: BlockNumber`, `epoch_length: EpochLength` | `HeaderDepView` | Each field is exactly 8 bytes through `LOAD_HEADER_BY_FIELD`; bad source uses error 44 and missing/one-past-last HeaderDep uses error 45. |
+| `ckb::header_dep(i)` | HeaderDep | `epoch_number: EpochNumber`, `epoch_start_block_number: BlockNumber`, `epoch_length: EpochLength`, `block_number: BlockNumber`, `timestamp: TimestampMillis` | `HeaderDepView` | Epoch fields are exact 8-byte `LOAD_HEADER_BY_FIELD` reads. Block/timestamp fields require an exact 208-byte `LOAD_HEADER` result and fixed RawHeader offsets. Bad source uses error 44, malformed size uses error 4, and missing/one-past-last HeaderDep uses error 45. |
 | `witness::args(i)` | Witness/Input | `size`, fixed 32-byte `lock`, `input_type`, `output_type` projections | `WitnessArgsView` | `size` is 8 bytes. Field projections are executable only when the selected Molecule field is exactly 32 bytes; malformed/truncated values use errors 42/43. |
 | `ckb::input_out_point(input)` or `input.out_point` | inherited Input/GroupInput | `tx_hash`, `index` | `OutPoint` | 32-byte transaction hash plus 4-byte CKB index widened to `u64`; incompatible source or malformed width terminates. |
 | `ckb::lock_script(cell)` or `cell.lock` | inherited Cell source | `hash`, `code_hash`, `hash_type`, `args_empty`, `args_hash` | `ScriptView` | Complete `hash` is `ScriptHash`; `code_hash` and `args_hash` are raw `Hash`; scalar fields are bounded and Molecule-checked. |
@@ -70,7 +70,7 @@ hash; it does not prove existence, deployment, or authorization.
 | Cell scalars and fixed bytes | capacity/occupied/unoccupied, count, type presence, data size, exact u8/u32/u64 reads, serialized Script byte/size reads | Executable or executable limited. Every byte offset is checked; fixed reads never allocate an unbounded buffer. |
 | Cell identities | data/lock/type hash reads and requirements, Script code-hash/hash-type/args checks, current Script args checks | Executable fixed 32-byte or scalar reads. Absent Type Script and wrong Script domain fail closed. |
 | Input lineage | full OutPoint transaction hash/index requirements and MetaPoint pair helpers | Executable fixed-width helpers. Pair scanners are protocol-neutral but have separately documented cardinality bounds. |
-| Temporal and DAO | typed HeaderDep fields; opaque and decoded `InputView.since`; six absolute/relative block, epoch, and timestamp `Since` domains; checked narrowing; checked `EpochDuration` arithmetic; explicit raw conversions; legacy raw constructors; DAO accumulated-rate/header-lineage/maturity helpers | The additive temporal subset is executable under the typed temporal contract. Decoding validates RFC0017 flags and payloads; same-domain epoch-Since comparisons use canonical fraction ordering; duration construction and EpochNumber add/sub enforce the 24-bit domain. Full-header temporal readers remain owned by issue #12. |
+| Temporal and DAO | typed HeaderDep epoch fields plus full-header block number and millisecond timestamp; opaque and decoded `InputView.since`; six absolute/relative block, epoch, and timestamp `Since` domains; checked narrowing; checked `EpochDuration` arithmetic; explicit raw conversions; legacy raw constructors; DAO accumulated-rate/header-lineage/maturity helpers | The additive temporal subset is executable under the typed temporal contract. Full-header reads require the exact 208-byte Molecule Header; Since decoding validates RFC0017 flags and payloads; same-domain epoch-Since comparisons use canonical fraction ordering; duration construction and EpochNumber add/sub enforce the 24-bit domain. |
 | Witness | count/size, exact byte/u32/u64/bytes32 reads, bounded spans, selected gather hashing, fixed 32-byte WitnessArgs fields | Executable limited. Arbitrary materialization of a variable-length witness or WitnessArgs field is deferred. |
 | Transaction preimage | `transaction_u32_le`, bounded gather BLAKE2b, raw-transaction hash without CellDeps | Executable limited to the declared offsets/chunks. Canonical CKB sighash-all remains fail-closed until its message and witness-ownership contract is implemented. |
 | Hashing | CKB BLAKE2b data/span helpers, fixed SHA-256/SHA256d values and pairs, bounded SHA256d Merkle proofs | Executable fixed-width or literal-bounded operations. No allocator-backed streaming hash surface is implied. |
@@ -107,7 +107,8 @@ derived epoch-start block number, a one-past-last HeaderDep, exact absolute and
 relative wire vectors for all six Since domains, checked decoding and
 narrowing, canonical epoch-fraction comparisons, malformed flags/fractions and
 scalar bounds, checked epoch-duration arithmetic and its overflow/underflow
-boundaries, an exact CellDep data hash, and a substituted hash.
+boundaries, exact full-header block/timestamp reads, an exact CellDep data hash,
+and a substituted hash.
 `tests/authoring_replace.rs` exercises the
 `ScriptHash` domain against real output Lock Script hashes. Existing
 `tests/ickb_diff.rs`, `tests/crypto_primitives.rs`, and artifact-checker mutation
@@ -121,8 +122,8 @@ The following work remains before issue #24 can close:
   ownership shared across #8, #13, and #22;
 - full-header decoding for timestamp, block number, and header hash when the
   frozen business corpus requires them;
-- the remaining full-header temporal readers, migration,
-  interface versioning, and business-fixture work owned by #12;
+- temporal migration, interface versioning, and business-fixture work owned by
+  #12;
 - persistent-policy and generated-builder parity for every admitted row;
 - standalone-checker machine mutations for the new HeaderDep source/index,
   field selector, exact width, syscall status, and terminal error;

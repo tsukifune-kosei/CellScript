@@ -152,6 +152,30 @@ impl CodeGenerator {
                 }
             }
         }
+        for (symbol, field_name, field_offset, disabled_reason) in [
+            (
+                "__ckb_header_dep_block_number",
+                "number",
+                ckb_abi::header::NUMBER_OFFSET,
+                "HeaderDepView.block_number is rejected outside the ckb target profile",
+            ),
+            (
+                "__ckb_header_dep_timestamp_millis",
+                "timestamp",
+                ckb_abi::header::TIMESTAMP_OFFSET,
+                "HeaderDepView.timestamp is rejected outside the ckb target profile",
+            ),
+        ] {
+            if scalar_helpers.contains(symbol) {
+                self.emit_runtime_header_dep_full_u64(
+                    symbol,
+                    field_name,
+                    field_offset,
+                    self.options.target_profile == TargetProfile::Ckb,
+                    disabled_reason,
+                );
+            }
+        }
         if scalar_helpers.contains("__ckb_input_since") {
             self.emit_runtime_input_field_u64(
                 "__ckb_input_since",
@@ -541,6 +565,7 @@ impl CodeGenerator {
             ("__ckb_epoch_duration_to_u64", "explicit EpochDuration to u64 conversion"),
             ("__ckb_block_number_to_u64", "explicit BlockNumber to u64 conversion"),
             ("__ckb_epoch_length_to_u64", "explicit EpochLength to u64 conversion"),
+            ("__ckb_timestamp_millis_to_u64", "explicit TimestampMillis to u64 conversion"),
             ("__ckb_cell_capacity", "SourceView cell capacity field"),
             ("__ckb_cell_occupied_capacity", "SourceView occupied capacity from CellOutput scripts and data bytes"),
             ("__ckb_cell_unoccupied_capacity", "SourceView capacity minus occupied capacity"),
@@ -694,7 +719,8 @@ impl CodeGenerator {
                 | "__ckb_epoch_number_to_u64"
                 | "__ckb_epoch_duration_to_u64"
                 | "__ckb_block_number_to_u64"
-                | "__ckb_epoch_length_to_u64" => self.emit_runtime_ckb_temporal_to_raw(name, detail),
+                | "__ckb_epoch_length_to_u64"
+                | "__ckb_timestamp_millis_to_u64" => self.emit_runtime_ckb_temporal_to_raw(name, detail),
                 "__ckb_exec_cell_dep_u8_args" => self.emit_runtime_exec_cell_dep_u8_args(enabled),
                 "__ckb_exec_cell_dep_hex4" => self.emit_runtime_cell_dep_hex4(enabled, false),
                 "__ckb_spawn_wait_cell_dep_hex4" => self.emit_runtime_cell_dep_hex4(enabled, true),
@@ -8883,6 +8909,64 @@ impl CodeGenerator {
         self.emit_large_addi("sp", "sp", 32);
         self.emit("ret");
 
+        self.emit_label(&invalid);
+        self.emit_process_failure(CellScriptRuntimeError::CkbSourceViewInvalid);
+    }
+
+    fn emit_runtime_header_dep_full_u64(
+        &mut self,
+        symbol: &str,
+        field_name: &str,
+        field_offset: usize,
+        enabled: bool,
+        disabled_reason: &str,
+    ) {
+        self.emit_global(symbol);
+        self.emit_label(symbol);
+        if !enabled {
+            self.emit(format!("# cellscript abi: {disabled_reason}"));
+            self.emit_process_failure(CellScriptRuntimeError::ConsumeInvalidOperand);
+            return;
+        }
+
+        const SIZE_OFFSET: usize = 0;
+        const HEADER_OFFSET: usize = 16;
+        const FRAME_SIZE: usize = HEADER_OFFSET + ckb_abi::header::SERIALIZED_SIZE;
+        const _: () = assert!(FRAME_SIZE.is_multiple_of(16));
+
+        let invalid = self.fresh_label("header_dep_full_view_invalid");
+        let malformed = self.fresh_label("header_dep_full_malformed");
+        let abi = self.runtime_abi();
+        self.emit_large_addi("sp", "sp", -(FRAME_SIZE as i64));
+        self.emit_decode_source_view_to_t1_t2(&invalid);
+        self.emit(format!("li t0, {}", abi.source_header_dep));
+        self.emit(format!("bne t2, t0, {invalid}"));
+        self.emit(format!(
+            "# cellscript abi: LOAD_HEADER exact Molecule Header size={} source=HeaderDep index=SourceView; {} offset={} width={}",
+            ckb_abi::header::SERIALIZED_SIZE,
+            field_name,
+            field_offset,
+            ckb_abi::header::SCALAR_WIDTH
+        ));
+        self.emit(format!("li t0, {}", ckb_abi::header::SERIALIZED_SIZE));
+        self.emit_stack_store("t0", SIZE_OFFSET);
+        self.emit_sp_addi("a0", HEADER_OFFSET);
+        self.emit_sp_addi("a1", SIZE_OFFSET);
+        self.emit("li a2, 0");
+        self.emit("mv a3, t1");
+        self.emit("mv a4, t2");
+        self.emit(format!("li a7, {}", abi.load_header));
+        self.emit("ecall");
+        self.emit_return_on_syscall_error(CellScriptRuntimeError::HeaderDepMissing);
+        self.emit_stack_load("t0", SIZE_OFFSET);
+        self.emit(format!("li t1, {}", ckb_abi::header::SERIALIZED_SIZE));
+        self.emit(format!("bne t0, t1, {malformed}"));
+        self.emit_stack_load("a0", HEADER_OFFSET + field_offset);
+        self.emit_large_addi("sp", "sp", FRAME_SIZE as i64);
+        self.emit("ret");
+
+        self.emit_label(&malformed);
+        self.emit_process_failure(CellScriptRuntimeError::ExactSizeMismatch);
         self.emit_label(&invalid);
         self.emit_process_failure(CellScriptRuntimeError::CkbSourceViewInvalid);
     }

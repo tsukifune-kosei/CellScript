@@ -2049,6 +2049,8 @@ pub(super) fn is_runtime_header_u64_call(func: &str) -> bool {
             | "__ckb_header_dep_epoch_number"
             | "__ckb_header_dep_epoch_start_block_number"
             | "__ckb_header_dep_epoch_length"
+            | "__ckb_header_dep_block_number"
+            | "__ckb_header_dep_timestamp_millis"
             | "__ckb_input_since"
     )
 }

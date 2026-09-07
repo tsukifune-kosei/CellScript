@@ -6852,6 +6852,7 @@ impl IrGenerator {
                 | "ckb::epoch_duration_to_u64"
                 | "ckb::block_number_to_u64"
                 | "ckb::epoch_length_to_u64"
+                | "ckb::timestamp_millis_to_u64"
                     if call.args.len() == 1 =>
                 {
                     let helper = match name.as_str() {
@@ -6859,7 +6860,8 @@ impl IrGenerator {
                         "ckb::epoch_number_to_u64" => "__ckb_epoch_number_to_u64",
                         "ckb::epoch_duration_to_u64" => "__ckb_epoch_duration_to_u64",
                         "ckb::block_number_to_u64" => "__ckb_block_number_to_u64",
-                        _ => "__ckb_epoch_length_to_u64",
+                        "ckb::epoch_length_to_u64" => "__ckb_epoch_length_to_u64",
+                        _ => "__ckb_timestamp_millis_to_u64",
                     };
                     self.lower_simple_runtime_call(helper, "ckb_temporal_raw", IrType::U64, &call.args, current, blocks, vars)
                 }
@@ -9076,6 +9078,12 @@ fn typed_view_property_runtime_helper(ty: &IrType, field: &str) -> Option<(&'sta
         )),
         ("HeaderDepView", "epoch_length") => {
             Some(("__ckb_header_dep_epoch_length", "typed_header_epoch_length", IrType::Named("EpochLength".to_string())))
+        }
+        ("HeaderDepView", "block_number") => {
+            Some(("__ckb_header_dep_block_number", "typed_header_block_number", IrType::Named("BlockNumber".to_string())))
+        }
+        ("HeaderDepView", "timestamp") => {
+            Some(("__ckb_header_dep_timestamp_millis", "typed_header_timestamp_millis", IrType::Named("TimestampMillis".to_string())))
         }
         (CKB_INPUT_OUT_POINT_REF_TYPE, "index") => Some(("__ckb_input_out_point_index", "typed_out_point_index", IrType::U64)),
         (CKB_INPUT_OUT_POINT_REF_TYPE, "tx_hash") => Some(("__ckb_input_out_point_tx_hash", "typed_out_point_tx_hash", IrType::Hash)),

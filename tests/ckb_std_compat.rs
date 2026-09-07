@@ -41,6 +41,9 @@ fn ckb_abi_syscall_constants_match_ckb_std() {
 
 #[test]
 fn ckb_abi_source_and_field_constants_match_ckb_std() {
+    assert_eq!(ckb_abi::header::SERIALIZED_SIZE, packed::Header::TOTAL_SIZE);
+    assert_eq!(ckb_abi::header::TIMESTAMP_OFFSET, 8);
+    assert_eq!(ckb_abi::header::NUMBER_OFFSET, 16);
     assert_eq!(ckb_abi::source::INPUT, Source::Input as u64);
     assert_eq!(ckb_abi::source::OUTPUT, Source::Output as u64);
     assert_eq!(ckb_abi::source::CELL_DEP, Source::CellDep as u64);

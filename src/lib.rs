@@ -222,7 +222,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v35-0.30-dev1-epoch-duration";
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v36-0.30-dev1-full-header-time";
 pub const METADATA_SCHEMA_VERSION: u32 = 68;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -17049,6 +17049,14 @@ fn body_ckb_runtime_features(
                 {
                     features.insert("ckb-header-epoch-length".to_string());
                 }
+                ir::IrInstruction::Call { func, .. } if func == "__ckb_header_dep_block_number" => {
+                    features.insert("ckb-header-full-decode".to_string());
+                    features.insert("ckb-header-block-number".to_string());
+                }
+                ir::IrInstruction::Call { func, .. } if func == "__ckb_header_dep_timestamp_millis" => {
+                    features.insert("ckb-header-full-decode".to_string());
+                    features.insert("ckb-header-timestamp-millis".to_string());
+                }
                 ir::IrInstruction::Call { func, .. } if func == "__ckb_input_since" => {
                     features.insert("ckb-input-since".to_string());
                 }
@@ -17933,6 +17941,10 @@ fn ckb_v014_runtime_access(func: &str) -> Option<(&'static str, &'static str, &'
         )),
         "__ckb_header_dep_epoch_length" => {
             Some(("header-dep-epoch-length", "LOAD_HEADER_BY_FIELD", "HeaderDep", "HeaderDepView.epoch_length"))
+        }
+        "__ckb_header_dep_block_number" => Some(("header-dep-block-number", "LOAD_HEADER", "HeaderDep", "HeaderDepView.block_number")),
+        "__ckb_header_dep_timestamp_millis" => {
+            Some(("header-dep-timestamp-millis", "LOAD_HEADER", "HeaderDep", "HeaderDepView.timestamp"))
         }
         "__ckb_source_group_input" => Some(("source-group-input", "SOURCE_VIEW", "GroupInput", "source::group_input")),
         "__ckb_source_group_output" => Some(("source-group-output", "SOURCE_VIEW", "GroupOutput", "source::group_output")),

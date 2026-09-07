@@ -303,7 +303,9 @@ includes exact wire vectors for all six domains, a helper-call ABI round trip,
 packed-order counterexamples, rationally equivalent fractions, reserved and
 metric flag rejection, scalar/timestamp bounds, and malformed fraction
 rejection. It also covers checked `EpochDuration` construction and EpochNumber
-addition/subtraction, including 24-bit overflow and underflow rejection. See the
+addition/subtraction, including 24-bit overflow and underflow rejection. The
+same regression checks exact 208-byte full-header decoding of block number and
+millisecond timestamp, including their typed-domain separation. See the
 [typed CKB temporal-domain contract](CELLSCRIPT_0_30_TEMPORAL_DOMAINS.md) for
 the implemented and deferred rows. This evidence does not close the complete
 temporal issue or the release gate.

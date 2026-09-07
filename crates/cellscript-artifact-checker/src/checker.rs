@@ -2225,6 +2225,7 @@ fn is_ckb_temporal_ordered_type(ty: &str) -> bool {
             | "EpochDuration"
             | "BlockNumber"
             | "EpochLength"
+            | "TimestampMillis"
             | "AbsoluteBlockSince"
             | "AbsoluteEpochSince"
             | "AbsoluteTimestampSince"

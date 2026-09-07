@@ -28,8 +28,9 @@ conversion, emits canonical rational epoch-fraction comparisons, and rejects
 malformed flags, metrics, fractions, scalar bounds, timestamp overflow, and
 mode/metric narrowing. `EpochDuration` construction and EpochNumber add/sub are
 checked against the 24-bit CKB epoch domain with overflow and underflow
-rejection. Full-header temporal readers, migration, public-interface version
-records, and the required business corpus remain open under issue #12.
+rejection. Fixed-size full-header decoding now supplies typed block number and
+millisecond timestamp reads. Migration, public-interface version records, and
+the required business corpus remain open under issue #12.
 
 Until this branch passes those criteria, treat it as development work, use
 `0.26b` only as its experimental implementation baseline, and retain 0.25 as

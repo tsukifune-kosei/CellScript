@@ -93,6 +93,14 @@ pub mod since {
     pub const EPOCH_FRACTION_MASK: u64 = EPOCH_FRACTION_BOUND - 1;
 }
 
+/// Fixed Molecule layout from CKB's `blockchain.mol` `Header` struct.
+pub mod header {
+    pub const SERIALIZED_SIZE: usize = 208;
+    pub const TIMESTAMP_OFFSET: usize = 8;
+    pub const NUMBER_OFFSET: usize = 16;
+    pub const SCALAR_WIDTH: usize = 8;
+}
+
 pub mod source_view {
     pub const INPUT: u64 = 1;
     pub const OUTPUT: u64 = 2;

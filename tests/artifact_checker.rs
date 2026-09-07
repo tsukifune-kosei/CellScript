@@ -1394,6 +1394,32 @@ action main() -> bool {
     binary.operands[1].ty = "AbsoluteTimestampSince".to_string();
     changed.rebind_typed_semantics();
     assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
+
+    let valid = Fixture::from_source(
+        r#"
+module checker::header_timestamp
+
+action main() -> bool {
+    verification
+        let header = ckb::header_dep(0)
+        return header.timestamp <= header.timestamp
+}
+"#,
+    );
+    let mut changed = valid.clone();
+    let binary = changed
+        .record
+        .typed_semantics
+        .entries
+        .iter_mut()
+        .flat_map(|entry| &mut entry.blocks)
+        .flat_map(|block| &mut block.operations)
+        .find(|operation| matches!(&operation.detail, TypedSemanticOperationDetail::BinaryOperator { operator } if operator == "le"))
+        .expect("fixture must contain the timestamp comparison");
+    assert!(binary.operands.iter().all(|operand| operand.ty == "TimestampMillis"));
+    binary.operands[1].ty = "BlockNumber".to_string();
+    changed.rebind_typed_semantics();
+    assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
 }
 
 #[test]

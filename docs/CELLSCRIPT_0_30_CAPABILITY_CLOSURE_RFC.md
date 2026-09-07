@@ -42,8 +42,9 @@ one-past-last HeaderDep failure, and CellDep data-hash substitution. The matrix
 also records exact CKB-VM `Since` vectors and checked decoder failures for all
 mode/metric combinations. Checked `EpochDuration` construction and EpochNumber
 add/sub now enforce the 24-bit domain with executable overflow and underflow
-evidence. Remaining work includes witness, full-header, dynamic-index, checker,
-builder, measurement, and release evidence.
+evidence. Exact 208-byte full-header decoding now supplies typed block number
+and millisecond timestamp reads. Remaining work includes witness, dynamic-index,
+checker, builder, measurement, and release evidence.
 
 The goal is business-scenario coverage comparable to hand-written Rust CKB
 Scripts for a defined, bounded portfolio. It is not unrestricted Rust language

@@ -545,6 +545,18 @@ impl LspServer {
 
         // Built-in namespace methods.
         match type_name {
+            "HeaderDepView" => {
+                for field in ["epoch_number", "epoch_start_block_number", "epoch_length", "block_number", "timestamp"] {
+                    items.push(CompletionItem {
+                        label: field.to_string(),
+                        kind: CompletionItemKind::Field,
+                        detail: Some(format!("HeaderDepView.{field}")),
+                        documentation: None,
+                        insert_text: Some(field.to_string()),
+                    });
+                }
+                return items;
+            }
             "Vec" => {
                 for (name, insert) in [
                     ("new", "Vec::new()"),
@@ -706,6 +718,7 @@ impl LspServer {
                     ("epoch_duration_to_u64", "ckb::epoch_duration_to_u64(${1:duration})"),
                     ("block_number_to_u64", "ckb::block_number_to_u64(${1:block})"),
                     ("epoch_length_to_u64", "ckb::epoch_length_to_u64(${1:length})"),
+                    ("timestamp_millis_to_u64", "ckb::timestamp_millis_to_u64(${1:timestamp})"),
                     ("current_role", "ckb::current_role()"),
                     ("current_script_hash", "ckb::current_script_hash()"),
                     ("script_hash", "ckb::script_hash(${1:hash})"),
@@ -1191,6 +1204,7 @@ impl LspServer {
             "EpochDuration",
             "BlockNumber",
             "EpochLength",
+            "TimestampMillis",
             "EncodedSince",
             "DecodedSince",
             "AbsoluteBlockSince",
@@ -3143,6 +3157,7 @@ mod tests {
         assert!(ckb.iter().any(|item| item.label == "epoch_sub"));
         assert!(ckb.iter().any(|item| item.label == "epoch_number_to_u64"));
         assert!(ckb.iter().any(|item| item.label == "epoch_duration_to_u64"));
+        assert!(ckb.iter().any(|item| item.label == "timestamp_millis_to_u64"));
         assert!(ckb.iter().any(|item| item.label == "cell_lock_code_hash"));
         assert!(ckb.iter().any(|item| item.label == "cell_type_args_hash"));
         assert!(ckb.iter().any(|item| item.label == "require_cell_lock_args_prefix_hash"));
@@ -3154,6 +3169,10 @@ mod tests {
         assert!(ckb.iter().any(|item| item.label == "raw_transaction_hash_without_cell_deps"));
         assert!(ckb.iter().any(|item| item.label == "trusted_exec_cell_dep_u8_args"));
         assert!(ckb.iter().any(|item| item.label == "trusted_spawn_wait_cell_dep_hex4"));
+
+        let header = server.member_completions("file:///test.cell", "HeaderDepView");
+        assert!(header.iter().any(|item| item.label == "block_number"));
+        assert!(header.iter().any(|item| item.label == "timestamp"));
 
         let bip340 = server.member_completions("file:///test.cell", "verifier::btc::bip340");
         assert!(bip340.iter().any(|item| item.label == "require_signature_from_cell_dep"));

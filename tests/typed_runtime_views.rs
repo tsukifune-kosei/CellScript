@@ -86,6 +86,8 @@ action inspect(witness expected_data_hash: Hash) -> u64 {
     require ckb::epoch_number_to_u64(header.epoch_number) == 42
     require ckb::block_number_to_u64(header.epoch_start_block_number) == 97
     require ckb::epoch_length_to_u64(header.epoch_length) == 10
+    require ckb::block_number_to_u64(header.block_number) == 100
+    require ckb::timestamp_millis_to_u64(header.timestamp) == 1700000000123
     return 0
 }
 "#;
@@ -117,7 +119,8 @@ fn fixture(dep_data: Bytes, witness: Bytes) -> ckb_script_runner::CkbVmFixture {
     fixture.cell_deps.push(FixtureCell { capacity: 100_000_000_000, type_script: None, data: dep_data });
     fixture.witnesses = vec![witness];
     fixture.header_dao_fields = vec![[0; 32]];
-    fixture.header_contexts = vec![FixtureHeaderContext { number: 100, epoch_number: 42, epoch_index: 3, epoch_length: 10 }];
+    fixture.header_contexts =
+        vec![FixtureHeaderContext { number: 100, timestamp: 1_700_000_000_123, epoch_number: 42, epoch_index: 3, epoch_length: 10 }];
     fixture
 }
 
@@ -131,6 +134,12 @@ fn typed_cell_input_and_header_views_execute_and_fail_closed() {
     let execution = execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &valid);
     assert_eq!(execution.exit_code, 0, "all typed runtime-view fields must match: {:?}", execution.captured_debug);
     assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-epoch-checked-arithmetic".to_string()));
+    assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-header-full-decode".to_string()));
+    assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-header-block-number".to_string()));
+    assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-header-timestamp-millis".to_string()));
+    assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| {
+        access.syscall == "LOAD_HEADER" && access.source == "HeaderDep" && access.operation == "header-dep-timestamp-millis"
+    }));
 
     let mut wrong_hash = expected_hash;
     wrong_hash[0] ^= 0xff;
