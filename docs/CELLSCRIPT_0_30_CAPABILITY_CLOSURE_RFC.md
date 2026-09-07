@@ -254,16 +254,21 @@ bundle. `PB213` reports type, ownership, correspondence, or closed-foreign
 identity conflicts. Runtime-selected/open participants remain blocked on #11's
 typed Script-handle contract.
 
-The first #11 identity layer is now implemented at that artifact boundary.
+The exact-artifact #11 layer is now implemented across the artifact and source
+runtime boundaries.
 Each admitted artifact receives an exact receipt over package/lock-node/entry/role,
 interface and typed-semantics hashes, ELF, target profile, the existing package
 ABI identity, verified bundle, complete CKB Script, code CellDep, and chain.
 The corresponding `CSHDLv1-fixed-202` value commits to the receipt and the
 runtime-relevant hash axes while remaining an ordinary value with no Cell
-lifecycle authority. Data-hash and Type-hash code identity are explicit
-separate policies. This establishes a stable exact handle for closed artifacts;
-it does not yet implement generic source types, runtime-selected construction,
-upgrade-line handles, compatible-open handles, or open cross-Script roles.
+lifecycle authority. ProtocolBundle emits the full-value CKB Blake2b-256 hash;
+`ExactScriptHandle` witness parameters and role-specific checked helpers bind
+that literal to the selected Lock/Type Script hash or verifier CellDep data
+hash in CKB-VM. Data-hash and Type-hash code identity are explicit separate
+policies. This establishes a stable exact handle for closed artifacts; it does
+not yet implement generic `ScriptHandle<I>` types, runtime-selected compatible
+construction, upgrade-line handles, compatible-open handles, or open
+cross-Script roles.
 
 Generated TypeScript action builders now expose the same ProtocolBundle v1
 state names and artifact-binding schema as the Rust adapter. Their client
