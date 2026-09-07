@@ -16,7 +16,6 @@ use crate::crypto::{ckb_blake2b256, hex0x};
 use crate::shared::stable_json_pretty;
 
 const SCHEMA: &str = "novaseal-fiber-node-execution-v0.4";
-const BRUNO_CLI: &str = "@usebruno/cli@1.20.0";
 const PREVIOUS_SCHEMAS: &[&str] =
     &["novaseal-fiber-node-execution-v0.1", "novaseal-fiber-node-execution-v0.2", "novaseal-fiber-node-execution-v0.3", SCHEMA];
 
@@ -234,13 +233,20 @@ fn workflow_report(repo: &Path, workflow: &Workflow, execution: Option<&Value>) 
     })
 }
 
-fn previous(output: &Path, current: &Value, cellscript: &Value, artifact: &Value) -> BTreeMap<String, Value> {
+fn previous(
+    output: &Path,
+    current: &Value,
+    cellscript: &Value,
+    artifact: &Value,
+    execution_toolchain: &Value,
+) -> BTreeMap<String, Value> {
     let Ok(bytes) = fs::read(output) else { return BTreeMap::new() };
     let Ok(report) = serde_json::from_slice::<Value>(&bytes) else { return BTreeMap::new() };
     if !report["schema"].as_str().is_some_and(|schema| PREVIOUS_SCHEMAS.contains(&schema))
         || !same_provenance(report.get("fiber_repo"), current)
         || !same_provenance(report.get("cellscript_repo"), cellscript)
         || report.get("cellscript_fungible_artifact") != Some(artifact)
+        || report.get("execution_toolchain") != Some(execution_toolchain)
     {
         return BTreeMap::new();
     }
@@ -318,6 +324,11 @@ fn which(name: &str) -> Option<String> {
     env::var_os("PATH")
         .and_then(|paths| env::split_paths(&paths).map(|path| path.join(name)).find(|path| path.is_file()))
         .map(|path| path.to_string_lossy().into_owned())
+}
+
+fn version(name: &str) -> Option<String> {
+    let output = Command::new(name).arg("--version").output().ok()?;
+    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 fn command_with_timeout(mut command: Command, timeout: Duration) -> Result<Output> {
@@ -415,12 +426,12 @@ fn bruno_workspace(repo: &Path, suite: &str, log: &Path) -> Result<(PathBuf, Vec
     Ok((workspace, patched))
 }
 
-fn bruno_command(suite_arg: &str, artifact_hash: Option<&str>) -> Vec<String> {
+fn bruno_command(suite_arg: &str, artifact_hash: Option<&str>, bruno_cli: &str) -> Vec<String> {
     let mut command = vec![
         "npm".into(),
         "exec".into(),
         "--".into(),
-        BRUNO_CLI.into(),
+        bruno_cli.into(),
         "run".into(),
         suite_arg.into(),
         "-r".into(),
@@ -451,6 +462,7 @@ fn execute_workflow(
     timeout: u64,
     info: &Value,
     artifact_hash: Option<&str>,
+    bruno_cli: &str,
 ) -> Result<Value> {
     let suite_arg = format!("e2e/{}", workflow.suite);
     let log = output.parent().unwrap().join("novaseal-fiber-node-experiments").join(workflow.suite.replace('/', "__"));
@@ -491,7 +503,7 @@ fn execute_workflow(
         }
     }
     let (bruno, patches) = bruno_workspace(repo, workflow.suite, &log)?;
-    let command = bruno_command(&suite_arg, artifact_hash);
+    let command = bruno_command(&suite_arg, artifact_hash, bruno_cli);
     let completed = command_with_timeout(
         {
             let mut value = Command::new(&command[0]);
@@ -525,6 +537,7 @@ pub fn run(
     repo_root: &Path,
     fiber_repo: Option<&Path>,
     cellscript_fungible_artifact: Option<&Path>,
+    bruno_cli: &str,
     output: Option<&Path>,
     pretty: bool,
     suites: &[String],
@@ -537,6 +550,10 @@ pub fn run(
     let fiber_repo = fs::canonicalize(&fiber_repo).unwrap_or(fiber_repo);
     let output = output.map(Path::to_path_buf).unwrap_or_else(|| repo_root.join("target/novaseal-fiber-node-experiments.json"));
     let allowed = WORKFLOWS.iter().map(|workflow| workflow.suite).collect::<BTreeSet<_>>();
+    let exact_bruno = Regex::new(r"^@usebruno/cli@[0-9]+\.[0-9]+\.[0-9]+$").unwrap();
+    if !exact_bruno.is_match(bruno_cli) {
+        bail!("Bruno CLI must be an exact @usebruno/cli MAJOR.MINOR.PATCH package version");
+    }
     if let Some(invalid) = suites.iter().find(|suite| !allowed.contains(suite.as_str())) {
         bail!("unknown Fiber suite: {invalid}");
     }
@@ -561,13 +578,20 @@ pub fn run(
     }
     let artifact = artifact_binding(&repo_root, cellscript_fungible_artifact)?;
     let artifact_hash = artifact.get("ckb_data_hash").and_then(Value::as_str);
-    let mut executions = previous(&output, &info, &cellscript_info, &artifact);
+    let execution_toolchain = json!({
+        "bruno_cli": bruno_cli,
+        "node": version("node"),
+        "npm": version("npm"),
+        "ckb": version("ckb"),
+        "ckb_cli": version("ckb-cli"),
+    });
+    let mut executions = previous(&output, &info, &cellscript_info, &artifact, &execution_toolchain);
     let mut contract_override =
         cellscript_fungible_artifact.map(|path| TemporaryContractOverride::install(&fiber_repo, path)).transpose()?;
     for workflow in WORKFLOWS.iter().filter(|workflow| selected.contains(workflow.suite)) {
         executions.insert(
             workflow.suite.into(),
-            execute_workflow(&repo_root, &fiber_repo, &output, workflow, assume, timeout, &info, artifact_hash)?,
+            execute_workflow(&repo_root, &fiber_repo, &output, workflow, assume, timeout, &info, artifact_hash, bruno_cli)?,
         );
     }
     let mut restored_info = info.clone();
@@ -610,8 +634,9 @@ pub fn run(
         "schema": SCHEMA, "status": status, "generated_at_unix": generated, "classification": "fiber_node_execution_v0",
         "cellscript_repo": cellscript_info, "fiber_repo": info, "fiber_repo_after_restore": restored_info,
         "cellscript_fungible_artifact": artifact,
+        "execution_toolchain": execution_toolchain,
         "devnet_contract": {"runnable_devnet_contract_present": runnable, "start_command": "./tests/nodes/start.sh e2e/<suite>",
-            "wait_command": "./tests/nodes/wait.sh", "bruno_command": "cd tests/bruno && npm exec -- @usebruno/cli@1.20.0 run e2e/<suite> -r --env test", "source_docs": "docs/dev/README.md"},
+            "wait_command": "./tests/nodes/wait.sh", "bruno_command": format!("cd tests/bruno && npm exec -- {bruno_cli} run e2e/<suite> -r --env test"), "source_docs": "docs/dev/README.md"},
         "workflow_coverage": {"required_count": WORKFLOWS.len(), "present_count": present, "executed_count": executed,
             "passed_execution_count": passed, "all_required_workflows_present": all_present, "all_required_workflows_executed": all_executed,
             "all_required_workflows_executed_passed": all_passed, "partial_execution_passed": partial},
@@ -633,6 +658,8 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const BRUNO_CLI: &str = "@usebruno/cli@1.20.0";
 
     fn test_root(name: &str) -> PathBuf {
         env::temp_dir().join(format!("cellscript-fiber-experiments-{name}-{}", std::process::id()))
@@ -669,6 +696,7 @@ mod tests {
         let output = root.join("report.json");
         let provenance = json!({"path":"fiber", "origin":"origin", "branch":"develop", "commit":"abc", "dirty":false});
         let artifact = json!({"ckb_data_hash":"0x01"});
+        let toolchain = json!({"bruno_cli": BRUNO_CLI, "node": "v20", "npm": "10", "ckb": "0.202", "ckb_cli": "1.15"});
         fs::write(
             &output,
             serde_json::to_vec(&json!({
@@ -676,22 +704,25 @@ mod tests {
                 "fiber_repo": provenance,
                 "cellscript_repo": provenance,
                 "cellscript_fungible_artifact": artifact,
+                "execution_toolchain": toolchain,
                 "workflows": [{"suite":"udt-router-pay", "execution":{"status":"passed", "fiber_repo": provenance}}],
             }))
             .unwrap(),
         )
         .unwrap();
 
-        assert_eq!(previous(&output, &provenance, &provenance, &artifact).len(), 1);
-        assert!(previous(&output, &provenance, &provenance, &json!({"ckb_data_hash":"0x02"})).is_empty());
+        assert_eq!(previous(&output, &provenance, &provenance, &artifact, &toolchain).len(), 1);
+        assert!(previous(&output, &provenance, &provenance, &json!({"ckb_data_hash":"0x02"}), &toolchain).is_empty());
         let changed_cellscript = json!({"path":"cellscript", "origin":"origin", "branch":"0.26b", "commit":"def", "dirty":false});
-        assert!(previous(&output, &provenance, &changed_cellscript, &artifact).is_empty());
+        assert!(previous(&output, &provenance, &changed_cellscript, &artifact, &toolchain).is_empty());
+        let changed_toolchain = json!({"bruno_cli": "@usebruno/cli@4.1.0"});
+        assert!(previous(&output, &provenance, &provenance, &artifact, &changed_toolchain).is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn live_bruno_command_is_version_pinned_and_binds_the_artifact_hash() {
-        let command = bruno_command("e2e/udt", Some("0x1234"));
+        let command = bruno_command("e2e/udt", Some("0x1234"), BRUNO_CLI);
         assert_eq!(
             command,
             [

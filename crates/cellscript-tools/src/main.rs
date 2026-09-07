@@ -227,6 +227,9 @@ enum Command {
         /// Temporarily install this exact CellScript fungible ELF as Fiber's dev SimpleUDT contract.
         #[arg(long)]
         cellscript_fungible_artifact: Option<PathBuf>,
+        /// Exact Bruno CLI package version (defaults to the version pinned by Fiber CI).
+        #[arg(long, default_value = "@usebruno/cli@1.20.0")]
+        bruno_cli: String,
         #[arg(long)]
         output: Option<PathBuf>,
         #[arg(long)]
@@ -491,6 +494,7 @@ fn main() -> ExitCode {
             repo_root,
             fiber_repo,
             cellscript_fungible_artifact,
+            bruno_cli,
             output,
             pretty,
             run_suite,
@@ -501,6 +505,7 @@ fn main() -> ExitCode {
             repo_root.as_deref().unwrap_or(&root),
             fiber_repo.as_deref(),
             cellscript_fungible_artifact.as_deref(),
+            &bruno_cli,
             output.as_deref(),
             pretty,
             &run_suite,
