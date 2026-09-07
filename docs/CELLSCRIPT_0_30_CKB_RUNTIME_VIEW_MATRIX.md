@@ -85,7 +85,7 @@ hash; it does not prove existence, deployment, or authorization.
 | Input lineage | full OutPoint transaction hash/index requirements and MetaPoint pair helpers | Executable fixed-width helpers. Pair scanners are protocol-neutral but have separately documented cardinality bounds. |
 | Temporal and DAO | typed HeaderDep epoch fields plus full-header block number and millisecond timestamp; opaque and decoded `InputView.since`; six absolute/relative block, epoch, and timestamp `Since` domains; checked narrowing; checked `EpochDuration` arithmetic; explicit raw conversions; legacy raw constructors; DAO accumulated-rate/header-lineage/maturity helpers | The additive temporal subset is executable under the typed temporal contract. Full-header reads require the exact 208-byte Molecule Header; Since decoding validates RFC0017 flags and payloads; same-domain epoch-Since comparisons use canonical fraction ordering; duration construction and EpochNumber add/sub enforce the 24-bit domain. |
 | Witness | count/size, legacy exact byte/u32/u64/bytes32 reads, bounded spans, selected gather hashing, exact 32-byte typed WitnessArgs fields, and owner-tagged variable-length raw/lock/entry/output_type views with exact scalar reads and streaming Blake2b | Executable limited. Bounded views admit at most 65,536 bytes and do not expose allocation, mutation, slicing as an owned value, or unchecked pointers. |
-| Transaction preimage | `transaction_u32_le`, bounded gather BLAKE2b, raw-transaction hash without CellDeps | Executable limited to the declared offsets/chunks. Canonical CKB sighash-all remains fail-closed until its message and witness-ownership contract is implemented. |
+| Transaction identity and preimage | canonical `ckb::transaction_hash()` through exact 32-byte `LOAD_TX_HASH`; `transaction_u32_le`; bounded gather BLAKE2b; raw-transaction hash without CellDeps | The canonical raw transaction hash is executable and fixed-width. Other preimage reads remain limited to their declared offsets/chunks. Canonical CKB sighash-all remains fail-closed until its message and witness-ownership contract is implemented. |
 | Hashing | CKB BLAKE2b data/span helpers, fixed SHA-256/SHA256d values and pairs, bounded SHA256d Merkle proofs | Executable fixed-width or literal-bounded operations. No allocator-backed streaming hash surface is implied. |
 | CellDep delegation | exact-index/literal-bounded data-hash checks; fixed u8/hex4 EXEC; hex4 SPAWN/WAIT | Raw adapters remain fail-closed under production policy. `trusted_*` forms are a composition boundary requiring an exact manifest declaration and data hash; successful delegation does not prove external internals. |
 | Protocol helpers | bounded xUDT, DAO, C256, and MetaPoint requirements | Executable only for their documented fixed shapes. They do not widen the general transaction-view contract. |
@@ -122,15 +122,17 @@ derived epoch-start block number, a one-past-last HeaderDep, exact absolute and
 relative wire vectors for all six Since domains, checked decoding and
 narrowing, canonical epoch-fraction comparisons, malformed flags/fractions and
 scalar bounds, checked epoch-duration arithmetic and its overflow/underflow
-boundaries, exact full-header block/timestamp reads, an exact CellDep data hash,
-a substituted hash, successful dynamic Input/CellDep/Witness index zero, and a
-dynamic index above the 32-bit view domain. The bounded witness cases cover
+boundaries, exact full-header block/timestamp reads, the exact 32-byte CKB raw
+transaction hash, an exact CellDep data hash, a substituted hash, successful
+dynamic Input/CellDep/Witness index zero, and a dynamic index above the 32-bit
+view domain. The bounded witness cases cover
 all four owners, 700/900/1024-byte fields, the complete serialized witness,
 exact scalar reads, streaming hashes, `Some(empty)`, absent and over-bound
 values, malformed/truncated Molecule data, and GroupOutput provenance.
 `tests/artifact_checker.rs` changes source, index bound, range, contract,
-bounded owner/maximum, handle, and module/entry copies after outer hash
-rebinding and requires independent `V2410` rejection. Generated
+transaction-hash operation/syscall/binding/width, bounded owner/maximum,
+handle, and module/entry copies after outer hash rebinding and requires
+independent `V2410` rejection. Generated
 TypeScript builder tests retain the same dynamic parameter bound.
 `tests/authoring_replace.rs` exercises the
 `ScriptHash` domain against real output Lock Script hashes. Existing

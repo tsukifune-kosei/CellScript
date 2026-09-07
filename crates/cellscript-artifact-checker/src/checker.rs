@@ -873,8 +873,38 @@ fn parse_runtime_accesses(value: Option<&Value>, label: &str) -> Result<Vec<Runt
             )));
         }
         validate_runtime_access_provenance(&prefix, &access.source, Some(access.index), &access.provenance)?;
+        validate_canonical_transaction_hash_runtime_access(&prefix, access)?;
     }
     Ok(accesses)
+}
+
+fn validate_canonical_transaction_hash_runtime_access(prefix: &str, access: &RuntimeAccess) -> Result<(), CheckerError> {
+    let identifies_transaction_hash =
+        access.operation == "transaction-hash" || access.syscall == "LOAD_TX_HASH" || access.binding == "ckb::transaction_hash";
+    if !identifies_transaction_hash {
+        return Ok(());
+    }
+    let not_applicable =
+        RuntimeScalarProvenance { kind: "not-applicable".to_string(), value: None, binding: None, max_inclusive: None };
+    let fixed_32 = RuntimeRangeProvenance {
+        kind: "fixed-width".to_string(),
+        offset: not_applicable.clone(),
+        length: RuntimeScalarProvenance { kind: "static".to_string(), value: Some(32), binding: None, max_inclusive: Some(32) },
+    };
+    if access.operation != "transaction-hash"
+        || access.syscall != "LOAD_TX_HASH"
+        || access.source != "Transaction"
+        || access.index != 0
+        || access.binding != "ckb::transaction_hash"
+        || access.provenance.source.resolved_source != "Transaction"
+        || access.provenance.source.origin != "implicit-lowering"
+        || access.provenance.source.binding.is_some()
+        || access.provenance.index != not_applicable
+        || access.provenance.range != fixed_32
+    {
+        return Err(metadata_binding_error(format!("{prefix} does not match the canonical 32-byte LOAD_TX_HASH contract")));
+    }
+    Ok(())
 }
 
 fn validate_runtime_access_provenance(
@@ -1019,6 +1049,7 @@ fn known_runtime_syscall(syscall: &str) -> bool {
         syscall,
         "LOAD_CELL"
             | "LOAD_TRANSACTION"
+            | "LOAD_TX_HASH"
             | "LOAD_CELL_BY_FIELD"
             | "LOAD_CELL_DATA"
             | "LOAD_HEADER"
@@ -1062,7 +1093,7 @@ fn known_runtime_syscall(syscall: &str) -> bool {
 
 fn runtime_syscall_allows_source(syscall: &str, source: &str) -> bool {
     match syscall {
-        "LOAD_TRANSACTION" => source == "Transaction",
+        "LOAD_TRANSACTION" | "LOAD_TX_HASH" => source == "Transaction",
         "LOAD_CELL" => matches!(source, "Input" | "Output" | "CellDep" | "GroupInput" | "GroupOutput"),
         "LOAD_CELL_BY_FIELD" => {
             matches!(source, "Input" | "Output" | "GroupInput" | "GroupOutput" | "CellDep" | "SourceView")

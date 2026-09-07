@@ -28,6 +28,7 @@ action inspect(witness expected_data_hash: Hash) -> u64 {
     let input = ckb::input<Token>(0)
     let dep = ckb::cell_dep(0)
     let header = ckb::header_dep(0)
+    let transaction_hash = ckb::transaction_hash()
     let earlier = preserve_epoch_since(ckb::since_absolute_epoch(42, 3, 10))
     let later = ckb::since_absolute_epoch(43, 0, 10)
     let half = ckb::since_absolute_epoch(42, 1, 2)
@@ -83,6 +84,7 @@ action inspect(witness expected_data_hash: Hash) -> u64 {
     require input.occupied_capacity <= input.capacity
     require input.unoccupied_capacity + input.occupied_capacity == input.capacity
     require dep.data_hash == expected_data_hash
+    require transaction_hash != Hash::zero()
     require ckb::epoch_number_to_u64(header.epoch_number) == 42
     require ckb::block_number_to_u64(header.epoch_start_block_number) == 97
     require ckb::epoch_length_to_u64(header.epoch_length) == 10
@@ -160,8 +162,16 @@ fn typed_cell_input_and_header_views_execute_and_fail_closed() {
     assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-header-full-decode".to_string()));
     assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-header-block-number".to_string()));
     assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-header-timestamp-millis".to_string()));
+    assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-transaction-hash".to_string()));
     assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| {
         access.syscall == "LOAD_HEADER" && access.source == "HeaderDep" && access.operation == "header-dep-timestamp-millis"
+    }));
+    assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| {
+        access.syscall == "LOAD_TX_HASH"
+            && access.source == "Transaction"
+            && access.operation == "transaction-hash"
+            && access.provenance.range.kind == "fixed-width"
+            && access.provenance.range.length.value == Some(32)
     }));
 
     let mut wrong_hash = expected_hash;

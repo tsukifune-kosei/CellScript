@@ -315,6 +315,7 @@ fn is_v014_runtime_helper(func: &str) -> bool {
             | "__ckb_timestamp_millis_to_u64"
             | "__ckb_current_role"
             | "__ckb_current_script_hash"
+            | "__ckb_transaction_hash"
             | "__ckb_cell_capacity"
             | "__ckb_cell_occupied_capacity"
             | "__ckb_cell_unoccupied_capacity"

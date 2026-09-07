@@ -545,7 +545,7 @@ impl CodeGenerator {
     }
 
     fn emit_runtime_current_script_hash_call(&mut self, dest: Option<&IrVar>, func: &str, args: &[IrOperand]) -> Result<bool> {
-        if func != "__ckb_current_script_hash" {
+        if !matches!(func, "__ckb_current_script_hash" | "__ckb_transaction_hash") {
             return Ok(false);
         }
         let Some(dest) = dest else {
@@ -565,13 +565,18 @@ impl CodeGenerator {
             return Ok(true);
         };
 
-        self.emit("# cellscript abi: load current script hash into addressable Hash");
+        let (description, helper, label_prefix) = if func == "__ckb_transaction_hash" {
+            ("transaction hash", "__ckb_transaction_hash", "transaction_hash")
+        } else {
+            ("current script hash", "__ckb_current_script_hash", "current_script_hash")
+        };
+        self.emit(format!("# cellscript abi: load {description} into addressable Hash"));
         self.emit("li t0, 32");
         self.emit_schema_size_store("t0", size_offset);
         self.emit_sp_addi("a0", buffer_offset);
         self.emit_sp_addi("a1", size_offset);
-        self.emit("call __ckb_current_script_hash");
-        let ok_label = self.fresh_label("current_script_hash_ok");
+        self.emit(format!("call {helper}"));
+        let ok_label = self.fresh_label(&format!("{label_prefix}_ok"));
         self.emit(format!("beqz a0, {}", ok_label));
         self.emit_process_failure_status();
         self.emit_label(&ok_label);

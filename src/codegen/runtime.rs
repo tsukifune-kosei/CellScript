@@ -560,6 +560,7 @@ impl CodeGenerator {
             ("__ckb_spawn_wait_cell_dep_hex4", "checked returning SPAWN and WAIT with four hexadecimal arguments"),
             ("__ckb_current_role", "current script role inferred from group input lock/type hashes"),
             ("__ckb_current_script_hash", "current script hash loaded via LOAD_SCRIPT_HASH"),
+            ("__ckb_transaction_hash", "canonical raw transaction hash loaded via LOAD_TX_HASH"),
             ("__ckb_since_to_raw", "explicit typed Since to raw CKB wire bits conversion"),
             ("__ckb_epoch_number_to_u64", "explicit EpochNumber to u64 conversion"),
             ("__ckb_epoch_duration_to_u64", "explicit EpochDuration to u64 conversion"),
@@ -723,6 +724,7 @@ impl CodeGenerator {
                 "__ckb_transaction_blake2b_gather" => self.emit_runtime_gather_hash(enabled, false),
                 "__ckb_witness_blake2b_select_chunks" => self.emit_runtime_gather_hash(enabled, true),
                 "__ckb_current_script_hash" => self.emit_runtime_current_script_hash_helper(enabled),
+                "__ckb_transaction_hash" => self.emit_runtime_transaction_hash_helper(enabled),
                 "__ckb_since_to_raw"
                 | "__ckb_epoch_number_to_u64"
                 | "__ckb_epoch_duration_to_u64"
@@ -3758,6 +3760,45 @@ impl CodeGenerator {
         self.emit_label(&failed);
         self.emit(format!("li a0, {}", CellScriptRuntimeError::SyscallFailed.code()));
         self.emit(format!("j {}", done));
+        self.emit_label(&malformed);
+        self.emit(format!("li a0, {}", CellScriptRuntimeError::FixedByteComparisonUnresolved.code()));
+        self.emit_label(&done);
+        self.emit("ld ra, 16(sp)");
+        self.emit("addi sp, sp, 24");
+        self.emit("ret");
+    }
+
+    fn emit_runtime_transaction_hash_helper(&mut self, enabled: bool) {
+        self.emit_global("__ckb_transaction_hash");
+        self.emit_label("__ckb_transaction_hash");
+        self.emit("# cellscript abi: canonical raw transaction Hash via LOAD_TX_HASH");
+        self.emit("# cellscript abi: args a0=out32_ptr, a1=size_ptr; returns a0=status");
+        if !enabled {
+            self.emit(format!("li a0, {}", CellScriptRuntimeError::SyscallFailed.code()));
+            self.emit("ret");
+            return;
+        }
+        let failed = self.fresh_label("transaction_hash_load_failed");
+        let malformed = self.fresh_label("transaction_hash_malformed");
+        let done = self.fresh_label("transaction_hash_done");
+        self.emit("addi sp, sp, -24");
+        self.emit("sd ra, 16(sp)");
+        self.emit("sd a1, 8(sp)");
+        self.emit("li t0, 32");
+        self.emit("sd t0, 0(a1)");
+        self.emit("li a2, 0");
+        self.emit(format!("li a7, {}", ckb_abi::syscall::LOAD_TX_HASH));
+        self.emit("ecall");
+        self.emit(format!("bnez a0, {failed}"));
+        self.emit("ld t6, 8(sp)");
+        self.emit("ld t0, 0(t6)");
+        self.emit("li t1, 32");
+        self.emit(format!("bne t0, t1, {malformed}"));
+        self.emit("li a0, 0");
+        self.emit(format!("j {done}"));
+        self.emit_label(&failed);
+        self.emit(format!("li a0, {}", CellScriptRuntimeError::SyscallFailed.code()));
+        self.emit(format!("j {done}"));
         self.emit_label(&malformed);
         self.emit(format!("li a0, {}", CellScriptRuntimeError::FixedByteComparisonUnresolved.code()));
         self.emit_label(&done);

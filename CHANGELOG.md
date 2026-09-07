@@ -137,6 +137,25 @@
   within the 600 KiB budget. Advance the artifact cache identity to
   `project-source-set-v40-0.30-dev1-bounded-witness`.
 
+- Add `ckb::transaction_hash() -> Hash` as the canonical fixed-width
+  transaction identity primitive. The CKB backend calls `LOAD_TX_HASH`,
+  requires success and an exact 32-byte result, and preserves the access as
+  `transaction-hash` / `Transaction` provenance in metadata schema 70.
+  Metadata validation and the standalone checker bind the operation, syscall,
+  source, authoring name, implicit index, and exact range; rebound mutations
+  cannot relabel it as a generic transaction read. Real CKB-VM evidence proves
+  that a nonzero hash is available in an ordinary Type Script transaction, and
+  the syntax audit, LSP, example, generated metadata path, and WASM tests share
+  the same surface. This primitive is the raw transaction-hash prefix required
+  by canonical signing domains; it does not by itself implement
+  `env::sighash_all`, which remains fail-closed until group-witness ownership,
+  first-witness lock replacement, extra-witness inclusion, and bounded message
+  construction are explicit. The rebuilt browser bundle is 554,741 bytes gzip
+  with SHA-256
+  `7884304db93b50abadb8e7ca082d23afe60ee2d5d73886fd5f3572a4f525d179`,
+  within the 600 KiB budget. Advance the artifact cache identity to
+  `project-source-set-v41-0.30-dev1-transaction-hash`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

@@ -27,8 +27,10 @@ resource Token has store { amount: u64 }
 action inspect(witness source_index: u64, witness expected_data_hash: Hash) -> u64 {
     let input = ckb::input<Token>(source_index)
     let dep = ckb::cell_dep(source_index)
+    let transaction_hash = ckb::transaction_hash()
     require input.capacity > 0
     require dep.data_hash == expected_data_hash
+    require transaction_hash != Hash::zero()
     return 0
 }
 "#;
@@ -224,6 +226,44 @@ fn checker_rejects_runtime_access_provenance_tampering_after_hash_rebinding() {
 
     let mut changed = valid.clone();
     changed.metadata["actions"][0]["ckb_runtime_accesses"][0]["binding"] = Value::String("tampered".to_string());
+    changed.rebind_sidecars();
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let set_transaction_hash_access_field = |metadata: &mut Value, field: &str, value: &Value| {
+        for pointer in ["/runtime/ckb_runtime_accesses", "/actions/0/ckb_runtime_accesses"] {
+            let accesses = metadata.pointer_mut(pointer).and_then(Value::as_array_mut).unwrap();
+            let access = accesses
+                .iter_mut()
+                .find(|access| access["operation"] == "transaction-hash")
+                .expect("canonical transaction-hash access");
+            access[field] = value.clone();
+        }
+    };
+
+    for mutation in [
+        ("operation", Value::String("transaction-hash-unbound".to_string())),
+        ("syscall", Value::String("LOAD_TRANSACTION".to_string())),
+        ("binding", Value::String("ckb::transaction_bytes".to_string())),
+    ] {
+        let mut changed = valid.clone();
+        set_transaction_hash_access_field(&mut changed.metadata, mutation.0, &mutation.1);
+        changed.rebind_sidecars();
+        assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+    }
+
+    let mut changed = valid.clone();
+    for pointer in ["/runtime/ckb_runtime_accesses", "/actions/0/ckb_runtime_accesses"] {
+        let access = changed
+            .metadata
+            .pointer_mut(pointer)
+            .and_then(Value::as_array_mut)
+            .unwrap()
+            .iter_mut()
+            .find(|access| access["operation"] == "transaction-hash")
+            .expect("canonical transaction-hash access");
+        access["provenance"]["range"]["length"]["value"] = Value::from(31);
+        access["provenance"]["range"]["length"]["max_inclusive"] = Value::from(31);
+    }
     changed.rebind_sidecars();
     assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
 

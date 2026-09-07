@@ -53,6 +53,12 @@ evidence. Owner-tagged bounded raw/lock/entry/output_type witness views now
 close the variable witness-value row with literal 65,536-byte bounds, exact
 scalar reads, streaming Blake2b, stable absent/over-bound failures, and
 schema/checker mutation coverage.
+The runtime now also exposes the canonical 32-byte raw transaction hash through
+`ckb::transaction_hash()` and `LOAD_TX_HASH`, with exact range provenance and
+real CKB-VM evidence. This closes the transaction-identity prefix needed by a
+signing-message domain. Canonical sighash construction remains open because it
+must still bind the first group witness with its lock field cleared, all other
+group witnesses, and transaction-level extra witnesses under explicit bounds.
 
 The goal is business-scenario coverage comparable to hand-written Rust CKB
 Scripts for a defined, bounded portfolio. It is not unrestricted Rust language

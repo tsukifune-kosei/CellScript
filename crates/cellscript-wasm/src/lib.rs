@@ -560,6 +560,7 @@ action inspect() -> bool {
         let duration = ckb::epoch_duration(5)
         let header = ckb::header_dep(0)
         let next_epoch = ckb::epoch_add(header.epoch_number, duration)
+        let transaction_hash = ckb::transaction_hash()
         return ckb::since_metric(decoded) <= 2
             && ckb::since_to_raw(block) == 42
             && ckb::since_to_raw(timestamp) == 13835058055282167312
@@ -567,6 +568,7 @@ action inspect() -> bool {
             && ckb::epoch_number_to_u64(next_epoch) >= 5
             && ckb::block_number_to_u64(header.block_number) >= 0
             && ckb::timestamp_millis_to_u64(header.timestamp) >= 0
+            && transaction_hash != Hash::zero()
 }
 "#;
         let result: serde_json::Value = serde_json::from_str(&compile_metadata_json(source, "2027", None)).unwrap();
@@ -574,7 +576,7 @@ action inspect() -> bool {
         assert_eq!(result["edition"], "2027");
         assert_eq!(result["target_profile"]["since_abi"], "ckb-since-rfc0017-typed-v1");
         let features = result["actions"][0]["ckb_runtime_features"].as_array().expect("runtime features");
-        for expected in ["ckb-header-epoch-number", "ckb-header-block-number", "ckb-header-timestamp-millis"] {
+        for expected in ["ckb-header-epoch-number", "ckb-header-block-number", "ckb-header-timestamp-millis", "ckb-transaction-hash"] {
             assert!(features.iter().any(|feature| feature == expected), "missing {expected}: {result}");
         }
     }

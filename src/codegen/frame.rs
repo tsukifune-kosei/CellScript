@@ -572,7 +572,9 @@ impl CodeGenerator {
                         }
                     }
                     IrInstruction::Call { dest: Some(dest), func, args }
-                        if func == "__ckb_current_script_hash" && args.is_empty() && dest.ty == IrType::Hash =>
+                        if matches!(func.as_str(), "__ckb_current_script_hash" | "__ckb_transaction_hash")
+                            && args.is_empty()
+                            && dest.ty == IrType::Hash =>
                     {
                         self.cell_buffer_size_offsets.insert(dest.id, next_cell_slot);
                         self.cell_buffer_offsets.insert(dest.id, next_cell_slot + 8);

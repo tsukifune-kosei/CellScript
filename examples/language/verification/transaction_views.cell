@@ -12,6 +12,8 @@ action inspect_transaction() -> u64 {
         let witness_args = witness::args(0)
         let out_point = input.out_point
         let lock = input.lock
+        let transaction_hash = ckb::transaction_hash()
         require lock.args_empty || lock.hash_type <= 4
+        require transaction_hash != Hash::zero()
         return input.capacity + output.output_index + dep.data_size + witness_args.size + out_point.index
 }

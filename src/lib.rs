@@ -223,7 +223,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v40-0.30-dev1-bounded-witness";
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v41-0.30-dev1-transaction-hash";
 pub const METADATA_SCHEMA_VERSION: u32 = 70;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -4152,6 +4152,29 @@ fn validate_ckb_runtime_access_list(scope: &str, name: &str, accesses: &[CkbRunt
             )));
         }
         validate_ckb_runtime_access_provenance(&prefix, &access.source, Some(access.index), &access.provenance)?;
+        validate_canonical_transaction_hash_runtime_access(&prefix, access)?;
+    }
+    Ok(())
+}
+
+fn validate_canonical_transaction_hash_runtime_access(prefix: &str, access: &CkbRuntimeAccessMetadata) -> Result<()> {
+    let identifies_transaction_hash =
+        access.operation == "transaction-hash" || access.syscall == "LOAD_TX_HASH" || access.binding == "ckb::transaction_hash";
+    if !identifies_transaction_hash {
+        return Ok(());
+    }
+    if access.operation != "transaction-hash"
+        || access.syscall != "LOAD_TX_HASH"
+        || access.source != "Transaction"
+        || access.index != 0
+        || access.binding != "ckb::transaction_hash"
+        || access.provenance.source.resolved_source != "Transaction"
+        || access.provenance.source.origin != "implicit-lowering"
+        || access.provenance.source.binding.is_some()
+        || access.provenance.index != runtime_scalar_not_applicable()
+        || access.provenance.range != runtime_range_fixed(32)
+    {
+        return Err(CompileError::without_span(format!("{} does not match the canonical 32-byte LOAD_TX_HASH contract", prefix)));
     }
     Ok(())
 }
@@ -4366,6 +4389,7 @@ fn is_known_ckb_runtime_syscall(syscall: &str) -> bool {
         syscall,
         "LOAD_CELL"
             | "LOAD_TRANSACTION"
+            | "LOAD_TX_HASH"
             | "LOAD_CELL_BY_FIELD"
             | "LOAD_CELL_DATA"
             | "LOAD_HEADER"
@@ -4409,7 +4433,7 @@ fn is_known_ckb_runtime_syscall(syscall: &str) -> bool {
 
 fn ckb_runtime_syscall_allows_source(syscall: &str, source: &str) -> bool {
     match syscall {
-        "LOAD_TRANSACTION" => source == "Transaction",
+        "LOAD_TRANSACTION" | "LOAD_TX_HASH" => source == "Transaction",
         "LOAD_CELL" => matches!(source, "Input" | "Output" | "CellDep" | "GroupInput" | "GroupOutput"),
         "LOAD_CELL_BY_FIELD" => matches!(source, "Input" | "Output" | "GroupInput" | "GroupOutput" | "CellDep" | "SourceView"),
         "LOAD_CELL_DATA" => {
@@ -16813,7 +16837,9 @@ fn metadata_prelude_availability(
                                     .first()
                                     .is_some_and(|arg| metadata_fixed_hash_input_available(arg, &availability, type_layouts))
                         }
-                        "__ckb_current_script_hash" | "__ckb_raw_transaction_hash_without_cell_deps" => args.is_empty(),
+                        "__ckb_current_script_hash" | "__ckb_transaction_hash" | "__ckb_raw_transaction_hash_without_cell_deps" => {
+                            args.is_empty()
+                        }
                         "__ckb_input_out_point_tx_hash"
                         | "__ckb_cell_lock_hash"
                         | "__ckb_cell_type_hash"
@@ -18008,6 +18034,9 @@ fn body_ckb_runtime_features(
                     features.insert("ckb-blake2b".to_string());
                     features.insert("ckb-raw-transaction-empty-cell-deps-hash".to_string());
                 }
+                ir::IrInstruction::Call { func, .. } if func == "__ckb_transaction_hash" => {
+                    features.insert("ckb-transaction-hash".to_string());
+                }
                 ir::IrInstruction::Call { func, .. }
                     if matches!(func.as_str(), "__ckb_transaction_blake2b_gather" | "__ckb_witness_blake2b_select_chunks") =>
                 {
@@ -18578,6 +18607,7 @@ fn runtime_range_for_call(func: &str, args: &[ir::IrOperand]) -> CkbRuntimeRange
         | "__ckb_cell_lock_u8"
         | "__ckb_cell_type_u8" => Some(1),
         "__ckb_cell_data_hash_field"
+        | "__ckb_transaction_hash"
         | "__ckb_cell_lock_hash"
         | "__ckb_cell_type_hash"
         | "__ckb_input_out_point_tx_hash"
@@ -19355,6 +19385,7 @@ fn ckb_v014_runtime_access(func: &str) -> Option<(&'static str, &'static str, &'
             "ckb::require_current_script_args_empty",
         )),
         "__ckb_current_script_hash" => Some(("current-script-hash", "LOAD_SCRIPT_HASH", "CurrentScript", "ckb::current_script_hash")),
+        "__ckb_transaction_hash" => Some(("transaction-hash", "LOAD_TX_HASH", "Transaction", "ckb::transaction_hash")),
         "__ckb_cell_data_hash" => Some(("cell-data-hash", "LOAD_CELL_DATA", "SourceView", "ckb::cell_data_hash")),
         "__ckb_cell_data_hash_at" => Some(("cell-data-hash-at", "LOAD_CELL_DATA", "SourceView", "ckb::cell_data_hash_at")),
         "__ckb_cell_data_blake2b_span" => {

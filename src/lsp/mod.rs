@@ -737,6 +737,7 @@ impl LspServer {
                     ("timestamp_millis_to_u64", "ckb::timestamp_millis_to_u64(${1:timestamp})"),
                     ("current_role", "ckb::current_role()"),
                     ("current_script_hash", "ckb::current_script_hash()"),
+                    ("transaction_hash", "ckb::transaction_hash()"),
                     ("script_hash", "ckb::script_hash(${1:hash})"),
                     ("cell_capacity", "ckb::cell_capacity(${1:source::group_input(0)})"),
                     ("cell_occupied_capacity", "ckb::cell_occupied_capacity(${1:source::group_input(0)})"),
@@ -3222,6 +3223,7 @@ mod tests {
         assert!(ckb.iter().any(|item| item.label == "hash_sha256d"));
         assert!(ckb.iter().any(|item| item.label == "require_sha256d_merkle_root"));
         assert!(ckb.iter().any(|item| item.label == "raw_transaction_hash_without_cell_deps"));
+        assert!(ckb.iter().any(|item| item.label == "transaction_hash"));
         assert!(ckb.iter().any(|item| item.label == "trusted_exec_cell_dep_u8_args"));
         assert!(ckb.iter().any(|item| item.label == "trusted_spawn_wait_cell_dep_hex4"));
 

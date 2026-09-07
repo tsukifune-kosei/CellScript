@@ -9,9 +9,11 @@ action inspect() -> u64 {
         let entry = witness::bounded_entry(witness_args, 4096)
         let output_type = witness::bounded_output_type(witness_args, 1024)
         let digest = witness::blake2b(raw)
+        let transaction_hash = ckb::transaction_hash()
         require lock.size <= 1024
         require entry.size <= 4096
         require output_type.size <= 1024
         require digest != Hash::zero()
+        require transaction_hash != Hash::zero()
         return 0
 }

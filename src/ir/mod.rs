@@ -7119,6 +7119,15 @@ impl IrGenerator {
                     blocks,
                     vars,
                 ),
+                "ckb::transaction_hash" if call.args.is_empty() => self.lower_simple_runtime_call(
+                    "__ckb_transaction_hash",
+                    "transaction_hash",
+                    IrType::Hash,
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
                 "ckb::transaction_u32_le" if call.args.len() == 1 => self.lower_simple_runtime_call(
                     "__ckb_transaction_u32_le",
                     "transaction_u32_le",

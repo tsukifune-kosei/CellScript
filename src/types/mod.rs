@@ -6766,7 +6766,7 @@ impl<'a> TypeChecker<'a> {
                             }
                             Type::Unit
                         }
-                        ("ckb", "current_script_hash" | "raw_transaction_hash_without_cell_deps") => {
+                        ("ckb", "current_script_hash" | "transaction_hash" | "raw_transaction_hash_without_cell_deps") => {
                             self.validate_builtin_arity(name, 0, arg_types, call.span)?;
                             Type::Hash
                         }
