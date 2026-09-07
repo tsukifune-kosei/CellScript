@@ -174,7 +174,12 @@ then requires that dry-run and records the node's tx-pool cycles and fee.
 `submit_signed_protocol_bundle()` validates the complete signed/tx-pool chain
 before calling `send_transaction` and rejects a returned hash that differs from
 the raw transaction hash. Its receipt says `submitted-uncommitted`; commitment
-still requires a later status query.
+still requires a later status query. `wait_for_protocol_bundle_confirmation()`
+polls that canonical `get_transaction` location against `get_tip_header`,
+restarts depth observation after an inclusion change or disappearance, and
+rechecks the location before emitting `ConfirmedProtocolBundleTx`. The receipt
+records the inclusion block/index, observed tip, required depth, and reorg
+count; it is a bounded observation and does not claim absolute finality.
 
 Generated TypeScript builders export `bindProtocolBundleArtifact()` and
 `createProtocolBundleClient()`. The artifact binding fixes the package,
@@ -183,7 +188,8 @@ identity. The client mirrors the Rust adapter state order and exposes a
 `ProtocolBundleSigningRequest` containing only an opaque unsigned transaction
 handle plus bundle/transaction hashes. A wallet, hardware signer, or service
 returns signed bytes through `resumeSigned`; no key material enters the
-generated package.
+generated package. Its final `confirm` step requires explicit confirmation,
+attempt, and polling-interval bounds.
 
 `CkbSdkAcceptance::dry_run_protocol_bundle()` and the equivalent
 `CellScriptAdapter` method call CKB `estimate_cycles` with that exact

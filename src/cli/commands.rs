@@ -8457,7 +8457,8 @@ fn typescript_builder_manifest(
                 "SignedProtocolBundleTx",
                 "SignedDryRunProtocolBundleTx",
                 "TxPoolAcceptedProtocolBundleTx",
-                "SubmittedProtocolBundleTx"
+                "SubmittedProtocolBundleTx",
+                "ConfirmedProtocolBundleTx"
             ],
             "private_keys": "never-in-bundle-or-evidence"
         },
@@ -8622,6 +8623,13 @@ export type SignedProtocolBundle = ProtocolBundleStage<"SignedProtocolBundleTx">
 export type SignedDryRunProtocolBundle = ProtocolBundleStage<"SignedDryRunProtocolBundleTx">;
 export type TxPoolAcceptedProtocolBundle = ProtocolBundleStage<"TxPoolAcceptedProtocolBundleTx">;
 export type SubmittedProtocolBundle = ProtocolBundleStage<"SubmittedProtocolBundleTx">;
+export type ConfirmedProtocolBundle = ProtocolBundleStage<"ConfirmedProtocolBundleTx">;
+
+export interface ProtocolBundleConfirmationPolicy {
+  requiredConfirmations: number;
+  maxAttempts: number;
+  pollingIntervalMs: number;
+}
 
 export interface ProtocolBundleSigningRequest {
   state: "ProtocolBundleSigningRequest";
@@ -8651,6 +8659,10 @@ export interface ProtocolBundleRuntime {
   dryRunSigned(signed: SignedProtocolBundle): Promise<SignedDryRunProtocolBundle>;
   testTxPool(signed: SignedProtocolBundle, dryRun: SignedDryRunProtocolBundle): Promise<TxPoolAcceptedProtocolBundle>;
   submit(signed: SignedProtocolBundle, accepted: TxPoolAcceptedProtocolBundle): Promise<SubmittedProtocolBundle>;
+  confirm(
+    submitted: SubmittedProtocolBundle,
+    policy: ProtocolBundleConfirmationPolicy,
+  ): Promise<ConfirmedProtocolBundle>;
 }
 
 function assertProtocolBundleStage<S extends string>(value: ProtocolBundleStage<S>, state: S, previous?: ProtocolBundleStage<string>): void {
@@ -8717,6 +8729,17 @@ export function createProtocolBundleClient(runtime: ProtocolBundleRuntime) {
       const submitted = await runtime.submit(signed, accepted);
       assertProtocolBundleStage(submitted, "SubmittedProtocolBundleTx", accepted);
       return submitted;
+    },
+    async confirm(submitted: SubmittedProtocolBundle, policy: ProtocolBundleConfirmationPolicy) {
+      assertProtocolBundleStage(submitted, "SubmittedProtocolBundleTx");
+      if (!Number.isInteger(policy.requiredConfirmations) || policy.requiredConfirmations < 1
+        || !Number.isInteger(policy.maxAttempts) || policy.maxAttempts < 1
+        || !Number.isInteger(policy.pollingIntervalMs) || policy.pollingIntervalMs < 0) {
+        throw new Error("ProtocolBundle confirmation policy must use bounded non-negative integers and at least one confirmation/attempt");
+      }
+      const confirmed = await runtime.confirm(submitted, policy);
+      assertProtocolBundleStage(confirmed, "ConfirmedProtocolBundleTx", submitted);
+      return confirmed;
     },
   };
 }
@@ -9726,6 +9749,7 @@ fn typescript_builder_test(actions: &[&crate::ActionMetadata]) -> Result<String>
              async dryRunSigned(value) { calls.push(\"dry-run\"); return stage(\"SignedDryRunProtocolBundleTx\", value); },\n\
              async testTxPool(_signed, value) { calls.push(\"tx-pool\"); return stage(\"TxPoolAcceptedProtocolBundleTx\", value); },\n\
              async submit(_signed, value) { calls.push(\"submit\"); return stage(\"SubmittedProtocolBundleTx\", value); },\n\
+             async confirm(value, policy) { calls.push(\"confirm\"); assert.equal(policy.requiredConfirmations, 3); return stage(\"ConfirmedProtocolBundleTx\", value); },\n\
            };\n\
            const client = builder.createProtocolBundleClient(runtime);\n\
            const prepared = await client.prepare({}, [first, second]);\n\
@@ -9736,7 +9760,9 @@ fn typescript_builder_test(actions: &[&crate::ActionMetadata]) -> Result<String>
            const accepted = await client.acceptSigned(signed);\n\
            const submitted = await client.submit(signed, accepted.accepted);\n\
            assert.equal(submitted.state, \"SubmittedProtocolBundleTx\");\n\
-           assert.deepEqual(calls, [\"check\", \"materialize\", \"live-inputs\", \"live-dependencies\", \"ready\", \"signed\", \"dry-run\", \"tx-pool\", \"submit\"]);\n\
+           const confirmed = await client.confirm(submitted, { requiredConfirmations: 3, maxAttempts: 20, pollingIntervalMs: 1000 });\n\
+           assert.equal(confirmed.state, \"ConfirmedProtocolBundleTx\");\n\
+           assert.deepEqual(calls, [\"check\", \"materialize\", \"live-inputs\", \"live-dependencies\", \"ready\", \"signed\", \"dry-run\", \"tx-pool\", \"submit\", \"confirm\"]);\n\
            const wrongRuntime = { ...runtime, async resolveLiveInputs(value) { return stage(\"WrongState\", value); } };\n\
            await assert.rejects(() => builder.createProtocolBundleClient(wrongRuntime).prepare({}, [first, second]), /invalid LiveResolvedProtocolBundleTx evidence/);\n\
          });\n\n",

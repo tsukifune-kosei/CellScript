@@ -823,7 +823,8 @@ fn validate_builder_manifest(input: &ProtocolArtifactInput, metadata: &CompileMe
                     "SignedProtocolBundleTx",
                     "SignedDryRunProtocolBundleTx",
                     "TxPoolAcceptedProtocolBundleTx",
-                    "SubmittedProtocolBundleTx"
+                    "SubmittedProtocolBundleTx",
+                    "ConfirmedProtocolBundleTx"
                 ],
                 "private_keys": "never-in-bundle-or-evidence"
             })),

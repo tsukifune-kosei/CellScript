@@ -197,6 +197,10 @@ The signing path is an ordered state machine:
    to the same signed serialization hash.
 5. `submit_signed_protocol_bundle` checks that evidence before RPC submission
    and emits an explicitly uncommitted receipt.
+6. `wait_for_protocol_bundle_confirmation` polls the canonical transaction
+   location to a caller-selected depth, restarts if an observed inclusion
+   disappears or changes, and emits `ConfirmedProtocolBundleTx` only after a
+   final location recheck.
 
 Private keys are never fields in the ProtocolBundle or its evidence. Hardware,
 wallet, and software signers remain behind CKB SDK `ScriptUnlocker` interfaces.
@@ -245,10 +249,12 @@ The next bundle phases must add, without weakening this hash boundary:
 - builder-derived transaction claims and live Cell selection;
 - independently attributed per-group cycles when an execution backend can
   report them;
-- freshness-safe confirmation and reorg handling.
+- additional product-specific finality policy beyond the adapter's bounded,
+  reorg-aware confirmation observation.
 
 The original compiler report remains offline structural evidence. Adapter
 materialization, live resolution, dependency resolution, signed dry-run,
 tx-pool, and submission records advance the same hash-bound transaction without
-rewriting that report. Submission is still uncommitted; only future
-confirmation and reorg-aware evidence may describe a committed transaction.
+rewriting that report. Submission is still uncommitted. The versioned
+confirmation record upgrades it only to an observed canonical inclusion at the
+required depth and explicitly does not claim absolute finality.

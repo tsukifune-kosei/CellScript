@@ -10071,7 +10071,8 @@ action mint(amount: u64, owner: Address) -> Token {
     assert_eq!(manifest["protocol_bundle_contract"]["schema"], "cellscript-protocol-bundle-v1");
     assert_eq!(manifest["protocol_bundle_contract"]["runtime_adapter"], "cellscript-ckb-adapter");
     assert_eq!(manifest["protocol_bundle_contract"]["private_keys"], "never-in-bundle-or-evidence");
-    assert_eq!(manifest["protocol_bundle_contract"]["states"].as_array().unwrap().len(), 8);
+    assert_eq!(manifest["protocol_bundle_contract"]["states"].as_array().unwrap().len(), 9);
+    assert_eq!(manifest["protocol_bundle_contract"]["states"][8], "ConfirmedProtocolBundleTx");
     assert_eq!(
         manifest["actions"][0]["action_scan_selectors"]["selector_count"],
         manifest["actions"][0]["runtime_input_requirements"]
@@ -10116,6 +10117,8 @@ action mint(amount: u64, owner: Address) -> Token {
     assert!(index_ts.contains("bindProtocolBundleArtifact"), "{index_ts}");
     assert!(index_ts.contains("createProtocolBundleClient"), "{index_ts}");
     assert!(index_ts.contains("ProtocolBundleSigningRequest"), "{index_ts}");
+    assert!(index_ts.contains("ProtocolBundleConfirmationPolicy"), "{index_ts}");
+    assert!(index_ts.contains("ConfirmedProtocolBundleTx"), "{index_ts}");
     assert!(index_ts.contains("privateKeysIncluded: false"), "{index_ts}");
 
     let builder_test = std::fs::read_to_string(output_dir.join("test").join("builder.test.mjs")).unwrap();

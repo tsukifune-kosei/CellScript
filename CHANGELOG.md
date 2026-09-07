@@ -278,6 +278,16 @@
   explicitly contain no private keys. Generated packages compile with `tsc`
   and exercise both the positive state order and wrong-state rejection.
 
+- Complete the first reorg-aware ProtocolBundle confirmation boundary. The CKB
+  adapter polls the submitted transaction's canonical `get_transaction`
+  location, derives depth from `get_tip_header`, restarts observation if an
+  inclusion disappears or changes, and rechecks the location before emitting
+  `cellscript-protocol-bundle-confirmation-v1`. The final
+  `ConfirmedProtocolBundleTx` records inclusion block/index, observed tip,
+  required and observed depth, network identity, and reorg count while
+  explicitly refusing an absolute-finality claim. Generated TypeScript clients
+  expose the same ninth state and validate bounded polling policy.
+
 - Make ProtocolBundle eligibility discoverable through Registry verification
   evidence. Both independent Registry verifiers emit the exact bundle schema,
   artifact-binding schema, and runtime-adapter identity only for CKB ELF
@@ -290,7 +300,7 @@
 - Publish the numbered ProtocolBundle end-to-end wiki tutorial consumed by the
   website docs renderer. It connects standalone artifact admission, Registry
   discovery, offline conflict checks, Rust adapter states, generated TypeScript
-  external-signing flow, and the remaining confirmation/reorg boundary.
+  external-signing flow, and the bounded confirmation/finality boundary.
 
 ## 0.26b - Experimental semantic-foundation branch
 

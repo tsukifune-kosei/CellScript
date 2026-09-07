@@ -237,8 +237,11 @@ The adapter now gates signing on both live receipts, delegates key operations to
 caller-supplied SDK unlockers, preserves compiler-owned witness fields, verifies
 the signed bytes through node execution and tx-pool acceptance, and gates
 submission on that evidence. Builder-derived live selection, independently
-measured per-group cycles, confirmation/reorg evidence, and the remaining
-runtime-adapter work remain required before issue #9 is complete. See
+measured per-group cycles, and the remaining runtime-adapter work remain
+required before issue #9 is complete. Confirmation now polls the canonical
+transaction location to a caller-selected depth, restarts after an observed
+reorg, and preserves the final inclusion/tip snapshot without claiming absolute
+finality. See
 [CellScript ProtocolBundle v1](CELLSCRIPT_PROTOCOL_BUNDLE.md).
 
 Generated TypeScript action builders now expose the same ProtocolBundle v1

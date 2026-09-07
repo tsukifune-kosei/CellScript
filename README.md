@@ -1014,7 +1014,10 @@ artifact's code Cell or complete dep-group membership, admitted ELF data hash,
 and data-hash or type-hash Script identity against the same transaction. The
 adapter can then run supplied CKB SDK unlockers, preserve entry-witness fields,
 dry-run the signed bytes, require tx-pool acceptance, and submit with a hash-bound
-uncommitted receipt. Generated TypeScript packages expose the same ordered
+uncommitted receipt. A reorg-aware confirmation poll can then bind canonical
+block inclusion and a caller-selected minimum depth to the same bundle and
+transaction identities; the receipt remains a bounded observation rather than
+an absolute-finality claim. Generated TypeScript packages expose the same ordered
 states and an artifact binding tied to their metadata, ELF, interface, and
 builder-manifest identities; signing requests carry no private keys.
 Registry verified-build evidence exposes the same bundle schema, binding

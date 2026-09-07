@@ -275,6 +275,31 @@ pub struct ProtocolBundleSubmissionEvidence {
     pub chain_evidence: &'static str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleConfirmationEvidence {
+    pub schema: &'static str,
+    pub state: &'static str,
+    pub bundle_hash: String,
+    pub raw_transaction_hash: String,
+    pub signed_serialized_transaction_hash: String,
+    pub submitted_transaction_hash: String,
+    pub network_chain_id: String,
+    pub network_genesis_hash: String,
+    pub block_hash: String,
+    pub block_number: u64,
+    pub transaction_index: u32,
+    pub observed_tip_hash: String,
+    pub observed_tip_number: u64,
+    pub confirmation_count: u64,
+    pub required_confirmation_count: u64,
+    pub reorgs_observed: u32,
+    pub canonical_status: &'static str,
+    pub confirmation_status: &'static str,
+    pub finality_claim: &'static str,
+    pub committed: bool,
+    pub chain_evidence: &'static str,
+}
+
 #[derive(Debug, Deserialize)]
 struct ReportWire {
     schema: String,
@@ -892,6 +917,81 @@ pub fn protocol_bundle_submission_evidence(
         tx_pool_accepted: true,
         committed: false,
         chain_evidence: "submitted-uncommitted",
+    })
+}
+
+/// Bind a canonical-chain inclusion and bounded confirmation-depth observation
+/// to one exact submitted ProtocolBundle transaction.
+///
+/// This is an observation at `observed_tip_hash`, not a claim of absolute
+/// finality. The RPC-facing adapter rechecks `get_transaction` after observing
+/// the required depth and restarts the depth count when a reorg changes or
+/// removes an earlier inclusion.
+#[allow(clippy::too_many_arguments)]
+pub fn protocol_bundle_confirmation_evidence(
+    submission: &ProtocolBundleSubmissionEvidence,
+    materialization: &ProtocolBundleMaterializationEvidence,
+    observed_chain_id: &str,
+    observed_genesis_hash: &str,
+    block_hash: &str,
+    block_number: u64,
+    transaction_index: u32,
+    observed_tip_hash: &str,
+    observed_tip_number: u64,
+    required_confirmation_count: u64,
+    reorgs_observed: u32,
+) -> Result<ProtocolBundleConfirmationEvidence> {
+    if submission.schema != "cellscript-protocol-bundle-submission-v1"
+        || submission.state != "SubmittedProtocolBundleTx"
+        || submission.bundle_hash != materialization.bundle_hash
+        || submission.raw_transaction_hash != materialization.raw_transaction_hash
+        || submission.submitted_transaction_hash != submission.raw_transaction_hash
+        || !submission.tx_pool_accepted
+        || submission.committed
+        || submission.chain_evidence != "submitted-uncommitted"
+        || materialization.schema != PROTOCOL_BUNDLE_MATERIALIZATION_SCHEMA
+        || materialization.state != "MaterializedProtocolBundleTx"
+    {
+        bail!("ProtocolBundle confirmation is not bound to the submitted materialized transaction");
+    }
+    if observed_chain_id != materialization.network_chain_id || observed_genesis_hash != materialization.network_genesis_hash {
+        bail!("connected CKB network identity does not match the submitted ProtocolBundle");
+    }
+    require_hash32("ProtocolBundle submitted transaction hash", &submission.submitted_transaction_hash)?;
+    require_hash32("ProtocolBundle confirmation block hash", block_hash)?;
+    require_hash32("ProtocolBundle confirmation tip hash", observed_tip_hash)?;
+    if required_confirmation_count == 0 {
+        bail!("ProtocolBundle required confirmation count must be at least one");
+    }
+    let confirmation_count = observed_tip_number
+        .checked_sub(block_number)
+        .and_then(|distance| distance.checked_add(1))
+        .ok_or_else(|| anyhow::anyhow!("ProtocolBundle confirmation tip precedes its inclusion block"))?;
+    if confirmation_count < required_confirmation_count {
+        bail!("ProtocolBundle confirmation depth {confirmation_count} is below required depth {required_confirmation_count}");
+    }
+    Ok(ProtocolBundleConfirmationEvidence {
+        schema: "cellscript-protocol-bundle-confirmation-v1",
+        state: "ConfirmedProtocolBundleTx",
+        bundle_hash: submission.bundle_hash.clone(),
+        raw_transaction_hash: submission.raw_transaction_hash.clone(),
+        signed_serialized_transaction_hash: submission.signed_serialized_transaction_hash.clone(),
+        submitted_transaction_hash: submission.submitted_transaction_hash.clone(),
+        network_chain_id: observed_chain_id.to_string(),
+        network_genesis_hash: observed_genesis_hash.to_string(),
+        block_hash: block_hash.to_string(),
+        block_number,
+        transaction_index,
+        observed_tip_hash: observed_tip_hash.to_string(),
+        observed_tip_number,
+        confirmation_count,
+        required_confirmation_count,
+        reorgs_observed,
+        canonical_status: "committed-in-canonical-chain",
+        confirmation_status: "required-depth-observed",
+        finality_claim: "bounded-observation-not-absolute-finality",
+        committed: true,
+        chain_evidence: "node-committed-confirmation-depth-observed",
     })
 }
 
@@ -1923,6 +2023,59 @@ mod tests {
             protocol_bundle_submission_evidence(&signed_transaction, &signing, &tx_pool, &H256::from(submitted_hash)).unwrap();
         assert_eq!(submission.state, "SubmittedProtocolBundleTx");
         assert!(!submission.committed);
+        let confirmation = protocol_bundle_confirmation_evidence(
+            &submission,
+            &materialization,
+            &materialization.network_chain_id,
+            &materialization.network_genesis_hash,
+            &format!("0x{}", "6".repeat(64)),
+            100,
+            2,
+            &format!("0x{}", "7".repeat(64)),
+            104,
+            5,
+            1,
+        )
+        .unwrap();
+        assert_eq!(confirmation.state, "ConfirmedProtocolBundleTx");
+        assert_eq!(confirmation.confirmation_count, 5);
+        assert_eq!(confirmation.reorgs_observed, 1);
+        assert!(confirmation.committed);
+        assert_eq!(confirmation.finality_claim, "bounded-observation-not-absolute-finality");
+
+        let error = protocol_bundle_confirmation_evidence(
+            &submission,
+            &materialization,
+            &materialization.network_chain_id,
+            &materialization.network_genesis_hash,
+            &format!("0x{}", "6".repeat(64)),
+            100,
+            2,
+            &format!("0x{}", "7".repeat(64)),
+            103,
+            5,
+            0,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("below required depth"), "{error}");
+
+        let error = protocol_bundle_confirmation_evidence(
+            &submission,
+            &materialization,
+            "another-chain",
+            &materialization.network_genesis_hash,
+            &format!("0x{}", "6".repeat(64)),
+            100,
+            2,
+            &format!("0x{}", "7".repeat(64)),
+            104,
+            5,
+            0,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("network identity"), "{error}");
 
         let error = protocol_bundle_submission_evidence(&signed_transaction, &signing, &tx_pool, &H256::from([0xffu8; 32]))
             .unwrap_err()

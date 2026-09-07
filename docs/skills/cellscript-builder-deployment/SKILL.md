@@ -63,6 +63,9 @@ Validation defaults:
   `unlock_protocol_bundle_transaction`, dry-run the signed bytes, require bound
   tx-pool acceptance, and only then call `submit_signed_protocol_bundle`;
   submitted evidence remains uncommitted.
+- call `wait_for_protocol_bundle_confirmation` with an explicit minimum depth
+  and bounded poll policy; retain the inclusion/tip/reorg snapshot and do not
+  upgrade it to an absolute-finality claim.
 - generated TypeScript packages may use `bindProtocolBundleArtifact` and
   `createProtocolBundleClient`; keep signing resumable through the opaque
   `ProtocolBundleSigningRequest` and never add key material to bundle data.

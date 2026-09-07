@@ -30,15 +30,15 @@ pub mod policy_witness;
 mod protocol_bundle;
 
 pub use protocol_bundle::{
-    materialize_protocol_bundle_report, protocol_bundle_dependency_resolution_evidence, protocol_bundle_dry_run_evidence,
-    protocol_bundle_live_resolution_evidence, protocol_bundle_ready_to_sign_evidence, protocol_bundle_signed_dry_run_evidence,
-    protocol_bundle_submission_evidence, protocol_bundle_tx_pool_evidence, ProtocolBundleCellDepObservation,
-    ProtocolBundleCodeCellDepExpectation, ProtocolBundleCodeCellEvidence, ProtocolBundleDependencyResolutionEvidence,
-    ProtocolBundleDryRunEvidence, ProtocolBundleGroupDryRunEvidence, ProtocolBundleIndexBinding, ProtocolBundleLiveCellObservation,
-    ProtocolBundleLiveInputEvidence, ProtocolBundleLiveInputExpectation, ProtocolBundleLiveResolutionEvidence,
-    ProtocolBundleMaterializationEvidence, ProtocolBundleReadyToSignEvidence, ProtocolBundleScriptGroupEvidence,
-    ProtocolBundleSignedDryRunEvidence, ProtocolBundleSignedTransactionEvidence, ProtocolBundleSubmissionEvidence,
-    ProtocolBundleTxPoolEvidence,
+    materialize_protocol_bundle_report, protocol_bundle_confirmation_evidence, protocol_bundle_dependency_resolution_evidence,
+    protocol_bundle_dry_run_evidence, protocol_bundle_live_resolution_evidence, protocol_bundle_ready_to_sign_evidence,
+    protocol_bundle_signed_dry_run_evidence, protocol_bundle_submission_evidence, protocol_bundle_tx_pool_evidence,
+    ProtocolBundleCellDepObservation, ProtocolBundleCodeCellDepExpectation, ProtocolBundleCodeCellEvidence,
+    ProtocolBundleConfirmationEvidence, ProtocolBundleDependencyResolutionEvidence, ProtocolBundleDryRunEvidence,
+    ProtocolBundleGroupDryRunEvidence, ProtocolBundleIndexBinding, ProtocolBundleLiveCellObservation, ProtocolBundleLiveInputEvidence,
+    ProtocolBundleLiveInputExpectation, ProtocolBundleLiveResolutionEvidence, ProtocolBundleMaterializationEvidence,
+    ProtocolBundleReadyToSignEvidence, ProtocolBundleScriptGroupEvidence, ProtocolBundleSignedDryRunEvidence,
+    ProtocolBundleSignedTransactionEvidence, ProtocolBundleSubmissionEvidence, ProtocolBundleTxPoolEvidence,
 };
 
 pub const ACTION_PLAN_POLICY: &str = "cellscript-action-builder-plan-v1";
@@ -1571,6 +1571,28 @@ impl<'a> CkbSdkAcceptance<'a> {
         protocol_bundle_submission_evidence(signed_tx, signing, tx_pool, &submitted_hash)
     }
 
+    /// Wait for one submitted ProtocolBundle transaction to remain committed
+    /// in the canonical chain through the requested confirmation depth.
+    /// Inclusion changes or disappearance after inclusion are treated as
+    /// reorgs and restart the bounded depth observation.
+    pub fn wait_for_protocol_bundle_confirmation(
+        &self,
+        submission: &ProtocolBundleSubmissionEvidence,
+        materialization: &ProtocolBundleMaterializationEvidence,
+        required_confirmations: u64,
+        max_attempts: u32,
+        delay_ms: u64,
+    ) -> Result<ProtocolBundleConfirmationEvidence> {
+        wait_for_protocol_bundle_confirmation_with_client(
+            self.client,
+            submission,
+            materialization,
+            required_confirmations,
+            max_attempts,
+            delay_ms,
+        )
+    }
+
     pub fn verify_protocol_bundle_live_inputs(
         &self,
         tx: &TransactionView,
@@ -1982,6 +2004,28 @@ impl CellScriptAdapter {
         protocol_bundle_submission_evidence(signed_tx, signing, tx_pool, &submitted_hash)
     }
 
+    /// Wait for a submitted ProtocolBundle transaction to remain in the
+    /// canonical chain through a bounded confirmation depth. The returned
+    /// evidence records any inclusion changes observed while polling and does
+    /// not claim absolute finality.
+    pub fn wait_for_protocol_bundle_confirmation(
+        &self,
+        submission: &ProtocolBundleSubmissionEvidence,
+        materialization: &ProtocolBundleMaterializationEvidence,
+        required_confirmations: u64,
+        max_attempts: u32,
+        delay_ms: u64,
+    ) -> Result<ProtocolBundleConfirmationEvidence> {
+        wait_for_protocol_bundle_confirmation_with_client(
+            &self.client,
+            submission,
+            materialization,
+            required_confirmations,
+            max_attempts,
+            delay_ms,
+        )
+    }
+
     /// Resolve every input through `get_live_cell`, verify the exact expected
     /// CellOutput/data and network identity, and replace skeleton-sourced
     /// capacity/fee claims with live node evidence.
@@ -2100,6 +2144,137 @@ fn verify_protocol_bundle_live_inputs_with_client(
         live_inputs.push((output, data));
     }
     protocol_bundle_live_resolution_evidence(tx, materialization, &observed_chain_id, &observed_genesis_hash, &live_inputs)
+}
+
+fn wait_for_protocol_bundle_confirmation_with_client(
+    client: &CkbRpcClient,
+    submission: &ProtocolBundleSubmissionEvidence,
+    materialization: &ProtocolBundleMaterializationEvidence,
+    required_confirmations: u64,
+    max_attempts: u32,
+    delay_ms: u64,
+) -> Result<ProtocolBundleConfirmationEvidence> {
+    if required_confirmations == 0 {
+        bail!("ProtocolBundle required confirmation count must be at least one");
+    }
+    if max_attempts == 0 {
+        bail!("ProtocolBundle confirmation polling requires at least one attempt");
+    }
+    let tx_hash = parse_protocol_bundle_h256("submitted transaction hash", &submission.submitted_transaction_hash)?;
+    let mut last_inclusion: Option<(H256, u64)> = None;
+    let mut reorgs_observed = 0u32;
+
+    for attempt in 0..max_attempts {
+        let Some((block_hash, block_number, transaction_index)) =
+            protocol_bundle_committed_location(client.get_transaction(tx_hash.clone())?, &tx_hash)?
+        else {
+            observe_protocol_bundle_inclusion(&mut last_inclusion, None, &mut reorgs_observed);
+            if attempt + 1 < max_attempts {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            }
+            continue;
+        };
+
+        observe_protocol_bundle_inclusion(&mut last_inclusion, Some((block_hash.clone(), block_number)), &mut reorgs_observed);
+
+        let tip = client.get_tip_header()?;
+        let tip_number = tip.inner.number.value();
+        let confirmation_count = tip_number
+            .checked_sub(block_number)
+            .and_then(|distance| distance.checked_add(1))
+            .ok_or_else(|| anyhow::anyhow!("CKB tip precedes the ProtocolBundle inclusion block"))?;
+        if confirmation_count < required_confirmations {
+            if attempt + 1 < max_attempts {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            }
+            continue;
+        }
+
+        let refreshed = protocol_bundle_committed_location(client.get_transaction(tx_hash.clone())?, &tx_hash)?;
+        let Some((refreshed_block_hash, refreshed_block_number, refreshed_transaction_index)) = refreshed else {
+            observe_protocol_bundle_inclusion(&mut last_inclusion, None, &mut reorgs_observed);
+            continue;
+        };
+        if refreshed_block_hash != block_hash || refreshed_block_number != block_number {
+            observe_protocol_bundle_inclusion(
+                &mut last_inclusion,
+                Some((refreshed_block_hash, refreshed_block_number)),
+                &mut reorgs_observed,
+            );
+            continue;
+        }
+        if refreshed_transaction_index != transaction_index {
+            bail!("ProtocolBundle transaction index changed without an inclusion block change");
+        }
+
+        let refreshed_tip = client.get_tip_header()?;
+        let consensus = client.get_consensus()?;
+        let observed_genesis_hash = format!("0x{}", hex::encode(consensus.genesis_hash.as_bytes()));
+        return protocol_bundle_confirmation_evidence(
+            submission,
+            materialization,
+            &consensus.id,
+            &observed_genesis_hash,
+            &format!("0x{}", hex::encode(block_hash.as_bytes())),
+            block_number,
+            transaction_index,
+            &format!("0x{}", hex::encode(refreshed_tip.hash.as_bytes())),
+            refreshed_tip.inner.number.value(),
+            required_confirmations,
+            reorgs_observed,
+        );
+    }
+
+    bail!(
+        "ProtocolBundle transaction {} did not reach {} confirmation(s) within {} attempts; observed {} reorg(s)",
+        submission.submitted_transaction_hash,
+        required_confirmations,
+        max_attempts,
+        reorgs_observed
+    )
+}
+
+fn observe_protocol_bundle_inclusion(previous: &mut Option<(H256, u64)>, current: Option<(H256, u64)>, reorgs_observed: &mut u32) {
+    if previous.is_some() && previous.as_ref() != current.as_ref() {
+        *reorgs_observed = (*reorgs_observed).saturating_add(1);
+    }
+    *previous = current;
+}
+
+fn protocol_bundle_committed_location(
+    response: Option<TransactionWithStatusResponse>,
+    tx_hash: &H256,
+) -> Result<Option<(H256, u64, u32)>> {
+    let Some(response) = response else {
+        return Ok(None);
+    };
+    let status = response.tx_status;
+    match status.status {
+        Status::Committed => Ok(Some((
+            status.block_hash.ok_or_else(|| anyhow::anyhow!("committed ProtocolBundle transaction omitted block_hash"))?,
+            status.block_number.ok_or_else(|| anyhow::anyhow!("committed ProtocolBundle transaction omitted block_number"))?.value(),
+            status.tx_index.ok_or_else(|| anyhow::anyhow!("committed ProtocolBundle transaction omitted tx_index"))?.value(),
+        ))),
+        Status::Rejected => bail!(
+            "ProtocolBundle transaction {:?} was rejected by the node: {}",
+            tx_hash,
+            status.reason.unwrap_or_else(|| "no rejection reason".to_string())
+        ),
+        Status::Pending | Status::Proposed | Status::Unknown => Ok(None),
+    }
+}
+
+fn parse_protocol_bundle_h256(label: &str, value: &str) -> Result<H256> {
+    let Some(raw) = value.strip_prefix("0x") else {
+        bail!("ProtocolBundle {label} must be canonical 0x-prefixed lowercase hex");
+    };
+    if raw.len() != 64 || !raw.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
+        bail!("ProtocolBundle {label} must be canonical 0x-prefixed lowercase hex");
+    }
+    let bytes = hex::decode(raw).map_err(|error| anyhow::anyhow!("failed to decode ProtocolBundle {label}: {error}"))?;
+    let mut result = [0u8; 32];
+    result.copy_from_slice(&bytes);
+    Ok(H256::from(result))
 }
 
 fn verify_protocol_bundle_live_dependencies_with_client(
@@ -2242,6 +2417,27 @@ pub fn sample_action_plan() -> ActionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protocol_bundle_confirmation_tracker_counts_inclusion_reorgs_once() {
+        let first = (H256::from([0x11u8; 32]), 10);
+        let replacement = (H256::from([0x22u8; 32]), 11);
+        let mut previous = None;
+        let mut reorgs = 0;
+
+        observe_protocol_bundle_inclusion(&mut previous, None, &mut reorgs);
+        observe_protocol_bundle_inclusion(&mut previous, Some(first.clone()), &mut reorgs);
+        observe_protocol_bundle_inclusion(&mut previous, Some(first), &mut reorgs);
+        assert_eq!(reorgs, 0);
+
+        observe_protocol_bundle_inclusion(&mut previous, None, &mut reorgs);
+        assert_eq!(reorgs, 1);
+        observe_protocol_bundle_inclusion(&mut previous, Some(replacement.clone()), &mut reorgs);
+        assert_eq!(reorgs, 1);
+        observe_protocol_bundle_inclusion(&mut previous, Some((H256::from([0x33u8; 32]), 12)), &mut reorgs);
+        assert_eq!(reorgs, 2);
+        assert_eq!(previous, Some((H256::from([0x33u8; 32]), 12)));
+    }
 
     #[test]
     fn parses_compiler_action_plan_boundary() {

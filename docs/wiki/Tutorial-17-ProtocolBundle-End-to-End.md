@@ -3,12 +3,12 @@
 ProtocolBundle v1 composes two or more independently compiled CKB Script
 artifacts into one transaction while keeping every Script's artifact identity,
 transaction claims, and evidence separate. This tutorial follows the 0.30
-development contract from checked ELF files through an externally signed
-submission receipt.
+development contract from checked ELF files through an externally signed,
+bounded confirmation receipt.
 
-The current endpoint is a submitted transaction. A submission receipt is not a
-confirmation receipt. Confirmation depth, reorg handling, builder-derived live
-Cell selection, and independently measured per-Script-Group cycles remain open.
+The current endpoint records a canonical-chain inclusion and caller-selected
+depth without claiming absolute finality. Builder-derived live Cell selection
+and independently measured per-Script-Group cycles remain open.
 
 ## 1. Know the three identities
 
@@ -150,6 +150,7 @@ The node-backed states are ordered:
 | `SignedDryRunProtocolBundleTx` | The node executed the signed bytes successfully |
 | `TxPoolAcceptedProtocolBundleTx` | Tx-pool acceptance binds node cycles and computed fee |
 | `SubmittedProtocolBundleTx` | The node returned the expected transaction hash |
+| `ConfirmedProtocolBundleTx` | Canonical inclusion survived the requested bounded confirmation depth |
 
 `CkbSdkAcceptance` checks the connected chain ID and genesis hash before live
 resolution. Direct code deps must contain bytes with the admitted ELF data hash.
@@ -167,7 +168,7 @@ Every generated TypeScript action-builder package exports:
 
 - `bindProtocolBundleArtifact`;
 - `createProtocolBundleClient`;
-- the same eight state names;
+- the same nine state names;
 - `ProtocolBundleSigningRequest`; and
 - the bundle, report, and artifact-binding schema constants.
 
@@ -184,13 +185,18 @@ const artifact = builder.bindProtocolBundleArtifact({
 });
 
 const client = builder.createProtocolBundleClient(runtime);
-const prepared = await client.prepare(bundleInput, [artifact, authArtifact]);
-const request = client.signingRequest(prepared);
+const flow = await client.prepare(bundleInput, [artifact, authArtifact]);
+const request = client.signingRequest(flow.prepared);
 
-// Send request.transactionHandle to a wallet or hardware signer.
-const signed = await client.resumeSigned(prepared, signedTransaction);
+// Send request.unsignedTransaction to a wallet or hardware signer.
+const signed = await client.resumeSigned(flow.prepared, signedTransaction);
 const accepted = await client.acceptSigned(signed);
-const submitted = await client.submit(signed, accepted);
+const submitted = await client.submit(signed, accepted.accepted);
+const confirmed = await client.confirm(submitted, {
+  requiredConfirmations: 6,
+  maxAttempts: 120,
+  pollingIntervalMs: 5000,
+});
 ```
 
 `request.privateKeysIncluded` is always `false`. The client rejects duplicate
@@ -207,9 +213,12 @@ unobserved unless separate evidence proves execution.
 
 `SubmittedProtocolBundleTx` proves that the node accepted a submission request
 and returned the expected transaction hash. It remains explicitly uncommitted.
-Do not present it as a confirmed state transition. A later 0.30 slice must bind
-block inclusion, confirmation depth, freshness, and reorg handling before the
-ProtocolBundle path can emit committed-chain evidence.
+The confirmation poll uses `get_transaction`'s canonical committed location and
+`get_tip_header` to derive depth. If an observed inclusion disappears or moves,
+it increments `reorgs_observed` and restarts the count. Before returning it reads
+the location again. `ConfirmedProtocolBundleTx` records that bounded snapshot,
+including the inclusion block/index and observed tip, while its
+`finality_claim` remains `bounded-observation-not-absolute-finality`.
 
 For the complete field and conflict contract, read
 [CellScript ProtocolBundle v1](../CELLSCRIPT_PROTOCOL_BUNDLE.md). For deployment
