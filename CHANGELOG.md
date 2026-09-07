@@ -199,6 +199,22 @@
   independence, same-name/different-genesis rejection, ambiguous matches,
   rebound lock evidence, and the former external-resolver panic path.
 
+- Add the Phase 0 and deterministic offline-composition core for issue #9.
+  `cellc protocol bundle check` reads a bounded
+  `cellscript-protocol-bundle-input-v1`, confines artifact paths, admits every
+  referenced ELF/metadata/lowering/source-map set through the standalone
+  checker, binds exact entry/package/lock/deployment/interface/typed-semantic
+  identities, and emits a canonical `cellscript-protocol-bundle-v1` plus CKB
+  bundle hash. The resolver sorts declarative inputs while retaining physical
+  transaction array order and rejects all documented ownership, output,
+  witness, dependency ordering, Script/resource identity, capacity,
+  fee/change, network/profile, signing-domain, and missing-index conflicts with
+  stable `PB200`-`PB211` codes. A real three-artifact order/token/authorization
+  CLI fixture proves canonical order independence and fail-before-signing
+  conflict output. Runtime transaction serialization, per-Script-Group CKB-VM
+  execution, RPC/signing/submission, and chain evidence remain explicitly
+  unexecuted until the later #9 phases.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

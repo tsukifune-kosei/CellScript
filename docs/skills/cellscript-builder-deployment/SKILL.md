@@ -5,6 +5,7 @@ references:
   - docs/CELLSCRIPT_CKB_ADAPTER.md
   - docs/CELLSCRIPT_CAPACITY_AND_BUILDER_CONTRACT.md
   - docs/CELLSCRIPT_PACKAGE_PROVENANCE_AND_DEPLOYMENT_IDENTITY.md
+  - docs/CELLSCRIPT_PROTOCOL_BUNDLE.md
   - examples/ckb-sdk-builder/README.md
 commands:
   - cellc action build
@@ -12,6 +13,7 @@ commands:
   - cellc deploy plan
   - cellc deploy verify
   - cellc tx validate
+  - cellc protocol bundle check
 ---
 
 # CellScript Builder And Deployment
@@ -37,3 +39,6 @@ Validation defaults:
   materialised `ActionPlan` JSON consumed by the Rust adapter;
 - run `cellc deploy plan --json` for deployment planning;
 - run `cellc tx validate --json` against concrete transaction evidence.
+- use `cellc protocol bundle check --json` to admit independent ELF artifacts
+  and reject offline role/index/witness/dependency/policy conflicts before
+  signing; treat its transaction, CKB-VM, and chain evidence as unexecuted.

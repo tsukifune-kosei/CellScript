@@ -37,6 +37,8 @@ pub mod parser;
 pub mod policy_witness;
 pub mod proof_plan;
 #[cfg(not(feature = "wasm"))]
+pub mod protocol_bundle;
+#[cfg(not(feature = "wasm"))]
 pub mod repl;
 pub mod resolve;
 pub mod runtime_errors;

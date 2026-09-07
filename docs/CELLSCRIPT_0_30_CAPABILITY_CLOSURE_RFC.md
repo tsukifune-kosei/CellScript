@@ -212,6 +212,18 @@ global and group-relative roles, reports witness/index/CellDep conflicts, builds
 one transaction, and preserves per-Script evidence. Typed source syntax may be
 added only after that contract is stable.
 
+The Phase 0 and offline composition core now use
+`cellscript-protocol-bundle-input-v1` and emit a canonical
+`cellscript-protocol-bundle-v1` hash. `cellc protocol bundle check` admits each
+ELF through the standalone checker and detects the complete documented
+ownership, placement, witness, dependency, Script/resource identity, capacity,
+fee/change, network/profile, signature-domain, and out-of-range index conflict
+matrix. The emitted evidence truthfully leaves transaction serialization,
+CKB-VM execution, and chain evidence unexecuted. Builder-derived claims, one
+concrete Molecule transaction, per-group execution, and runtime-adapter work
+remain required before issue #9 is complete. See
+[CellScript ProtocolBundle v1](CELLSCRIPT_PROTOCOL_BUNDLE.md).
+
 Extend trusted external verification through exact artifact, interface,
 deployment, argument-adapter, and result contracts. General process or pipe
 programming is not required for parity. A new bounded IPC adapter is admitted

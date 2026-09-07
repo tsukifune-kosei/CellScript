@@ -1,0 +1,146 @@
+# CellScript ProtocolBundle v1
+
+Status: 0.30 development contract for issue
+[#9](https://github.com/CellScript-Labs/CellScript/issues/9).
+
+## Boundary
+
+`cellscript-protocol-bundle-v1` is an off-chain composition object for two or
+more independently compiled CKB Script artifacts. The offline checker:
+
+1. loads each referenced ELF, compile metadata, lowering record, and source
+   map from a path confined to the input document's directory;
+2. admits every artifact through `cellscript-artifact-checker` and the current
+   metadata validator;
+3. binds the selected entry, package/lock identity, exact ELF hash, interface,
+   typed semantics, target profile, deployment, and code CellDep;
+4. merges explicitly named input, output, witness, CellDep, HeaderDep, fee,
+   and change claims against one deterministic transaction skeleton; and
+5. emits a stable bundle hash, conflict report, and runtime evidence template.
+
+This layer does not link ELF files, merge their trust boundaries, call one CKB
+Script from another, query RPC, sign, submit, or claim CKB-VM/chain evidence.
+
+## Schemas and hash
+
+The local authoring document uses
+`cellscript-protocol-bundle-input-v1`. Its artifact paths are local evidence
+locators and are excluded from the resolved bundle hash. Successful checking
+emits a `cellscript-protocol-bundle-v1` object inside a
+`cellscript-protocol-bundle-report-v1` report.
+
+The `bundle_hash` is CKB Blake2b-256 over:
+
+```text
+"cellscript-protocol-bundle-v1" || 0x00 || canonical_json(resolved_bundle)
+```
+
+Artifacts are sorted by ID. Role, witness, dependency, and policy claims are
+sorted by their physical key and artifact identity. Transaction arrays keep
+their exact order because their position is part of CKB semantics. Reordering
+input declarations that describe the same composition therefore retains the
+same hash, while changing an index, claim, deployment, checked artifact, or
+transaction slot changes it.
+
+## Input contract
+
+The top-level input contains:
+
+| Field | Contract |
+|---|---|
+| `network` | Non-empty chain ID plus canonical `0x`-prefixed 32-byte lowercase genesis hash |
+| `artifacts` | 2 to 64 independent checked ELF references |
+| `transaction` | Version-0 transaction skeleton with exact ordered cell, witness, CellDep, HeaderDep, fee-policy, and change-policy commitments |
+| `roles` | Named input/output indexes with exclusive or shared-read ownership and optional exact Script/resource/cell/capacity requirements |
+| `witnesses` | Exact `WitnessArgs` index/field, ABI, commitment, signing domain, and write/read ownership |
+| `cell_deps` / `header_deps` | Named logical dependencies mapped to exact global positions |
+| `policies` | Fee or change policy hashes with exclusive or shared ownership |
+
+Every artifact record names a package coordinate and exact `Cell.lock` node
+identity, one selected action/lock/function, the Script role (`lock`, `type`,
+or `spawned-verifier`), four checked artifact files, and one exact deployment.
+For `data`, `data1`, and `data2` deployments, the Script code hash must equal
+the checked ELF's CKB hash. A `type` deployment binds the separately supplied
+Type-hash identity. All deployments must use a hash type admitted by the
+artifact target profile.
+
+Paths must be relative, must resolve to regular files inside the input
+document's directory, and are read only after byte budgets are checked. The
+standalone checker must report verified binding, structure, lowering, and
+typed semantics for every artifact.
+
+## Ownership
+
+`exclusive` means one artifact owns the cell role. `shared-read` means the
+artifact only observes it. Two exclusive claims on one physical cell conflict.
+One exclusive role and compatible shared readers can coexist, which permits a
+Lock Script and Type Script to validate the same Cell. Explicit expected Lock,
+Type, resource, cell, and capacity values must still agree with each other and
+the transaction skeleton.
+
+Witness fields use `exclusive-write` or `shared-read`. Multiple writers
+conflict. A writer and readers may share a field only when their ABI, value
+commitment, and signing domain agree. This records ownership; it does not
+manufacture a signature or canonical signing message.
+
+## Conflict codes
+
+The checker returns conflicts in stable code/key/artifact order and never
+chooses a winner:
+
+| Code | Class | Rejection condition |
+|---|---|---|
+| `PB200` | input ownership | Multiple artifacts claim exclusive ownership of one cell slot |
+| `PB201` | output placement | A cell commitment or output placement disagrees |
+| `PB202` | witness ABI | Witness field writers, ABIs, or commitments disagree |
+| `PB203` | dependency ordering | A CellDep/HeaderDep identity or logical position disagrees |
+| `PB204` | Script identity | Expected Lock/Type Script identity disagrees |
+| `PB205` | resource identity | Explicit logical/Type-ID resource identities disagree |
+| `PB206` | capacity | Exact or minimum capacity is not satisfied |
+| `PB207` | fee/change | Fee/change policy identity or exclusive ownership disagrees |
+| `PB208` | network/deployment | An artifact deployment uses another chain identity |
+| `PB209` | profile/version | Target, VM, source encoding, or ABI profile hashes disagree |
+| `PB210` | signature policy | Signing domains disagree for one witness field |
+| `PB211` | skeleton binding | A claimed global index does not exist |
+
+Malformed schemas, unknown fields, duplicate artifact/claim identities,
+unknown artifact references, non-canonical hashes, escaped paths, over-budget
+inputs, and failed artifact admission are structural errors rather than
+resolvable conflicts.
+
+## CLI
+
+```bash
+cellc protocol bundle check protocol-bundle.json --json
+cellc protocol bundle check protocol-bundle.json --output build/protocol-bundle.report.json
+```
+
+On success, `status` is `ok`, `conflicts` is empty, and
+`evidence.structural_verification` is `verified`. On conflict, the command
+exits unsuccessfully after writing the requested report so tooling can inspect
+the complete conflict set. No signing or network operation occurs.
+
+## Evidence tiers and remaining phases
+
+The v1 offline report retains the standalone checker report for every
+artifact. `transaction_serialization`, `ckb_vm_execution`, and
+`chain_evidence` remain `not-executed`, with no exact transaction hash. This is
+the Phase 0 format/threat-model contract and the deterministic core of Phase 1
+offline composition.
+
+The next bundle phases must add, without weakening this hash boundary:
+
+- builder-manifest-derived claims and a fully materialized Molecule
+  transaction;
+- validation of that same transaction against every artifact's builder
+  assumptions;
+- per-Script-Group CKB-VM execution over byte-identical transaction bytes;
+- occupied-capacity, fee, change, serialized-size, and aggregate/per-group
+  cycle evidence;
+- runtime-adapter live Cell and deployment resolution; and
+- generated TypeScript/Rust-facing APIs with resumable signing.
+
+Until those phases land, this report is offline structural evidence. It is not
+a submission-ready transaction or a statement that all participating Scripts
+accepted one concrete transaction.
+

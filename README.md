@@ -979,6 +979,7 @@ the manual, CI, recovery, and external-wallet path.
 | `cellc explain graph` | Derive a cyclic ProtocolGraph audit view from compile metadata |
 | `cellc tx validate` | Validate transaction JSON shape against builder assumptions before signing |
 | `cellc tx solve` | Emit a deterministic transaction template from metadata |
+| `cellc protocol bundle check` | Independently admit multiple ELF artifacts, merge one offline transaction skeleton, and reject Script/index/witness/dependency/policy conflicts before signing |
 | `cellc deploy plan` | Emit a reproducible deployment plan |
 | `cellc deploy verify` / `deploy diff` / `deploy lock-deps` | Verify, compare, and lock deployment metadata |
 | `cellc proof-diff` / `profile` / `tx trace` / `audit-bundle` | Emit v0.16 audit and debug reports |
@@ -998,6 +999,10 @@ the manual, CI, recovery, and external-wallet path.
 | `cellc certify --plugin novaseal-profile-v0` | Run the deterministic compiler-hosted NovaSeal profile certification (consumes `target/novaseal-*.json` and the local certifier source) |
 | `cellc repl` | Start the interactive REPL |
 | `cellc run` | Run no-argument standalone ELF entrypoints via CKB-VM, or use explicit `--simulate`; parameter/transaction contexts fail closed instead of silently falling back |
+
+The versioned ProtocolBundle schema, ownership rules, conflict codes, evidence
+tiers, and current offline-only boundary are specified in
+[CellScript ProtocolBundle v1](docs/CELLSCRIPT_PROTOCOL_BUNDLE.md).
 | `cellc publish` / `cellc publish --offline` / `cellc registry add` / `cellc registry edit --yank` | Public publish plus explicit local/offline registry metadata flow; public registry policy makes bare `cellc publish` an authenticated registry write, with Git/static metadata retained for audit and fallback |
 | `cellc auth capability create/submit/revoke` / public registry write API / non-CellScript artifact install | Typed wallet-rooted publication policy and future-facing artifact profiles; fail-closed where unsupported |
 

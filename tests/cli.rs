@@ -93,6 +93,7 @@ fn cellc_top_level_help_shows_commands_and_direct_source_mode() {
     assert!(stdout.contains("build"), "unexpected help: {stdout}");
     assert!(stdout.contains("verify-artifact"), "unexpected help: {stdout}");
     assert!(stdout.contains("tx"), "unexpected help: {stdout}");
+    assert!(stdout.contains("protocol"), "unexpected help: {stdout}");
     assert!(stdout.contains("deploy"), "unexpected help: {stdout}");
     assert!(!stdout.contains("validate-tx"), "legacy tx alias should be hidden from top-level help: {stdout}");
     assert!(!stdout.contains("deploy-plan"), "legacy deploy alias should be hidden from top-level help: {stdout}");
@@ -132,6 +133,7 @@ fn cellc_list_reports_package_commands_without_direct_flags() {
     assert!(stdout.contains("Installed cellc commands"), "unexpected list: {stdout}");
     assert!(stdout.contains("build"), "unexpected list: {stdout}");
     assert!(stdout.contains("tx"), "unexpected list: {stdout}");
+    assert!(stdout.contains("protocol"), "unexpected list: {stdout}");
     assert!(stdout.contains("deploy"), "unexpected list: {stdout}");
     assert!(stdout.contains("registry"), "unexpected list: {stdout}");
     assert!(stdout.contains("receipt"), "unexpected list: {stdout}");
@@ -2370,6 +2372,198 @@ action ping() -> u64 {
         .output()
         .unwrap();
     assert!(verify.status.success(), "{}", String::from_utf8_lossy(&verify.stderr));
+}
+
+#[test]
+fn protocol_bundle_checks_three_independent_artifacts_and_hashes_canonical_composition() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let sources = [
+        (
+            "order",
+            r#"
+module protocol::order
+
+action settle() -> bool {
+    verification
+        true
+}
+"#,
+        ),
+        (
+            "token",
+            r#"
+module protocol::token
+
+action transfer() -> bool {
+    verification
+        true
+}
+"#,
+        ),
+        (
+            "auth",
+            r#"
+module protocol::auth
+
+lock authorize(witness approved: bool) -> bool {
+    verification
+        approved
+}
+"#,
+        ),
+    ];
+
+    let mut artifact_hashes = std::collections::BTreeMap::new();
+    for (name, source) in sources {
+        let source_path = root.join(format!("{name}.cell"));
+        let artifact_path = root.join(format!("{name}.elf"));
+        std::fs::write(&source_path, source).unwrap();
+        let build = Command::new(env!("CARGO_BIN_EXE_cellc"))
+            .arg(&source_path)
+            .args(["--target", "riscv64-elf", "-o"])
+            .arg(&artifact_path)
+            .output()
+            .unwrap();
+        assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join(format!("{name}.elf.meta.json"))).unwrap()).unwrap();
+        artifact_hashes.insert(name, metadata["artifact_hash"].as_str().unwrap().to_string());
+    }
+
+    let network = serde_json::json!({
+        "chain_id": "ckb-testnet",
+        "genesis_hash": format!("0x{}", "0".repeat(64)),
+    });
+    let artifact = |id: &str, entry_kind: &str, entry_name: &str, role: &str, dep_byte: &str| {
+        let artifact_hash = artifact_hashes[id].clone();
+        serde_json::json!({
+            "id": id,
+            "package_coordinate": format!("example/{id}@1.0.0"),
+            "lock_node_id": format!("{id}@1.0.0|path:{id}|env=default|features=default"),
+            "entry": { "kind": entry_kind, "name": entry_name },
+            "script_role": role,
+            "files": {
+                "artifact": format!("{id}.elf"),
+                "metadata": format!("{id}.elf.meta.json"),
+                "lowering_record": format!("{id}.elf.lowering.json"),
+                "source_map": format!("{id}.elf.sourcemap.json"),
+            },
+            "deployment": {
+                "network": network.clone(),
+                "artifact_hash": artifact_hash,
+                "script": {
+                    "code_hash": format!("0x{}", artifact_hashes[id]),
+                    "hash_type": "data2",
+                    "args": "0x",
+                },
+                "code_cell_dep": {
+                    "out_point": { "tx_hash": format!("0x{}", dep_byte.repeat(64)), "index": 0 },
+                    "dep_type": "code",
+                },
+            },
+        })
+    };
+    let order = artifact("order", "action", "settle", "type", "1");
+    let token = artifact("token", "action", "transfer", "type", "2");
+    let auth = artifact("auth", "lock", "authorize", "lock", "3");
+    let order_script = order.pointer("/deployment/script").unwrap().clone();
+    let token_script = token.pointer("/deployment/script").unwrap().clone();
+    let auth_script = auth.pointer("/deployment/script").unwrap().clone();
+    let cell_deps = [&order, &token, &auth]
+        .into_iter()
+        .map(|artifact| artifact.pointer("/deployment/code_cell_dep").unwrap().clone())
+        .collect::<Vec<_>>();
+    let cell = |commitment_byte: &str, capacity: u64, lock: serde_json::Value, ty: serde_json::Value| {
+        serde_json::json!({
+            "cell_commitment": format!("0x{}", commitment_byte.repeat(64)),
+            "capacity": capacity,
+            "lock": lock,
+            "type": ty,
+        })
+    };
+    let mut manifest = serde_json::json!({
+        "schema": "cellscript-protocol-bundle-input-v1",
+        "network": network,
+        "artifacts": [order, token, auth],
+        "transaction": {
+            "version": 0,
+            "inputs": [cell("4", 1_000, auth_script.clone(), order_script.clone())],
+            "outputs": [cell("5", 900, auth_script.clone(), token_script.clone())],
+            "witnesses": [{}],
+            "cell_deps": cell_deps.clone(),
+            "header_deps": [],
+            "fee_policy_hash": format!("0x{}", "6".repeat(64)),
+            "change_policy_hash": format!("0x{}", "7".repeat(64)),
+        },
+        "roles": [
+            {
+                "artifact": "order", "name": "order-input", "location": "input", "index": 0,
+                "ownership": "exclusive", "expected_type": order_script,
+                "cell_commitment": format!("0x{}", "4".repeat(64)), "minimum_capacity": 1_000,
+            },
+            {
+                "artifact": "auth", "name": "authorization", "location": "input", "index": 0,
+                "ownership": "shared-read", "expected_lock": auth_script,
+            },
+            {
+                "artifact": "token", "name": "token-output", "location": "output", "index": 0,
+                "ownership": "exclusive", "expected_type": token_script,
+                "cell_commitment": format!("0x{}", "5".repeat(64)), "exact_capacity": 900,
+            },
+        ],
+        "cell_deps": [
+            { "artifact": "order", "name": "order-code", "index": 0, "cell_dep": cell_deps[0].clone() },
+            { "artifact": "token", "name": "token-code", "index": 1, "cell_dep": cell_deps[1].clone() },
+            { "artifact": "auth", "name": "auth-code", "index": 2, "cell_dep": cell_deps[2].clone() },
+        ],
+    });
+    let manifest_path = root.join("protocol-bundle.json");
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+
+    let first = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .args(["protocol", "bundle", "check"])
+        .arg(&manifest_path)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
+    let first: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(first["status"], "ok");
+    assert_eq!(first["bundle"]["artifacts"].as_array().unwrap().len(), 3);
+    assert_eq!(first["evidence"]["structural_verification"], "verified");
+    assert_eq!(first["evidence"]["ckb_vm_execution"], "not-executed");
+    assert_eq!(first["conflicts"], serde_json::json!([]));
+
+    manifest["artifacts"].as_array_mut().unwrap().reverse();
+    manifest["roles"].as_array_mut().unwrap().reverse();
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    let second = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .args(["protocol", "bundle", "check"])
+        .arg(&manifest_path)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
+    let second: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(first["bundle_hash"], second["bundle_hash"]);
+
+    let authorization = manifest["roles"].as_array_mut().unwrap().iter_mut().find(|role| role["artifact"] == "auth").unwrap();
+    authorization["ownership"] = serde_json::json!("exclusive");
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    let conflict_path = root.join("protocol-conflicts.json");
+    let conflict = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .args(["protocol", "bundle", "check"])
+        .arg(&manifest_path)
+        .arg("--output")
+        .arg(&conflict_path)
+        .output()
+        .unwrap();
+    assert!(!conflict.status.success(), "conflicting exclusive roles must fail before signing");
+    let conflict_report: serde_json::Value = serde_json::from_slice(&std::fs::read(conflict_path).unwrap()).unwrap();
+    assert_eq!(conflict_report["status"], "failed");
+    assert!(conflict_report["conflicts"].as_array().unwrap().iter().any(|conflict| conflict["code"] == "PB200"));
+    assert_eq!(conflict_report["evidence"]["structural_verification"], "not-provided");
 }
 
 #[test]

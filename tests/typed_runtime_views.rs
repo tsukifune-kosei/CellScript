@@ -455,7 +455,7 @@ fn bounded_witness_empty_absent_bound_and_range_semantics_fail_closed() {
         .output_type(Some(Bytes::default()).pack())
         .build()
         .as_bytes();
-    let empty_hash = byte_string_literal(&blake2b_256(&[]));
+    let empty_hash = byte_string_literal(&blake2b_256([]));
     let empty_source = format!(
         r#"module runtime_views::bounded_witness_empty
 

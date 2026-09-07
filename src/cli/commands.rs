@@ -125,6 +125,7 @@ pub enum Command {
     SignReceipt(SignReceiptArgs),
     VerifyReceipt(VerifyReceiptArgs),
     VerifyArtifact(VerifyArtifactArgs),
+    ProtocolBundleCheck(ProtocolBundleCheckArgs),
     Run(RunArgs),
     Artifact(ArtifactArgs),
     Publish(PublishArgs),
@@ -602,6 +603,13 @@ pub struct VerifyArtifactArgs {
 }
 
 #[derive(Debug, Default)]
+pub struct ProtocolBundleCheckArgs {
+    pub manifest: PathBuf,
+    pub output: Option<PathBuf>,
+    pub json: bool,
+}
+
+#[derive(Debug, Default)]
 pub struct RunArgs {
     pub args: Vec<String>,
     pub release: bool,
@@ -962,6 +970,7 @@ impl CommandExecutor {
             Command::SignReceipt(args) => Self::sign_receipt(args),
             Command::VerifyReceipt(args) => Self::verify_receipt(args),
             Command::VerifyArtifact(args) => Self::verify_artifact(args),
+            Command::ProtocolBundleCheck(args) => Self::protocol_bundle_check(args),
             Command::Run(args) => Self::run(args),
             Command::Artifact(args) => super::artifact::execute(args),
             Command::Publish(args) => Self::publish(args),
@@ -4155,6 +4164,39 @@ impl CommandExecutor {
             }
         }
         Ok(())
+    }
+
+    fn protocol_bundle_check(args: ProtocolBundleCheckArgs) -> Result<()> {
+        let report = crate::protocol_bundle::check_protocol_bundle_file(&args.manifest)?;
+        let machine = serde_json::to_value(&report).map_err(|error| {
+            crate::error::CompileError::without_span(format!("failed to serialize ProtocolBundle report: {}", error))
+        })?;
+        if let Some(output) = args.output.as_deref() {
+            if let Some(parent) = output.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(
+                output,
+                serde_json::to_vec_pretty(&report).map_err(|error| {
+                    crate::error::CompileError::without_span(format!("failed to serialize ProtocolBundle report: {}", error))
+                })?,
+            )?;
+        }
+
+        let human_lines = vec![
+            format!("ProtocolBundle check: {}", report.status),
+            format!("  Bundle hash: {}", report.bundle_hash),
+            format!("  Artifacts: {}", report.bundle.artifacts.len()),
+            format!("  Conflicts: {}", report.conflicts.len()),
+            "  Runtime evidence: not executed".to_string(),
+        ];
+        let failed = report.status != "ok";
+        let outcome = CommandOutcome { machine, human_lines };
+        if failed {
+            Err(outcome.failure(format!("ProtocolBundle has {} unresolved conflict(s)", report.conflicts.len())))
+        } else {
+            outcome.emit(args.json)
+        }
     }
 
     fn run(args: RunArgs) -> Result<()> {
@@ -15293,6 +15335,34 @@ impl CliParser {
                     ,
             )
             .subcommand(
+                ClapCommand::new("protocol")
+                    .display_order(42)
+                    .about("Compose and inspect artifact-only multi-Script protocols")
+                    .arg_required_else_help(true)
+                    .subcommand(
+                        ClapCommand::new("bundle")
+                            .about("Compose independently checked artifacts into one transaction skeleton")
+                            .arg_required_else_help(true)
+                            .subcommand(
+                                ClapCommand::new("check")
+                                    .about("Verify artifact identities and reject transaction-role conflicts offline")
+                                    .arg(
+                                        Arg::new("manifest")
+                                            .value_name("BUNDLE_JSON")
+                                            .required(true)
+                                            .help("cellscript-protocol-bundle-input-v1 manifest with relative checked-artifact paths"),
+                                    )
+                                    .arg(
+                                        Arg::new("output")
+                                            .long("output")
+                                            .short('o')
+                                            .value_name("REPORT_JSON")
+                                            .help("Write the resolved bundle, conflicts, and evidence template"),
+                                    ),
+                            ),
+                    ),
+            )
+            .subcommand(
                 ClapCommand::new("verify-artifact")
                     .display_order(43)
                     .about("Verify an emitted CellScript artifact against its metadata sidecar")
@@ -16663,6 +16733,17 @@ impl CliParser {
                 artifact: m.get_one::<String>("artifact").map(PathBuf::from).expect("required artifact"),
                 json: json_output(m),
             }),
+            Some(("protocol", protocol)) => match protocol.subcommand() {
+                Some(("bundle", bundle)) => match bundle.subcommand() {
+                    Some(("check", check)) => Command::ProtocolBundleCheck(ProtocolBundleCheckArgs {
+                        manifest: check.get_one::<String>("manifest").map(PathBuf::from).expect("required ProtocolBundle manifest"),
+                        output: check.get_one::<String>("output").map(PathBuf::from),
+                        json: json_output(check),
+                    }),
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            },
             Some(("verify-artifact", m)) => Command::VerifyArtifact(VerifyArtifactArgs {
                 artifact: m.get_one::<String>("artifact").map(PathBuf::from).expect("required artifact"),
                 metadata: m.get_one::<String>("metadata").map(PathBuf::from),

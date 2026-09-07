@@ -583,6 +583,13 @@ on stdout for either success or failure. Structured failures carry their
 category and exit code in addition to source ranges and diagnostic codes.
 `--message-format=json` remains a hidden deprecated alias for compatibility.
 
+`cellc protocol bundle check` is the deterministic offline multi-Script
+composition check. Its input and report schemas, artifact admission boundary,
+stable conflict codes, and deliberately unexecuted runtime evidence are defined
+in [CellScript ProtocolBundle v1](CELLSCRIPT_PROTOCOL_BUNDLE.md). Focused bundle
+tests do not replace `dev`; runtime-adapter, CKB-VM, and chain evidence remain
+outside the current command.
+
 The old release wrapper remains supported:
 
 ```bash
