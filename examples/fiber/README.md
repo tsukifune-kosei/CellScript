@@ -255,13 +255,16 @@ commitment, shutdown, or watchtower builders preserve them safely.
 ## Validation Status
 
 The exact dedicated artifact has passed bounded local-devnet tests against the
-audited Fiber `04e091b08953368aa5ee977f562ad628c3000ff4` baseline:
+audited Fiber `f9232d52254a5aa52195ecae296c896de7078887` baseline:
 
-- routed UDT payment: 16/16 requests and 24/24 assertions;
-- pending-TLC force close and watchtower settlement: 28/28 requests and 32/32
-  assertions;
-- direct UDT lifecycle: 25/25 assertions, including exact-args rejection,
-  automatic/manual channel acceptance, direct TLC, and shutdown initiation.
+- direct UDT workflow: 15/15 requests;
+- routed UDT payment: 16/16 requests;
+- pending-TLC force close and watchtower settlement: 28/28 requests.
+
+All three observed Bruno's terminal summary, returned zero, did not time out,
+and exited naturally. The exact source, artifact, runtime and toolchain binding
+is recorded in the
+[0.26b business end-to-end regression report](../../docs/releases/CELLSCRIPT_0_26_BUSINESS_E2E_REPORT.md).
 
 Run the local compiler/CKB-VM boundary yourself:
 

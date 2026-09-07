@@ -35,7 +35,7 @@ pub const FIBER_REGISTRATION_SCHEMA: &str = "cellscript-fiber-registration-v1";
 pub const FIBER_TOPOLOGY_SCHEMA: &str = "cellscript-fiber-topology-v1";
 pub const FIBER_ACCEPTANCE_SCHEMA: &str = "cellscript-fiber-acceptance-v1";
 pub const FUNGIBLE_ENTRY_CONTRACT: &str = "fungible-type-group-v1";
-pub const AUDITED_FIBER_REVISION: &str = "04e091b08953368aa5ee977f562ad628c3000ff4";
+pub const AUDITED_FIBER_REVISION: &str = "f9232d52254a5aa52195ecae296c896de7078887";
 pub const AUDITED_FIBER_REVISIONS: &[&str] = &[AUDITED_FIBER_REVISION];
 
 pub fn is_audited_fiber_revision(revision: &str) -> bool {
@@ -49,7 +49,7 @@ mod tests {
     #[test]
     fn audited_fiber_revision_is_an_exact_allowlist() {
         assert!(is_audited_fiber_revision(AUDITED_FIBER_REVISION));
-        assert!(!is_audited_fiber_revision("04e091b"));
+        assert!(!is_audited_fiber_revision("f9232d5"));
         assert!(!is_audited_fiber_revision("e00d0e3c9a9284ea1c7705d360be615cfce1a5c6"));
     }
 }

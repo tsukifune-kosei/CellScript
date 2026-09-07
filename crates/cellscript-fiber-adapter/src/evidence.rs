@@ -643,11 +643,11 @@ mod tests {
 
     #[test]
     fn node_revision_accepts_only_fibers_seven_hex_abbreviation_or_the_full_hash() {
-        let revision = "04e091b08953368aa5ee977f562ad628c3000ff4";
-        assert!(node_commit_matches_revision("04e091b 2026-07-01", revision));
+        let revision = "f9232d52254a5aa52195ecae296c896de7078887";
+        assert!(node_commit_matches_revision("f9232d5 2026-09-07", revision));
         assert!(node_commit_matches_revision(revision, revision));
-        assert!(!node_commit_matches_revision("04e091b-dirty 2026-07-01", revision));
-        assert!(!node_commit_matches_revision("04e091b0 2026-07-01", revision));
+        assert!(!node_commit_matches_revision("f9232d5-dirty 2026-09-07", revision));
+        assert!(!node_commit_matches_revision("f9232d50 2026-09-07", revision));
         assert!(!node_commit_matches_revision("04e091 2026-07-01", revision));
     }
 

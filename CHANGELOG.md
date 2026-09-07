@@ -86,6 +86,19 @@
   Runtime-generated, untracked node backups are reported after restoration but
   do not masquerade as tracked source drift.
 
+- Complete the final 0.26b business regression replay against clean, exact
+  parent runtimes. CKB production acceptance at pinned CKB
+  `f7fa4436737756f97a24e254f22c13a36316ecea` passes all 43 actions, 17 Locks,
+  26 stateful scenarios / 46 committed steps, and 67 exact live artifact-hash
+  bindings. The 218-case iCKB differential suite and full ecosystem-reuse gate
+  also pass. Fiber at upstream
+  `f9232d52254a5aa52195ecae296c896de7078887` runs the exact 2,032-byte Data2
+  fungible ELF through direct UDT, routed payment, and UDT watchtower settlement
+  workflows: 15/15, 16/16, and 28/28 requests pass with natural process exits.
+  This is complete CKB production-inventory coverage and selected 3/16 Fiber
+  workflow coverage, not a universal regression proof or mainnet certificate.
+  See the [0.26b business end-to-end regression report](docs/releases/CELLSCRIPT_0_26_BUSINESS_E2E_REPORT.md).
+
 - Add the bounded real-contract interoperability primitives exercised by the
   separate Spore and Fiber comparison work: exact witness/data/Lock/Type byte
   and size reads, exact Script/data-hash fields, Input `since`, transaction
