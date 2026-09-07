@@ -450,6 +450,26 @@ namespace = "cellscript"
 When overrides exist, `--environment mainnet` is mandatory. The environment
 root in `Cell.lock` binds both `chain_id` and genesis hash.
 
+For a transitive package, the name `mainnet` has no special meaning and is not
+inherited. CellScript selects the unique dependency-local environment with the
+same chain identity, or you can make the edge policy explicit:
+
+```toml
+[dependencies.protocol]
+path = "deps/protocol"
+use_environment = "production"
+
+[dependencies.codec]
+path = "deps/codec"
+environment_independent = true
+```
+
+The first mapping is accepted only when `production` has the same `chain_id`
+and genesis hash as the root selection. The second skips dependency-local
+overrides while preserving the root identity for later transitive edges.
+`cellc add` exposes the corresponding `--use-environment NAME` and
+`--environment-independent` flags.
+
 The portable checked-in example exercises these inputs together:
 
 ```bash

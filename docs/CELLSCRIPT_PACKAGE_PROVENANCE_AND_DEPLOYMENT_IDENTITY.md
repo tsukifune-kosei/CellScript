@@ -416,6 +416,8 @@ through the `namespace` field:
 | `token = { version = "0.3.0", path = "../token" }` | Local path, bypasses registry |
 | `token = { version = "0.3.0", git = "...", tag = "v0.3.0" }` | Git clone, bypasses registry |
 | `token = { package = "token", version = "^0.3.0", resolver = "vendor" }` | Invoke a declared bounded resolver only during explicit lock/update, then normalize to Registry or exact Git source |
+| `token = { version = "0.3.0", use_environment = "production" }` | Use the dependency-local `production` environment after verifying its chain ID and genesis hash against the root selection |
+| `codec = { version = "0.3.0", environment_independent = true }` | Do not apply a dependency-local override on this edge; retain the root chain identity for later edges |
 
 The resolution priority is: `path` > `git` > `registry`. If `path` or `git`
 is specified, the dependency is resolved locally and the `namespace` field
@@ -436,7 +438,11 @@ Intents are determined at compile time; facts are determined after deployment.
 `Cell.lock` v3 separates mutable resolution from compilation. It records the
 root manifest digest, canonical dependency nodes and outgoing alias edges,
 runtime/test and environment roots, exact source/content identity, build
-identity hashes, and deployment references.
+identity hashes, and deployment references. For an environment-selected graph,
+each canonical node ID also binds the root environment name, dependency-local
+environment name, selection policy, `chain_id`, and normalized genesis hash.
+An outgoing edge therefore identifies both the package instance and the exact
+environment decision used to build its transitive dependency set.
 
 **Lockfile schema**:
 
@@ -480,7 +486,7 @@ chain_id = "ckb"
 genesis_hash = "0x..."
 
 [environments.mainnet.dependencies]
-token = "token@0.3.0|registry:...|env=mainnet|features=default"
+token = "token@0.3.0|registry:...|env=inherit-by-chain-identity:root=...:local=...:chain=...:genesis=...|features=default"
 
 [deployment.ckb.aggron4]
 status = "deployed"
@@ -513,6 +519,42 @@ materialization.
 
 The existing `LockedSource::Path { path }` and `LockedSource::Git { url, revision }`
 are unchanged.
+
+#### Chain-identity-safe dependency environments
+
+Environment names are local aliases. They never propagate across package
+boundaries by string equality. When the root selects `--environment`, every
+dependency edge makes one deterministic choice:
+
+```toml
+# Select this exact name from the dependency's own Cell.toml. Its chain_id and
+# genesis_hash must equal the root selection.
+[dependencies.order]
+path = "deps/order"
+use_environment = "production"
+
+# Apply no dependency-local overrides on this edge. The root chain identity is
+# still carried to transitive edges and bounded external resolvers.
+[dependencies.codec]
+path = "deps/codec"
+environment_independent = true
+```
+
+Without either field, the resolver inherits by identity: exactly one
+dependency environment must match the root `chain_id` and genesis hash. A
+dependency with no environment-specific overrides is safely recorded as
+environment-independent when no local environment matches. A dependency that
+has overrides but no match fails. Multiple matches are ambiguous and require
+`use_environment`. The two fields are mutually exclusive.
+
+Locked and frozen builds recompute this decision from the locked dependency
+manifest and require the resulting canonical node ID to match the edge in
+`Cell.lock`. This catches renamed or removed mappings without invoking a
+resolver or choosing a replacement. External resolver requests use the
+validated identity directly and never use `expect` on a dependency-controlled
+environment name. Request schema `cellscript-dependency-resolver-request-v2`
+separates `root_name` from the optional dependency-local `local_name`; neither
+label substitutes for `chain_id` plus genesis hash.
 
 **Cross-file binding**: The `record` field references the deployment by network
 and identifier. The `record_hash` field is the Blake2b-256 hash of the

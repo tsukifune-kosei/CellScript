@@ -8165,8 +8165,10 @@ fn bundled_package_graph_exercises_alias_features_test_scope_and_ckb_environment
         "[environments.mainnet.dev_dependencies]",
         "[environments.testnet.dependencies]",
         "[environments.testnet.dev_dependencies]",
-        "network_contracts@1.0.0|path:deps/contracts-mainnet|env=mainnet",
-        "network_contracts@2.0.0|path:deps/contracts-testnet|env=testnet",
+        "network_contracts@1.0.0|path:deps/contracts-mainnet|env=environment-independent:root=6d61696e6e6574",
+        "network_contracts@2.0.0|path:deps/contracts-testnet|env=environment-independent:root=746573746e6574",
+        "chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111",
+        "chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222",
     ] {
         assert!(lock_text.contains(needle), "package graph lock should contain `{needle}`");
     }

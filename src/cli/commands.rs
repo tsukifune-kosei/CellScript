@@ -237,6 +237,8 @@ pub struct AddArgs {
     pub build: bool,
     pub git: Option<String>,
     pub path: Option<PathBuf>,
+    pub use_environment: Option<String>,
+    pub environment_independent: bool,
     pub json: bool,
 }
 
@@ -1744,6 +1746,11 @@ impl CommandExecutor {
         }
         if args.package.is_some() && args.crates.len() != 1 {
             return Err(crate::error::CompileError::without_span("cellc add --package requires exactly one local dependency alias"));
+        }
+        if args.use_environment.is_some() && args.environment_independent {
+            return Err(crate::error::CompileError::without_span(
+                "cellc add accepts either --use-environment or --environment-independent, not both",
+            ));
         }
 
         let pm = PackageManager::new(".");
@@ -4509,6 +4516,8 @@ impl CommandExecutor {
                 optional: false,
                 features: Vec::new(),
                 default_features: true,
+                use_environment: None,
+                environment_independent: false,
                 allow_unverified: false,
                 allow_quarantined: false,
             };
@@ -4540,6 +4549,8 @@ impl CommandExecutor {
                 optional: false,
                 features: Vec::new(),
                 default_features: true,
+                use_environment: None,
+                environment_independent: false,
                 allow_unverified: false,
                 allow_quarantined: false,
             };
@@ -4604,6 +4615,8 @@ impl CommandExecutor {
                     optional: false,
                     features: Vec::new(),
                     default_features: true,
+                    use_environment: None,
+                    environment_independent: false,
                     allow_unverified: args.allow_unverified,
                     allow_quarantined: args.allow_quarantined,
                 })
@@ -12115,6 +12128,8 @@ fn dependency_from_add_args(args: &AddArgs) -> Dependency {
             optional: false,
             features: Vec::new(),
             default_features: true,
+            use_environment: args.use_environment.clone(),
+            environment_independent: args.environment_independent,
             allow_unverified: false,
             allow_quarantined: false,
         }),
@@ -12131,25 +12146,31 @@ fn dependency_from_add_args(args: &AddArgs) -> Dependency {
             optional: false,
             features: Vec::new(),
             default_features: true,
+            use_environment: args.use_environment.clone(),
+            environment_independent: args.environment_independent,
             allow_unverified: false,
             allow_quarantined: false,
         }),
-        _ if args.package.is_some() => Dependency::Detailed(DetailedDependency {
-            version: "*".to_string(),
-            namespace: None,
-            package: args.package.clone(),
-            resolver: None,
-            git: None,
-            branch: None,
-            tag: None,
-            rev: None,
-            path: None,
-            optional: false,
-            features: Vec::new(),
-            default_features: true,
-            allow_unverified: false,
-            allow_quarantined: false,
-        }),
+        _ if args.package.is_some() || args.use_environment.is_some() || args.environment_independent => {
+            Dependency::Detailed(DetailedDependency {
+                version: "*".to_string(),
+                namespace: None,
+                package: args.package.clone(),
+                resolver: None,
+                git: None,
+                branch: None,
+                tag: None,
+                rev: None,
+                path: None,
+                optional: false,
+                features: Vec::new(),
+                default_features: true,
+                use_environment: args.use_environment.clone(),
+                environment_independent: args.environment_independent,
+                allow_unverified: false,
+                allow_quarantined: false,
+            })
+        }
         _ => Dependency::Simple("*".to_string()),
     }
 }
@@ -14622,6 +14643,20 @@ impl CliParser {
                     .arg(Arg::new("build").long("build").action(ArgAction::SetTrue).help("Add as build dependency"))
                     .arg(Arg::new("git").long("git").value_name("URL").help("Add a git dependency source"))
                     .arg(Arg::new("path").long("path").value_name("PATH").help("Add a local path dependency source"))
+                    .arg(
+                        Arg::new("use-environment")
+                            .long("use-environment")
+                            .value_name("NAME")
+                            .conflicts_with("environment-independent")
+                            .help("Map this edge to an exact dependency-local environment with the root chain identity"),
+                    )
+                    .arg(
+                        Arg::new("environment-independent")
+                            .long("environment-independent")
+                            .action(ArgAction::SetTrue)
+                            .conflicts_with("use-environment")
+                            .help("Do not apply dependency-local environment overrides on this edge"),
+                    )
                     ,
             )
             .subcommand(
@@ -16258,6 +16293,8 @@ impl CliParser {
                 build: m.get_flag("build"),
                 git: m.get_one::<String>("git").cloned(),
                 path: m.get_one::<String>("path").map(PathBuf::from),
+                use_environment: m.get_one::<String>("use-environment").cloned(),
+                environment_independent: m.get_flag("environment-independent"),
                 json: json_output(m),
             }),
             Some(("remove", m)) => Command::Remove(RemoveArgs {
@@ -16970,6 +17007,42 @@ mod tests {
         ] {
             assert!(validate_build_entry_selection(&args).unwrap_err().message.contains("mutually exclusive"));
         }
+    }
+
+    #[test]
+    fn add_dependency_parses_chain_identity_safe_environment_policy() {
+        let matches = CliParser::command()
+            .try_get_matches_from(["cellc", "add", "peer", "--path", "deps/peer", "--use-environment", "production"])
+            .unwrap();
+        let Command::Add(args) = CliParser::parse_matches(matches) else {
+            panic!("expected add command");
+        };
+        assert_eq!(args.use_environment.as_deref(), Some("production"));
+        assert!(!args.environment_independent);
+        let Dependency::Detailed(dependency) = dependency_from_add_args(&args) else {
+            panic!("expected detailed dependency");
+        };
+        assert_eq!(dependency.use_environment.as_deref(), Some("production"));
+
+        let independent = CliParser::command().try_get_matches_from(["cellc", "add", "peer", "--environment-independent"]).unwrap();
+        let Command::Add(args) = CliParser::parse_matches(independent) else {
+            panic!("expected add command");
+        };
+        assert!(args.environment_independent);
+        assert!(matches!(
+            dependency_from_add_args(&args),
+            Dependency::Detailed(DetailedDependency { environment_independent: true, .. })
+        ));
+
+        let conflict = CliParser::command().try_get_matches_from([
+            "cellc",
+            "add",
+            "peer",
+            "--use-environment",
+            "production",
+            "--environment-independent",
+        ]);
+        assert_eq!(conflict.unwrap_err().kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]

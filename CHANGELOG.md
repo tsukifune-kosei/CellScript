@@ -179,6 +179,26 @@
   within the 600 KiB budget. Advance the artifact cache identity to
   `project-source-set-v42-0.30-dev1-sighash-zero-lock`.
 
+- Make package environment propagation chain-identity-safe before the
+  ProtocolBundle work begins. A dependency edge may name its dependency-local
+  environment with `use_environment = "..."`, inherit the unique environment
+  whose `chain_id` and normalized 32-byte genesis hash match the root, or
+  declare `environment_independent = true`. Equal display names no longer
+  select transitive overrides. Missing, mismatched, or ambiguous mappings fail
+  with compile diagnostics, while update-time external resolvers receive the
+  already validated chain identity without looking up an inherited name in the
+  dependency manifest. Canonical dependency node IDs bind the root name,
+  dependency-local name, selection policy, chain ID, and genesis hash, so
+  frozen/offline materialization rejects stale mappings even when manifest and
+  source hashes are rebound. Update-time resolver requests advance to
+  `cellscript-dependency-resolver-request-v2`, carrying separate `root_name`
+  and optional dependency `local_name` fields beside the validated identity.
+  Also compare transitive path dependencies after
+  resolving each path from its own manifest root. Unit coverage includes a
+  three-package diamond with different local environment names, explicit
+  independence, same-name/different-genesis rejection, ambiguous matches,
+  rebound lock evidence, and the former external-resolver panic path.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

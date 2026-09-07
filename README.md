@@ -819,7 +819,10 @@ Non-CellScript artifact profiles still fail closed.
 - `--frozen` — imply offline mode and suppress all lockfile writes;
   `--offline` permits only materialized exact sources
 - `[features]`, optional `dep:<alias>`, `[dev_dependencies]`, local
-  `package = "..."` aliases, and environment overrides are lock-graph inputs;
+  `package = "..."` aliases, and environment overrides are lock-graph inputs.
+  Transitive environments are selected by exact `chain_id` plus genesis hash;
+  dependency edges can use `use_environment = "local-name"` or
+  `environment_independent = true`, and equal display names carry no authority;
   `[build.dependencies]` remains fail-closed pending isolated execution
 - `[resolvers.<name>]` — optional absolute-path/SHA-256-bound, time/output
   bounded update-time resolver; its versioned response must normalize to an

@@ -66,6 +66,13 @@ bounds, exact transform, scope, and order are bound in metadata schema 71 and
 the independent checker. This is the simple all-zero placeholder domain; it
 does not claim multisig layouts that preserve a nonzero configuration prefix,
 and the older generic `env::sighash_all(source)` spelling remains fail-closed.
+The P0 chain-identity prerequisite from issue #17 is also implemented on this
+branch: transitive dependency environments are selected by exact chain ID and
+genesis hash, explicit local-name mappings are revalidated, independent edges
+remain explicit, external resolvers no longer look up an inherited label, and
+canonical lock node IDs bind the complete selection. ProtocolBundle work can
+therefore consume a frozen dependency graph without treating environment names
+as deployment identity.
 
 The goal is business-scenario coverage comparable to hand-written Rust CKB
 Scripts for a defined, bounded portfolio. It is not unrestricted Rust language
@@ -115,7 +122,7 @@ form a complete 0.30 business-capability plan.
 | Timelocks, epochs, timestamps, and `Since` | [#12](https://github.com/CellScript-Labs/CellScript/issues/12) | Covered for typed temporal domains. It does not own the rest of the transaction-view and syscall surface. |
 | Digest-committed substate and authenticated openings | [#13](https://github.com/CellScript-Labs/CellScript/issues/13) | Covered for commitments and opening correspondence. It must share the entry witness envelope with output plans and verifier proofs. |
 | Honest capability and product-completeness claims | [#14](https://github.com/CellScript-Labs/CellScript/issues/14) | Covered as a governance rule. It is not an implementation owner for the missing capabilities. |
-| Reproducible workspace, resolver, compiler-requirement, build-plan, and upgrade behavior | [#15](https://github.com/CellScript-Labs/CellScript/issues/15), [#16](https://github.com/CellScript-Labs/CellScript/issues/16), [#17](https://github.com/CellScript-Labs/CellScript/issues/17), [#18](https://github.com/CellScript-Labs/CellScript/issues/18), [#19](https://github.com/CellScript-Labs/CellScript/issues/19), [#20](https://github.com/CellScript-Labs/CellScript/issues/20) | Covered by separate toolchain owners. #17 is a correctness prerequisite for chain-specific composition and deployment claims. |
+| Reproducible workspace, resolver, compiler-requirement, build-plan, and upgrade behavior | [#15](https://github.com/CellScript-Labs/CellScript/issues/15), [#16](https://github.com/CellScript-Labs/CellScript/issues/16), [#17](https://github.com/CellScript-Labs/CellScript/issues/17), [#18](https://github.com/CellScript-Labs/CellScript/issues/18), [#19](https://github.com/CellScript-Labs/CellScript/issues/19), [#20](https://github.com/CellScript-Labs/CellScript/issues/20) | Covered by separate toolchain owners. #17's chain-identity propagation and frozen-lock contract are implemented on the 0.30 branch; the remaining package/build/upgrade owners still gate complete composition. |
 | Typed zero-knowledge verifier contracts | [#22](https://github.com/CellScript-Labs/CellScript/issues/22) | Covered as research and typed external-verifier composition. A circuit DSL is outside the 0.30 core. |
 | Stable public value-generics surface | [#23](https://github.com/CellScript-Labs/CellScript/issues/23) | Covered as a language-design owner. It must close before public 0.30 package APIs are frozen. |
 | Typed CKB transaction views and runtime adapters | [#24](https://github.com/CellScript-Labs/CellScript/issues/24) | Newly owned for 0.30. It unifies admitted Cell/input/header/witness/Script/hash/source operations without a raw syscall escape hatch. |
@@ -308,7 +315,8 @@ adding an untracked general-purpose escape hatch.
 
 - Complete #9, #10, and #11 in dependency order.
 - Close the relevant #15-#20 package, environment, build, and upgrade
-  prerequisites.
+  prerequisites. The #17 environment-selection prerequisite is implemented;
+  workspace/build-plan/compiler-requirement/upgrade closure remains.
 - Generate complete builders and execute multi-Script transaction fixtures.
 
 ### Stage 3: business parity and economics

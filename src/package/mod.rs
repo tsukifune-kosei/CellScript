@@ -200,6 +200,15 @@ pub struct DetailedDependency {
     pub features: Vec<String>,
     #[serde(default = "default_true")]
     pub default_features: bool,
+    /// Explicit dependency-local environment name for this edge. The selected
+    /// environment must have the same CKB chain identity as the root package.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_environment: Option<String>,
+    /// Declare that this dependency edge does not apply a dependency-local
+    /// environment override. The root chain identity is still preserved for
+    /// the dependency's transitive edges and external resolver requests.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub environment_independent: bool,
     /// Persisted acknowledgement that this dependency may resolve from a
     /// source_published or indexed_pending Registry entry.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -228,7 +237,8 @@ struct ExternalResolverRequest<'a> {
 
 #[derive(Debug, Serialize)]
 struct ExternalResolverEnvironment<'a> {
-    name: &'a str,
+    root_name: &'a str,
+    local_name: Option<&'a str>,
     chain_id: &'a str,
     genesis_hash: &'a str,
 }
@@ -253,7 +263,7 @@ struct ExternalResolvedDependency {
     rev: Option<String>,
 }
 
-const EXTERNAL_RESOLVER_REQUEST_SCHEMA: &str = "cellscript-dependency-resolver-request-v1";
+const EXTERNAL_RESOLVER_REQUEST_SCHEMA: &str = "cellscript-dependency-resolver-request-v2";
 const EXTERNAL_RESOLVER_RESPONSE_SCHEMA: &str = "cellscript-dependency-resolver-response-v1";
 const EXTERNAL_RESOLVER_TIMEOUT: Duration = Duration::from_secs(10);
 const EXTERNAL_RESOLVER_MAX_OUTPUT_BYTES: u64 = 1024 * 1024;
@@ -378,6 +388,34 @@ pub struct ResolutionOptions {
     pub no_default_features: bool,
     pub environment: Option<String>,
     pub offline: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnvironmentSelectionPolicy {
+    Root,
+    InheritByChainIdentity,
+    ExplicitLocalName,
+    EnvironmentIndependent,
+}
+
+impl EnvironmentSelectionPolicy {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Root => "root",
+            Self::InheritByChainIdentity => "inherit-by-chain-identity",
+            Self::ExplicitLocalName => "explicit-local-name",
+            Self::EnvironmentIndependent => "environment-independent",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectedEnvironmentContext {
+    root_name: String,
+    local_name: Option<String>,
+    chain_id: String,
+    genesis_hash: String,
+    policy: EnvironmentSelectionPolicy,
 }
 
 impl Default for ResolutionOptions {
@@ -571,7 +609,11 @@ fn sanitize_node_component(value: &str) -> String {
         .collect()
 }
 
-fn package_node_id(package: &ResolvedPackage, options: &ResolutionOptions) -> String {
+fn package_node_id(
+    package: &ResolvedPackage,
+    options: &ResolutionOptions,
+    environment: Option<&SelectedEnvironmentContext>,
+) -> String {
     let source = match &package.source {
         PackageSource::Local(path) => format!("path:{}", path.to_string_lossy().replace('\\', "/")),
         PackageSource::Git { url, revision } => format!("git:{url}#{revision}"),
@@ -587,8 +629,20 @@ fn package_node_id(package: &ResolvedPackage, options: &ResolutionOptions) -> St
         features.push("default".to_string());
     }
     features.sort();
-    let environment = options.environment.as_deref().unwrap_or("default");
+    let environment = environment.map(environment_node_identity).unwrap_or_else(|| "default".to_string());
     format!("{}@{}|{}|env={}|features={}", package.name, package.version, source, environment, features.join(","))
+}
+
+fn environment_node_identity(environment: &SelectedEnvironmentContext) -> String {
+    let local_name = environment.local_name.as_deref().map(hex::encode).unwrap_or_else(|| "-".to_string());
+    format!(
+        "{}:root={}:local={}:chain={}:genesis={}",
+        environment.policy.as_str(),
+        hex::encode(environment.root_name.as_bytes()),
+        local_name,
+        hex::encode(environment.chain_id.as_bytes()),
+        environment.genesis_hash
+    )
 }
 
 fn dependency_package_name(alias: &str, dependency: &Dependency) -> String {
@@ -602,10 +656,14 @@ fn dependency_is_optional(dependency: &Dependency) -> bool {
     matches!(dependency, Dependency::Detailed(detail) if detail.optional)
 }
 
-fn dependency_resolution_options(dependency: &Dependency, parent: &ResolutionOptions) -> ResolutionOptions {
+fn dependency_resolution_options(
+    dependency: &Dependency,
+    parent: &ResolutionOptions,
+    environment: Option<&SelectedEnvironmentContext>,
+) -> ResolutionOptions {
     let mut options = ResolutionOptions {
         scope: DependencyScope::Runtime,
-        environment: parent.environment.clone(),
+        environment: environment.and_then(|selected| selected.local_name.clone()),
         offline: parent.offline,
         ..ResolutionOptions::default()
     };
@@ -685,6 +743,140 @@ fn validate_environment(name: &str, environment: &CkbEnvironment) -> Result<()> 
         return Err(CompileError::without_span(format!("environment '{}' genesis_hash must contain exactly 32 bytes of hex", name)));
     }
     Ok(())
+}
+
+fn normalized_genesis_hash(value: &str) -> String {
+    format!("0x{}", value.strip_prefix("0x").unwrap_or(value).to_ascii_lowercase())
+}
+
+fn same_chain_identity(left: &CkbEnvironment, right: &SelectedEnvironmentContext) -> bool {
+    left.chain_id == right.chain_id && normalized_genesis_hash(&left.genesis_hash) == right.genesis_hash
+}
+
+fn root_environment_context(manifest: &PackageManifest, options: &ResolutionOptions) -> Result<Option<SelectedEnvironmentContext>> {
+    let Some(name) = options.environment.as_deref() else {
+        return Ok(None);
+    };
+    let environment = manifest.environments.get(name).ok_or_else(|| {
+        CompileError::without_span(format!(
+            "unknown package environment '{}'; declare [environments.{}] with chain_id and genesis_hash",
+            name, name
+        ))
+    })?;
+    validate_environment(name, environment)?;
+    Ok(Some(SelectedEnvironmentContext {
+        root_name: name.to_string(),
+        local_name: Some(name.to_string()),
+        chain_id: environment.chain_id.clone(),
+        genesis_hash: normalized_genesis_hash(&environment.genesis_hash),
+        policy: EnvironmentSelectionPolicy::Root,
+    }))
+}
+
+fn dependency_environment_directive(dependency: &Dependency) -> (Option<&str>, bool) {
+    match dependency {
+        Dependency::Simple(_) => (None, false),
+        Dependency::Detailed(detail) => (detail.use_environment.as_deref(), detail.environment_independent),
+    }
+}
+
+fn dependency_environment_context(
+    alias: &str,
+    dependency: &Dependency,
+    manifest: &PackageManifest,
+    parent: Option<&SelectedEnvironmentContext>,
+) -> Result<Option<SelectedEnvironmentContext>> {
+    let (explicit_name, environment_independent) = dependency_environment_directive(dependency);
+    if explicit_name.is_some() && environment_independent {
+        return Err(CompileError::without_span(format!(
+            "dependency '{}' cannot combine use_environment with environment_independent",
+            alias
+        )));
+    }
+
+    let Some(parent) = parent else {
+        if let Some(name) = explicit_name {
+            return Err(CompileError::without_span(format!(
+                "dependency '{}' selects dependency environment '{}' without a root --environment chain identity",
+                alias, name
+            )));
+        }
+        if !environment_independent && !manifest.dependency_overrides.is_empty() {
+            return Err(CompileError::without_span(format!(
+                "dependency '{}' declares environment-specific dependency overrides but the edge has no selected chain identity; select a root --environment or set environment_independent = true",
+                alias
+            )));
+        }
+        return Ok(None);
+    };
+
+    let selected = if environment_independent {
+        return Ok(Some(SelectedEnvironmentContext {
+            root_name: parent.root_name.clone(),
+            local_name: None,
+            chain_id: parent.chain_id.clone(),
+            genesis_hash: parent.genesis_hash.clone(),
+            policy: EnvironmentSelectionPolicy::EnvironmentIndependent,
+        }));
+    } else if let Some(name) = explicit_name {
+        let environment = manifest.environments.get(name).ok_or_else(|| {
+            CompileError::without_span(format!("dependency '{}' maps to unknown dependency-local environment '{}'", alias, name))
+        })?;
+        if !same_chain_identity(environment, parent) {
+            return Err(CompileError::without_span(format!(
+                "dependency '{}' environment '{}' has chain identity '{}:{}' but the root selected '{}:{}'",
+                alias,
+                name,
+                environment.chain_id,
+                normalized_genesis_hash(&environment.genesis_hash),
+                parent.chain_id,
+                parent.genesis_hash
+            )));
+        }
+        (name.to_string(), EnvironmentSelectionPolicy::ExplicitLocalName)
+    } else {
+        let matches = manifest
+            .environments
+            .iter()
+            .filter(|(_, environment)| same_chain_identity(environment, parent))
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [name] => (name.clone(), EnvironmentSelectionPolicy::InheritByChainIdentity),
+            [] if manifest.dependency_overrides.is_empty() => {
+                return Ok(Some(SelectedEnvironmentContext {
+                    root_name: parent.root_name.clone(),
+                    local_name: None,
+                    chain_id: parent.chain_id.clone(),
+                    genesis_hash: parent.genesis_hash.clone(),
+                    policy: EnvironmentSelectionPolicy::EnvironmentIndependent,
+                }));
+            }
+            [] => {
+                return Err(CompileError::without_span(format!(
+                    "dependency '{}' has environment-specific overrides but no environment matches root chain identity '{}:{}'; set use_environment to an exact matching local environment or declare environment_independent = true",
+                    alias, parent.chain_id, parent.genesis_hash
+                )));
+            }
+            names => {
+                return Err(CompileError::without_span(format!(
+                    "dependency '{}' has multiple environments matching root chain identity '{}:{}': {}; set use_environment explicitly",
+                    alias,
+                    parent.chain_id,
+                    parent.genesis_hash,
+                    names.join(", ")
+                )));
+            }
+        }
+    };
+
+    Ok(Some(SelectedEnvironmentContext {
+        root_name: parent.root_name.clone(),
+        local_name: Some(selected.0),
+        chain_id: parent.chain_id.clone(),
+        genesis_hash: parent.genesis_hash.clone(),
+        policy: selected.1,
+    }))
 }
 
 impl PackageManager {
@@ -810,13 +1002,21 @@ dist/
     pub fn resolve_dependencies_with_options(&mut self, options: &ResolutionOptions) -> Result<()> {
         let manifest = self.read_manifest()?;
         self.validate_manifest_package_contract(&manifest)?;
+        let root_environment = root_environment_context(&manifest, options)?;
         self.resolved.clear();
         self.root_dependencies.clear();
 
         let dependencies = self.selected_dependencies(&manifest, options, true)?;
         for (alias, dep) in dependencies {
-            let node_id =
-                self.resolve_dependency_from_root(&alias, &dep, &self.root.clone(), options, &mut Vec::new(), &mut Vec::new())?;
+            let node_id = self.resolve_dependency_from_root(
+                &alias,
+                &dep,
+                &self.root.clone(),
+                options,
+                root_environment.as_ref(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )?;
             self.root_dependencies.insert(alias, node_id);
         }
 
@@ -826,6 +1026,7 @@ dist/
     pub fn resolve_locked_dependencies(&mut self, options: &ResolutionOptions) -> Result<()> {
         let manifest = self.read_manifest()?;
         self.validate_manifest_package_contract(&manifest)?;
+        let root_environment = root_environment_context(&manifest, options)?;
         let selected = self.selected_dependencies(&manifest, options, true)?;
         self.resolved.clear();
         self.root_dependencies.clear();
@@ -868,7 +1069,8 @@ dist/
                 .get(environment_name)
                 .ok_or_else(|| CompileError::without_span(format!("unknown package environment '{}'", environment_name)))?;
             if locked_environment.chain_id != manifest_environment.chain_id
-                || !locked_environment.genesis_hash.eq_ignore_ascii_case(&manifest_environment.genesis_hash)
+                || normalized_genesis_hash(&locked_environment.genesis_hash)
+                    != normalized_genesis_hash(&manifest_environment.genesis_hash)
             {
                 return Err(CompileError::without_span(format!(
                     "environment '{}' chain identity differs between Cell.toml and Cell.lock; run 'cellc update --environment {}'",
@@ -896,7 +1098,13 @@ dist/
                 .dependencies
                 .get(node_id)
                 .ok_or_else(|| CompileError::without_span(format!("Cell.lock edge '{}' targets missing node '{}'", alias, node_id)))?;
-            let issues = lock_dependency_consistency_issues(&alias, &dependency, locked, manifest.package.namespace.as_deref());
+            let issues = lock_dependency_consistency_issues(
+                &alias,
+                &dependency,
+                locked,
+                manifest.package.namespace.as_deref(),
+                Some((&self.root, &self.root)),
+            );
             if !issues.is_empty() {
                 return Err(CompileError::without_span(format!(
                     "Cell.lock dependency '{}' is inconsistent with Cell.toml: {}; run 'cellc update' explicitly",
@@ -904,8 +1112,15 @@ dist/
                     issues.join("; ")
                 )));
             }
-            let node_options = dependency_resolution_options(&dependency, options);
-            self.materialize_locked_node(node_id, &lockfile, &node_options, &mut Vec::new())?;
+            self.materialize_locked_node(
+                node_id,
+                &lockfile,
+                options,
+                root_environment.as_ref(),
+                &alias,
+                &dependency,
+                &mut Vec::new(),
+            )?;
             self.root_dependencies.insert(alias, node_id.clone());
         }
 
@@ -916,12 +1131,12 @@ dist/
         &mut self,
         node_id: &str,
         lockfile: &Lockfile,
-        options: &ResolutionOptions,
+        parent_options: &ResolutionOptions,
+        parent_environment: Option<&SelectedEnvironmentContext>,
+        edge_alias: &str,
+        edge_dependency: &Dependency,
         stack: &mut Vec<String>,
     ) -> Result<()> {
-        if self.resolved.contains_key(node_id) {
-            return Ok(());
-        }
         if stack.iter().any(|candidate| candidate == node_id) {
             let mut cycle = stack.clone();
             cycle.push(node_id.to_string());
@@ -931,7 +1146,7 @@ dist/
             .dependencies
             .get(node_id)
             .ok_or_else(|| CompileError::without_span(format!("Cell.lock is missing dependency node '{}'", node_id)))?;
-        let package_path = self.locked_source_path(locked, options.offline)?;
+        let package_path = self.locked_source_path(locked, parent_options.offline)?;
         let manifest_path = package_path.join("Cell.toml");
         let bytes = std::fs::read(&manifest_path).map_err(|error| {
             CompileError::without_span(format!("failed to read locked dependency manifest '{}': {}", manifest_path.display(), error))
@@ -949,7 +1164,7 @@ dist/
         let manifest: PackageManifest = toml::from_str(manifest_source).map_err(|error| {
             CompileError::without_span(format!("failed to parse locked dependency manifest '{}': {}", manifest_path.display(), error))
         })?;
-        validate_declarations(&manifest.artifacts)?;
+        self.validate_manifest_package_contract(&manifest)?;
         if manifest.package.name != locked.name || manifest.package.version != locked.version {
             return Err(CompileError::without_span(format!(
                 "locked dependency '{}' manifest identity is '{}@{}', expected '{}@{}'",
@@ -966,7 +1181,31 @@ dist/
             )));
         }
 
-        let selected_dependencies = self.selected_dependencies(&manifest, options, false)?;
+        let node_environment = dependency_environment_context(edge_alias, edge_dependency, &manifest, parent_environment)?;
+        let node_options = dependency_resolution_options(edge_dependency, parent_options, node_environment.as_ref());
+        let locked_package = ResolvedPackage {
+            node_id: String::new(),
+            name: locked.name.clone(),
+            version: locked.version.clone(),
+            path: package_path.clone(),
+            source: locked_source_to_package_source(&locked.source),
+            dependencies: BTreeMap::new(),
+            namespace: locked.namespace.clone(),
+            source_hash: Some(source_hash.clone()),
+            manifest_digest: digest.clone(),
+        };
+        let expected_node_id = package_node_id(&locked_package, &node_options, node_environment.as_ref());
+        if node_id != expected_node_id {
+            return Err(CompileError::without_span(format!(
+                "Cell.lock dependency edge '{}' records node '{}' but its chain-identity-safe environment selection requires '{}'; run 'cellc update' explicitly",
+                edge_alias, node_id, expected_node_id
+            )));
+        }
+        if self.resolved.contains_key(node_id) {
+            return Ok(());
+        }
+
+        let selected_dependencies = self.selected_dependencies(&manifest, &node_options, false)?;
         let mut selected_edges = BTreeMap::new();
         stack.push(node_id.to_string());
         for (alias, dependency) in selected_dependencies {
@@ -982,7 +1221,13 @@ dist/
                     node_id, alias, target
                 ))
             })?;
-            let issues = lock_dependency_consistency_issues(&alias, &dependency, target_lock, manifest.package.namespace.as_deref());
+            let issues = lock_dependency_consistency_issues(
+                &alias,
+                &dependency,
+                target_lock,
+                manifest.package.namespace.as_deref(),
+                Some((&package_path, &self.root)),
+            );
             if !issues.is_empty() {
                 return Err(CompileError::without_span(format!(
                     "locked dependency node '{}' edge '{}' is inconsistent with its manifest: {}",
@@ -991,8 +1236,7 @@ dist/
                     issues.join("; ")
                 )));
             }
-            let child_options = dependency_resolution_options(&dependency, options);
-            self.materialize_locked_node(target, lockfile, &child_options, stack)?;
+            self.materialize_locked_node(target, lockfile, &node_options, node_environment.as_ref(), &alias, &dependency, stack)?;
             selected_edges.insert(alias, target.clone());
         }
         stack.pop();
@@ -1111,20 +1355,29 @@ dist/
             .chain(manifest.dev_dependencies.iter())
             .chain(manifest.dependency_overrides.values().flat_map(|dependencies| dependencies.iter()));
         for (alias, dependency) in declared_dependencies {
-            if let Dependency::Detailed(detail) = dependency
-                && let Some(resolver) = detail.resolver.as_deref()
-            {
-                if detail.path.is_some() || detail.git.is_some() {
+            if let Dependency::Detailed(detail) = dependency {
+                if detail.use_environment.as_deref().is_some_and(|name| name.trim().is_empty()) {
+                    return Err(CompileError::without_span(format!("dependency '{}' use_environment must not be empty", alias)));
+                }
+                if detail.use_environment.is_some() && detail.environment_independent {
                     return Err(CompileError::without_span(format!(
-                        "dependency '{}' cannot combine resolver with path or git",
+                        "dependency '{}' cannot combine use_environment with environment_independent",
                         alias
                     )));
                 }
-                if !manifest.resolvers.contains_key(resolver) {
-                    return Err(CompileError::without_span(format!(
-                        "dependency '{}' selects undeclared resolver '{}'",
-                        alias, resolver
-                    )));
+                if let Some(resolver) = detail.resolver.as_deref() {
+                    if detail.path.is_some() || detail.git.is_some() {
+                        return Err(CompileError::without_span(format!(
+                            "dependency '{}' cannot combine resolver with path or git",
+                            alias
+                        )));
+                    }
+                    if !manifest.resolvers.contains_key(resolver) {
+                        return Err(CompileError::without_span(format!(
+                            "dependency '{}' selects undeclared resolver '{}'",
+                            alias, resolver
+                        )));
+                    }
                 }
             }
         }
@@ -1211,6 +1464,7 @@ dist/
         dep: &Dependency,
         base_root: &Path,
         parent_options: &ResolutionOptions,
+        parent_environment: Option<&SelectedEnvironmentContext>,
         stack_ids: &mut Vec<String>,
         stack_labels: &mut Vec<String>,
     ) -> Result<String> {
@@ -1221,7 +1475,14 @@ dist/
             }
             Dependency::Detailed(detailed) => {
                 if detailed.resolver.is_some() {
-                    let normalized = self.resolve_external_dependency(alias, &package_name, detailed, base_root, parent_options)?;
+                    let normalized = self.resolve_external_dependency(
+                        alias,
+                        &package_name,
+                        detailed,
+                        base_root,
+                        parent_options,
+                        parent_environment,
+                    )?;
                     let resolved = if let Some(git) = &normalized.git {
                         self.resolve_from_git_with_manifest(&package_name, git, &normalized)?
                     } else {
@@ -1269,8 +1530,9 @@ dist/
                 manifest.package.name
             )));
         }
-        let child_options = dependency_resolution_options(dep, parent_options);
-        let node_id = package_node_id(&resolved, &child_options);
+        let child_environment = dependency_environment_context(alias, dep, &manifest, parent_environment)?;
+        let child_options = dependency_resolution_options(dep, parent_options, child_environment.as_ref());
+        let node_id = package_node_id(&resolved, &child_options, child_environment.as_ref());
         if let Some(requirement) = self.version_requirement_of(dep) {
             let requirement = version::parse_version_req(&requirement)?;
             if !version::satisfies(&resolved.version, &requirement) {
@@ -1300,8 +1562,15 @@ dist/
         let child_dependencies = self.selected_dependencies(&manifest, &child_options, false)?;
         let mut child_edges = BTreeMap::new();
         for (child_alias, child_dep) in child_dependencies {
-            let child_id =
-                self.resolve_dependency_from_root(&child_alias, &child_dep, &resolved.path, &child_options, stack_ids, stack_labels)?;
+            let child_id = self.resolve_dependency_from_root(
+                &child_alias,
+                &child_dep,
+                &resolved.path,
+                &child_options,
+                child_environment.as_ref(),
+                stack_ids,
+                stack_labels,
+            )?;
             child_edges.insert(child_alias, child_id);
         }
         stack_ids.pop();
@@ -1320,6 +1589,7 @@ dist/
         dependency: &DetailedDependency,
         owner_root: &Path,
         options: &ResolutionOptions,
+        environment_context: Option<&SelectedEnvironmentContext>,
     ) -> Result<DetailedDependency> {
         if options.offline {
             return Err(CompileError::without_span(format!(
@@ -1361,9 +1631,11 @@ dist/
             )));
         }
 
-        let environment = options.environment.as_deref().map(|name| {
-            let config = owner_manifest.environments.get(name).expect("selected environment was validated");
-            ExternalResolverEnvironment { name, chain_id: &config.chain_id, genesis_hash: &config.genesis_hash }
+        let environment = environment_context.map(|selected| ExternalResolverEnvironment {
+            root_name: &selected.root_name,
+            local_name: selected.local_name.as_deref(),
+            chain_id: &selected.chain_id,
+            genesis_hash: &selected.genesis_hash,
         });
         let request = ExternalResolverRequest {
             schema: EXTERNAL_RESOLVER_REQUEST_SCHEMA,
@@ -1478,6 +1750,8 @@ dist/
                     optional: dependency.optional,
                     features: dependency.features.clone(),
                     default_features: dependency.default_features,
+                    use_environment: None,
+                    environment_independent: false,
                     allow_unverified: false,
                     allow_quarantined: false,
                 })
@@ -1499,6 +1773,8 @@ dist/
                     optional: dependency.optional,
                     features: dependency.features.clone(),
                     default_features: dependency.default_features,
+                    use_environment: None,
+                    environment_independent: false,
                     allow_unverified: dependency.allow_unverified,
                     allow_quarantined: dependency.allow_quarantined,
                 })
@@ -2379,7 +2655,7 @@ impl Lockfile {
                 environment_name.to_string(),
                 LockedEnvironment {
                     chain_id: environment.chain_id.clone(),
-                    genesis_hash: environment.genesis_hash.clone(),
+                    genesis_hash: normalized_genesis_hash(&environment.genesis_hash),
                     dependencies: runtime,
                     dev_dependencies: dev,
                 },
@@ -2439,7 +2715,7 @@ impl Lockfile {
                 continue;
             };
             if locked_environment.chain_id != environment.chain_id
-                || !locked_environment.genesis_hash.eq_ignore_ascii_case(&environment.genesis_hash)
+                || normalized_genesis_hash(&locked_environment.genesis_hash) != normalized_genesis_hash(&environment.genesis_hash)
             {
                 issues.push(format!("environment '{}' chain identity differs between Cell.toml and Cell.lock", environment_name));
             }
@@ -2495,7 +2771,7 @@ impl Lockfile {
                 continue;
             };
             match self.dependencies.get(node_id) {
-                Some(locked) => issues.extend(lock_dependency_consistency_issues(alias, dependency, locked, namespace)),
+                Some(locked) => issues.extend(lock_dependency_consistency_issues(alias, dependency, locked, namespace, None)),
                 None => issues.push(format!("{} dependency '{}' targets missing node '{}'", label, alias, node_id)),
             }
         }
@@ -2507,7 +2783,7 @@ impl Lockfile {
                 continue;
             };
             match self.dependencies.get(node_id) {
-                Some(locked) => issues.extend(lock_dependency_consistency_issues(alias, dependency, locked, namespace)),
+                Some(locked) => issues.extend(lock_dependency_consistency_issues(alias, dependency, locked, namespace, None)),
                 None => issues.push(format!("{} dev-dependency '{}' targets missing node '{}'", label, alias, node_id)),
             }
         }
@@ -2624,6 +2900,7 @@ fn lock_dependency_consistency_issues(
     dep: &Dependency,
     locked: &LockedDependency,
     consuming_namespace: Option<&str>,
+    path_context: Option<(&Path, &Path)>,
 ) -> Vec<String> {
     let mut issues = Vec::new();
     let expected_package = dependency_package_name(name, dep);
@@ -2652,7 +2929,14 @@ fn lock_dependency_consistency_issues(
                 // source recorded here. Locked builds never invoke them.
             } else if let Some(path) = &detail.path {
                 match &locked.source {
-                    LockedSource::Path { path: locked_path } if locked_path == path => {}
+                    LockedSource::Path { path: locked_path }
+                        if path_context.map_or_else(
+                            || locked_path == path,
+                            |(manifest_root, workspace_root)| {
+                                canonical_path(&manifest_root.join(path)).ok()
+                                    == canonical_path(&workspace_root.join(locked_path)).ok()
+                            },
+                        ) => {}
                     source => issues.push(format!(
                         "dependency '{}' expects path source '{}' but Cell.lock records {}",
                         name,
@@ -3755,6 +4039,234 @@ path = "deps/testnet"
 
         let missing = PackageManager::new(root).resolve_locked_dependencies(&ResolutionOptions::default()).unwrap_err();
         assert!(missing.message.contains("--environment"), "{}", missing.message);
+    }
+
+    #[test]
+    fn transitive_environment_selection_uses_chain_identity_across_local_names_and_a_diamond() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        for (relative, name) in [("deps/left", "left"), ("deps/right", "right"), ("deps/common", "common")] {
+            write_path_package(root, relative, name, "1.0.0");
+        }
+        let genesis = "11".repeat(32);
+        std::fs::write(
+            root.join("deps/common/Cell.toml"),
+            format!(
+                "[package]\nedition = \"2026\"\nname = \"common\"\nversion = \"1.0.0\"\n\n[environments.live]\nchain_id = \"ckb\"\ngenesis_hash = \"0x{genesis}\"\n"
+            ),
+        )
+        .unwrap();
+        for (relative, name, local_environment) in [("deps/left", "left", "production"), ("deps/right", "right", "ckb-main")] {
+            std::fs::write(
+                root.join(relative).join("Cell.toml"),
+                format!(
+                    "[package]\nedition = \"2026\"\nname = \"{name}\"\nversion = \"1.0.0\"\n\n[dependencies.common]\npath = \"../common\"\n\n[environments.{local_environment}]\nchain_id = \"ckb\"\ngenesis_hash = \"0x{genesis}\"\n"
+                ),
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            root.join("Cell.toml"),
+            format!(
+                "[package]\nedition = \"2026\"\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.left]\npath = \"deps/left\"\nuse_environment = \"production\"\n\n[dependencies.right]\npath = \"deps/right\"\n\n[environments.mainnet]\nchain_id = \"ckb\"\ngenesis_hash = \"0x{genesis}\"\n"
+            ),
+        )
+        .unwrap();
+
+        let options = ResolutionOptions { environment: Some("mainnet".to_string()), ..ResolutionOptions::default() };
+        let mut manager = PackageManager::new(root);
+        manager.resolve_dependencies_with_options(&options).unwrap();
+        let left = manager.root_dependencies()["left"].clone();
+        let right = manager.root_dependencies()["right"].clone();
+        let left_common = manager.get_resolved()[&left].dependencies["common"].clone();
+        let right_common = manager.get_resolved()[&right].dependencies["common"].clone();
+        assert_eq!(left_common, right_common);
+        assert!(left.contains("explicit-local-name"), "{left}");
+        assert!(right.contains("inherit-by-chain-identity"), "{right}");
+        assert!(left_common.contains("inherit-by-chain-identity"), "{left_common}");
+
+        let manifest = manager.read_manifest().unwrap();
+        let mut lockfile = Lockfile::new();
+        lockfile.package.edition = CURRENT_EDITION;
+        lockfile.replace_with_resolution(&manager, &manifest, &options).unwrap();
+        lockfile.write_to_root(root).unwrap();
+        let mut locked = PackageManager::new(root);
+        locked.resolve_locked_dependencies(&options).unwrap();
+        assert_eq!(locked.get_resolved()[&left].dependencies["common"], left_common);
+        assert_eq!(locked.get_resolved()[&right].dependencies["common"], right_common);
+    }
+
+    #[test]
+    fn transitive_environment_mismatch_and_ambiguity_fail_before_overrides_apply() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        for (relative, name) in [("deps/child", "child"), ("deps/base", "base"), ("deps/alternate", "base")] {
+            write_path_package(root, relative, name, "1.0.0");
+        }
+        std::fs::write(
+            root.join("deps/child/Cell.toml"),
+            format!(
+                "[package]\nedition = \"2026\"\nname = \"child\"\nversion = \"1.0.0\"\n\n[dependencies.base]\npath = \"../base\"\n\n[environments.mainnet]\nchain_id = \"ckb\"\ngenesis_hash = \"0x{}\"\n\n[dependency_overrides.mainnet.base]\npath = \"../alternate\"\n",
+                "22".repeat(32)
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("Cell.toml"),
+            format!(
+                "[package]\nedition = \"2026\"\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.child]\npath = \"deps/child\"\n\n[environments.mainnet]\nchain_id = \"ckb\"\ngenesis_hash = \"0x{}\"\n",
+                "11".repeat(32)
+            ),
+        )
+        .unwrap();
+        let options = ResolutionOptions { environment: Some("mainnet".to_string()), ..ResolutionOptions::default() };
+        let mismatch = PackageManager::new(root).resolve_dependencies_with_options(&options).unwrap_err();
+        assert!(mismatch.message.contains("no environment matches root chain identity"), "{}", mismatch.message);
+
+        std::fs::write(
+            root.join("deps/child/Cell.toml"),
+            format!(
+                "[package]\nedition = \"2026\"\nname = \"child\"\nversion = \"1.0.0\"\n\n[dependencies.base]\npath = \"../base\"\n\n[environments.mainnet]\nchain_id = \"ckb-fork\"\ngenesis_hash = \"0x{}\"\n\n[dependency_overrides.mainnet.base]\npath = \"../alternate\"\n",
+                "11".repeat(32)
+            ),
+        )
+        .unwrap();
+        let wrong_chain = PackageManager::new(root).resolve_dependencies_with_options(&options).unwrap_err();
+        assert!(wrong_chain.message.contains("no environment matches root chain identity"), "{}", wrong_chain.message);
+
+        std::fs::write(
+            root.join("deps/child/Cell.toml"),
+            format!(
+                "[package]\nedition = \"2026\"\nname = \"child\"\nversion = \"1.0.0\"\n\n[environments.one]\nchain_id = \"ckb\"\ngenesis_hash = \"0x{0}\"\n\n[environments.two]\nchain_id = \"ckb\"\ngenesis_hash = \"0x{0}\"\n",
+                "11".repeat(32)
+            ),
+        )
+        .unwrap();
+        let ambiguous = PackageManager::new(root).resolve_dependencies_with_options(&options).unwrap_err();
+        assert!(ambiguous.message.contains("multiple environments matching root chain identity"), "{}", ambiguous.message);
+    }
+
+    #[test]
+    fn explicit_environment_independence_skips_foreign_overrides_but_preserves_the_root_identity() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        write_path_package(root, "deps/child", "child", "1.0.0");
+        write_path_package(root, "deps/base", "base", "1.0.0");
+        write_path_package(root, "deps/alternate", "base", "2.0.0");
+        std::fs::write(
+            root.join("deps/child/Cell.toml"),
+            format!(
+                "[package]\nedition = \"2026\"\nname = \"child\"\nversion = \"1.0.0\"\n\n[dependencies.base]\npath = \"../base\"\n\n[environments.foreign]\nchain_id = \"ckb-fork\"\ngenesis_hash = \"0x{}\"\n\n[dependency_overrides.foreign.base]\npath = \"../alternate\"\n",
+                "22".repeat(32)
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("Cell.toml"),
+            format!(
+                "[package]\nedition = \"2026\"\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.child]\npath = \"deps/child\"\nenvironment_independent = true\n\n[environments.mainnet]\nchain_id = \"ckb\"\ngenesis_hash = \"0x{}\"\n",
+                "11".repeat(32)
+            ),
+        )
+        .unwrap();
+        let options = ResolutionOptions { environment: Some("mainnet".to_string()), ..ResolutionOptions::default() };
+        let mut manager = PackageManager::new(root);
+        manager.resolve_dependencies_with_options(&options).unwrap();
+        let child = &manager.get_resolved()[&manager.root_dependencies()["child"]];
+        assert!(child.node_id.contains("environment-independent"), "{}", child.node_id);
+        assert_eq!(manager.get_resolved()[&child.dependencies["base"]].version, "1.0.0");
+    }
+
+    #[test]
+    fn locked_environment_mapping_rejects_a_rebound_dependency_manifest() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        write_path_package(root, "deps/child", "child", "1.0.0");
+        let genesis = "11".repeat(32);
+        std::fs::write(
+            root.join("deps/child/Cell.toml"),
+            format!(
+                "[package]\nedition = \"2026\"\nname = \"child\"\nversion = \"1.0.0\"\n\n[environments.production]\nchain_id = \"ckb\"\ngenesis_hash = \"0x{genesis}\"\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("Cell.toml"),
+            format!(
+                "[package]\nedition = \"2026\"\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies.child]\npath = \"deps/child\"\n\n[environments.mainnet]\nchain_id = \"ckb\"\ngenesis_hash = \"0x{genesis}\"\n"
+            ),
+        )
+        .unwrap();
+        let options = ResolutionOptions { environment: Some("mainnet".to_string()), ..ResolutionOptions::default() };
+        write_test_lock(root, &options);
+        let mut lockfile = Lockfile::read_from_root(root).unwrap().unwrap();
+        let node_id = lockfile.environments["mainnet"].dependencies["child"].clone();
+        std::fs::write(
+            root.join("deps/child/Cell.toml"),
+            format!(
+                "[package]\nedition = \"2026\"\nname = \"child\"\nversion = \"1.0.0\"\n\n[environments.renamed]\nchain_id = \"ckb\"\ngenesis_hash = \"0x{genesis}\"\n"
+            ),
+        )
+        .unwrap();
+        lockfile.dependencies.get_mut(&node_id).unwrap().manifest_digest = compute_manifest_digest(&root.join("deps/child")).unwrap();
+        lockfile.dependencies.get_mut(&node_id).unwrap().source_hash =
+            Some(registry::compute_source_hash(&root.join("deps/child")).unwrap());
+        lockfile.write_to_root(root).unwrap();
+
+        let error = PackageManager::new(root).resolve_locked_dependencies(&options).unwrap_err();
+        assert!(error.message.contains("chain-identity-safe environment selection requires"), "{}", error.message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transitive_external_resolver_uses_validated_identity_without_inherited_name_lookup() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempdir().unwrap();
+        let owner = temp.path().join("owner");
+        std::fs::create_dir_all(&owner).unwrap();
+        let response = serde_json::json!({
+            "schema": EXTERNAL_RESOLVER_RESPONSE_SCHEMA,
+            "dependency": { "package": "math", "version": "1.2.3", "namespace": "cellscript" }
+        });
+        let resolver_path = owner.join("resolver.sh");
+        let request_path = owner.join("request.json");
+        std::fs::write(&resolver_path, format!("#!/bin/sh\ncat >'{}'\nprintf '%s\\n' '{}'\n", request_path.display(), response))
+            .unwrap();
+        let mut permissions = std::fs::metadata(&resolver_path).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&resolver_path, permissions).unwrap();
+        let digest = sha256_file(&resolver_path).unwrap();
+        std::fs::write(
+            owner.join("Cell.toml"),
+            format!(
+                "[package]\nedition = \"2026\"\nname = \"owner\"\nversion = \"1.0.0\"\n\n[resolvers.local]\ncommand = \"{}\"\nsha256 = \"sha256:{digest}\"\n\n[dependencies.math]\nversion = \"^1.2.0\"\nresolver = \"local\"\n",
+                resolver_path.display()
+            ),
+        )
+        .unwrap();
+        let manifest: PackageManifest = toml::from_str(&std::fs::read_to_string(owner.join("Cell.toml")).unwrap()).unwrap();
+        let Dependency::Detailed(dependency) = &manifest.dependencies["math"] else {
+            panic!("expected detailed dependency");
+        };
+        let environment = SelectedEnvironmentContext {
+            root_name: "mainnet".to_string(),
+            local_name: Some("production".to_string()),
+            chain_id: "ckb".to_string(),
+            genesis_hash: format!("0x{}", "11".repeat(32)),
+            policy: EnvironmentSelectionPolicy::InheritByChainIdentity,
+        };
+        let resolved = PackageManager::new(temp.path())
+            .resolve_external_dependency("math", "math", dependency, &owner, &ResolutionOptions::default(), Some(&environment))
+            .unwrap();
+        assert_eq!(resolved.version, "=1.2.3");
+        assert_eq!(resolved.namespace.as_deref(), Some("cellscript"));
+        let request: serde_json::Value = serde_json::from_slice(&std::fs::read(request_path).unwrap()).unwrap();
+        assert_eq!(request["schema"], EXTERNAL_RESOLVER_REQUEST_SCHEMA);
+        assert_eq!(request["environment"]["root_name"], "mainnet");
+        assert_eq!(request["environment"]["local_name"], "production");
+        assert_eq!(request["environment"]["chain_id"], "ckb");
+        assert_eq!(request["environment"]["genesis_hash"], format!("0x{}", "11".repeat(32)));
     }
 
     #[test]

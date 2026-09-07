@@ -6,6 +6,8 @@ references:
   - docs/releases/CELLSCRIPT_0_21_RELEASE_NOTES.md
   - docs/CELLSCRIPT_GATE_POLICY.md
 commands:
+  - cellc add
+  - cellc lock
   - cellc check
   - cellc build
   - cellc fmt
@@ -33,3 +35,10 @@ Validation defaults:
   evidence;
 - run `cellc --list` to inspect the canonical command tree;
 - run `./scripts/cellscript_gate.sh dev` before claiming local readiness.
+
+When a root CKB environment is selected, treat environment names as local
+aliases. Transitive dependencies inherit only by exact `chain_id` plus genesis
+hash. Use `use_environment = "dependency-local-name"` (or `cellc add
+--use-environment ...`) for an explicit matching map, and
+`environment_independent = true` when the edge must apply no dependency-local
+override. Never infer chain identity from equal names such as `mainnet`.
