@@ -6820,12 +6820,44 @@ impl IrGenerator {
                     blocks,
                     vars,
                 ),
-                "ckb::since_to_raw" | "ckb::epoch_number_to_u64" | "ckb::block_number_to_u64" | "ckb::epoch_length_to_u64"
+                "ckb::epoch_duration" if call.args.len() == 1 => self.lower_simple_runtime_call(
+                    "__ckb_epoch_duration",
+                    "ckb_epoch_duration",
+                    IrType::Named("EpochDuration".to_string()),
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
+                "ckb::epoch_add" if call.args.len() == 2 => self.lower_simple_runtime_call(
+                    "__ckb_epoch_add",
+                    "ckb_epoch_add",
+                    IrType::Named("EpochNumber".to_string()),
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
+                "ckb::epoch_sub" if call.args.len() == 2 => self.lower_simple_runtime_call(
+                    "__ckb_epoch_sub",
+                    "ckb_epoch_sub",
+                    IrType::Named("EpochNumber".to_string()),
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
+                "ckb::since_to_raw"
+                | "ckb::epoch_number_to_u64"
+                | "ckb::epoch_duration_to_u64"
+                | "ckb::block_number_to_u64"
+                | "ckb::epoch_length_to_u64"
                     if call.args.len() == 1 =>
                 {
                     let helper = match name.as_str() {
                         "ckb::since_to_raw" => "__ckb_since_to_raw",
                         "ckb::epoch_number_to_u64" => "__ckb_epoch_number_to_u64",
+                        "ckb::epoch_duration_to_u64" => "__ckb_epoch_duration_to_u64",
                         "ckb::block_number_to_u64" => "__ckb_block_number_to_u64",
                         _ => "__ckb_epoch_length_to_u64",
                     };

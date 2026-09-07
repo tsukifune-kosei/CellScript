@@ -222,7 +222,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v34-0.30-dev1-since-domains";
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v35-0.30-dev1-epoch-duration";
 pub const METADATA_SCHEMA_VERSION: u32 = 68;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -4014,6 +4014,7 @@ fn is_known_ckb_runtime_syscall(syscall: &str) -> bool {
             | "LOAD_SCRIPT_ARGS"
             | "SOURCE_VIEW"
             | "CKB_SINCE_ENCODING"
+            | "CKB_EPOCH_ARITHMETIC"
             | "LOAD_CELL_BY_FIELD+LOAD_CELL_DATA"
             | "LOAD_CELL_BY_FIELD+LOAD_CELL_DATA+LOAD_WITNESS"
             | "LOAD_INPUT_BY_FIELD/SOURCE_VIEW"
@@ -4063,6 +4064,7 @@ fn ckb_runtime_syscall_allows_source(syscall: &str, source: &str) -> bool {
             matches!(source, "Input" | "Output" | "CellDep" | "HeaderDep" | "GroupInput" | "GroupOutput" | "SourceView" | "Expression")
         }
         "CKB_SINCE_ENCODING" => source == "Expression",
+        "CKB_EPOCH_ARITHMETIC" => source == "Expression",
         "LOAD_CELL_BY_FIELD+LOAD_CELL_DATA" => source == "SourceView",
         "LOAD_CELL_BY_FIELD+LOAD_CELL_DATA+LOAD_WITNESS" => source == "SourceView",
         "LOAD_INPUT_BY_FIELD/SOURCE_VIEW" => source == "Input/Output",
@@ -17125,6 +17127,11 @@ fn body_ckb_runtime_features(
                     features.insert("ckb-since-checked-decoding".to_string());
                 }
                 ir::IrInstruction::Call { func, .. }
+                    if matches!(func.as_str(), "__ckb_epoch_duration" | "__ckb_epoch_add" | "__ckb_epoch_sub") =>
+                {
+                    features.insert("ckb-epoch-checked-arithmetic".to_string());
+                }
+                ir::IrInstruction::Call { func, .. }
                     if matches!(
                         func.as_str(),
                         "__ckb_input_out_point_index"
@@ -17973,6 +17980,9 @@ fn ckb_v014_runtime_access(func: &str) -> Option<(&'static str, &'static str, &'
         "__ckb_since_is_disabled" => Some(("since-disabled", "CKB_SINCE_ENCODING", "Expression", "ckb::since_is_disabled")),
         "__ckb_since_metric" => Some(("since-metric", "CKB_SINCE_ENCODING", "Expression", "ckb::since_metric")),
         "__ckb_since_value" => Some(("since-value", "CKB_SINCE_ENCODING", "Expression", "ckb::since_value")),
+        "__ckb_epoch_duration" => Some(("epoch-duration-checked", "CKB_EPOCH_ARITHMETIC", "Expression", "ckb::epoch_duration")),
+        "__ckb_epoch_add" => Some(("epoch-add-checked", "CKB_EPOCH_ARITHMETIC", "Expression", "ckb::epoch_add")),
+        "__ckb_epoch_sub" => Some(("epoch-sub-checked", "CKB_EPOCH_ARITHMETIC", "Expression", "ckb::epoch_sub")),
         "__ckb_cell_capacity" => Some(("cell-capacity", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::cell_capacity")),
         "__ckb_cell_occupied_capacity" => {
             Some(("cell-occupied-capacity", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::cell_occupied_capacity"))

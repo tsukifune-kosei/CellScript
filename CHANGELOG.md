@@ -57,6 +57,16 @@
   timestamp/full-block readers, checked duration arithmetic, migration, and the
   complete business corpus remain open under issue #12.
 
+- Add checked `EpochDuration` arithmetic to the typed temporal contract.
+  `ckb::epoch_duration` validates the CKB 24-bit epoch-number domain;
+  `ckb::epoch_add` rejects overflow and `ckb::epoch_sub` rejects underflow;
+  `ckb::epoch_duration_to_u64` is the explicit representation escape hatch.
+  The dedicated type cannot be mixed with `EpochNumber` or raw integers, and
+  the three checked operations remain named in IR, typed semantics, runtime
+  access metadata, and CKB-VM failure evidence. Invalid arithmetic uses stable
+  error 20, `numeric-or-discriminant-invalid`. Advance the artifact cache
+  identity to `project-source-set-v35-0.30-dev1-epoch-duration`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

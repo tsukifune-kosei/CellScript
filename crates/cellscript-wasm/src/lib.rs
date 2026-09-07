@@ -557,9 +557,13 @@ action inspect() -> bool {
         let decoded = ckb::since_decode(input.since)
         let block = ckb::since_absolute_block(42)
         let timestamp = ckb::since_relative_timestamp(3600)
+        let duration = ckb::epoch_duration(5)
+        let next_epoch = ckb::epoch_add(ckb::header_dep(0).epoch_number, duration)
         return ckb::since_metric(decoded) <= 2
             && ckb::since_to_raw(block) == 42
             && ckb::since_to_raw(timestamp) == 13835058055282167312
+            && ckb::epoch_duration_to_u64(duration) == 5
+            && ckb::epoch_number_to_u64(next_epoch) >= 5
 }
 "#;
         let result: serde_json::Value = serde_json::from_str(&compile_metadata_json(source, "2027", None)).unwrap();

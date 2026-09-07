@@ -491,6 +491,17 @@ impl CodeGenerator {
             self.emit_runtime_ckb_since_projection_helper(name, operation, detail, enabled);
         }
 
+        for (name, operation, detail) in [
+            ("__ckb_epoch_duration", "duration", "checked CKB epoch duration constructor"),
+            ("__ckb_epoch_add", "add", "checked EpochNumber plus EpochDuration"),
+            ("__ckb_epoch_sub", "sub", "checked EpochNumber minus EpochDuration"),
+        ] {
+            if !referenced_helpers.contains(name) {
+                continue;
+            }
+            self.emit_runtime_ckb_epoch_arithmetic_helper(name, operation, detail, enabled);
+        }
+
         let needs_c256_product = referenced_helpers.contains("__c256_require_u128_product_lte")
             || referenced_helpers.contains("__c256_require_u128_product_eq")
             || referenced_helpers.contains("__c256_require_u128_sum2_products_lte")
@@ -527,6 +538,7 @@ impl CodeGenerator {
             ("__ckb_current_script_hash", "current script hash loaded via LOAD_SCRIPT_HASH"),
             ("__ckb_since_to_raw", "explicit typed Since to raw CKB wire bits conversion"),
             ("__ckb_epoch_number_to_u64", "explicit EpochNumber to u64 conversion"),
+            ("__ckb_epoch_duration_to_u64", "explicit EpochDuration to u64 conversion"),
             ("__ckb_block_number_to_u64", "explicit BlockNumber to u64 conversion"),
             ("__ckb_epoch_length_to_u64", "explicit EpochLength to u64 conversion"),
             ("__ckb_cell_capacity", "SourceView cell capacity field"),
@@ -680,6 +692,7 @@ impl CodeGenerator {
                 "__ckb_current_script_hash" => self.emit_runtime_current_script_hash_helper(enabled),
                 "__ckb_since_to_raw"
                 | "__ckb_epoch_number_to_u64"
+                | "__ckb_epoch_duration_to_u64"
                 | "__ckb_block_number_to_u64"
                 | "__ckb_epoch_length_to_u64" => self.emit_runtime_ckb_temporal_to_raw(name, detail),
                 "__ckb_exec_cell_dep_u8_args" => self.emit_runtime_exec_cell_dep_u8_args(enabled),
@@ -3469,6 +3482,53 @@ impl CodeGenerator {
         self.emit_label(&malformed);
         self.emit("li a0, 0");
         self.emit(format!("li a1, {}", CellScriptRuntimeError::CkbSinceMalformed.code()));
+        self.emit_label(&done);
+        self.emit("ret");
+    }
+
+    fn emit_runtime_ckb_epoch_arithmetic_helper(&mut self, symbol: &str, operation: &str, detail: &str, enabled: bool) {
+        self.emit_global(symbol);
+        self.emit_label(symbol);
+        self.emit(format!("# cellscript abi: {detail}; values must remain below 2^24"));
+        if !enabled {
+            self.emit("li a0, 0");
+            self.emit(format!("li a1, {}", CellScriptRuntimeError::SyscallFailed.code()));
+            self.emit("ret");
+            return;
+        }
+
+        let invalid = self.fresh_label("ckb_epoch_arithmetic_invalid");
+        let done = self.fresh_label("ckb_epoch_arithmetic_done");
+        self.emit(format!("li t0, {CKB_EPOCH_NUMBER_BOUND}"));
+        self.emit("sltu t1, a0, t0");
+        self.emit(format!("beqz t1, {invalid}"));
+
+        match operation {
+            "duration" => {}
+            "add" | "sub" => {
+                self.emit("sltu t1, a1, t0");
+                self.emit(format!("beqz t1, {invalid}"));
+                if operation == "add" {
+                    self.emit("add t2, a0, a1");
+                    self.emit("sltu t1, t2, a0");
+                    self.emit(format!("bnez t1, {invalid}"));
+                    self.emit("sltu t1, t2, t0");
+                    self.emit(format!("beqz t1, {invalid}"));
+                    self.emit("addi a0, t2, 0");
+                } else {
+                    self.emit("sltu t1, a0, a1");
+                    self.emit(format!("bnez t1, {invalid}"));
+                    self.emit("sub a0, a0, a1");
+                }
+            }
+            _ => unreachable!("known CKB epoch arithmetic operation"),
+        }
+
+        self.emit("li a1, 0");
+        self.emit(format!("j {done}"));
+        self.emit_label(&invalid);
+        self.emit("li a0, 0");
+        self.emit(format!("li a1, {}", CellScriptRuntimeError::NumericOrDiscriminantInvalid.code()));
         self.emit_label(&done);
         self.emit("ret");
     }

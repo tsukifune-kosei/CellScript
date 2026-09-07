@@ -391,6 +391,7 @@ const CKB_OUT_POINT_TYPE: &str = "OutPoint";
 const CKB_SCRIPT_VIEW_TYPE: &str = "ScriptView";
 const CKB_SCRIPT_HASH_TYPE: &str = "ScriptHash";
 const CKB_EPOCH_NUMBER_TYPE: &str = "EpochNumber";
+const CKB_EPOCH_DURATION_TYPE: &str = "EpochDuration";
 const CKB_BLOCK_NUMBER_TYPE: &str = "BlockNumber";
 const CKB_EPOCH_LENGTH_TYPE: &str = "EpochLength";
 const CKB_ENCODED_SINCE_TYPE: &str = "EncodedSince";
@@ -6845,6 +6846,25 @@ impl<'a> TypeChecker<'a> {
                             }
                             Type::U64
                         }
+                        ("ckb", "epoch_duration") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if arg_types[0] != Type::U64 {
+                                return Err(CompileError::new("ckb::epoch_duration expects a u64 value", call.span));
+                            }
+                            Type::Named(CKB_EPOCH_DURATION_TYPE.to_string())
+                        }
+                        ("ckb", "epoch_add" | "epoch_sub") => {
+                            self.validate_builtin_arity(name, 2, arg_types, call.span)?;
+                            if arg_types[0] != Type::Named(CKB_EPOCH_NUMBER_TYPE.to_string())
+                                || arg_types[1] != Type::Named(CKB_EPOCH_DURATION_TYPE.to_string())
+                            {
+                                return Err(CompileError::new(
+                                    format!("{} expects (epoch: EpochNumber, duration: EpochDuration)", name),
+                                    call.span,
+                                ));
+                            }
+                            Type::Named(CKB_EPOCH_NUMBER_TYPE.to_string())
+                        }
                         ("ckb", "since_to_raw") => {
                             self.validate_builtin_arity(name, 1, arg_types, call.span)?;
                             if !Self::is_ckb_since_type(&arg_types[0]) {
@@ -6855,10 +6875,11 @@ impl<'a> TypeChecker<'a> {
                             }
                             Type::U64
                         }
-                        ("ckb", "epoch_number_to_u64" | "block_number_to_u64" | "epoch_length_to_u64") => {
+                        ("ckb", "epoch_number_to_u64" | "epoch_duration_to_u64" | "block_number_to_u64" | "epoch_length_to_u64") => {
                             self.validate_builtin_arity(name, 1, arg_types, call.span)?;
                             let expected = match suffix {
                                 "epoch_number_to_u64" => CKB_EPOCH_NUMBER_TYPE,
+                                "epoch_duration_to_u64" => CKB_EPOCH_DURATION_TYPE,
                                 "block_number_to_u64" => CKB_BLOCK_NUMBER_TYPE,
                                 _ => CKB_EPOCH_LENGTH_TYPE,
                             };
@@ -8179,6 +8200,7 @@ impl<'a> TypeChecker<'a> {
             | CKB_SCRIPT_VIEW_TYPE
             | CKB_SCRIPT_HASH_TYPE
             | CKB_EPOCH_NUMBER_TYPE
+            | CKB_EPOCH_DURATION_TYPE
             | CKB_BLOCK_NUMBER_TYPE
             | CKB_EPOCH_LENGTH_TYPE
             | CKB_ENCODED_SINCE_TYPE
@@ -8486,6 +8508,7 @@ impl<'a> TypeChecker<'a> {
                 if matches!(
                     name.as_str(),
                     CKB_EPOCH_NUMBER_TYPE
+                        | CKB_EPOCH_DURATION_TYPE
                         | CKB_BLOCK_NUMBER_TYPE
                         | CKB_EPOCH_LENGTH_TYPE
                         | CKB_ABSOLUTE_BLOCK_SINCE_TYPE
@@ -10310,6 +10333,9 @@ action inspect() -> bool {
         let another_absolute_block = ckb::since_absolute_block(43)
         let absolute_timestamp = ckb::since_absolute_timestamp(1700000000)
         let another_absolute_timestamp = ckb::since_absolute_timestamp(1700000001)
+        let duration = ckb::epoch_duration(5)
+        let epoch_after = ckb::epoch_add(header.epoch_number, duration)
+        let epoch_before = ckb::epoch_sub(header.epoch_number, duration)
         let encoded = ckb::input<Token>(0).since
         let decoded = ckb::since_decode(encoded)
         require absolute < another_absolute
@@ -10323,6 +10349,9 @@ action inspect() -> bool {
             && ckb::since_metric(decoded) <= 2
             && ckb::since_epoch_absolute(1, 0, 1) >= 0
             && ckb::input_since_at(source::input(0)) >= 0
+            && ckb::epoch_number_to_u64(epoch_after) == 47
+            && ckb::epoch_number_to_u64(epoch_before) == 37
+            && ckb::epoch_duration_to_u64(duration) == 5
 }
 "#,
         );
@@ -10335,6 +10364,11 @@ action inspect() -> bool {
             ("ckb::since_decode(ckb::input<Token>(0).since) == ckb::since_absolute_block(0)", "comparison requires matching types"),
             ("ckb::header_dep(0).epoch_number == ckb::header_dep(0).epoch_start_block_number", "comparison requires matching types"),
             ("ckb::input<Token>(0).since == 0", "comparison requires matching types"),
+            (
+                "ckb::epoch_add(ckb::header_dep(0).epoch_number, 1) == ckb::header_dep(0).epoch_number",
+                "expects (epoch: EpochNumber, duration: EpochDuration)",
+            ),
+            ("ckb::epoch_duration(1) == ckb::header_dep(0).epoch_number", "comparison requires matching types"),
         ] {
             let invalid = source_module(&format!(
                 "module test\nresource Token has store {{ amount: u64 }}\naction inspect() -> bool {{ verification return {expression} }}"

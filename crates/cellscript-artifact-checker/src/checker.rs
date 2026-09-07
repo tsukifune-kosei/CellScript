@@ -2222,6 +2222,7 @@ fn is_ckb_temporal_ordered_type(ty: &str) -> bool {
     matches!(
         ty,
         "EpochNumber"
+            | "EpochDuration"
             | "BlockNumber"
             | "EpochLength"
             | "AbsoluteBlockSince"

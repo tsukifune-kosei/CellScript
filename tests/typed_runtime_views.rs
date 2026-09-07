@@ -41,6 +41,10 @@ action inspect(witness expected_data_hash: Hash) -> u64 {
     let later_absolute_timestamp = ckb::since_absolute_timestamp(1700000001)
     let relative_timestamp = ckb::since_relative_timestamp(3600)
     let disabled = ckb::since_decode(input.since)
+    let five_epochs = ckb::epoch_duration(5)
+    let seven_epochs = ckb::epoch_duration(7)
+    let epoch_after = ckb::epoch_add(header.epoch_number, five_epochs)
+    let epoch_before = ckb::epoch_sub(header.epoch_number, five_epochs)
     let decoded_epoch = ckb::since_from_raw_checked(2305854004380303402)
     let decoded_zero_fraction = ckb::since_from_raw_checked(2305843009213693994)
     let decoded_relative_timestamp = ckb::since_from_raw_checked(13835058055282167312)
@@ -71,6 +75,10 @@ action inspect(witness expected_data_hash: Hash) -> u64 {
     require ckb::since_metric(decoded_relative_timestamp) == 2
     require ckb::since_value(decoded_relative_timestamp) == 3600
     require ckb::since_as_relative_timestamp(decoded_relative_timestamp) == relative_timestamp
+    require five_epochs < seven_epochs
+    require ckb::epoch_duration_to_u64(five_epochs) == 5
+    require ckb::epoch_number_to_u64(epoch_after) == 47
+    require ckb::epoch_number_to_u64(epoch_before) == 37
     require ckb::since_to_raw(input.since) == 0
     require input.occupied_capacity <= input.capacity
     require input.unoccupied_capacity + input.occupied_capacity == input.capacity
@@ -122,6 +130,7 @@ fn typed_cell_input_and_header_views_execute_and_fail_closed() {
     let valid = fixture(dep_data.clone(), witness(&result, expected_hash));
     let execution = execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &valid);
     assert_eq!(execution.exit_code, 0, "all typed runtime-view fields must match: {:?}", execution.captured_debug);
+    assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-epoch-checked-arithmetic".to_string()));
 
     let mut wrong_hash = expected_hash;
     wrong_hash[0] ^= 0xff;
@@ -157,5 +166,22 @@ fn typed_cell_input_and_header_views_execute_and_fail_closed() {
         let invalid = fixture(Bytes::from_static(b"cellscript-0.30-runtime-view"), witness(&result, expected_hash));
         let execution = execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &invalid);
         assert_eq!(execution.exit_code, 37, "malformed or mismatched typed Since values must fail closed");
+    }
+
+    for source in [
+        SOURCE.replace("ckb::epoch_duration(5)", "ckb::epoch_duration(16777216)"),
+        SOURCE.replace(
+            "let epoch_after = ckb::epoch_add(header.epoch_number, five_epochs)",
+            "let epoch_after = ckb::epoch_add(header.epoch_number, ckb::epoch_duration(16777215))",
+        ),
+        SOURCE.replace(
+            "let epoch_before = ckb::epoch_sub(header.epoch_number, five_epochs)",
+            "let epoch_before = ckb::epoch_sub(header.epoch_number, ckb::epoch_duration(43))",
+        ),
+    ] {
+        let result = compile(&source);
+        let invalid = fixture(Bytes::from_static(b"cellscript-0.30-runtime-view"), witness(&result, expected_hash));
+        let execution = execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &invalid);
+        assert_eq!(execution.exit_code, 20, "invalid EpochDuration arithmetic must use numeric-or-discriminant-invalid");
     }
 }

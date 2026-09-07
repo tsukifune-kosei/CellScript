@@ -699,7 +699,11 @@ impl LspServer {
                     ("since_metric", "ckb::since_metric(${1:decoded})"),
                     ("since_value", "ckb::since_value(${1:decoded})"),
                     ("since_to_raw", "ckb::since_to_raw(${1:since})"),
+                    ("epoch_duration", "ckb::epoch_duration(${1:epochs})"),
+                    ("epoch_add", "ckb::epoch_add(${1:epoch}, ${2:duration})"),
+                    ("epoch_sub", "ckb::epoch_sub(${1:epoch}, ${2:duration})"),
                     ("epoch_number_to_u64", "ckb::epoch_number_to_u64(${1:epoch})"),
+                    ("epoch_duration_to_u64", "ckb::epoch_duration_to_u64(${1:duration})"),
                     ("block_number_to_u64", "ckb::block_number_to_u64(${1:block})"),
                     ("epoch_length_to_u64", "ckb::epoch_length_to_u64(${1:length})"),
                     ("current_role", "ckb::current_role()"),
@@ -1184,6 +1188,7 @@ impl LspServer {
             "Hash",
             "ScriptHash",
             "EpochNumber",
+            "EpochDuration",
             "BlockNumber",
             "EpochLength",
             "EncodedSince",
@@ -3133,7 +3138,11 @@ mod tests {
         assert!(ckb.iter().any(|item| item.label == "since_as_absolute_epoch"));
         assert!(ckb.iter().any(|item| item.label == "since_metric"));
         assert!(ckb.iter().any(|item| item.label == "since_to_raw"));
+        assert!(ckb.iter().any(|item| item.label == "epoch_duration"));
+        assert!(ckb.iter().any(|item| item.label == "epoch_add"));
+        assert!(ckb.iter().any(|item| item.label == "epoch_sub"));
         assert!(ckb.iter().any(|item| item.label == "epoch_number_to_u64"));
+        assert!(ckb.iter().any(|item| item.label == "epoch_duration_to_u64"));
         assert!(ckb.iter().any(|item| item.label == "cell_lock_code_hash"));
         assert!(ckb.iter().any(|item| item.label == "cell_type_args_hash"));
         assert!(ckb.iter().any(|item| item.label == "require_cell_lock_args_prefix_hash"));

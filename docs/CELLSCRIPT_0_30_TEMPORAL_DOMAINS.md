@@ -3,8 +3,9 @@
 ## Status
 
 **Status: implemented additive Phase 1 contract for typed HeaderDep epoch
-fields, all six RFC0017 `Since` mode/metric domains, and checked decoding. This
-document does not close issue #12 or the 0.30 release gate.**
+fields, all six RFC0017 `Since` mode/metric domains, checked decoding, and
+checked whole-epoch duration arithmetic. This document does not close issue
+#12 or the 0.30 release gate.**
 
 The normative chain behavior comes from
 [CKB RFC 0017](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0017-tx-valid-since/0017-tx-valid-since.md).
@@ -20,6 +21,7 @@ meanings.
 | Source type | Meaning | Runtime representation |
 |---|---|---|
 | `EpochNumber` | Whole epoch number returned by a HeaderDep field read | checked 8-byte scalar |
+| `EpochDuration` | Whole-epoch interval bounded to the 24-bit CKB epoch-number domain | checked 8-byte scalar |
 | `BlockNumber` | Epoch start block number returned by a HeaderDep field read | checked 8-byte scalar |
 | `EpochLength` | Epoch length returned by a HeaderDep field read | checked 8-byte scalar |
 | `EncodedSince` | Opaque, undecoded `since` read from `InputView.since` | exact CKB `u64` wire bits |
@@ -86,9 +88,25 @@ Raw representation is available only through explicit conversions:
 ```cellscript
 let raw_since: u64 = ckb::since_to_raw(absolute)
 let raw_epoch: u64 = ckb::epoch_number_to_u64(header.epoch_number)
+let raw_duration: u64 = ckb::epoch_duration_to_u64(ckb::epoch_duration(5))
 let raw_start: u64 = ckb::block_number_to_u64(header.epoch_start_block_number)
 let raw_length: u64 = ckb::epoch_length_to_u64(header.epoch_length)
 ```
+
+Whole-epoch arithmetic uses an explicit duration domain:
+
+```cellscript
+let duration = ckb::epoch_duration(5)
+let unlock_epoch = ckb::epoch_add(header.epoch_number, duration)
+let prior_epoch = ckb::epoch_sub(header.epoch_number, duration)
+```
+
+The constructor rejects values at or above `2^24`. Addition rejects results at
+or above that bound, and subtraction rejects underflow. All three paths also
+revalidate their typed operands at the runtime boundary and use stable error 20,
+`numeric-or-discriminant-invalid`, on failure. `EpochNumber` and
+`EpochDuration` remain distinct source and IR types; ordinary numeric operators
+and mixed-domain comparisons do not erase that distinction.
 
 The conversion calls survive typed IR and typed-semantics records as named
 runtime operations. The machine ABI carries every implemented temporal value
@@ -119,7 +137,9 @@ all six RFC0017 mode/metric wire vectors, helper-call ABI preservation, ordered
 comparisons, rationally equivalent fractions, a case where packed-integer
 ordering is wrong, checked decoding and narrowing, HeaderDep temporal reads,
 reserved-bit rejection, scalar bounds, timestamp multiplication overflow, and
-malformed zero-length constructor rejection. Type-checker tests reject
+malformed zero-length constructor rejection. The same CKB-VM fixture covers
+duration construction, addition, subtraction, overflow, and underflow.
+Type-checker tests reject
 absolute/relative mixing, block/epoch/timestamp mixing, and implicit comparison
 with raw integers. The standalone checker rejects typed-semantics mutations
 that change either mode or metric on a comparison operand.
@@ -130,7 +150,6 @@ The following work remains before the temporal issue can close:
 
 - typed timestamp and whole-block readers backed by a bounded full-header
   decoding contract where CKB field syscalls do not expose those values;
-- checked `EpochDuration` arithmetic and overflow/underflow evidence;
 - migration warnings, a mechanical migration action, and old-edition package
   interoperation tests;
 - explicit constructor/decoder requirements in exported package-interface

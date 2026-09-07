@@ -40,8 +40,10 @@ typed HeaderDep views expose all three fields admitted by CKB's
 args hashes. CKB-VM tests cover a nonzero epoch, the derived epoch-start block,
 one-past-last HeaderDep failure, and CellDep data-hash substitution. The matrix
 also records exact CKB-VM `Since` vectors and checked decoder failures for all
-mode/metric combinations, plus the still-open witness, full-header,
-dynamic-index, checker, builder, measurement, and release evidence.
+mode/metric combinations. Checked `EpochDuration` construction and EpochNumber
+add/sub now enforce the 24-bit domain with executable overflow and underflow
+evidence. Remaining work includes witness, full-header, dynamic-index, checker,
+builder, measurement, and release evidence.
 
 The goal is business-scenario coverage comparable to hand-written Rust CKB
 Scripts for a defined, bounded portfolio. It is not unrestricted Rust language

@@ -272,6 +272,32 @@ impl StdLib {
                 params: vec![("decoded".to_string(), IrType::Named("DecodedSince".to_string()))],
                 return_type: Some(IrType::U64),
             },
+            StdFunction {
+                name: "ckb_epoch_duration".to_string(),
+                params: vec![("value".to_string(), IrType::U64)],
+                return_type: Some(IrType::Named("EpochDuration".to_string())),
+            },
+            StdFunction {
+                name: "ckb_epoch_add".to_string(),
+                params: vec![
+                    ("epoch".to_string(), IrType::Named("EpochNumber".to_string())),
+                    ("duration".to_string(), IrType::Named("EpochDuration".to_string())),
+                ],
+                return_type: Some(IrType::Named("EpochNumber".to_string())),
+            },
+            StdFunction {
+                name: "ckb_epoch_sub".to_string(),
+                params: vec![
+                    ("epoch".to_string(), IrType::Named("EpochNumber".to_string())),
+                    ("duration".to_string(), IrType::Named("EpochDuration".to_string())),
+                ],
+                return_type: Some(IrType::Named("EpochNumber".to_string())),
+            },
+            StdFunction {
+                name: "ckb_epoch_duration_to_u64".to_string(),
+                params: vec![("duration".to_string(), IrType::Named("EpochDuration".to_string()))],
+                return_type: Some(IrType::U64),
+            },
             StdFunction { name: "ckb_current_role".to_string(), params: vec![], return_type: Some(IrType::U64) },
             StdFunction {
                 name: "ckb_cell_capacity".to_string(),

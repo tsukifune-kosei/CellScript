@@ -304,8 +304,12 @@ fn is_v014_runtime_helper(func: &str) -> bool {
             | "__ckb_since_is_disabled"
             | "__ckb_since_metric"
             | "__ckb_since_value"
+            | "__ckb_epoch_duration"
+            | "__ckb_epoch_add"
+            | "__ckb_epoch_sub"
             | "__ckb_since_to_raw"
             | "__ckb_epoch_number_to_u64"
+            | "__ckb_epoch_duration_to_u64"
             | "__ckb_block_number_to_u64"
             | "__ckb_epoch_length_to_u64"
             | "__ckb_current_role"
@@ -565,6 +569,7 @@ fn is_ckb_temporal_scalar_name(name: &str) -> bool {
     matches!(
         name,
         "EpochNumber"
+            | "EpochDuration"
             | "BlockNumber"
             | "EpochLength"
             | "EncodedSince"
