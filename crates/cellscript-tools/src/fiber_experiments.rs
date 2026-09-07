@@ -9,8 +9,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use regex::Regex;
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use wait_timeout::ChildExt;
 
+use crate::crypto::{ckb_blake2b256, hex0x};
 use crate::shared::stable_json_pretty;
 
 const SCHEMA: &str = "novaseal-fiber-node-execution-v0.4";
@@ -225,11 +227,13 @@ fn workflow_report(repo: &Path, workflow: &Workflow, execution: Option<&Value>) 
     })
 }
 
-fn previous(output: &Path, current: &Value) -> BTreeMap<String, Value> {
+fn previous(output: &Path, current: &Value, cellscript: &Value, artifact: &Value) -> BTreeMap<String, Value> {
     let Ok(bytes) = fs::read(output) else { return BTreeMap::new() };
     let Ok(report) = serde_json::from_slice::<Value>(&bytes) else { return BTreeMap::new() };
     if !report["schema"].as_str().is_some_and(|schema| PREVIOUS_SCHEMAS.contains(&schema))
         || !same_provenance(report.get("fiber_repo"), current)
+        || !same_provenance(report.get("cellscript_repo"), cellscript)
+        || report.get("cellscript_fungible_artifact") != Some(artifact)
     {
         return BTreeMap::new();
     }
@@ -244,6 +248,63 @@ fn previous(output: &Path, current: &Value) -> BTreeMap<String, Value> {
                 .then(|| (suite.to_owned(), execution.clone()))
         })
         .collect()
+}
+
+struct TemporaryContractOverride {
+    target: PathBuf,
+    original: Vec<u8>,
+    restored: bool,
+}
+
+impl TemporaryContractOverride {
+    fn install(repo: &Path, artifact: &Path) -> Result<Self> {
+        let target = repo.join("tests/deploy/contracts/simple_udt");
+        let original = fs::read(&target).with_context(|| format!("read Fiber dev contract {}", target.display()))?;
+        let replacement = fs::read(artifact).with_context(|| format!("read CellScript fungible artifact {}", artifact.display()))?;
+        fs::write(&target, replacement)
+            .with_context(|| format!("temporarily install CellScript fungible artifact at {}", target.display()))?;
+        Ok(Self { target, original, restored: false })
+    }
+
+    fn restore(&mut self) -> Result<()> {
+        if !self.restored {
+            fs::write(&self.target, &self.original)
+                .with_context(|| format!("restore Fiber dev contract {}", self.target.display()))?;
+            self.restored = true;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for TemporaryContractOverride {
+    fn drop(&mut self) {
+        if !self.restored {
+            let _ = fs::write(&self.target, &self.original);
+        }
+    }
+}
+
+fn artifact_binding(repo_root: &Path, artifact: Option<&Path>) -> Result<Value> {
+    let Some(artifact) = artifact else { return Ok(Value::Null) };
+    let metadata =
+        fs::symlink_metadata(artifact).with_context(|| format!("inspect CellScript fungible artifact {}", artifact.display()))?;
+    if !metadata.file_type().is_file() {
+        bail!("CellScript fungible artifact must be a regular, non-symlink file: {}", artifact.display());
+    }
+    let artifact = fs::canonicalize(artifact)?;
+    let bytes = fs::read(&artifact)?;
+    if !bytes.starts_with(b"\x7fELF") {
+        bail!("CellScript fungible artifact is not an ELF file: {}", artifact.display());
+    }
+    Ok(json!({
+        "path": relative(&artifact, repo_root),
+        "size_bytes": bytes.len(),
+        "sha256": format!("0x{}", hex::encode(Sha256::digest(&bytes))),
+        "ckb_data_hash": hex0x(&ckb_blake2b256(&bytes)?),
+        "fiber_dev_contract_slot": "tests/deploy/contracts/simple_udt",
+        "hash_type": "data2",
+        "temporary_install_restored": true,
+    }))
 }
 
 fn which(name: &str) -> Option<String> {
@@ -356,8 +417,15 @@ fn stop(child: &mut Child) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn execute_workflow(repo_root: &Path, repo: &Path, output: &Path, workflow: &Workflow, assume: bool, timeout: u64) -> Result<Value> {
-    let info = provenance(repo);
+fn execute_workflow(
+    repo_root: &Path,
+    repo: &Path,
+    output: &Path,
+    workflow: &Workflow,
+    assume: bool,
+    timeout: u64,
+    info: &Value,
+) -> Result<Value> {
     let suite_arg = format!("e2e/{}", workflow.suite);
     let log = output.parent().unwrap().join("novaseal-fiber-node-experiments").join(workflow.suite.replace('/', "__"));
     fs::create_dir_all(&log)?;
@@ -430,6 +498,7 @@ fn execute_workflow(repo_root: &Path, repo: &Path, output: &Path, workflow: &Wor
 pub fn run(
     repo_root: &Path,
     fiber_repo: Option<&Path>,
+    cellscript_fungible_artifact: Option<&Path>,
     output: Option<&Path>,
     pretty: bool,
     suites: &[String],
@@ -451,9 +520,32 @@ pub fn run(
         suites.iter().cloned().collect()
     };
     let info = provenance(&fiber_repo);
-    let mut executions = previous(&output, &info);
+    let cellscript_info = provenance(&repo_root);
+    if cellscript_fungible_artifact.is_some() && assume {
+        bail!("a temporary CellScript artifact cannot be installed when --assume-nodes-running is used");
+    }
+    if cellscript_fungible_artifact.is_some() && selected.is_empty() {
+        bail!("a CellScript fungible artifact requires --run-suite or --run-all");
+    }
+    if cellscript_fungible_artifact.is_some() && info["dirty"] != false {
+        bail!("Fiber checkout must be clean before temporarily installing a CellScript artifact");
+    }
+    if cellscript_fungible_artifact.is_some() && cellscript_info["dirty"] != false {
+        bail!("CellScript checkout must be clean before recording live Fiber artifact evidence");
+    }
+    let artifact = artifact_binding(&repo_root, cellscript_fungible_artifact)?;
+    let mut executions = previous(&output, &info, &cellscript_info, &artifact);
+    let mut contract_override =
+        cellscript_fungible_artifact.map(|path| TemporaryContractOverride::install(&fiber_repo, path)).transpose()?;
     for workflow in WORKFLOWS.iter().filter(|workflow| selected.contains(workflow.suite)) {
-        executions.insert(workflow.suite.into(), execute_workflow(&repo_root, &fiber_repo, &output, workflow, assume, timeout)?);
+        executions
+            .insert(workflow.suite.into(), execute_workflow(&repo_root, &fiber_repo, &output, workflow, assume, timeout, &info)?);
+    }
+    if let Some(contract_override) = contract_override.as_mut() {
+        contract_override.restore()?;
+        if provenance(&fiber_repo) != info {
+            bail!("Fiber checkout changed after restoring the temporary CellScript artifact");
+        }
     }
     let workflows =
         WORKFLOWS.iter().map(|workflow| workflow_report(&fiber_repo, workflow, executions.get(workflow.suite))).collect::<Vec<_>>();
@@ -484,7 +576,9 @@ pub fn run(
     let profiles = WORKFLOWS.iter().flat_map(|workflow| workflow.profiles).copied().collect::<BTreeSet<_>>();
     let generated = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let report = json!({
-        "schema": SCHEMA, "status": status, "generated_at_unix": generated, "classification": "fiber_node_execution_v0", "fiber_repo": info,
+        "schema": SCHEMA, "status": status, "generated_at_unix": generated, "classification": "fiber_node_execution_v0",
+        "cellscript_repo": cellscript_info, "fiber_repo": info,
+        "cellscript_fungible_artifact": artifact,
         "devnet_contract": {"runnable_devnet_contract_present": runnable, "start_command": "./tests/nodes/start.sh e2e/<suite>",
             "wait_command": "./tests/nodes/wait.sh", "bruno_command": "cd tests/bruno && npm exec -- @usebruno/cli run e2e/<suite> -r --env test", "source_docs": "docs/dev/README.md"},
         "workflow_coverage": {"required_count": WORKFLOWS.len(), "present_count": present, "executed_count": executed,
@@ -503,4 +597,64 @@ pub fn run(
     fs::write(&output, format!("{}\n", text.trim_end_matches('\n')))?;
     println!("{}", output.display());
     Ok(if matches!(status, "missing_fiber_clone" | "incomplete" | "failed") { 1 } else { 0 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_root(name: &str) -> PathBuf {
+        env::temp_dir().join(format!("cellscript-fiber-experiments-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn temporary_contract_override_restores_explicitly_and_on_drop() {
+        let root = test_root("restore");
+        let contract_dir = root.join("fiber/tests/deploy/contracts");
+        fs::create_dir_all(&contract_dir).unwrap();
+        let target = contract_dir.join("simple_udt");
+        let artifact = root.join("cellscript.elf");
+        fs::write(&target, b"original").unwrap();
+        fs::write(&artifact, b"replacement").unwrap();
+
+        {
+            let mut guard = TemporaryContractOverride::install(&root.join("fiber"), &artifact).unwrap();
+            assert_eq!(fs::read(&target).unwrap(), b"replacement");
+            guard.restore().unwrap();
+            assert_eq!(fs::read(&target).unwrap(), b"original");
+        }
+        {
+            let _guard = TemporaryContractOverride::install(&root.join("fiber"), &artifact).unwrap();
+            assert_eq!(fs::read(&target).unwrap(), b"replacement");
+        }
+        assert_eq!(fs::read(&target).unwrap(), b"original");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prior_execution_requires_the_exact_cellscript_artifact_binding() {
+        let root = test_root("binding");
+        fs::create_dir_all(&root).unwrap();
+        let output = root.join("report.json");
+        let provenance = json!({"path":"fiber", "origin":"origin", "branch":"develop", "commit":"abc", "dirty":false});
+        let artifact = json!({"ckb_data_hash":"0x01"});
+        fs::write(
+            &output,
+            serde_json::to_vec(&json!({
+                "schema": SCHEMA,
+                "fiber_repo": provenance,
+                "cellscript_repo": provenance,
+                "cellscript_fungible_artifact": artifact,
+                "workflows": [{"suite":"udt-router-pay", "execution":{"status":"passed", "fiber_repo": provenance}}],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(previous(&output, &provenance, &provenance, &artifact).len(), 1);
+        assert!(previous(&output, &provenance, &provenance, &json!({"ckb_data_hash":"0x02"})).is_empty());
+        let changed_cellscript = json!({"path":"cellscript", "origin":"origin", "branch":"0.26b", "commit":"def", "dirty":false});
+        assert!(previous(&output, &provenance, &changed_cellscript, &artifact).is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
 }

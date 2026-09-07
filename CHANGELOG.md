@@ -66,6 +66,13 @@
   changed hashes, removed records, and evidence-tier inflation. See
   [Trusted External Verifiers](docs/CELLSCRIPT_TRUSTED_EXTERNAL_VERIFIERS.md).
 
+- Bind live Fiber business experiments to the exact CellScript fungible ELF
+  and both clean repository revisions. `fiber-node-experiments` can
+  temporarily install `--cellscript-fungible-artifact` in Fiber's dev
+  SimpleUDT slot, records its SHA-256, CKB data hash, byte length and Data2
+  identity, restores the original fixture before reporting, and refuses to
+  reuse prior execution when either repository or the artifact changes.
+
 - Add the bounded real-contract interoperability primitives exercised by the
   separate Spore and Fiber comparison work: exact witness/data/Lock/Type byte
   and size reads, exact Script/data-hash fields, Input `since`, transaction

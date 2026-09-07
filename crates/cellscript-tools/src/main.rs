@@ -224,6 +224,9 @@ enum Command {
         repo_root: Option<PathBuf>,
         #[arg(long)]
         fiber_repo: Option<PathBuf>,
+        /// Temporarily install this exact CellScript fungible ELF as Fiber's dev SimpleUDT contract.
+        #[arg(long)]
+        cellscript_fungible_artifact: Option<PathBuf>,
         #[arg(long)]
         output: Option<PathBuf>,
         #[arg(long)]
@@ -487,6 +490,7 @@ fn main() -> ExitCode {
         Command::FiberNodeExperiments {
             repo_root,
             fiber_repo,
+            cellscript_fungible_artifact,
             output,
             pretty,
             run_suite,
@@ -496,6 +500,7 @@ fn main() -> ExitCode {
         } => match fiber_experiments::run(
             repo_root.as_deref().unwrap_or(&root),
             fiber_repo.as_deref(),
+            cellscript_fungible_artifact.as_deref(),
             output.as_deref(),
             pretty,
             &run_suite,

@@ -199,6 +199,15 @@ The no-profile Fiber path has a separate, non-gating acceptance entry point:
 ./scripts/cellscript_fiber_acceptance.sh --static
 ```
 
+For live developer-node regression evidence,
+`cellscript-tools fiber-node-experiments --cellscript-fungible-artifact <ELF>`
+temporarily installs that exact ELF in Fiber's dev SimpleUDT contract slot and
+restores the original fixture before returning. Its report binds the artifact
+SHA-256, CKB data hash, byte length and Data2 selector together with clean
+CellScript and Fiber revisions. Cached workflow results are reusable only when
+all three identities remain exact. This mode still produces bounded local
+devnet evidence rather than a mainnet or operator-identity claim.
+
 Static mode runs the dedicated CKB-VM transaction matrix, adapter tests, and
 adapter clippy. It proves only compiler/artifact compatibility; it does not
 prove that a Fiber node loaded configuration, advertised an asset, opened a
