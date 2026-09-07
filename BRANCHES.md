@@ -13,7 +13,14 @@ optional, and accepts branch-local `replace before -> after` successor
 relations with schema-resolved `same except` expansion, explicit
 lock/capacity/identity treatments and source-level path completeness,
 including relations in each branch of an `if` (`exact_hash` stays reserved
-fail-closed pending the Script-hash value contract). A separate bounded
+fail-closed pending the Script-hash value contract). It also exposes bounded
+real-contract byte/span/preimage primitives and exact u8/hex EXEC plus hex
+SPAWN/WAIT adapters. External calls remain fail-closed by default; an admitted
+call must use a `trusted_*` intrinsic, pin a compile-time CellDep data hash, and
+match an exact versioned `Cell.toml` declaration. Generated code checks that
+hash before delegation, and metadata/ProofPlan/checker evidence uses the
+separate `trusted-external` tier with no claim over external code internals.
+See `docs/CELLSCRIPT_TRUSTED_EXTERNAL_VERIFIERS.md`. A separate bounded
 Type-policy artifact path now dispatches explicitly tagged actions from full
 Script-hash keyed witness records. An authenticated issuer lifecycle now
 executes locally in CKB-VM under one persistent policy; complete product and

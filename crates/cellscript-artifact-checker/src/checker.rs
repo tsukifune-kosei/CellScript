@@ -474,6 +474,37 @@ fn validate_metadata_binding(
             "compile metadata typed semantics or interface identity differs from the lowering record",
         ));
     }
+    let runtime_trusted = metadata
+        .get("runtime")
+        .and_then(|runtime| runtime.get("trusted_external_verifiers"))
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    let runtime_trusted: Vec<TrustedExternalVerifierRecord> = serde_json::from_value(runtime_trusted).map_err(|error| {
+        CheckerError::new(
+            CheckerRejectionCode::V2420TypedMachineBindingInvalid,
+            format!("compile metadata trusted external verifier shape is invalid: {error}"),
+        )
+    })?;
+    let constraints_trusted = metadata
+        .get("constraints")
+        .and_then(|constraints| constraints.get("ckb"))
+        .and_then(|ckb| ckb.get("trusted_external_verifiers"))
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    let constraints_trusted: Vec<TrustedExternalVerifierRecord> = serde_json::from_value(constraints_trusted).map_err(|error| {
+        CheckerError::new(
+            CheckerRejectionCode::V2420TypedMachineBindingInvalid,
+            format!("compile metadata CKB trusted external verifier shape is invalid: {error}"),
+        )
+    })?;
+    if runtime_trusted != record.typed_semantics.trusted_external_verifiers
+        || constraints_trusted != record.typed_semantics.trusted_external_verifiers
+    {
+        return Err(CheckerError::new(
+            CheckerRejectionCode::V2420TypedMachineBindingInvalid,
+            "compile metadata runtime/CKB trusted external verifier bindings differ from typed semantics",
+        ));
+    }
     if source_map.lowering_record_hash != record_hash
         || source_map.artifact_hash != record.artifact_hash
         || source_map.source_set_hash != record.source_set_hash
@@ -502,6 +533,15 @@ fn validate_typed_semantics(record: &VerifiedLoweringRecord) -> Result<(), Check
     ensure_sorted_unique(&typed.types, |item| item.name.as_str(), "typed type")?;
     ensure_sorted_unique(&typed.entries, |item| item.id.as_str(), "typed entry")?;
     ensure_sorted_unique(&typed.instantiations, |item| item.identity.as_str(), "typed instantiation")?;
+    if typed.trusted_external_verifiers.len() > 1_024 {
+        return typed_error("trusted external verifier record count exceeds 1024");
+    }
+    if typed.trusted_external_verifiers.windows(2).any(|pair| {
+        (&pair[0].scope, &pair[0].operation, &pair[0].adapter, &pair[0].code_hash, &pair[0].name)
+            >= (&pair[1].scope, &pair[1].operation, &pair[1].adapter, &pair[1].code_hash, &pair[1].name)
+    }) {
+        return typed_error("trusted external verifier records are not strictly sorted and unique");
+    }
     validate_semantic_foundation(typed, record)?;
     let lowering_entries = record.entries.iter().map(|entry| (entry.id.as_str(), entry)).collect::<BTreeMap<_, _>>();
     let typed_types = typed.types.iter().map(|ty| (ty.name.as_str(), ty)).collect::<BTreeMap<_, _>>();
@@ -515,6 +555,7 @@ fn validate_typed_semantics(record: &VerifiedLoweringRecord) -> Result<(), Check
         .map(|call| call.target.as_str())
         .collect::<BTreeSet<_>>();
     let proof_ids = record.proof_records.iter().map(|proof| proof.id.as_str()).collect::<BTreeSet<_>>();
+    validate_trusted_external_verifiers(typed, record)?;
     for ty in &typed.types {
         validate_typed_type(ty)?;
     }
@@ -736,6 +777,140 @@ fn validate_typed_semantics(record: &VerifiedLoweringRecord) -> Result<(), Check
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_trusted_external_verifiers(typed: &TypedSemanticRecord, lowering: &VerifiedLoweringRecord) -> Result<(), CheckerError> {
+    let binding_for_delegate =
+        |block: &crate::schema::TypedSemanticBlock, delegate_index: usize| -> Option<(&'static str, &'static str, String)> {
+            let [source_operation, hash_operation, delegate_operation] =
+                block.operations.get(delegate_index.checked_sub(2)?..=delegate_index)?
+            else {
+                return None;
+            };
+            let source_call = source_operation.call.as_ref()?;
+            let hash_call = hash_operation.call.as_ref()?;
+            let delegate_call = delegate_operation.call.as_ref()?;
+            let source_local = *source_operation.destinations.as_slice().first()?;
+            if source_operation.destinations.len() != 1
+                || source_call.target != "__ckb_source_cell_dep"
+                || hash_call.target != "__ckb_require_cell_data_hash"
+                || hash_operation.operands.first()?.local != Some(source_local)
+                || source_operation.operands.first()? != delegate_operation.operands.first()?
+            {
+                return None;
+            }
+            let (operation, adapter) = match delegate_call.target.as_str() {
+                "__ckb_exec_cell_dep_u8_args" => ("exec", "u8-args-v1"),
+                "__ckb_exec_cell_dep_hex4" => ("exec", "hex4-v1"),
+                "__ckb_spawn_wait_cell_dep_hex4" => ("spawn-wait", "hex4-v1"),
+                _ => return None,
+            };
+            let hash = match hash_operation.operands.get(1)?.constant.as_ref()? {
+                TypedSemanticConstant::Hash(hash) => hash.clone(),
+                _ => return None,
+            };
+            Some((operation, adapter, hash))
+        };
+
+    for verifier in &typed.trusted_external_verifiers {
+        let canonical_hash = verifier.code_hash.len() == 64
+            && verifier.code_hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        if verifier.schema != "cellscript-trusted-external-verifier-v1"
+            || verifier.version != 1
+            || verifier.name.trim().is_empty()
+            || verifier.scope.trim().is_empty()
+            || !matches!(verifier.operation.as_str(), "exec" | "spawn-wait")
+            || !matches!(
+                (verifier.operation.as_str(), verifier.adapter.as_str()),
+                ("exec", "u8-args-v1" | "hex4-v1") | ("spawn-wait", "hex4-v1")
+            )
+            || !canonical_hash
+            || verifier.hash_type != "data"
+            || verifier.source_identity.trim().is_empty()
+            || verifier.source_identity.len() > 4_096
+            || verifier.applicability.trim().is_empty()
+            || verifier.applicability.len() > 4_096
+            || verifier.trust_basis.trim().is_empty()
+            || verifier.trust_basis.len() > 4_096
+            || verifier.name.len() > 4_096
+            || verifier.scope.len() > 4_096
+            || verifier.guarantees.is_empty()
+            || verifier.guarantees.len() > 64
+            || verifier.guarantees.iter().any(|item| item.trim().is_empty() || item.len() > 4_096)
+            || !verifier.guarantees.windows(2).all(|pair| pair[0] < pair[1])
+            || verifier.identity_binding != "runtime-load-cell-data-hash-before-delegation-v1"
+            || verifier.evidence_tier != "trusted-external"
+            || verifier.compiler_proves_internal_semantics
+        {
+            return typed_error(format!("trusted external verifier '{}' has an invalid or overstated trust record", verifier.name));
+        }
+        let Some(entry) = typed.entries.iter().find(|entry| entry.id == verifier.scope) else {
+            return typed_error(format!(
+                "trusted external verifier '{}' references missing scope '{}'",
+                verifier.name, verifier.scope
+            ));
+        };
+        let sequence_bound = entry.blocks.iter().any(|block| {
+            block.operations.iter().enumerate().any(|(index, _)| {
+                binding_for_delegate(block, index).is_some_and(|(operation, adapter, hash)| {
+                    operation == verifier.operation && adapter == verifier.adapter && hash == verifier.code_hash
+                })
+            })
+        });
+        let (feature, category) = if verifier.operation == "exec" {
+            ("exec-target-and-replaced-continuation", "exec-delegation")
+        } else {
+            ("spawn-target-and-checked-child-exit", "spawn-delegation")
+        };
+        let proof_bound = lowering.proof_records.iter().any(|proof| {
+            proof.entry_id == verifier.scope
+                && proof.evidence_tier == "trusted-external"
+                && proof.obligation == format!("{feature}:{category}:trusted-external")
+        });
+        if !sequence_bound || !proof_bound {
+            return typed_error(format!(
+                "trusted external verifier '{}' is not jointly bound to an exact data-hash check, delegated call, and trusted-external ProofPlan",
+                verifier.name
+            ));
+        }
+    }
+    for entry in &typed.entries {
+        let declared = typed.trusted_external_verifiers.iter().filter(|verifier| verifier.scope == entry.id).collect::<Vec<_>>();
+        if declared.is_empty() {
+            continue;
+        }
+        for block in &entry.blocks {
+            for (index, operation) in block.operations.iter().enumerate() {
+                let Some(call) = operation.call.as_ref() else { continue };
+                if !matches!(
+                    call.target.as_str(),
+                    "__ckb_exec_cell_dep_u8_args" | "__ckb_exec_cell_dep_hex4" | "__ckb_spawn_wait_cell_dep_hex4"
+                ) {
+                    continue;
+                }
+                let Some((delegation, adapter, hash)) = binding_for_delegate(block, index) else {
+                    return typed_error(format!(
+                        "typed entry '{}' contains delegated execution outside the required source/hash/delegate sequence",
+                        entry.id
+                    ));
+                };
+                if !declared
+                    .iter()
+                    .any(|verifier| verifier.operation == delegation && verifier.adapter == adapter && verifier.code_hash == hash)
+                {
+                    return typed_error(format!(
+                        "typed entry '{}' delegates to an identity absent from its trusted external verifier records",
+                        entry.id
+                    ));
+                }
+            }
+        }
+    }
+    let trusted_proof_count = lowering.proof_records.iter().filter(|proof| proof.evidence_tier == "trusted-external").count();
+    if typed.trusted_external_verifiers.is_empty() != (trusted_proof_count == 0) {
+        return typed_error("trusted-external ProofPlan evidence and typed verifier records do not agree");
     }
     Ok(())
 }
@@ -1014,6 +1189,7 @@ fn validate_semantic_foundation(typed: &TypedSemanticRecord, record: &VerifiedLo
                 disposition.enforcement.as_str(),
                 "checked-static"
                     | "checked-runtime"
+                    | "trusted-external"
                     | "runtime-helper-required"
                     | "builder-evidence-required"
                     | "metadata-only"
@@ -1104,12 +1280,14 @@ fn validate_semantic_foundation(typed: &TypedSemanticRecord, record: &VerifiedLo
                 claim.enforcement.as_str(),
                 "checked-static"
                     | "checked-runtime"
+                    | "trusted-external"
                     | "runtime-helper-required"
                     | "builder-evidence-required"
                     | "metadata-only"
                     | "chain-evidence-required"
             )
-            || (claim.on_chain_checked && !matches!(claim.enforcement.as_str(), "checked-static" | "checked-runtime"))
+            || (claim.on_chain_checked
+                && !matches!(claim.enforcement.as_str(), "checked-static" | "checked-runtime" | "trusted-external"))
         {
             return typed_error(format!("semantic claim '{}' has an invalid enforcement classification", claim.id));
         }
@@ -1954,7 +2132,7 @@ fn arithmetic_result_type(left: &str, right: &str) -> Option<String> {
         "u8" => Some(8_u16),
         "u16" => Some(16),
         "u32" => Some(32),
-        "u64" => Some(64),
+        "u64" | "usize" => Some(64),
         "u128" => Some(128),
         _ => None,
     };
@@ -2034,7 +2212,9 @@ fn optional_types_equivalent(left: Option<&str>, right: Option<&str>) -> bool {
 }
 
 fn typed_value_assignable(actual: &str, expected: &str) -> bool {
-    canonical_abi_type(actual) == canonical_abi_type(expected) || arithmetic_result_type(actual, expected).as_deref() == Some(expected)
+    canonical_abi_type(actual) == canonical_abi_type(expected)
+        || arithmetic_result_type(actual, expected).as_deref() == Some(expected)
+        || unsigned_integer_width(actual).zip(unsigned_integer_width(expected)).is_some_and(|(actual, expected)| actual <= expected)
 }
 
 fn checked_unsigned_narrowing_move(
@@ -2095,7 +2275,7 @@ fn unsigned_integer_width(ty: &str) -> Option<u32> {
         "u8" => Some(8),
         "u16" => Some(16),
         "u32" => Some(32),
-        "u64" => Some(64),
+        "u64" | "usize" => Some(64),
         "u128" => Some(128),
         _ => None,
     }
@@ -2566,7 +2746,19 @@ fn validate_record_graph(record: &VerifiedLoweringRecord, budgets: &CheckerBudge
         }
     }
     for proof in &record.proof_records {
-        if !entries.contains_key(proof.entry_id.as_str()) || proof.obligation.is_empty() || proof.evidence_tier.is_empty() {
+        if !entries.contains_key(proof.entry_id.as_str())
+            || proof.obligation.is_empty()
+            || !matches!(
+                proof.evidence_tier.as_str(),
+                "checked-static"
+                    | "checked-runtime"
+                    | "trusted-external"
+                    | "runtime-helper-required"
+                    | "builder-evidence-required"
+                    | "metadata-only"
+                    | "chain-evidence-required"
+            )
+        {
             return Err(CheckerError::new(
                 CheckerRejectionCode::V2408ProofCoverageInvalid,
                 format!("proof '{}' has an invalid owner or empty enforcement fields", proof.id),
@@ -3288,5 +3480,14 @@ mod tests {
         assert_ne!(canonical_abi_type("&[Hash; 4]"), canonical_abi_type("[hash; 4]"));
         assert_ne!(canonical_abi_type("Pair<u64>"), canonical_abi_type("Pair<u128>"));
         assert_ne!(canonical_abi_type("AddressBook"), canonical_abi_type("addressBook"));
+    }
+
+    #[test]
+    fn lossless_unsigned_moves_include_the_rv64_usize_alias() {
+        assert!(typed_value_assignable("u8", "usize"));
+        assert!(typed_value_assignable("usize", "u64"));
+        assert_eq!(arithmetic_result_type("u8", "usize").as_deref(), Some("u64"));
+        assert!(!typed_value_assignable("u128", "usize"));
+        assert!(!typed_value_assignable("i32", "usize"));
     }
 }

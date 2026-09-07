@@ -600,6 +600,38 @@ impl SimulateInterpreter {
             _ => return Ok(SimValue::Simulated { ty: "call".to_string(), description: "indirect call".to_string() }),
         };
 
+        if matches!(
+            func_name.as_str(),
+            "witness::count"
+                | "witness::byte"
+                | "witness::u32_le"
+                | "witness::u64_le"
+                | "ckb::cell_data_u8"
+                | "ckb::cell_data_hash_field"
+                | "ckb::cell_lock_size"
+                | "ckb::cell_type_size"
+                | "ckb::cell_lock_u8"
+                | "ckb::cell_type_u8"
+                | "ckb::input_since_at"
+                | "ckb::exec_cell_dep_u8_args"
+                | "ckb::exec_cell_dep_hex4"
+                | "ckb::spawn_wait_cell_dep_hex4"
+                | "ckb::trusted_exec_cell_dep_u8_args"
+                | "ckb::trusted_exec_cell_dep_hex4"
+                | "ckb::trusted_spawn_wait_cell_dep_hex4"
+                | "ckb::transaction_u32_le"
+                | "ckb::transaction_blake2b_gather"
+                | "witness::blake2b_select_chunks"
+                | "witness::bytes32"
+                | "witness::blake2b_span"
+                | "ckb::cell_data_blake2b_span"
+                | "ckb::raw_transaction_hash_without_cell_deps"
+        ) {
+            return Err(SimulateError::Unsupported {
+                description: format!("{func_name} requires CKB transaction bytes; run a CKB-VM transaction fixture"),
+            });
+        }
+
         let args: Vec<SimValue> = call.args.iter().map(|e| self.eval_expr(e)).collect::<Result<_, _>>()?;
         let arg_strs: Vec<String> = args.iter().map(|v| v.to_string()).collect();
 

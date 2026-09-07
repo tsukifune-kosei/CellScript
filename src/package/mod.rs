@@ -318,6 +318,24 @@ pub struct CkbDeployConfig {
     pub type_id: Option<String>,
     #[serde(default)]
     pub cell_deps: Vec<CkbCellDepConfig>,
+    #[serde(default)]
+    pub trusted_external_verifiers: Vec<CkbTrustedExternalVerifierConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CkbTrustedExternalVerifierConfig {
+    pub schema: String,
+    pub name: String,
+    pub scope: String,
+    pub operation: String,
+    pub adapter: String,
+    pub code_hash: String,
+    pub hash_type: String,
+    pub source_identity: String,
+    pub applicability: String,
+    pub trust_basis: String,
+    pub guarantees: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

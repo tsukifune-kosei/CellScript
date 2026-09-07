@@ -1888,6 +1888,9 @@ pub(super) fn is_void_runtime_requirement_call(func: &str) -> bool {
     matches!(
         func,
         "__ckb_require_maturity"
+            | "__ckb_exec_cell_dep_u8_args"
+            | "__ckb_exec_cell_dep_hex4"
+            | "__ckb_spawn_wait_cell_dep_hex4"
             | "__ckb_require_time"
             | "__ckb_require_epoch_after"
             | "__ckb_require_epoch_relative"
@@ -1949,6 +1952,14 @@ pub(super) fn is_runtime_scalar_failclosed_call(func: &str) -> bool {
             | "__ckb_cell_unoccupied_capacity"
             | "__ckb_cell_output_index"
             | "__ckb_cell_data_size"
+            | "__ckb_cell_count"
+            | "__ckb_cell_has_type"
+            | "__ckb_cell_data_u8"
+            | "__ckb_cell_lock_size"
+            | "__ckb_cell_type_size"
+            | "__ckb_cell_lock_u8"
+            | "__ckb_cell_type_u8"
+            | "__ckb_input_since_at"
             | "__ckb_cell_data_u32_le"
             | "__ckb_cell_data_u64_le"
             | "__ckb_cell_lock_hash_type"
@@ -1964,6 +1975,11 @@ pub(super) fn is_runtime_scalar_failclosed_call(func: &str) -> bool {
             | "__xudt_amount_high"
             | "__xudt_owner_mode_input_type_hash"
             | "__ckb_witness_size"
+            | "__ckb_witness_count"
+            | "__ckb_witness_u8"
+            | "__ckb_witness_u32_le"
+            | "__ckb_transaction_u32_le"
+            | "__ckb_witness_u64_le"
     )
 }
 
@@ -2556,6 +2572,7 @@ mod tests {
             write_intents: Vec::new(),
             bounded_collection_ops: Vec::new(),
             borrow_regions: Vec::new(),
+            trusted_external_calls: Vec::new(),
             enforced_claims: Vec::new(),
             blocks: Vec::new(),
         };
@@ -2933,6 +2950,7 @@ mod tests {
                     write_intents: vec![],
                     bounded_collection_ops: vec![],
                     borrow_regions: vec![],
+                    trusted_external_calls: vec![],
                     enforced_claims: vec![],
                     blocks: vec![IrBlock {
                         id: BlockId(0),

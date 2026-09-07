@@ -31,6 +31,7 @@ pub struct ProofPlanDiagnosticMetadata {
 pub enum EvidenceTier {
     CheckedStatic,
     CheckedRuntime,
+    TrustedExternal,
     RuntimeHelperRequired,
     BuilderEvidenceRequired,
     #[default]
@@ -39,9 +40,10 @@ pub enum EvidenceTier {
 }
 
 impl EvidenceTier {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::CheckedStatic,
         Self::CheckedRuntime,
+        Self::TrustedExternal,
         Self::RuntimeHelperRequired,
         Self::BuilderEvidenceRequired,
         Self::MetadataOnly,
@@ -52,6 +54,7 @@ impl EvidenceTier {
         match self {
             Self::CheckedStatic => "checked-static",
             Self::CheckedRuntime => "checked-runtime",
+            Self::TrustedExternal => "trusted-external",
             Self::RuntimeHelperRequired => "runtime-helper-required",
             Self::BuilderEvidenceRequired => "builder-evidence-required",
             Self::MetadataOnly => "metadata-only",
@@ -60,7 +63,7 @@ impl EvidenceTier {
     }
 
     pub const fn is_checked(self) -> bool {
-        matches!(self, Self::CheckedStatic | Self::CheckedRuntime)
+        matches!(self, Self::CheckedStatic | Self::CheckedRuntime | Self::TrustedExternal)
     }
 }
 
@@ -1209,6 +1212,7 @@ fn body_reads(body: &ir::IrBody, params: &[ir::IrParam], runtime_accesses: &[Ckb
 
 fn reads_for_source(source: &str) -> &'static [&'static str] {
     match source {
+        "Transaction" => &["transaction"],
         "Input" => &["input"],
         "Output" => &["output"],
         "GroupInput" => &["group_input"],
@@ -1806,6 +1810,7 @@ mod tests {
             vec![
                 "checked-static",
                 "checked-runtime",
+                "trusted-external",
                 "runtime-helper-required",
                 "builder-evidence-required",
                 "metadata-only",

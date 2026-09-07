@@ -947,7 +947,18 @@ impl Formatter {
                 self.format_branch_expr_body(&if_expr.then_branch),
                 self.format_branch_expr_body(&if_expr.else_branch)
             ),
-            Expr::Cast(cast) => format!("{} as {}", self.format_expr(&cast.expr), format_type(&cast.ty)),
+            Expr::Cast(cast) => {
+                let inner = self.format_expr(&cast.expr);
+                // Cast binds more tightly than every binary operator. Losing
+                // these parentheses can change both arithmetic and Vec type
+                // inference, e.g. `(count - removed) as u8` is not
+                // `count - removed as u8`.
+                if matches!(cast.expr.as_ref(), Expr::Assign(_) | Expr::Binary(_) | Expr::Range(_)) {
+                    format!("({}) as {}", inner, format_type(&cast.ty))
+                } else {
+                    format!("{} as {}", inner, format_type(&cast.ty))
+                }
+            }
             Expr::Range(range) => format!("{}..{}", self.format_expr(&range.start), self.format_expr(&range.end)),
             Expr::StructInit(init) => {
                 let fields =
@@ -1418,6 +1429,17 @@ fn mix(value: u64, mask: u64, count: u64) -> u64 {
         });
         let formatted = formatted.unwrap();
         assert!(formatted.contains("return (value & mask | value ^ mask) << count"), "{formatted}");
+    }
+
+    #[test]
+    fn format_preserves_cast_of_binary_expression() {
+        for expression in ["(left - right) as u8", "(left & right) as u128", "(left << right) as u128", "(left == right) as u8"] {
+            let source = format!("module cast_precedence\nfn value(left: u64, right: u64) -> u128 {{ return {expression} }}");
+            let module = parser::parse(&lexer::lex(&source).unwrap()).unwrap();
+            let formatted = format_default(&module).unwrap();
+            assert!(formatted.contains(expression), "{formatted}");
+            verify_idempotent(&formatted, FormatConfig::default()).unwrap();
+        }
     }
 
     #[test]

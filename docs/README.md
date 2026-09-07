@@ -3,7 +3,7 @@
 This directory is organized by document role. Keep new docs in the smallest
 stable category that matches how readers should use them.
 
-The experimental `0.26b` implementation uses metadata schema 65. The finalized
+The experimental `0.26b` implementation uses metadata schema 66. The finalized
 0.26 release record below remains the historical schema 62 contract.
 
 ## Stable Tutorials
@@ -80,6 +80,10 @@ High-value active references include:
 - [CELLSCRIPT_POLICY_WITNESS_ABI.md](CELLSCRIPT_POLICY_WITNESS_ABI.md) for
   explicit policy selection, tagged multi-record witnesses, builder contracts,
   and signature-field ownership
+- [CELLSCRIPT_TRUSTED_EXTERNAL_VERIFIERS.md](CELLSCRIPT_TRUSTED_EXTERNAL_VERIFIERS.md)
+  for exact-hash EXEC/SPAWN composition, manifest declarations, the
+  `trusted-external` evidence tier, and its explicit no-proof-of-internals
+  boundary
 - `CELLSCRIPT_1_0_SEMANTIC_FOUNDATION_RFC.md` for the post-0.26 design agenda,
   issue/conflict reconciliation, staged acceptance gates, and the experimental
   `0.26b` implementation boundary

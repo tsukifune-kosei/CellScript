@@ -16,6 +16,99 @@ transfer relation shrinks from **7,824 to 3,392 bytes (-56.65%)**. Its tested
 high-level relation syntax still produces exactly the same ELF as its explicit
 consume/create expansion.
 
+The branch also adds a bounded `trusted-external` boundary for real CKB
+verifiers reached through EXEC or SPAWN/WAIT. This is an experimental branch
+capability, not a claim that every third-party verifier is safe or that 0.26 is
+already production-ready.
+
+## Bounded Real-Contract Interoperability Primitives
+
+The Spore and Fiber comparison work required exact access to CKB bytes rather
+than schema-shaped approximations. `0.26b` therefore adds a low-level, bounded
+set of primitives shared by both source editions:
+
+| Area | Implemented surface |
+| --- | --- |
+| Witnesses | complete witness count; exact byte/u32/u64/32-byte reads; exact-span and selected-chunk BLAKE2b |
+| Cells and Inputs | Cell count/type presence; exact data, serialized Lock, and serialized Type sizes/bytes; full consensus data-hash field; selected Input `since` |
+| Transaction | exact packed u32 reads; RawTransaction-with-empty-CellDeps hash; bounded gathered BLAKE2b spans |
+| Delegation | bounded u8 arguments, four hexadecimal arguments, EXEC process replacement, and SPAWN/WAIT with checked child status |
+
+All source intervals and local vectors are bounds-checked before reads or
+encoding. Streaming hashes use fixed working memory rather than allocating the
+source length. Short reads, invalid SourceViews, arithmetic overflow, malformed
+transaction layouts, syscall errors, and failed children terminate fail closed.
+The simulator reports these transaction-dependent operations as unsupported; it
+does not fabricate consensus evidence.
+
+These primitives are compiler/runtime building blocks, not a new high-level
+business grammar. Raw EXEC and SPAWN adapters deliberately retain unresolved
+external-verifier ProofPlan obligations. Only the exact trusted-external path
+below can discharge the target-identity/delegation portion of that obligation.
+
+## Trusted External Verifiers
+
+CKB contracts commonly compose with separately deployed code whose identity is
+the hash of its bytes. CellScript now represents that dependency explicitly
+without relabelling it as compiler-proved semantics.
+
+A trusted call has three inseparable parts:
+
+1. source uses a `trusted_*` intrinsic with a compile-time 32-byte verifier
+   data hash;
+2. `Cell.toml` supplies an exact, versioned declaration for the semantic scope,
+   operation, exact argument adapter, source identity, applicability, trust
+   basis, and required guarantees; and
+3. emitted code loads the selected CellDep's complete `DATA_HASH`, compares it
+   with the source constant, and delegates only after equality succeeds.
+
+The implemented operations are bounded u8/hex EXEC and hex SPAWN/WAIT. EXEC
+uses CKB process replacement. SPAWN waits and accepts only a zero child status.
+Any syscall, argument-materialization, hash, or child-status failure terminates
+through the existing fail-closed runtime contract.
+
+The evidence tier is exactly `trusted-external`. It establishes target identity
+and the delegation adapter, not the verifier's internal parser, authorization,
+cryptography, or protocol semantics. Metadata records this as
+`compiler_proves_internal_semantics = false`. Raw EXEC/SPAWN remains rejected by
+production policy; a declaration cannot bless a raw call, unused declarations
+are errors, and trusted and undeclared calls cannot be mixed in one scope.
+
+The independent checker verifies more than record equality. It requires the
+typed source-CellDep load, data-hash check, and delegation call to be one ordered
+three-operation sequence; the loaded CellDep local and delegation operand must
+refer to the same selection, and the exact constant hash must match the
+declaration. It then binds that sequence to `trusted-external` ProofPlan evidence
+and the existing typed-to-machine record. Mutations of the hash, declaration,
+evidence tier, sequence, or sidecar copies fail closed.
+
+This change advances compile metadata from schema 65 to **66** and typed
+semantics from v7 to **v8**. See
+[Trusted External Verifiers](../CELLSCRIPT_TRUSTED_EXTERNAL_VERIFIERS.md) for the
+source calls, manifest schema, exact boundary, and deployment checklist.
+
+### Real-contract evidence and cost boundary
+
+The mechanism was motivated by the separate Spore/Fiber comparison work, where
+the delegated verifier is real external CKB code rather than a CellScript
+rewrite. The Spore Agent reconstruction produced a 52,960-byte ELF whose CKB
+data hash is
+`cf79590446a6a526fe7ee2e64a0c5f216ae6755f79fb966fd03cd0e718157f69`;
+two independent historical-toolchain builds matched byte for byte. In that
+audit corpus, the CellScript and frozen Rust Spore implementations both executed
+the same Agent bytes and agreed on 131 added transactions (11 accepted, 120
+rejected), including per-byte mutations of immutable Agent state.
+
+That corpus remains finite comparison evidence, not a proof of the Agent's
+internals or a production release certificate. It also supplies an important
+cost counterexample: CellScript Spore plus the shared Agent measured 169,584
+bytes versus 119,800 bytes for the smallest measured frozen Rust Spore plus the
+same Agent (**41.6% larger**), and the positive CellScript transactions used
+**3.372–3.703x** the cycles of the fastest measured Rust variant. The compact
+ELF improvement is real, but it does not imply universal byte or cycle
+superiority. Cost claims remain attached to exact contracts, toolchains, and
+fixtures.
+
 ## Major Backend Optimization: Compact ELF and Immediate Encoding
 
 This is an assembler-layer improvement shared by Edition 2026 and the
@@ -282,10 +375,11 @@ boundary is
 `cellscript-typed-semantics-v3`, including dedicated bounded Cell load, plan
 load, output verification, and output-end operations.
 
-The experimental `0.26b` branch separately advances metadata to schema 65,
-lowering records to v6, typed semantics to v7, and source maps to v2; see the
+The experimental `0.26b` branch separately advances metadata to schema 66,
+lowering records to v6, typed semantics to v8, and source maps to v2; see the
 [branch evidence policy](../CELLSCRIPT_GATE_POLICY.md#026b-semantic-foundation-evidence).
-The assembler optimization does not itself introduce those schema changes.
+The trusted-external record introduces the v8/schema-66 step; the assembler
+optimization does not itself introduce those schema changes.
 
 Merge readiness requires:
 

@@ -131,7 +131,7 @@ deployment evidence, and chain commitment remain separate states.
 ## Typed Semantics Relationship
 
 The public interface answers “what can a dependency rely on?” The
-`cellscript-typed-semantics-v7` record answers “what typed operations and
+`cellscript-typed-semantics-v8` record answers “what typed operations and
 control-flow facts were lowered?” Its embedded
 `cellscript-semantic-foundation-v3` additionally answers where values came
 from, which transaction roles they bind, how Cells are disposed, where claims
@@ -143,6 +143,10 @@ An explicit policy's tagged export set and outer witness ABI are bound by its
 entry contract. The package interface hash does not by itself select or prove a
 particular deployed policy; deployment and builder consumers must retain the
 selected artifact contract as well.
+Typed semantics v8 can also name an exact, manifest-declared external verifier
+under the `trusted-external` evidence tier. That record binds the selected
+CellDep data hash and delegation operation; it is not part of the package
+interface hash and is not a proof of the external program's implementation.
 ELF builds additionally bind the typed record to the verified lowering and machine
 records described in
 [CellScript Verified Artifact Boundary](CELLSCRIPT_VERIFIED_ARTIFACT_BOUNDARY.md).

@@ -338,6 +338,28 @@ impl CodeGenerator {
         if self.emit_runtime_c256_sum2_product_requirement_call(func, args)? {
             return Ok(());
         }
+        if matches!(func, "__ckb_exec_cell_dep_hex4" | "__ckb_spawn_wait_cell_dep_hex4") {
+            let Some(IrOperand::Var(bytes)) = args.get(1) else {
+                self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+                return Ok(());
+            };
+            if args.len() != 6 || bytes.ty != IrType::Named("Vec<u8>".into()) || !self.stack_collection_vars.contains(&bytes.id) {
+                self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+                return Ok(());
+            }
+            self.emit_operand_to_register("a0", &args[0]);
+            self.emit_operand_to_register("a1", &args[1]);
+            self.emit("ld a2, -8(a1)"); // proven local byte-vector count
+            for (arg, register) in args[2..].iter().zip(["a3", "a4", "a5", "a6"]) {
+                self.emit_operand_to_register(register, arg);
+            }
+            self.emit(format!("call {func}"));
+            let ok = self.fresh_label("hex4_checked_return");
+            self.emit(format!("beqz a0, {ok}"));
+            self.emit_process_failure_status();
+            self.emit_label(&ok);
+            return Ok(());
+        }
         if self.emit_runtime_current_script_hash_call(dest, func, args)? {
             return Ok(());
         }
@@ -345,6 +367,9 @@ impl CodeGenerator {
             return Ok(());
         }
         if self.emit_runtime_cell_data_hash_at_call(dest, func, args)? {
+            return Ok(());
+        }
+        if self.emit_runtime_span_hash_call(dest, func, args)? {
             return Ok(());
         }
         if self.emit_runtime_cell_script_hash_field_call(dest, func, args)? {
@@ -536,6 +561,7 @@ impl CodeGenerator {
             func,
             "__ckb_cell_lock_hash"
                 | "__ckb_cell_type_hash"
+                | "__ckb_cell_data_hash_field"
                 | "__ckb_cell_data_hash"
                 | "__ckb_cell_lock_code_hash"
                 | "__ckb_cell_type_code_hash"
@@ -611,6 +637,94 @@ impl CodeGenerator {
         self.emit_process_failure_status();
         self.emit_label(&ok_label);
         self.emit_sp_addi("t0", buffer_offset);
+        self.emit_stack_store("t0", dest.id * 8);
+        Ok(true)
+    }
+
+    fn emit_runtime_span_hash_call(&mut self, dest: Option<&IrVar>, func: &str, args: &[IrOperand]) -> Result<bool> {
+        if matches!(func, "__ckb_transaction_blake2b_gather" | "__ckb_witness_blake2b_select_chunks") {
+            let select = func == "__ckb_witness_blake2b_select_chunks";
+            let Some(dest) = dest else {
+                self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+                return Ok(true);
+            };
+            let vector_start = if select { 3 } else { 0 };
+            let valid = args.len() == if select { 6 } else { 4 }
+                && args.iter().enumerate().skip(vector_start).all(|(index, arg)| {
+                    let ty = if !select && index < 2 { "Vec<u64>" } else { "Vec<u8>" };
+                    matches!(arg, IrOperand::Var(var) if var.ty == IrType::Named(ty.into()) && self.stack_collection_vars.contains(&var.id))
+                });
+            let (Some(size), Some(buffer)) =
+                (self.cell_buffer_size_offsets.get(&dest.id).copied(), self.cell_buffer_offsets.get(&dest.id).copied())
+            else {
+                self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+                return Ok(true);
+            };
+            if !valid || dest.ty != IrType::Hash {
+                self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+                return Ok(true);
+            }
+            self.emit("li t0, 32");
+            self.emit_stack_store("t0", size);
+            for (index, arg) in args.iter().enumerate() {
+                self.emit_operand_to_register(&format!("a{index}"), arg);
+            }
+            self.emit_sp_addi(if select { "a6" } else { "a4" }, buffer);
+            self.emit(format!("call {func}"));
+            let ok = self.fresh_label("gather_hash_ok");
+            self.emit(format!("beqz a0, {ok}"));
+            self.emit_process_failure_status();
+            self.emit_label(&ok);
+            self.emit_sp_addi("t0", buffer);
+            self.emit_stack_store("t0", dest.id * 8);
+            return Ok(true);
+        }
+        let raw_transaction = func == "__ckb_raw_transaction_hash_without_cell_deps";
+        let bytes32 = func == "__ckb_witness_bytes32";
+        if !raw_transaction && !bytes32 && !matches!(func, "__ckb_cell_data_blake2b_span" | "__ckb_witness_blake2b_span") {
+            return Ok(false);
+        }
+        let Some(dest) = dest else {
+            self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+            return Ok(true);
+        };
+        if args.len()
+            != if raw_transaction {
+                0
+            } else if bytes32 {
+                2
+            } else {
+                3
+            }
+            || dest.ty != IrType::Hash
+        {
+            self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+            return Ok(true);
+        }
+        let (Some(size), Some(buffer)) =
+            (self.cell_buffer_size_offsets.get(&dest.id).copied(), self.cell_buffer_offsets.get(&dest.id).copied())
+        else {
+            self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
+            return Ok(true);
+        };
+        self.emit("li t0, 32");
+        self.emit_stack_store("t0", size);
+        // Arguments are lowered scalar locals/constants. No pointer-loading
+        // helper is invoked while the earlier argument registers are live.
+        if !raw_transaction {
+            self.emit_operand_to_register("a0", &args[0]);
+            self.emit_operand_to_register("a1", &args[1]);
+            if !bytes32 {
+                self.emit_operand_to_register("a2", &args[2]);
+            }
+        }
+        self.emit_sp_addi("a3", buffer);
+        self.emit(format!("call {func}"));
+        let ok = self.fresh_label("span_hash_ok");
+        self.emit(format!("beqz a0, {ok}"));
+        self.emit_process_failure_status();
+        self.emit_label(&ok);
+        self.emit_sp_addi("t0", buffer);
         self.emit_stack_store("t0", dest.id * 8);
         Ok(true)
     }
@@ -1346,6 +1460,13 @@ impl CodeGenerator {
             self.emit(format!("li {}, {}", register, width));
         } else if let (IrOperand::Var(var), CallLengthKind::FixedBytes) = (arg, kind) {
             if let Some(width) = self.fixed_named_type_width(&var.ty) {
+                self.emit(format!("li {}, {}", register, width));
+            } else if self.fixed_byte_local_offsets.contains_key(&var.id)
+                && let Some(width) = operand_fixed_byte_width(arg)
+            {
+                // A locally materialized fixed-byte value owns exact-width
+                // storage. Unlike a borrowed parameter it needs no length slot.
+                self.emit(format!("# cellscript abi: local fixed-byte value var{} has exact width {}", var.id, width));
                 self.emit(format!("li {}, {}", register, width));
             } else {
                 self.emit(format!(

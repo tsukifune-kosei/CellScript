@@ -1,6 +1,44 @@
 {
   "entries": [
     {
+      "conditions": "Experimental gathered hashes require proven local byte/offset vectors and checked transaction span bounds.",
+      "fail_closed_features": [
+        "gather-hash-materialization"
+      ],
+      "id": "runtime:gather-hash-arguments",
+      "layer": "runtime",
+      "production_policy": "accepted only when the shape classifier reports no fail-closed feature",
+      "status": "shape-gated"
+    },
+    {
+      "conditions": "Experimental returning four-argument hex SPAWN/WAIT requires a proven local Vec<u8>; the external child verifier remains separately unresolved.",
+      "fail_closed_features": [
+        "spawn-argv-materialization"
+      ],
+      "id": "runtime:spawn-hex4-arguments",
+      "layer": "runtime",
+      "production_policy": "accepted only when the shape classifier reports no fail-closed feature",
+      "status": "shape-gated"
+    },
+    {
+      "conditions": "Experimental four-argument hex EXEC requires a proven local Vec<u8>; external-verifier delegation remains separately unresolved.",
+      "fail_closed_features": [
+        "exec-argv-materialization"
+      ],
+      "id": "runtime:exec-hex4-arguments",
+      "layer": "runtime",
+      "production_policy": "accepted only when the shape classifier reports no fail-closed feature",
+      "status": "shape-gated"
+    },
+    {
+      "conditions": "EXEC or SPAWN/WAIT is admitted only through a trusted_* intrinsic with a compile-time 32-byte DATA_HASH, an exact versioned Cell.toml declaration, an emitted pre-delegation identity check, and a trusted-external evidence record that never claims to prove the verifier's internals.",
+      "fail_closed_features": [],
+      "id": "runtime:trusted-external-delegation",
+      "layer": "runtime",
+      "production_policy": "accepted only when the shape classifier reports no fail-closed feature",
+      "status": "bounded"
+    },
+    {
       "conditions": "One-byte unsigned scalar with checked source representability.",
       "fail_closed_features": [],
       "id": "type:u8",

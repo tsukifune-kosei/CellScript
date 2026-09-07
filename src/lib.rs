@@ -64,7 +64,7 @@ pub use proof_plan::{EvidenceTier, ProofPlanDiagnosticMetadata, ProofPlanMetadat
 
 use camino::{Utf8Path, Utf8PathBuf};
 use error::{CompileError, DiagnosticSeverity, Result};
-use package::{BuildConfig, CkbCellDepConfig, PackageManifest, WorkspaceManifest};
+use package::{BuildConfig, CkbCellDepConfig, CkbTrustedExternalVerifierConfig, PackageManifest, WorkspaceManifest};
 use resolve::ModuleResolver;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -223,7 +223,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
 const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v27-verifier-failure";
-pub const METADATA_SCHEMA_VERSION: u32 = 65;
+pub const METADATA_SCHEMA_VERSION: u32 = 66;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
 pub const CONSTRAINTS_METADATA_SCHEMA_VERSION: u32 = 3;
@@ -772,6 +772,8 @@ pub struct CkbConstraintsMetadata {
     pub dep_group_manifest: CkbDepGroupManifestMetadata,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub script_references: Vec<CkbScriptReferenceMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trusted_external_verifiers: Vec<cellscript_artifact_checker::TrustedExternalVerifierRecord>,
     pub max_tx_verify_cycles: u64,
     pub max_block_cycles: u64,
     pub max_block_bytes: u64,
@@ -926,6 +928,8 @@ pub struct RuntimeMetadata {
     pub standalone_runner_compatible: bool,
     pub fail_closed_runtime_features: Vec<String>,
     pub ckb_runtime_accesses: Vec<CkbRuntimeAccessMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trusted_external_verifiers: Vec<cellscript_artifact_checker::TrustedExternalVerifierRecord>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transaction_view_handles: Vec<TransactionViewHandleMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1350,6 +1354,7 @@ pub fn validate_compile_metadata(metadata: &CompileMetadata, artifact_format: Ar
     validate_collection_instantiation_metadata(metadata)?;
     validate_ckb_script_group_metadata(metadata)?;
     validate_ckb_script_reference_metadata(metadata)?;
+    validate_trusted_external_verifier_metadata(metadata)?;
     validate_molecule_schema_metadata(metadata)?;
     validate_molecule_schema_manifest_metadata(metadata)?;
     validate_cell_data_codec_manifest_metadata(metadata)?;
@@ -1357,6 +1362,49 @@ pub fn validate_compile_metadata(metadata: &CompileMetadata, artifact_format: Ar
     validate_source_metadata(metadata)?;
     crate::proof_plan::soundness::validate_metadata(metadata, false)?;
 
+    Ok(())
+}
+
+fn validate_trusted_external_verifier_metadata(metadata: &CompileMetadata) -> Result<()> {
+    if metadata.typed_semantics.trusted_external_verifiers != metadata.runtime.trusted_external_verifiers {
+        return Err(CompileError::without_span("typed semantics and runtime metadata disagree on trusted external verifier bindings"));
+    }
+    if let Some(ckb) = metadata.constraints.ckb.as_ref()
+        && ckb.trusted_external_verifiers != metadata.runtime.trusted_external_verifiers
+    {
+        return Err(CompileError::without_span("CKB constraints and runtime metadata disagree on trusted external verifier bindings"));
+    }
+    for verifier in &metadata.runtime.trusted_external_verifiers {
+        if verifier.schema != TRUSTED_EXTERNAL_VERIFIER_SCHEMA
+            || verifier.version != 1
+            || verifier.evidence_tier != EvidenceTier::TrustedExternal.as_str()
+            || verifier.compiler_proves_internal_semantics
+            || verifier.identity_binding != "runtime-load-cell-data-hash-before-delegation-v1"
+            || !matches!(
+                (verifier.operation.as_str(), verifier.adapter.as_str()),
+                ("exec", "u8-args-v1" | "hex4-v1") | ("spawn-wait", "hex4-v1")
+            )
+        {
+            return Err(CompileError::without_span(format!(
+                "trusted external verifier '{}' has an invalid compiler evidence record",
+                verifier.name
+            )));
+        }
+        let category = if verifier.operation == "exec" { "exec-delegation" } else { "spawn-delegation" };
+        let proof_scope = verifier.scope.strip_prefix("helper:").map_or_else(|| verifier.scope.clone(), |name| format!("fn:{name}"));
+        if !metadata.runtime.proof_plan.iter().any(|plan| {
+            plan.origin == proof_scope
+                && plan.category == category
+                && plan.evidence_tier == EvidenceTier::TrustedExternal
+                && plan.on_chain_checked
+                && plan.codegen_coverage_status == "covered"
+        }) {
+            return Err(CompileError::without_span(format!(
+                "trusted external verifier '{}' has no matching checked ProofPlan binding",
+                verifier.name
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -1818,7 +1866,7 @@ fn validate_type_validity_metadata(metadata: &CompileMetadata) -> Result<()> {
                         )));
                     }
                 }
-                EvidenceTier::MetadataOnly | EvidenceTier::ChainEvidenceRequired => {
+                EvidenceTier::TrustedExternal | EvidenceTier::MetadataOnly | EvidenceTier::ChainEvidenceRequired => {
                     return Err(CompileError::without_span(format!(
                         "{prefix} uses unsupported validity evidence tier '{}'",
                         predicate.evidence_tier.as_str()
@@ -2456,6 +2504,7 @@ fn ckb_constraints(
             warnings: Vec::new(),
         },
         script_references: ckb_script_reference_metadata(metadata),
+        trusted_external_verifiers: metadata.runtime.trusted_external_verifiers.clone(),
         max_tx_verify_cycles,
         max_block_cycles,
         max_block_bytes,
@@ -2544,6 +2593,19 @@ fn ckb_script_reference_metadata(metadata: &CompileMetadata) -> Vec<CkbScriptRef
     for lock in &metadata.locks {
         collect_ckb_entry_script_references("lock", &lock.name, &lock.create_set, &lock.ckb_runtime_accesses, &mut refs);
     }
+    refs.extend(metadata.runtime.trusted_external_verifiers.iter().map(|verifier| CkbScriptReferenceMetadata {
+        scope: verifier.scope.clone(),
+        purpose: format!("trusted-external-{}", verifier.operation),
+        name: verifier.name.clone(),
+        code_hash: Some(verifier.code_hash.clone()),
+        hash_type: Some(verifier.hash_type.clone()),
+        args: None,
+        dep_source: "CellDep selected at runtime and bound by DATA_HASH".to_string(),
+        profile: "ckb".to_string(),
+        status: "trusted-external-identity-bound".to_string(),
+    }));
+    refs.sort_by(|left, right| (&left.scope, &left.purpose, &left.name).cmp(&(&right.scope, &right.purpose, &right.name)));
+    refs.dedup_by(|left, right| left.scope == right.scope && left.purpose == right.purpose && left.name == right.name);
     refs
 }
 
@@ -2606,6 +2668,27 @@ fn apply_manifest_deploy_metadata(metadata: &mut CompileMetadata, manifest: &Pac
     let Some(ckb_constraints) = metadata.constraints.ckb.as_mut() else {
         return Ok(());
     };
+
+    ckb_constraints.trusted_external_verifiers = metadata.runtime.trusted_external_verifiers.clone();
+    for verifier in &metadata.runtime.trusted_external_verifiers {
+        ckb_constraints.script_references.push(CkbScriptReferenceMetadata {
+            scope: verifier.scope.clone(),
+            purpose: format!("trusted-external-{}", verifier.operation),
+            name: verifier.name.clone(),
+            code_hash: Some(verifier.code_hash.clone()),
+            hash_type: Some(verifier.hash_type.clone()),
+            args: None,
+            dep_source: "CellDep selected at runtime and bound by DATA_HASH".to_string(),
+            profile: "ckb".to_string(),
+            status: "trusted-external-identity-bound".to_string(),
+        });
+    }
+    ckb_constraints
+        .script_references
+        .sort_by(|left, right| (&left.scope, &left.purpose, &left.name).cmp(&(&right.scope, &right.purpose, &right.name)));
+    ckb_constraints
+        .script_references
+        .dedup_by(|left, right| left.scope == right.scope && left.purpose == right.purpose && left.name == right.name);
 
     if let Some(hash_type) = ckb_manifest.hash_type.as_deref() {
         validate_ckb_hash_type(hash_type)?;
@@ -2671,6 +2754,272 @@ fn apply_manifest_deploy_metadata(metadata: &mut CompileMetadata, manifest: &Pac
 
     refresh_constraints_status(&mut metadata.constraints);
     Ok(())
+}
+
+const TRUSTED_EXTERNAL_VERIFIER_SCHEMA: &str = "cellscript-trusted-external-verifier-v1";
+
+#[derive(Debug, Clone)]
+struct TrustedExternalInvocation {
+    scope: String,
+    operation: String,
+    adapter: String,
+    code_hash: String,
+}
+
+fn apply_trusted_external_verifiers(
+    metadata: &mut CompileMetadata,
+    ir: &ir::IrModule,
+    declarations: &[CkbTrustedExternalVerifierConfig],
+) -> Result<()> {
+    if declarations.len() > 1_024 {
+        return Err(CompileError::without_span("trusted external verifier declaration count exceeds 1024").with_code("E2113"));
+    }
+    let mut invocations = Vec::new();
+    for item in &ir.items {
+        let (scope, body) = match item {
+            ir::IrItem::Action(item) => (format!("action:{}", item.name), &item.body),
+            ir::IrItem::PureFn(item) => (format!("helper:{}", item.name), &item.body),
+            ir::IrItem::Lock(item) => (format!("lock:{}", item.name), &item.body),
+            ir::IrItem::TypeDef(_) | ir::IrItem::Invariant(_) => continue,
+        };
+        for operation in ["exec", "spawn-wait"] {
+            let trusted_count = body.trusted_external_calls.iter().filter(|call| call.operation == operation).count();
+            let raw_count = body
+                .blocks
+                .iter()
+                .flat_map(|block| block.instructions.iter())
+                .filter(|instruction| {
+                    matches!(
+                        instruction,
+                        ir::IrInstruction::Call { func, .. }
+                            if (operation == "exec"
+                                && matches!(func.as_str(), "__ckb_exec_cell_dep_u8_args" | "__ckb_exec_cell_dep_hex4"))
+                                || (operation == "spawn-wait" && func == "__ckb_spawn_wait_cell_dep_hex4")
+                    )
+                })
+                .count();
+            if trusted_count > 0 && raw_count != trusted_count {
+                return Err(CompileError::without_span(format!(
+                    "scope '{scope}' mixes trusted and undeclared {operation} delegation; every external verifier call in a trusted scope must use a trusted_* intrinsic"
+                ))
+                .with_code("E2113"));
+            }
+        }
+        invocations.extend(body.trusted_external_calls.iter().map(|call| TrustedExternalInvocation {
+            scope: scope.clone(),
+            operation: call.operation.clone(),
+            adapter: call.adapter.clone(),
+            code_hash: hex_encode(&call.code_hash),
+        }));
+    }
+    if invocations.len() > 1_024 {
+        return Err(CompileError::without_span("trusted external verifier call-site count exceeds 1024").with_code("E2113"));
+    }
+
+    let mut declaration_keys = BTreeSet::new();
+    let mut declaration_names = BTreeSet::new();
+    for declaration in declarations {
+        validate_trusted_external_declaration(declaration)?;
+        let key =
+            (declaration.scope.clone(), declaration.operation.clone(), declaration.adapter.clone(), declaration.code_hash.clone());
+        if !declaration_keys.insert(key) {
+            return Err(CompileError::without_span(format!(
+                "duplicate trusted external verifier binding for scope '{}', operation '{}', adapter '{}', code hash '{}'",
+                declaration.scope, declaration.operation, declaration.adapter, declaration.code_hash
+            ))
+            .with_code("E2113"));
+        }
+        if !declaration_names.insert(declaration.name.clone()) {
+            return Err(CompileError::without_span(format!(
+                "trusted external verifier name '{}' is declared more than once",
+                declaration.name
+            ))
+            .with_code("E2113"));
+        }
+    }
+
+    let mut used = BTreeSet::new();
+    let mut records = Vec::new();
+    for invocation in &invocations {
+        let Some((index, declaration)) = declarations.iter().enumerate().find(|(_, declaration)| {
+            declaration.scope == invocation.scope
+                && declaration.operation == invocation.operation
+                && declaration.adapter == invocation.adapter
+                && declaration.code_hash == invocation.code_hash
+                && declaration.hash_type == "data"
+        }) else {
+            return Err(CompileError::without_span(format!(
+                "trusted external verifier call in '{}' has no exact Cell.toml binding for operation '{}', adapter '{}', and code hash '{}'",
+                invocation.scope, invocation.operation, invocation.adapter, invocation.code_hash
+            ))
+            .with_code("E2113"));
+        };
+        used.insert(index);
+        let mut guarantees = declaration.guarantees.clone();
+        guarantees.sort();
+        guarantees.dedup();
+        records.push(cellscript_artifact_checker::TrustedExternalVerifierRecord {
+            schema: TRUSTED_EXTERNAL_VERIFIER_SCHEMA.to_string(),
+            version: 1,
+            name: declaration.name.clone(),
+            scope: declaration.scope.clone(),
+            operation: declaration.operation.clone(),
+            adapter: declaration.adapter.clone(),
+            code_hash: declaration.code_hash.clone(),
+            hash_type: declaration.hash_type.clone(),
+            source_identity: declaration.source_identity.clone(),
+            applicability: declaration.applicability.clone(),
+            trust_basis: declaration.trust_basis.clone(),
+            guarantees,
+            identity_binding: "runtime-load-cell-data-hash-before-delegation-v1".to_string(),
+            evidence_tier: EvidenceTier::TrustedExternal.as_str().to_string(),
+            compiler_proves_internal_semantics: false,
+        });
+    }
+    if let Some((_, unused)) = declarations.iter().enumerate().find(|(index, _)| !used.contains(index)) {
+        return Err(CompileError::without_span(format!(
+            "trusted external verifier declaration '{}' is unused; declarations must bind an exact trusted_* call site",
+            unused.name
+        ))
+        .with_code("E2113"));
+    }
+    records.sort_by(|left, right| {
+        (&left.scope, &left.operation, &left.adapter, &left.code_hash, &left.name).cmp(&(
+            &right.scope,
+            &right.operation,
+            &right.adapter,
+            &right.code_hash,
+            &right.name,
+        ))
+    });
+    records.dedup_by(|left, right| {
+        left.scope == right.scope
+            && left.operation == right.operation
+            && left.adapter == right.adapter
+            && left.code_hash == right.code_hash
+            && left.name == right.name
+    });
+    metadata.runtime.trusted_external_verifiers = records.clone();
+
+    let grouped = records.iter().fold(BTreeMap::<(String, String), Vec<_>>::new(), |mut grouped, record| {
+        grouped.entry((record.scope.clone(), record.operation.clone())).or_default().push(record);
+        grouped
+    });
+    for ((scope, operation), bindings) in grouped {
+        rewrite_trusted_external_evidence(metadata, &scope, &operation, &bindings);
+    }
+    metadata.runtime.proof_plan_soundness = crate::proof_plan::soundness::check_metadata(metadata, false);
+    Ok(())
+}
+
+fn validate_trusted_external_declaration(declaration: &CkbTrustedExternalVerifierConfig) -> Result<()> {
+    let canonical_hash = hex_decode(&declaration.code_hash).filter(|bytes| hex_encode(bytes) == declaration.code_hash).is_some();
+    let required_text = [
+        ("name", declaration.name.as_str()),
+        ("scope", declaration.scope.as_str()),
+        ("source_identity", declaration.source_identity.as_str()),
+        ("applicability", declaration.applicability.as_str()),
+        ("trust_basis", declaration.trust_basis.as_str()),
+    ];
+    let adapter_valid = matches!(
+        (declaration.operation.as_str(), declaration.adapter.as_str()),
+        ("exec", "u8-args-v1" | "hex4-v1") | ("spawn-wait", "hex4-v1")
+    );
+    if declaration.schema != TRUSTED_EXTERNAL_VERIFIER_SCHEMA
+        || !adapter_valid
+        || declaration.hash_type != "data"
+        || declaration.code_hash.len() != 64
+        || !canonical_hash
+        || required_text.iter().any(|(_, value)| value.trim().is_empty() || value.len() > 4_096)
+        || declaration.guarantees.is_empty()
+        || declaration.guarantees.len() > 64
+        || declaration.guarantees.iter().any(|guarantee| guarantee.trim().is_empty() || guarantee.len() > 4_096)
+    {
+        return Err(CompileError::without_span(format!(
+            "trusted external verifier declaration '{}' is invalid: require schema '{}', operation/adapter exec+(u8-args-v1|hex4-v1) or spawn-wait+hex4-v1, hash_type=data, a canonical lowercase 32-byte code_hash, bounded non-empty identity/applicability/trust text, and 1..=64 bounded guarantees",
+            declaration.name, TRUSTED_EXTERNAL_VERIFIER_SCHEMA
+        ))
+        .with_code("E2113"));
+    }
+    Ok(())
+}
+
+fn rewrite_trusted_external_evidence(
+    metadata: &mut CompileMetadata,
+    scope: &str,
+    operation: &str,
+    bindings: &[&cellscript_artifact_checker::TrustedExternalVerifierRecord],
+) {
+    let proof_scope = scope.strip_prefix("helper:").map_or_else(|| scope.to_string(), |name| format!("fn:{name}"));
+    let (category, feature) = if operation == "exec" {
+        ("exec-delegation", "exec-target-and-replaced-continuation")
+    } else {
+        ("spawn-delegation", "spawn-target-and-checked-child-exit")
+    };
+    let identities = bindings
+        .iter()
+        .map(|binding| format!("{}:{}={}", binding.name, binding.adapter, binding.code_hash))
+        .collect::<Vec<_>>()
+        .join(",");
+    let detail = format!(
+        "external verifier identity is checked on-chain before {operation}; trusted declaration(s) [{identities}] are recorded claims and the compiler does not prove external code internals"
+    );
+    let rewrite = |plans: &mut Vec<ProofPlanMetadata>, obligations: &mut Vec<VerifierObligationMetadata>| {
+        for obligation in
+            obligations.iter_mut().filter(|item| item.scope == proof_scope && item.category == category && item.feature == feature)
+        {
+            obligation.status = "trusted-external".to_string();
+            obligation.detail = detail.clone();
+        }
+        for plan in plans.iter_mut().filter(|item| item.origin == proof_scope && item.category == category && item.feature == feature)
+        {
+            plan.evidence_tier = EvidenceTier::TrustedExternal;
+            plan.coverage.extend([
+                "identity-binding:runtime-load-cell-data-hash-before-delegation-v1".to_string(),
+                format!("trusted-external:{identities}"),
+                "compiler-proves-external-internals:false".to_string(),
+            ]);
+            plan.coverage.sort();
+            plan.coverage.dedup();
+            plan.on_chain_checked = true;
+            plan.on_chain_checked_obligations = vec![
+                format!("{category}:{feature}=trusted-external"),
+                "selected CellDep DATA_HASH equals the source-pinned verifier hash before delegation".to_string(),
+                "EXEC process replacement or SPAWN/WAIT child-exit contract is enforced by emitted runtime code".to_string(),
+            ];
+            plan.builder_assumptions.clear();
+            plan.codegen_coverage_status = "covered".to_string();
+            plan.status = "trusted-external".to_string();
+            plan.detail = detail.clone();
+            plan.diagnostics = vec![ProofPlanDiagnosticMetadata {
+                severity: "info".to_string(),
+                message: "trusted-external discharges target identity and delegation binding only; external verifier semantics remain outside compiler proof".to_string(),
+            }];
+        }
+    };
+    rewrite(&mut metadata.runtime.proof_plan, &mut metadata.runtime.verifier_obligations);
+    for action in &mut metadata.actions {
+        rewrite(&mut action.proof_plan, &mut action.verifier_obligations);
+        rewrite_trusted_external_requirements(&mut action.transaction_runtime_input_requirements, &proof_scope, feature);
+    }
+    for function in &mut metadata.functions {
+        rewrite(&mut function.proof_plan, &mut function.verifier_obligations);
+        rewrite_trusted_external_requirements(&mut function.transaction_runtime_input_requirements, &proof_scope, feature);
+    }
+    for lock in &mut metadata.locks {
+        rewrite(&mut lock.proof_plan, &mut lock.verifier_obligations);
+        rewrite_trusted_external_requirements(&mut lock.transaction_runtime_input_requirements, &proof_scope, feature);
+    }
+    rewrite_trusted_external_requirements(&mut metadata.runtime.transaction_runtime_input_requirements, &proof_scope, feature);
+}
+
+fn rewrite_trusted_external_requirements(requirements: &mut [TransactionRuntimeInputRequirementMetadata], scope: &str, feature: &str) {
+    for requirement in requirements.iter_mut().filter(|item| item.scope == scope && item.feature == feature) {
+        requirement.status = "trusted-external".to_string();
+        requirement.blocker = None;
+        requirement.blocker_class = None;
+        requirement.abi = "runtime-load-cell-data-hash-before-delegation-v1".to_string();
+    }
 }
 
 fn validate_ckb_hash_type(hash_type: &str) -> Result<()> {
@@ -3586,6 +3935,7 @@ fn is_known_ckb_runtime_source(source: &str) -> bool {
             | "CurrentScript/Input/GroupInput/GroupOutput"
             | "Process"
             | "Profile"
+            | "Transaction"
     )
 }
 
@@ -3593,6 +3943,7 @@ fn is_known_ckb_runtime_syscall(syscall: &str) -> bool {
     matches!(
         syscall,
         "LOAD_CELL"
+            | "LOAD_TRANSACTION"
             | "LOAD_CELL_BY_FIELD"
             | "LOAD_CELL_DATA"
             | "LOAD_HEADER"
@@ -3620,6 +3971,7 @@ fn is_known_ckb_runtime_syscall(syscall: &str) -> bool {
             | "CKB_BLAKE2B"
             | "SHA256"
             | "SPAWN"
+            | "EXEC"
             | "WAIT"
             | "PROCESS_ID"
             | "PIPE"
@@ -3632,6 +3984,7 @@ fn is_known_ckb_runtime_syscall(syscall: &str) -> bool {
 
 fn ckb_runtime_syscall_allows_source(syscall: &str, source: &str) -> bool {
     match syscall {
+        "LOAD_TRANSACTION" => source == "Transaction",
         "LOAD_CELL" => matches!(source, "Input" | "Output" | "CellDep" | "GroupInput" | "GroupOutput"),
         "LOAD_CELL_BY_FIELD" => matches!(source, "Input" | "Output" | "GroupInput" | "GroupOutput" | "CellDep" | "SourceView"),
         "LOAD_CELL_DATA" => {
@@ -3661,7 +4014,7 @@ fn ckb_runtime_syscall_allows_source(syscall: &str, source: &str) -> bool {
         "CAPACITY_POLICY" => source == "Output",
         "CKB_BLAKE2B" => source == "Profile",
         "SHA256" => source == "Profile",
-        "SPAWN" => source == "CellDep",
+        "SPAWN" | "EXEC" => source == "CellDep",
         "WAIT" | "PROCESS_ID" | "PIPE" | "PIPE_WRITE" | "PIPE_READ" | "INHERITED_FD" | "CLOSE" => source == "Process",
         _ => false,
     }
@@ -3836,6 +4189,26 @@ fn validate_ckb_script_reference_metadata(metadata: &CompileMetadata) -> Result<
                     return Err(CompileError::without_span(format!(
                         "{}.status '{}' does not match expected 'checked-runtime-load-cell-dep'",
                         prefix, reference.status
+                    )));
+                }
+            }
+            "trusted-external-exec" | "trusted-external-spawn-wait" => {
+                let Some(code_hash) = reference.code_hash.as_deref() else {
+                    return Err(CompileError::without_span(format!(
+                        "{}.code_hash is required for trusted external verifier references",
+                        prefix
+                    )));
+                };
+                if !is_canonical_hash_hex(code_hash) || reference.hash_type.as_deref() != Some("data") {
+                    return Err(CompileError::without_span(format!("{} must bind a canonical data code hash", prefix)));
+                }
+                if reference.args.is_some()
+                    || reference.dep_source != "CellDep selected at runtime and bound by DATA_HASH"
+                    || reference.status != "trusted-external-identity-bound"
+                {
+                    return Err(CompileError::without_span(format!(
+                        "{} does not carry the canonical trusted external CellDep binding contract",
+                        prefix
                     )));
                 }
             }
@@ -5953,7 +6326,7 @@ pub fn compile_with_executable_surface_policy(
 ) -> Result<CompileResult> {
     let ast = generics::monomorphize(&frontend::parse(source, options.edition)?)?;
 
-    let mut result = compile_ast_with_build(&ast, &options, None, None, None, policy)?;
+    let mut result = compile_ast_with_build(&ast, &options, None, None, None, None, policy)?;
     bind_compile_result_source_metadata(&mut result, vec![source_unit_from_bytes("<memory>", "memory", source.as_bytes())])?;
     result.validate()?;
     Ok(result)
@@ -5966,6 +6339,7 @@ pub fn compile_fungible_type_group_entry(source: &str, options: CompileOptions) 
     let mut result = compile_ast_with_build(
         &ast,
         &options,
+        None,
         None,
         None,
         Some(&CompileEntryScope::FungibleTypeGroupV1),
@@ -5985,7 +6359,7 @@ pub fn compile_fungible_type_group_entry_for(
 ) -> Result<CompileResult> {
     let ast = generics::monomorphize(&frontend::parse(source, options.edition)?)?;
     let scope = CompileEntryScope::FungibleTypeGroupV1For(type_name.into());
-    let mut result = compile_ast_with_build(&ast, &options, None, None, Some(&scope), ExecutableSurfacePolicy::AllowFailClosed)?;
+    let mut result = compile_ast_with_build(&ast, &options, None, None, None, Some(&scope), ExecutableSurfacePolicy::AllowFailClosed)?;
     bind_compile_result_source_metadata(&mut result, vec![source_unit_from_bytes("<memory>", "memory", source.as_bytes())])?;
     result.validate()?;
     Ok(result)
@@ -6002,6 +6376,7 @@ pub fn compile_metadata(source: &str, edition: CellScriptEdition, target: Option
     executable_surface::validate_ir_module(&ir)?;
     let mut metadata = compile_metadata_from_ir(&ir, artifact_format, target_profile, edition, None);
     bind_public_interface(&mut metadata, &ast);
+    apply_trusted_external_verifiers(&mut metadata, &ir, &[])?;
     bind_typed_semantics(&mut metadata, &ir);
     bind_source_metadata(&mut metadata, vec![source_unit_from_bytes("<memory>", "memory", source.as_bytes())]);
     validate_compile_metadata(&metadata, artifact_format)?;
@@ -6075,6 +6450,10 @@ pub fn compile_metadata_with_diagnostics(
     }
     let mut metadata = compile_metadata_from_ir(&ir, artifact_format, target_profile, edition, None);
     bind_public_interface(&mut metadata, &ast);
+    if let Err(error) = apply_trusted_external_verifiers(&mut metadata, &ir, &[]) {
+        diagnostics.push(error);
+        return CompileMetadataDiagnosticReport { metadata: None, diagnostics };
+    }
     bind_typed_semantics(&mut metadata, &ir);
     bind_source_metadata(&mut metadata, vec![source_unit_from_bytes("<memory>", "memory", source.as_bytes())]);
     if let Err(error) = validate_compile_metadata(&metadata, artifact_format) {
@@ -6121,6 +6500,10 @@ pub fn compile_sources_metadata_with_diagnostics(
     }
     let mut metadata = compile_metadata_from_ir(&ir, artifact_format, target_profile, edition, None);
     bind_public_interface(&mut metadata, &entry.ast);
+    if let Err(error) = apply_trusted_external_verifiers(&mut metadata, &ir, &[]) {
+        diagnostics.push(error);
+        return CompileMetadataDiagnosticReport { metadata: None, diagnostics };
+    }
     bind_typed_semantics(&mut metadata, &ir);
     let source_units = sources
         .iter()
@@ -6226,6 +6609,14 @@ fn compile_file_metadata_with_diagnostics(
     let mut metadata =
         compile_metadata_from_ir(&ir, artifact_format, target_profile, options.edition, options.primitive_compat.as_deref());
     bind_public_interface(&mut metadata, &entry.ast);
+    let trusted_external_verifiers = manifest
+        .as_ref()
+        .and_then(|manifest| manifest.deploy.ckb.as_ref())
+        .map_or(&[][..], |ckb| ckb.trusted_external_verifiers.as_slice());
+    if let Err(error) = apply_trusted_external_verifiers(&mut metadata, &ir, trusted_external_verifiers) {
+        diagnostics.push(error);
+        return CompileMetadataDiagnosticReport { metadata: None, diagnostics };
+    }
     bind_typed_semantics(&mut metadata, &ir);
     match collect_source_units_for_compile_file(path).and_then(|source_units| {
         bind_source_metadata(&mut metadata, source_units);
@@ -6652,6 +7043,7 @@ fn compile_ast_with_build(
     options: &CompileOptions,
     resolver: Option<(&ModuleResolver, &str)>,
     build: Option<&BuildConfig>,
+    trusted_external_verifiers: Option<&[CkbTrustedExternalVerifierConfig]>,
     entry_scope: Option<&CompileEntryScope>,
     executable_surface_policy: ExecutableSurfacePolicy,
 ) -> Result<CompileResult> {
@@ -6666,6 +7058,7 @@ fn compile_ast_with_build(
     let mut metadata =
         compile_metadata_from_ir(ir, artifact_format, target_profile, options.edition, options.primitive_compat.as_deref());
     bind_public_interface(&mut metadata, lowering_ast);
+    apply_trusted_external_verifiers(&mut metadata, ir, trusted_external_verifiers.unwrap_or_default())?;
     bind_typed_semantics(&mut metadata, ir);
     let target_policy_violations = target_profile_artifact_policy_violations(&metadata, target_profile);
     if !target_policy_violations.is_empty() {
@@ -6916,6 +7309,7 @@ fn compile_file_with_entry_scope<P: AsRef<Utf8Path>>(
         &options,
         Some((&project.resolver, &ast.name)),
         manifest.as_ref().map(|manifest| &manifest.build),
+        manifest.as_ref().and_then(|manifest| manifest.deploy.ckb.as_ref()).map(|ckb| ckb.trusted_external_verifiers.as_slice()),
         entry_scope.as_ref(),
         executable_surface_policy,
     )?;
@@ -7825,6 +8219,7 @@ fn compile_metadata_from_ir(
             standalone_runner_compatible,
             fail_closed_runtime_features,
             ckb_runtime_accesses,
+            trusted_external_verifiers: Vec::new(),
             transaction_view_handles,
             borrow_regions,
             capability_proofs,
@@ -8330,6 +8725,7 @@ fn scope_ir_to_fungible_type_group_v1(ir: &ir::IrModule, selected_type: Option<&
             write_intents: Vec::new(),
             bounded_collection_ops: Vec::new(),
             borrow_regions: Vec::new(),
+            trusted_external_calls: Vec::new(),
             enforced_claims: Vec::new(),
             blocks: vec![ir::IrBlock {
                 id: ir::BlockId(0),
@@ -10235,6 +10631,28 @@ fn body_verifier_obligations(
                 "Spawn target must resolve to a transaction CellDep or DepGroup script reference; DSL spawn syntax does not inline or authenticate the child script",
             );
         }
+        if access.operation == "exec-process-replacement" {
+            push_verifier_obligation(
+                &mut obligations,
+                &mut seen,
+                &scope,
+                "exec-delegation",
+                "exec-target-and-replaced-continuation",
+                "runtime-required",
+                "EXEC replaces this process: the selected CellDep ELF decides acceptance and parent checks after EXEC do not execute; artifact validation does not authenticate or prove the external verifier",
+            );
+        }
+        if access.operation == "spawn-wait-checked" {
+            push_verifier_obligation(
+                &mut obligations,
+                &mut seen,
+                &scope,
+                "spawn-delegation",
+                "spawn-target-and-checked-child-exit",
+                "runtime-required",
+                "SPAWN and WAIT require a successful child exit before continuing parent checks; artifact validation does not authenticate or prove the selected external CellDep verifier",
+            );
+        }
     }
 
     for check in body_static_resource_operation_checks(body) {
@@ -11413,6 +11831,36 @@ fn transaction_runtime_input_requirements_from_obligations(
 ) -> Vec<TransactionRuntimeInputRequirementMetadata> {
     let mut requirements = Vec::new();
     for obligation in obligations {
+        if obligation.category == "spawn-delegation" && obligation.status == "runtime-required" {
+            requirements.push(transaction_runtime_input_requirement(
+                obligation,
+                "spawn-verifier-cell-dep",
+                "runtime-required",
+                Some("authenticate the selected CellDep ELF and audit its complete child validation path; successful WAIT alone is not proof of the child's claimed semantics"),
+                Some("spawn-delegated-verifier-gap"),
+                "CellDep",
+                "spawn-verifier",
+                Some("script"),
+                "ckb-spawn-ipc",
+                None,
+            ));
+            continue;
+        }
+        if obligation.category == "exec-delegation" && obligation.status == "runtime-required" {
+            requirements.push(transaction_runtime_input_requirement(
+                obligation,
+                "exec-target-cell-dep",
+                "runtime-required",
+                Some("authenticate the selected CellDep ELF and audit its complete delegated validation path; parent post-EXEC checks are not executed"),
+                Some("exec-delegated-verifier-gap"),
+                "CellDep",
+                "exec-target",
+                Some("script"),
+                "ckb-exec-process-replacement",
+                None,
+            ));
+            continue;
+        }
         if obligation.category == "spawn-target" && obligation.status == "runtime-required" {
             requirements.push(transaction_runtime_input_requirement(
                 obligation,
@@ -14851,9 +15299,41 @@ fn body_fail_closed_runtime_features(
     for block in &body.blocks {
         for instruction in &block.instructions {
             match instruction {
+                ir::IrInstruction::Call { func, args, .. }
+                    if matches!(func.as_str(), "__ckb_transaction_blake2b_gather" | "__ckb_witness_blake2b_select_chunks") =>
+                {
+                    let select = func == "__ckb_witness_blake2b_select_chunks";
+                    let valid = args.len() == if select { 6 } else { 4 }
+                        && args.iter().enumerate().skip(if select { 3 } else { 0 }).all(|(index, arg)| {
+                            let ty = if !select && index < 2 { "Vec<u64>" } else { "Vec<u8>" };
+                            matches!(arg, ir::IrOperand::Var(var) if var.ty == ir::IrType::Named(ty.into()) && prelude_availability.stack_collection_vars.contains(&var.id))
+                        });
+                    if !valid {
+                        features.insert("gather-hash-materialization".to_string());
+                    }
+                }
                 ir::IrInstruction::Call { func, .. } if ir::IrDeferredRuntimeFeature::from_helper(func).is_some() => {
                     let deferred = ir::IrDeferredRuntimeFeature::from_helper(func).expect("guarded deferred runtime feature");
                     features.insert(deferred.feature().to_string());
+                }
+                ir::IrInstruction::Call { func, args, .. }
+                    if matches!(func.as_str(), "__ckb_exec_cell_dep_hex4" | "__ckb_spawn_wait_cell_dep_hex4") =>
+                {
+                    let materialized = args.len() == 6
+                        && args.get(1).is_some_and(|arg| {
+                            matches!(arg, ir::IrOperand::Var(var) if var.ty == ir::IrType::Named("Vec<u8>".into())
+                            && prelude_availability.stack_collection_vars.contains(&var.id))
+                        });
+                    if !materialized {
+                        features.insert(
+                            if func == "__ckb_exec_cell_dep_hex4" {
+                                "exec-argv-materialization"
+                            } else {
+                                "spawn-argv-materialization"
+                            }
+                            .to_string(),
+                        );
+                    }
                 }
                 ir::IrInstruction::FieldAccess { obj, field, .. } => {
                     if !is_executable_schema_field_access(obj, field, param_schema_vars, type_layouts)
@@ -15323,10 +15803,11 @@ fn metadata_prelude_availability(
                                     .first()
                                     .is_some_and(|arg| metadata_fixed_hash_input_available(arg, &availability, type_layouts))
                         }
-                        "__ckb_current_script_hash" => args.is_empty(),
+                        "__ckb_current_script_hash" | "__ckb_raw_transaction_hash_without_cell_deps" => args.is_empty(),
                         "__ckb_input_out_point_tx_hash"
                         | "__ckb_cell_lock_hash"
                         | "__ckb_cell_type_hash"
+                        | "__ckb_cell_data_hash_field"
                         | "__ckb_cell_data_hash"
                         | "__ckb_cell_lock_code_hash"
                         | "__ckb_cell_type_code_hash"
@@ -15337,6 +15818,10 @@ fn metadata_prelude_availability(
                         | "__ckb_witness_input_type"
                         | "__ckb_witness_output_type" => args.len() == 1,
                         "__ckb_cell_data_hash_at" => args.len() == 2,
+                        "__ckb_witness_bytes32" => args.len() == 2,
+                        "__ckb_cell_data_blake2b_span" | "__ckb_witness_blake2b_span" => args.len() == 3,
+                        "__ckb_transaction_blake2b_gather" => args.len() == 4,
+                        "__ckb_witness_blake2b_select_chunks" => args.len() == 6,
                         _ => false,
                     };
                     if fixed_hash_result {
@@ -15483,7 +15968,18 @@ fn metadata_prelude_availability(
                                 .insert(dest.id, MetadataAggregatePointerSource { ty: dest.ty.clone() });
                         }
                     } else if availability.aggregate_pointer_vars.contains_key(&arr.id) {
-                        if let (ir::IrType::Array(inner, len), Some(index)) = (&arr.ty, const_usize_operand(idx)) {
+                        // Fixed-byte arrays already have bounded pointer-backed
+                        // index lowering. Preserve the existing constant-index
+                        // path and admit dynamic byte reads only; wider aggregate
+                        // element representations keep their separate boundary.
+                        if matches!(&arr.ty, ir::IrType::Array(inner, _) if **inner == ir::IrType::U8)
+                            && dest.ty == ir::IrType::U8
+                            && const_usize_operand(idx).is_none()
+                            && metadata_u64_operand_available(idx, &availability)
+                        {
+                            availability.scalar_vars.insert(dest.id);
+                            availability.fixed_value_vars.insert(dest.id);
+                        } else if let (ir::IrType::Array(inner, len), Some(index)) = (&arr.ty, const_usize_operand(idx)) {
                             let element_ty = inner.as_ref();
                             let fixed_size = type_static_length(element_ty);
                             if index < *len && fixed_size.is_some() {
@@ -16476,6 +16972,45 @@ fn body_ckb_runtime_features(
                 ir::IrInstruction::Call { func, .. } if func == "__ckb_input_since" => {
                     features.insert("ckb-input-since".to_string());
                 }
+                ir::IrInstruction::Call { func, .. } if func == "__ckb_raw_transaction_hash_without_cell_deps" => {
+                    features.insert("ckb-blake2b".to_string());
+                    features.insert("ckb-raw-transaction-empty-cell-deps-hash".to_string());
+                }
+                ir::IrInstruction::Call { func, .. }
+                    if matches!(func.as_str(), "__ckb_transaction_blake2b_gather" | "__ckb_witness_blake2b_select_chunks") =>
+                {
+                    features.insert("ckb-blake2b".to_string());
+                    features.insert("ckb-gather-hash".to_string());
+                }
+                ir::IrInstruction::Call { func, .. } if func == "__ckb_transaction_u32_le" => {
+                    features.insert("ckb-transaction-byte-read".to_string());
+                }
+                ir::IrInstruction::Call { func, .. } if func == "__ckb_witness_bytes32" => {
+                    features.insert("ckb-witness-read".to_string());
+                    features.insert("ckb-witness-exact-fixed-bytes".to_string());
+                }
+                ir::IrInstruction::Call { func, .. } if func == "__ckb_cell_data_hash_field" => {
+                    features.insert("ckb-source-cell-fields".to_string());
+                    features.insert("ckb-consensus-data-hash-field".to_string());
+                }
+                ir::IrInstruction::Call { func, .. }
+                    if matches!(func.as_str(), "__ckb_exec_cell_dep_u8_args" | "__ckb_exec_cell_dep_hex4") =>
+                {
+                    features.insert("ckb-exec-process-replacement".to_string());
+                }
+                ir::IrInstruction::Call { func, .. } if func == "__ckb_input_since_at" => {
+                    features.insert("ckb-input-since".to_string());
+                    features.insert("ckb-source-cell-fields".to_string());
+                }
+                ir::IrInstruction::Call { func, .. }
+                    if matches!(
+                        func.as_str(),
+                        "__ckb_cell_lock_size" | "__ckb_cell_type_size" | "__ckb_cell_lock_u8" | "__ckb_cell_type_u8"
+                    ) =>
+                {
+                    features.insert("ckb-source-cell-fields".to_string());
+                    features.insert("ckb-serialized-script-read".to_string());
+                }
                 ir::IrInstruction::Call { func, .. }
                     if matches!(func.as_str(), "__ckb_since_epoch_absolute" | "__ckb_since_epoch_relative") =>
                 {
@@ -16595,6 +17130,9 @@ fn body_ckb_runtime_features(
                             | "__ckb_cell_data_hash"
                             | "__ckb_cell_data_hash_at"
                             | "__ckb_cell_data_size"
+                            | "__ckb_cell_count"
+                            | "__ckb_cell_has_type"
+                            | "__ckb_cell_data_u8"
                             | "__ckb_cell_data_u32_le"
                             | "__ckb_cell_data_u64_le"
                     ) =>
@@ -16640,7 +17178,11 @@ fn body_ckb_runtime_features(
                     }
                     if matches!(
                         func.as_str(),
-                        "__ckb_cell_data_hash" | "__ckb_cell_data_hash_at" | "__ckb_cell_data_u32_le" | "__ckb_cell_data_u64_le"
+                        "__ckb_cell_data_hash"
+                            | "__ckb_cell_data_hash_at"
+                            | "__ckb_cell_data_u8"
+                            | "__ckb_cell_data_u32_le"
+                            | "__ckb_cell_data_u64_le"
                     ) {
                         features.insert("ckb-cell-data-decode".to_string());
                     }
@@ -16648,6 +17190,15 @@ fn body_ckb_runtime_features(
                     {
                         features.insert("ckb-script-identity-requirements".to_string());
                     }
+                }
+                ir::IrInstruction::Call { func, .. }
+                    if matches!(func.as_str(), "__ckb_cell_data_blake2b_span" | "__ckb_witness_blake2b_span") =>
+                {
+                    features.insert("ckb-blake2b".to_string());
+                    features.insert("ckb-exact-span-hash".to_string());
+                    features.insert(
+                        if func == "__ckb_witness_blake2b_span" { "ckb-witness-read" } else { "ckb-source-cell-fields" }.to_string(),
+                    );
                 }
                 ir::IrInstruction::Call { func, .. } if func == "__ckb_require_current_script_args_empty" => {
                     features.insert("ckb-script-args-requirements".to_string());
@@ -17039,6 +17590,15 @@ fn body_ckb_runtime_accesses(
                 });
             }
             if let ir::IrInstruction::Call { func, args, .. } = instruction {
+                if func == "__ckb_spawn_wait_cell_dep_hex4" {
+                    accesses.push(CkbRuntimeAccessMetadata {
+                        operation: "spawn-child-exit-checked".to_string(),
+                        syscall: "WAIT".to_string(),
+                        source: "Process".to_string(),
+                        index: 0,
+                        binding: "ckb::spawn_wait_cell_dep_hex4".to_string(),
+                    });
+                }
                 if matches!(func.as_str(), "__novaseal_bip340_require_signature" | "__novaseal_bip340_require_signature_from_cell_dep")
                 {
                     let dep_index = if func == "__novaseal_bip340_require_signature_from_cell_dep" {
@@ -17207,6 +17767,26 @@ fn identity_runtime_access(operation: &str, source: &str, index: usize, binding:
 
 fn ckb_v014_runtime_access(func: &str) -> Option<(&'static str, &'static str, &'static str, &'static str)> {
     match func {
+        "__ckb_witness_bytes32" => Some(("witness-bytes32-exact", "LOAD_WITNESS", "Witness", "witness::bytes32")),
+        "__ckb_transaction_u32_le" => Some(("transaction-u32-le-exact", "LOAD_TRANSACTION", "Transaction", "ckb::transaction_u32_le")),
+        "__ckb_transaction_blake2b_gather" => {
+            Some(("transaction-blake2b-gather", "LOAD_TRANSACTION", "Transaction", "ckb::transaction_blake2b_gather"))
+        }
+        "__ckb_witness_blake2b_select_chunks" => {
+            Some(("witness-blake2b-select-chunks", "LOAD_WITNESS", "Witness", "witness::blake2b_select_chunks"))
+        }
+        "__ckb_cell_data_hash_field" => {
+            Some(("cell-data-hash-field", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::cell_data_hash_field"))
+        }
+        "__ckb_raw_transaction_hash_without_cell_deps" => Some((
+            "raw-transaction-empty-cell-deps-hash",
+            "LOAD_TRANSACTION",
+            "Transaction",
+            "ckb::raw_transaction_hash_without_cell_deps",
+        )),
+        "__ckb_exec_cell_dep_u8_args" => Some(("exec-process-replacement", "EXEC", "CellDep", "ckb::exec_cell_dep_u8_args")),
+        "__ckb_exec_cell_dep_hex4" => Some(("exec-process-replacement", "EXEC", "CellDep", "ckb::exec_cell_dep_hex4")),
+        "__ckb_spawn_wait_cell_dep_hex4" => Some(("spawn-wait-checked", "SPAWN", "CellDep", "ckb::spawn_wait_cell_dep_hex4")),
         "__ckb_spawn" => Some(("spawn", "SPAWN", "CellDep", "spawn")),
         "__ckb_wait" => Some(("wait", "WAIT", "Process", "wait")),
         "__ckb_process_id" => Some(("process-id", "PROCESS_ID", "Process", "process_id")),
@@ -17392,7 +17972,19 @@ fn ckb_v014_runtime_access(func: &str) -> Option<(&'static str, &'static str, &'
         "__ckb_current_script_hash" => Some(("current-script-hash", "LOAD_SCRIPT_HASH", "CurrentScript", "ckb::current_script_hash")),
         "__ckb_cell_data_hash" => Some(("cell-data-hash", "LOAD_CELL_DATA", "SourceView", "ckb::cell_data_hash")),
         "__ckb_cell_data_hash_at" => Some(("cell-data-hash-at", "LOAD_CELL_DATA", "SourceView", "ckb::cell_data_hash_at")),
+        "__ckb_cell_data_blake2b_span" => {
+            Some(("cell-data-blake2b-span", "LOAD_CELL_DATA", "SourceView", "ckb::cell_data_blake2b_span"))
+        }
+        "__ckb_witness_blake2b_span" => Some(("witness-blake2b-span", "LOAD_WITNESS", "Witness", "witness::blake2b_span")),
         "__ckb_cell_data_size" => Some(("cell-data-size", "LOAD_CELL_DATA", "SourceView", "ckb::cell_data_size")),
+        "__ckb_cell_lock_size" => Some(("cell-lock-script-size", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::cell_lock_size")),
+        "__ckb_cell_type_size" => Some(("cell-type-script-size", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::cell_type_size")),
+        "__ckb_cell_lock_u8" => Some(("cell-lock-script-byte", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::cell_lock_u8")),
+        "__ckb_cell_type_u8" => Some(("cell-type-script-byte", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::cell_type_u8")),
+        "__ckb_input_since_at" => Some(("input-since-at", "LOAD_INPUT_BY_FIELD", "SourceView", "ckb::input_since_at")),
+        "__ckb_cell_count" => Some(("cell-source-count", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::cell_count")),
+        "__ckb_cell_has_type" => Some(("cell-type-presence", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::cell_has_type")),
+        "__ckb_cell_data_u8" => Some(("cell-data-u8-exact", "LOAD_CELL_DATA", "SourceView", "ckb::cell_data_u8")),
         "__ckb_cell_data_u32_le" => Some(("cell-data-u32-le", "LOAD_CELL_DATA", "SourceView", "ckb::cell_data_u32_le")),
         "__ckb_cell_data_u64_le" => Some(("cell-data-u64-le", "LOAD_CELL_DATA", "SourceView", "ckb::cell_data_u64_le")),
         "__dao_accumulated_rate" => Some(("dao-accumulated-rate", "LOAD_HEADER", "HeaderDep", "dao::accumulated_rate")),
@@ -17460,6 +18052,10 @@ fn ckb_v014_runtime_access(func: &str) -> Option<(&'static str, &'static str, &'
             Some(("witness-output-type", "LOAD_WITNESS_ARGS_OUTPUT_TYPE", "GroupOutput", "witness::output_type"))
         }
         "__ckb_witness_size" => Some(("witness-size", "LOAD_WITNESS", "Witness", "witness::size")),
+        "__ckb_witness_count" => Some(("witness-count", "LOAD_WITNESS", "Witness", "witness::count")),
+        "__ckb_witness_u8" => Some(("witness-u8-exact", "LOAD_WITNESS", "Witness", "witness::byte")),
+        "__ckb_witness_u32_le" => Some(("witness-u32-le-exact", "LOAD_WITNESS", "Witness", "witness::u32_le")),
+        "__ckb_witness_u64_le" => Some(("witness-u64-le-exact", "LOAD_WITNESS", "Witness", "witness::u64_le")),
         "__ckb_require_witness_size_at_least" => {
             Some(("require-witness-size-at-least", "LOAD_WITNESS", "Witness", "ckb::require_witness_size_at_least"))
         }

@@ -3145,27 +3145,28 @@ impl<'a> Parser<'a> {
         if !self.check(&TokenKind::Lt) {
             return false;
         }
-        let mut depth = 0usize;
-        let mut index = self.position;
-        while let Some(token) = self.tokens.get(index) {
-            match token.kind {
-                TokenKind::Lt => depth = depth.saturating_add(1),
-                TokenKind::Gt => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        index += 1;
-                        while self.tokens.get(index).is_some_and(|token| token.kind == TokenKind::Newline) {
-                            index += 1;
-                        }
-                        return self.tokens.get(index).is_some_and(|token| &token.kind == follower);
-                    }
-                }
-                TokenKind::Eof => return false,
-                _ => {}
+        // Probe the type grammar, not angle-bracket balance across later statements.
+        // A comparison may otherwise consume an unrelated function's `-> (...)`.
+        // The probe owns its cursor/diagnostics and retains the type nesting budget.
+        let mut probe = Self::new(self.tokens);
+        probe.position = self.position + 1;
+        probe.type_depth = self.type_depth;
+        while !probe.check(&TokenKind::Gt) && !probe.check(&TokenKind::Eof) {
+            if probe.parse_type().is_err() {
+                return false;
             }
-            index += 1;
+            if probe.check(&TokenKind::Comma) {
+                probe.advance();
+            } else {
+                break;
+            }
         }
-        false
+        if !probe.check(&TokenKind::Gt) {
+            return false;
+        }
+        probe.advance();
+        probe.skip_newlines();
+        probe.check(follower)
     }
 
     fn parse_primary(&mut self) -> Result<Expr> {
@@ -4170,6 +4171,27 @@ fn aggregate_scope_from_target(target: &AggregateTarget) -> Option<&'static str>
 mod tests {
     use super::*;
     use crate::lexer::lex;
+
+    #[test]
+    fn generic_lookahead_does_not_cross_comparisons_or_function_boundaries() {
+        let source = r#"
+module comparison_boundary
+fn before(index: u64, end: u64, start: u64) -> bool {
+    while index < 3 { break }
+    if end < start || end - start < 4 { return false }
+    return true
+}
+fn after() -> (u64, u64) { return (0, 0) }
+"#;
+        assert_eq!(parse(&lex(source).unwrap()).unwrap().items.len(), 2);
+        for source in [
+            "module generic_call\nfn f() -> u64 { return choose<u64>(1) }",
+            "module generic_struct\nfn f() -> u64 { let x = Box<[u8; 32]> { value: 0 } return 0 }",
+            "module generic_nested\nfn f() -> u64 { return choose<Box<u64>>(1) }",
+        ] {
+            parse(&lex(source).unwrap()).unwrap();
+        }
+    }
 
     #[test]
     fn parses_labeled_loop_control() {

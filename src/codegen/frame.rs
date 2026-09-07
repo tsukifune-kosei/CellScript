@@ -542,6 +542,7 @@ impl CodeGenerator {
                             "__ckb_input_out_point_tx_hash"
                                 | "__ckb_cell_lock_hash"
                                 | "__ckb_cell_type_hash"
+                                | "__ckb_cell_data_hash_field"
                                 | "__ckb_cell_data_hash"
                                 | "__ckb_cell_data_hash_at"
                                 | "__ckb_cell_lock_code_hash"
@@ -565,6 +566,21 @@ impl CodeGenerator {
                         self.cell_buffer_size_offsets.insert(dest.id, next_cell_slot);
                         self.cell_buffer_offsets.insert(dest.id, next_cell_slot + 8);
                         next_cell_slot += RUNTIME_CELL_SLOT_SIZE;
+                    }
+                    IrInstruction::Call { dest: Some(dest), func, args }
+                        if ((matches!(func.as_str(), "__ckb_cell_data_blake2b_span" | "__ckb_witness_blake2b_span")
+                            && args.len() == 3)
+                            || (func == "__ckb_raw_transaction_hash_without_cell_deps" && args.is_empty())
+                            || (func == "__ckb_transaction_blake2b_gather" && args.len() == 4)
+                            || (func == "__ckb_witness_bytes32" && args.len() == 2)
+                            || (func == "__ckb_witness_blake2b_select_chunks" && args.len() == 6))
+                            && dest.ty == IrType::Hash =>
+                    {
+                        self.cell_buffer_size_offsets.insert(dest.id, next_cell_slot);
+                        self.cell_buffer_offsets.insert(dest.id, next_cell_slot + 8);
+                        // A digest needs a length word and 32 bytes, not a full
+                        // runtime Cell buffer. Preserve all legacy allocations.
+                        next_cell_slot += 40;
                     }
                     _ => {}
                 }
@@ -1232,6 +1248,16 @@ impl CodeGenerator {
             && let Some(value) = Self::const_as_u128(value)
         {
             self.emit_store_u128_const_to_stack_offset(value, dest_offset);
+            self.emit_store_u128_pointer_for_var(dest.id, dest_offset);
+            return true;
+        }
+        if let IrOperand::Var(var) = src
+            && matches!(var.ty, IrType::U8 | IrType::U16 | IrType::U32 | IrType::U64)
+        {
+            self.emit("# cellscript abi: zero-extend unsigned scalar into u128 storage");
+            self.emit_operand_to_register("t0", src);
+            self.emit_stack_store("t0", dest_offset);
+            self.emit_stack_store("zero", dest_offset + 8);
             self.emit_store_u128_pointer_for_var(dest.id, dest_offset);
             return true;
         }

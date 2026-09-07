@@ -374,6 +374,7 @@ mod tests {
             write_intents: Vec::new(),
             bounded_collection_ops: Vec::new(),
             borrow_regions: Vec::new(),
+            trusted_external_calls: Vec::new(),
             enforced_claims: Vec::new(),
             blocks: Vec::new(),
         }

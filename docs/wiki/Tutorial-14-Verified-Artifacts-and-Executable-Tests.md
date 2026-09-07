@@ -6,7 +6,7 @@ backend. Together they make more compiler claims independently inspectable
 without calling local execution chain evidence.
 
 The experimental `0.26b` line extends the same four-file bundle with
-`cellscript-typed-semantics-v7` inside lowering record v6 and semantic source
+`cellscript-typed-semantics-v8` inside lowering record v6 and semantic source
 mapping in source-map v2. The checker now
 independently validates the IR-shaped typed record, recomputes its layout,
 identity, operation, dataflow, ownership, and borrow invariants, and checks its

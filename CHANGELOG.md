@@ -2,6 +2,38 @@
 
 ## 0.26b - Experimental semantic-foundation branch
 
+- Add bounded, explicit trusted-external verifier delegation. New
+  `trusted_exec_cell_dep_u8_args`, `trusted_exec_cell_dep_hex4`, and
+  `trusted_spawn_wait_cell_dep_hex4` source intrinsics require a compile-time
+  32-byte CKB data hash plus an exact
+  `cellscript-trusted-external-verifier-v1` declaration in `Cell.toml` for the
+  semantic scope, operation, and exact argument adapter. Generated code
+  resolves the selected CellDep,
+  checks its complete `DATA_HASH`, and only then performs EXEC or SPAWN/WAIT;
+  SPAWN also requires a zero child status. Raw delegation remains E2105 and an
+  undeclared trusted call remains E2113 under `DenyFailClosed`;
+  unused/duplicate/non-canonical declarations are rejected with E2113, and raw
+  and trusted calls cannot mix within one scope. Advance compile metadata to
+  schema 66 and typed semantics to v8 with a separate
+  `trusted-external` evidence tier and an explicit
+  `compiler_proves_internal_semantics = false` boundary. The independent
+  checker requires one ordered source/hash/delegate sequence over the same
+  CellDep operand and cross-checks runtime, constraints, typed semantics,
+  ProofPlan, and machine lowering. Real CKB-VM tests prove exact-hash EXEC and
+  SPAWN positives plus CellDep-substitution rejection; checker mutations reject
+  changed hashes, removed records, and evidence-tier inflation. See
+  [Trusted External Verifiers](docs/CELLSCRIPT_TRUSTED_EXTERNAL_VERIFIERS.md).
+
+- Add the bounded real-contract interoperability primitives exercised by the
+  separate Spore and Fiber comparison work: exact witness/data/Lock/Type byte
+  and size reads, exact Script/data-hash fields, Input `since`, transaction
+  preimage reads, checked span and gathered BLAKE2b hashing, bounded byte-vector
+  materialization, and the u8/hex EXEC plus hex SPAWN/WAIT adapters. These are
+  typed, lowered through structured IR, emitted by the internal assembler,
+  surfaced in LSP completion, and classified in the executable-surface matrix.
+  The external verifier itself is not promoted by those raw adapters; production
+  admission requires the trusted-external route above.
+
 - Add a matched cost corpus (`tests/cost_corpus.rs` plus Rust references in
   `tests/fixtures/cost_corpus/`): three scenarios — a two-input pool merge
   with a checked sum and output lock binding, a two-field schema-roll
@@ -60,10 +92,9 @@
   Path-sensitive successor completeness is enforced at the source level: once
   a Cell role is disposed anywhere, every accepting path must dispose of it
   exactly once, loops reject disposal, and double disposal is rejected.
-  `lock = same` and `exact_hash(...)` are reserved with precise remediation
-  (unconstrained-lock successors have no conservation enforcement yet, and
-  the Script-hash value contract is not frozen); successors written in both
-  branches of an `if` still meet the existing single-create entry contract.
+  `lock = same` and successors written in both branches of an `if` are now
+  executable as described above. `exact_hash(...)` remains reserved with
+  precise remediation because the Script-hash value contract is not frozen.
   The formatter prints the relation and its output recompiles identically.
 
 - Record a WASM playground budget blocker: the canonical container rebuild

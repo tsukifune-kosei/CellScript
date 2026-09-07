@@ -46,13 +46,16 @@ agenda; it does not mark any acceptance checkbox below as project-approved.
 
 Implemented:
 
-- `cellscript-typed-semantics-v7` embeds
+- `cellscript-typed-semantics-v8` embeds
   `cellscript-semantic-foundation-v3` and a bounded,
   hash-consed `cellscript-value-provenance-dag-v1`;
 - canonical transaction roles, complete Cell-envelope disposition records,
   enforcement-classified claims, legacy ambiguity nodes, and distinct core,
   entry, artifact-contract, deployable-artifact, verified-bundle, source, and
   source-map identities;
+- a separate `trusted-external` verifier record binds an exact CellDep data
+  hash and ordered delegation sequence without claiming that the compiler
+  proves third-party code internals;
 - executable source-condition claims that bind canonical `require`/`enforce`
   statements to condition provenance, typed success/failure control flow, and
   the exact fail-closed runtime error; supporting ProofPlan obligations remain

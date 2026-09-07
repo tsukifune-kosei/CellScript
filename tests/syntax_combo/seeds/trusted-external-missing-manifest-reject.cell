@@ -1,0 +1,17 @@
+// audit:phase=reject_compile
+// audit:contains=E2113
+module cellscript::audit::trusted_external_missing_manifest
+
+action verify() -> u64 {
+    verification
+    ckb::trusted_exec_cell_dep_u8_args(
+        0,
+        Hash::from_bytes(b"\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11\x11"),
+        0,
+        0,
+        0,
+        0,
+        0
+    )
+    return 0
+}

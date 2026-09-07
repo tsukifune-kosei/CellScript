@@ -6612,8 +6612,84 @@ impl<'a> TypeChecker<'a> {
                             self.validate_builtin_arity(name, 0, arg_types, call.span)?;
                             Type::U64
                         }
-                        ("ckb", "current_script_hash") => {
+                        ("ckb", "exec_cell_dep_u8_args") => {
+                            self.validate_builtin_arity(name, 6, arg_types, call.span)?;
+                            if arg_types.iter().any(|ty| *ty != Type::U64) {
+                                return Err(CompileError::new(
+                                    "ckb::exec_cell_dep_u8_args expects six u64 values: CellDep index, argc, and four byte arguments",
+                                    call.span,
+                                ));
+                            }
+                            Type::Unit
+                        }
+                        ("ckb", "trusted_exec_cell_dep_u8_args") => {
+                            self.validate_builtin_arity(name, 7, arg_types, call.span)?;
+                            if arg_types[0] != Type::U64
+                                || arg_types[1] != Type::Hash
+                                || arg_types[2..].iter().any(|ty| *ty != Type::U64)
+                            {
+                                return Err(CompileError::new(
+                                    "ckb::trusted_exec_cell_dep_u8_args expects (dep: u64, code_hash: Hash, argc: u64, arg0: u64, arg1: u64, arg2: u64, arg3: u64)",
+                                    call.span,
+                                ));
+                            }
+                            Type::Unit
+                        }
+                        ("ckb", "exec_cell_dep_hex4" | "spawn_wait_cell_dep_hex4") => {
+                            self.validate_builtin_arity(name, 6, arg_types, call.span)?;
+                            if arg_types[0] != Type::U64
+                                || arg_types[1] != Type::Named("Vec<u8>".to_string())
+                                || arg_types[2..].iter().any(|ty| *ty != Type::U64)
+                            {
+                                return Err(CompileError::new(
+                                    format!("{name} expects (dep: u64, bytes: Vec<u8>, len0: u64, len1: u64, len2: u64, len3: u64)"),
+                                    call.span,
+                                ));
+                            }
+                            Type::Unit
+                        }
+                        ("ckb", "trusted_exec_cell_dep_hex4" | "trusted_spawn_wait_cell_dep_hex4") => {
+                            self.validate_builtin_arity(name, 7, arg_types, call.span)?;
+                            if arg_types[0] != Type::U64
+                                || arg_types[1] != Type::Hash
+                                || arg_types[2] != Type::Named("Vec<u8>".to_string())
+                                || arg_types[3..].iter().any(|ty| *ty != Type::U64)
+                            {
+                                return Err(CompileError::new(
+                                    format!("{name} expects (dep: u64, code_hash: Hash, bytes: Vec<u8>, len0: u64, len1: u64, len2: u64, len3: u64)"),
+                                    call.span,
+                                ));
+                            }
+                            Type::Unit
+                        }
+                        ("ckb", "current_script_hash" | "raw_transaction_hash_without_cell_deps") => {
                             self.validate_builtin_arity(name, 0, arg_types, call.span)?;
+                            Type::Hash
+                        }
+                        ("ckb", "transaction_u32_le") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if arg_types[0] != Type::U64 {
+                                return Err(CompileError::new("transaction_u32_le expects a u64 offset", call.span));
+                            }
+                            Type::U64
+                        }
+                        ("ckb", "transaction_blake2b_gather") => {
+                            self.validate_builtin_arity(name, 4, arg_types, call.span)?;
+                            for (ty, expected) in arg_types.iter().zip(["Vec<u64>", "Vec<u64>", "Vec<u8>", "Vec<u8>"]) {
+                                if *ty != Type::Named(expected.to_string()) {
+                                    return Err(CompileError::new("transaction_blake2b_gather expects (offsets: Vec<u64>, lengths: Vec<u64>, prefix: Vec<u8>, suffix: Vec<u8>)", call.span));
+                                }
+                            }
+                            Type::Hash
+                        }
+                        ("witness", "blake2b_select_chunks") => {
+                            self.validate_builtin_arity(name, 6, arg_types, call.span)?;
+                            if !Self::is_witness_args_view_type(&arg_types[0])
+                                || arg_types[1..3].iter().any(|ty| *ty != Type::U64)
+                                || arg_types[3..].iter().any(|ty| *ty != Type::Named("Vec<u8>".into()))
+                            {
+                                return Err(CompileError::new("witness::blake2b_select_chunks expects (view, start: u64, stride: u64, selection: Vec<u8>, prefix: Vec<u8>, suffix: Vec<u8>)", call.span));
+                            }
                             Type::Hash
                         }
                         ("ckb", "since_epoch_absolute" | "since_epoch_relative") => {
@@ -6634,18 +6710,23 @@ impl<'a> TypeChecker<'a> {
                             | "cell_output_index"
                             | "input_out_point_index"
                             | "input_out_point_tx_hash_low"
+                            | "input_since_at"
                             | "cell_lock_hash_low"
                             | "cell_type_hash_low"
                             | "cell_lock_hash_type"
                             | "cell_type_hash_type"
+                            | "cell_count"
+                            | "cell_lock_size"
+                            | "cell_type_size"
                             | "cell_data_size",
                         ) => {
                             self.validate_builtin_arity(name, 1, arg_types, call.span)?;
-                            let source_ok = if matches!(suffix, "input_out_point_index" | "input_out_point_tx_hash_low") {
-                                Self::is_input_view_type(&arg_types[0])
-                            } else {
-                                Self::is_cell_view_type(&arg_types[0])
-                            };
+                            let source_ok =
+                                if matches!(suffix, "input_out_point_index" | "input_out_point_tx_hash_low" | "input_since_at") {
+                                    Self::is_input_view_type(&arg_types[0])
+                                } else {
+                                    Self::is_cell_view_type(&arg_types[0])
+                                };
                             if !source_ok {
                                 return Err(CompileError::new(
                                     format!("{} expects a source view returned by source::*", name),
@@ -6716,6 +6797,21 @@ impl<'a> TypeChecker<'a> {
                             }
                             Type::Unit
                         }
+                        ("ckb", "cell_data_blake2b_span") | ("witness", "blake2b_span") => {
+                            self.validate_builtin_arity(name, 3, arg_types, call.span)?;
+                            let valid_view = if prefix == "ckb" {
+                                Self::is_cell_view_type(&arg_types[0])
+                            } else {
+                                Self::is_witness_args_view_type(&arg_types[0])
+                            };
+                            if !valid_view || arg_types[1] != Type::U64 || arg_types[2] != Type::U64 {
+                                return Err(CompileError::new(
+                                    format!("{} expects (source_view, offset: u64, length: u64)", name),
+                                    call.span,
+                                ));
+                            }
+                            Type::Hash
+                        }
                         ("ckb", "cell_data_hash_at") => {
                             self.validate_builtin_arity(name, 2, arg_types, call.span)?;
                             if !Self::is_cell_view_type(&arg_types[0]) || arg_types[1] != Type::U64 {
@@ -6726,7 +6822,7 @@ impl<'a> TypeChecker<'a> {
                             }
                             Type::Hash
                         }
-                        ("ckb", "cell_data_u32_le" | "cell_data_u64_le") => {
+                        ("ckb", "cell_data_u8" | "cell_data_u32_le" | "cell_data_u64_le" | "cell_lock_u8" | "cell_type_u8") => {
                             self.validate_builtin_arity(name, 2, arg_types, call.span)?;
                             if !Self::is_cell_view_type(&arg_types[0]) || arg_types[1] != Type::U64 {
                                 return Err(CompileError::new(format!("{} expects (source_view: u64, offset: u64)", name), call.span));
@@ -6737,6 +6833,7 @@ impl<'a> TypeChecker<'a> {
                             "ckb",
                             "cell_lock_hash"
                             | "cell_type_hash"
+                            | "cell_data_hash_field"
                             | "cell_data_hash"
                             | "cell_lock_code_hash"
                             | "cell_type_code_hash"
@@ -6754,7 +6851,7 @@ impl<'a> TypeChecker<'a> {
                             }
                             Type::Hash
                         }
-                        ("ckb", "cell_lock_args_empty" | "cell_type_args_empty") => {
+                        ("ckb", "cell_lock_args_empty" | "cell_type_args_empty" | "cell_has_type") => {
                             self.validate_builtin_arity(name, 1, arg_types, call.span)?;
                             if !Self::is_cell_view_type(&arg_types[0]) {
                                 return Err(CompileError::new(
@@ -7111,6 +7208,21 @@ impl<'a> TypeChecker<'a> {
                                 ));
                             }
                             Type::Unit
+                        }
+                        ("witness", "count") => {
+                            self.validate_builtin_arity(name, 0, arg_types, call.span)?;
+                            Type::U64
+                        }
+                        ("witness", "byte" | "u32_le" | "u64_le" | "bytes32") => {
+                            self.validate_builtin_arity(name, 2, arg_types, call.span)?;
+                            if !Self::is_witness_args_view_type(&arg_types[0]) || arg_types[1] != Type::U64 {
+                                return Err(CompileError::new(format!("{} expects (witness_view, offset: u64)", name), call.span));
+                            }
+                            if suffix == "bytes32" {
+                                Type::Hash
+                            } else {
+                                Type::U64
+                            }
                         }
                         ("witness", "raw" | "lock" | "input_type" | "output_type" | "size") => {
                             self.validate_builtin_arity(name, 1, arg_types, call.span)?;

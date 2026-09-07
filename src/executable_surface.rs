@@ -50,6 +50,25 @@ macro_rules! entry {
 }
 
 pub static EXECUTABLE_SURFACE: &[ExecutableSurfaceEntry] = &[
+    entry!(
+        "runtime:gather-hash-arguments", "runtime", "shape-gated", ACCEPT_WHEN_CLOSED,
+        "Experimental gathered hashes require proven local byte/offset vectors and checked transaction span bounds.",
+        ["gather-hash-materialization"]
+    ),
+    entry!(
+        "runtime:spawn-hex4-arguments", "runtime", "shape-gated", ACCEPT_WHEN_CLOSED,
+        "Experimental returning four-argument hex SPAWN/WAIT requires a proven local Vec<u8>; the external child verifier remains separately unresolved.",
+        ["spawn-argv-materialization"]
+    ),
+    entry!(
+        "runtime:exec-hex4-arguments", "runtime", "shape-gated", ACCEPT_WHEN_CLOSED,
+        "Experimental four-argument hex EXEC requires a proven local Vec<u8>; external-verifier delegation remains separately unresolved.",
+        ["exec-argv-materialization"]
+    ),
+    entry!(
+        "runtime:trusted-external-delegation", "runtime", "bounded", ACCEPT_WHEN_CLOSED,
+        "EXEC or SPAWN/WAIT is admitted only through a trusted_* intrinsic with a compile-time 32-byte DATA_HASH, an exact versioned Cell.toml declaration, an emitted pre-delegation identity check, and a trusted-external evidence record that never claims to prove the verifier's internals."
+    ),
     entry!("type:u8", "type", "complete", ACCEPT, "One-byte unsigned scalar with checked source representability."),
     entry!("type:u16", "type", "complete", ACCEPT, "Two-byte little-endian unsigned scalar."),
     entry!("type:u32", "type", "complete", ACCEPT, "Four-byte little-endian unsigned scalar."),

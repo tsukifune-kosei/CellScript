@@ -18,6 +18,7 @@ non-overlapping `E2xxx` range.
 | `E2110` | `generic-declaration-invalid` | A value-generic declaration violates the parameter, ability, phantom, or reserved-name contract. | Correct the declaration and keep Cell lifecycle authority outside ordinary generic values. |
 | `E2111` | `generic-instantiation-invalid` | A generic application has invalid arguments, constraints, layout, or identity. | Supply concrete fixed serializable value types satisfying every declared ability. |
 | `E2112` | `generic-instantiation-budget` | Deterministic monomorphization exceeded its nesting, count, or identity-size budget. | Reduce recursive/nested specializations or split the generic surface. |
+| `E2113` | `trusted-external-binding-invalid` | A trusted external verifier call or declaration is missing, mismatched, non-canonical, unused, or ambiguous. | Use a `trusted_*` intrinsic with an exact compile-time data hash and one matching versioned `Cell.toml` declaration. |
 | `E2200` | `unresolved-assembly-symbol` | Generated assembly references a missing label or call target. | Check callable reachability and helper closure. |
 | `E2201` | `assembly-layout` | Generated assembly could not form a valid machine layout. | Check sections, labels, branches, and block ordering. |
 | `E2202` | `instruction-encoding` | A RISC-V instruction or immediate could not be encoded. | Check the mnemonic, operands, registers, and immediate range. |

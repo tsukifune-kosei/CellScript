@@ -3,14 +3,14 @@
 **Status**: semantic-foundation preview implemented on the `0.26b` branch
 
 **Schemas**: `cellscript-verified-lowering-record-v6`,
-`cellscript-typed-semantics-v7`,
+`cellscript-typed-semantics-v8`,
 `cellscript-semantic-foundation-v3`,
 `cellscript-value-provenance-dag-v1`,
 `cellscript-source-artifact-map-v2`, and
 `cellscript-verified-artifact-boundary-v2`, plus
 `cellscript-artifact-checker-policy-v1`
 
-**Metadata schema**: 65
+**Metadata schema**: 66
 
 ## Purpose
 
@@ -26,10 +26,13 @@ build/main.elf.sourcemap.json
 
 The typed semantic record retains checked types, locals, calls, effects,
 ownership, borrow regions, concrete generic instantiations, layouts, and CFG
-operations in a parser-free schema. Typed semantics v7 also embeds the
+operations in a parser-free schema. Typed semantics v8 also embeds the
 frontend-independent semantic foundation: value provenance, artifact entry
 selection, transaction roles, exhaustive Cell dispositions, enforcement
-classes, legacy migration nodes, and layered semantic identities. Lowering
+classes, legacy migration nodes, and layered semantic identities. Typed
+semantics v8 additionally binds exact trusted-external verifier declarations
+to ordered CellDep data-hash checks and delegation calls while retaining an
+explicit no-proof-of-internals flag. Lowering
 record v6 embeds that record and binds it to the final machine layout. Every
 typed block is accounted for;
 optimized/elided typed blocks have an explicit empty machine-block list, while
@@ -69,7 +72,7 @@ accepted under the new versions by relabelling them.
 
 ### Fatal verifier failures
 
-Typed semantics v7 declares `failure_semantics = current-vm-process-exit-v1`.
+Typed semantics v8 declares `failure_semantics = current-vm-process-exit-v1`.
 Explicit typed failure blocks end in `verifier-failure`, with a nonzero error
 constant, rather than an ordinary value return. This operation must be the
 final operation in a matching terminal block; it cannot appear as an ignored

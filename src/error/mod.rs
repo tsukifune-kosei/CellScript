@@ -144,6 +144,12 @@ pub const COMPILER_ERROR_INFOS: &[CompilerErrorInfo] = &[
         hint: "Reduce nested or recursively expanding instantiations and keep concrete type identities compact.",
     },
     CompilerErrorInfo {
+        code: "E2113",
+        name: "trusted-external-binding-invalid",
+        description: "A trusted external verifier call or declaration is missing, mismatched, non-canonical, unused, or ambiguous.",
+        hint: "Use a trusted_* intrinsic with an exact compile-time data hash and one matching versioned Cell.toml declaration.",
+    },
+    CompilerErrorInfo {
         code: "E2200",
         name: "unresolved-assembly-symbol",
         description: "Generated assembly references a label or call target that was not emitted.",

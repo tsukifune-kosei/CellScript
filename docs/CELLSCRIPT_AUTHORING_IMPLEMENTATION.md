@@ -49,13 +49,13 @@ are not implementation of a required supported feature.
 | Dispatch rejection | Reject unknown/duplicate/ambiguous tags, wrong versions, malformed/oversized/trailing payload, branch confusion and missing policy checks. | Focused real VM negatives implemented for the bounded envelope and all four fixed cardinalities; independent machine dispatch verification remains pending. |
 | Lock authorization | Actual transaction-bound credential proof; reject copied owner values, missing/invalid proof and signed-transaction tampering. | Real multisig spending and the issuer-authorized mint/transfer/merge/burn VM lifecycle are implemented with credential and post-signing tamper negatives; the precise source-level Script identity/authorization API and chain evidence remain pending. |
 | Script identity API | Distinguish address decoding, full Script construction/hash comparison and signature verification; wrong-domain values fail typing or checked conversion. | Pending. |
-| Orthogonal obligations | Compose lifecycle, identity, asset accounting, capacity and authorization without double counting; scope and authenticated external guarantees remain distinct. | Executable relation sugar produces the same typed obligation set as its spelled-out 2026 form for data, capacity, identity and exact-lock treatment; broader constructor and external-guarantee composition remains pending. |
+| Orthogonal obligations | Compose lifecycle, identity, asset accounting, capacity and authorization without double counting; scope and authenticated external guarantees remain distinct. | Executable relation sugar produces the same typed obligation set as its spelled-out 2026 form for data, capacity, identity and exact-lock treatment. Bounded trusted-external EXEC/SPAWN now binds exact CellDep data identity and scoped guarantee claims under a separate evidence tier; broader constructor composition remains pending. |
 | Witness ABI contexts | Type input/output-only entries, Lock entries and shared witnesses have bounded, non-overlapping ownership; preserve old ABI bytes where compatible. | Empty-group fallback, canonical bounded multi-record Type envelope, independent host/adapter codecs and pre-signing placement implemented; full signed shared-policy integration remains pending. |
 | Token lifecycle | Execute generated Token Type Script under one persistent policy through authorized mint, transfer, merge and burn, with positive/negative VM and chain evidence. | Real CKB-VM coverage executes the complete issuer-authorized lifecycle under identical policy bytes, using earlier verified outputs as later inputs, across both editions and optimization levels 0-3; node admission, chain confirmation and deployment evidence remain pending. |
 | Schema-change lifecycle | Add `approval_nonce`, require reviewed reset on transfer, reject unchanged preservation and stale acknowledgement; retain old deployed-byte meaning. | Pending. |
 | Remaining business corpus | NFT capacity adjustment, fungible splits/merges, partial order, authenticated dependencies and interacting Script groups. | Pending. |
-| Independent artifact checking | Version and validate any new records, recompute identities, bind selected entries/relations/dispatch to machine evidence, and add adversarial mutations. | Typed policy, declaration/ABI and builder parameter projection checks implemented; independent selector/adapter machine proof remains pending. |
-| Language services and products | Parser, recovering diagnostics, formatter, LSP, editor, native CLI, WASM, package loading, public interfaces and builders agree. | Shared parser diagnostics, formatter round-trip, syntax matrix and VS Code snippet cover `replace`; the fresh WASM bundle exceeds its enforced budget, and complete browser/public-interface closure remains pending. |
+| Independent artifact checking | Version and validate any new records, recompute identities, bind selected entries/relations/dispatch to machine evidence, and add adversarial mutations. | Typed policy, declaration/ABI and builder parameter projection checks implemented. Trusted-external records are independently bound to an ordered same-CellDep hash-check/delegation sequence with mutation negatives; independent policy selector/adapter machine proof remains pending. |
+| Language services and products | Parser, recovering diagnostics, formatter, LSP, editor, native CLI, WASM, package loading, public interfaces and builders agree. | Shared parser diagnostics, formatter round-trip, syntax matrix and VS Code snippet cover `replace`; trusted external calls use ordinary call formatting plus LSP completions and package-manifest loading. The fresh WASM bundle exceeds its enforced budget, and complete browser/public-interface closure remains pending. |
 | Reproducibility and compatibility | Source/cache/profile versions, package locks, mixed editions, interfaces and deployment changes are explicit and reproducible. | Source/cache identity advanced; later ABI/dispatch/schema migration pending. |
 | Production acceptance | Applicable `dev`, `ci`, `backend` and clean-source release evidence, exact artifacts, runtime negatives, cycle/size/capacity measurements and required independent review. | The 2026-09-06 `dev` gate passes for the relation tranche. Full `backend` remains blocked at the documented stateful NFT recipe boundary, the release WASM rebuild exceeds budget, and `ci`, release and independent-review evidence remain pending. |
 
@@ -154,7 +154,7 @@ now addresses these rather than copying inaccurate records as reference semantic
   part of production acceptance.
 
 The mandatory fixed-Cell table introduced in typed semantics v5 is retained in
-`cellscript-typed-semantics-v7`. The
+`cellscript-typed-semantics-v8`. The
 independent checker cross-checks typed locals, roles and provenance, including
 hash-rebound source/ordinal/identity and missing-record mutations. This does
 not establish general syscall dataflow equivalence. The source-set artifact
@@ -282,13 +282,20 @@ whole WitnessArgs limit is 4,096 bytes with at most eight records. Host and CKB
 adapter codecs are independently implemented; placement preserves other fields,
 rejects occupied `input_type`, and must occur before signing.
 
-Metadata schema 65, `cellscript-typed-semantics-v7` and
+Metadata schema 66, `cellscript-typed-semantics-v8` and
 `cellscript-semantic-foundation-v3` bind the declared policy, selector provenance,
 resource layout, variant payload schemas, fixed counts and ordered common
 checks. Lowering record v6 includes separate terminal-failure sites and requires the exact new
 nested versions. The parser-free checker also derives builder encoding flags
 and parameter order/source/type from the typed record. This is not independent
 proof of machine scanner/adapter dataflow or deployment authentication.
+
+Typed semantics v8 additionally records versioned trusted external verifier
+dependencies. That record is admissible only when emitted code checks the
+selected CellDep's exact data hash before EXEC or SPAWN/WAIT. Its separate
+`trusted-external` evidence tier binds identity and delegation while explicitly
+denying any compiler proof of the external verifier's internals; see
+[Trusted External Verifiers](CELLSCRIPT_TRUSTED_EXTERNAL_VERIFIERS.md).
 
 Focused CKB-VM tests execute mint, transfer, merge and burn against the same
 compiled policy bytes, including optimization levels 0–3, nonzero group

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const LOWERING_RECORD_SCHEMA: &str = "cellscript-verified-lowering-record-v6";
-pub const TYPED_SEMANTICS_SCHEMA: &str = "cellscript-typed-semantics-v7";
+pub const TYPED_SEMANTICS_SCHEMA: &str = "cellscript-typed-semantics-v8";
 pub const SEMANTIC_FOUNDATION_SCHEMA: &str = "cellscript-semantic-foundation-v3";
 pub const PROVENANCE_GRAPH_SCHEMA: &str = "cellscript-value-provenance-dag-v1";
 pub const SOURCE_MAP_SCHEMA: &str = "cellscript-source-artifact-map-v2";
@@ -9,7 +9,7 @@ pub const VERIFIED_ARTIFACT_BOUNDARY_SCHEMA: &str = "cellscript-verified-artifac
 pub const CHECKER_POLICY_SCHEMA: &str = "cellscript-artifact-checker-policy-v1";
 pub const CHECKER_REPORT_SCHEMA: &str = "cellscript-artifact-checker-report-v1";
 pub const LOWERING_RECORD_VERSION: u32 = 6;
-pub const TYPED_SEMANTICS_VERSION: u32 = 7;
+pub const TYPED_SEMANTICS_VERSION: u32 = 8;
 pub const SEMANTIC_FOUNDATION_VERSION: u32 = 3;
 pub const PROVENANCE_GRAPH_VERSION: u32 = 1;
 pub const SOURCE_MAP_VERSION: u32 = 2;
@@ -111,7 +111,28 @@ pub struct TypedSemanticRecord {
     pub types: Vec<TypedSemanticType>,
     pub entries: Vec<TypedSemanticEntry>,
     pub instantiations: Vec<TypedSemanticInstantiation>,
+    pub trusted_external_verifiers: Vec<TrustedExternalVerifierRecord>,
     pub foundation: SemanticFoundationRecord,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedExternalVerifierRecord {
+    pub schema: String,
+    pub version: u32,
+    pub name: String,
+    pub scope: String,
+    pub operation: String,
+    pub adapter: String,
+    pub code_hash: String,
+    pub hash_type: String,
+    pub source_identity: String,
+    pub applicability: String,
+    pub trust_basis: String,
+    pub guarantees: Vec<String>,
+    pub identity_binding: String,
+    pub evidence_tier: String,
+    pub compiler_proves_internal_semantics: bool,
 }
 
 /// Fatal verification is distinct from a callable's ordinary return value and
@@ -168,6 +189,19 @@ impl TypedSemanticRecord {
             entry.obligations.dedup();
         }
         self.instantiations.sort_by(|left, right| left.identity.cmp(&right.identity));
+        for verifier in &mut self.trusted_external_verifiers {
+            verifier.guarantees.sort();
+            verifier.guarantees.dedup();
+        }
+        self.trusted_external_verifiers.sort_by(|left, right| {
+            (&left.scope, &left.operation, &left.adapter, &left.code_hash, &left.name).cmp(&(
+                &right.scope,
+                &right.operation,
+                &right.adapter,
+                &right.code_hash,
+                &right.name,
+            ))
+        });
         self.foundation.canonicalize();
     }
 }

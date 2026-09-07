@@ -21,6 +21,7 @@ mod expr;
 mod frame;
 mod policy;
 mod runtime;
+mod runtime_gather;
 mod schema;
 #[cfg(not(feature = "wasm"))]
 pub(crate) use abi::{entry_param_abi_sources, EntryParamAbiSource};
@@ -253,6 +254,9 @@ fn is_v014_runtime_helper(func: &str) -> bool {
     matches!(
         func,
         "__ckb_spawn"
+            | "__ckb_exec_cell_dep_u8_args"
+            | "__ckb_exec_cell_dep_hex4"
+            | "__ckb_spawn_wait_cell_dep_hex4"
             | "__ckb_wait"
             | "__ckb_process_id"
             | "__ckb_pipe"
@@ -292,8 +296,16 @@ fn is_v014_runtime_helper(func: &str) -> bool {
             | "__ckb_cell_type_hash_low"
             | "__ckb_cell_lock_hash"
             | "__ckb_cell_type_hash"
+            | "__ckb_cell_data_hash_field"
             | "__ckb_cell_data_hash"
             | "__ckb_cell_data_hash_at"
+            | "__ckb_cell_data_blake2b_span"
+            | "__ckb_witness_blake2b_span"
+            | "__ckb_raw_transaction_hash_without_cell_deps"
+            | "__ckb_transaction_blake2b_gather"
+            | "__ckb_witness_blake2b_select_chunks"
+            | "__ckb_transaction_u32_le"
+            | "__ckb_witness_bytes32"
             | "__ckb_cell_lock_code_hash"
             | "__ckb_cell_type_code_hash"
             | "__ckb_cell_lock_hash_type"
@@ -324,6 +336,14 @@ fn is_v014_runtime_helper(func: &str) -> bool {
             | "__c256_require_u128_sum2_products_lte"
             | "__c256_require_u128_sum2_products_eq"
             | "__ckb_cell_data_size"
+            | "__ckb_cell_count"
+            | "__ckb_cell_has_type"
+            | "__ckb_cell_data_u8"
+            | "__ckb_cell_lock_size"
+            | "__ckb_cell_type_size"
+            | "__ckb_cell_lock_u8"
+            | "__ckb_cell_type_u8"
+            | "__ckb_input_since_at"
             | "__ckb_cell_data_u32_le"
             | "__ckb_cell_data_u64_le"
             | "__dao_accumulated_rate"
@@ -349,6 +369,10 @@ fn is_v014_runtime_helper(func: &str) -> bool {
             | "__ckb_witness_input_type"
             | "__ckb_witness_output_type"
             | "__ckb_witness_size"
+            | "__ckb_witness_count"
+            | "__ckb_witness_u8"
+            | "__ckb_witness_u32_le"
+            | "__ckb_witness_u64_le"
             | "__ckb_require_witness_size_at_least"
             | "__ckb_sighash_all"
             | "__ckb_require_maturity"
@@ -1797,9 +1821,55 @@ impl CodeGenerator {
         self.tuple_call_return_vars.clear();
         self.tuple_call_return_field_slots.clear();
         self.tuple_aggregate_fields.clear();
+        // These caches describe values for the entire body, not a program
+        // point. A reassigned local must be read from its current stack slot;
+        // retaining its initializer would also poison derived expressions.
+        let destination = |instruction: &IrInstruction| match instruction {
+            IrInstruction::LoadConst { dest, .. }
+            | IrInstruction::LoadVar { dest, .. }
+            | IrInstruction::Binary { dest, .. }
+            | IrInstruction::Unary { dest, .. }
+            | IrInstruction::FieldAccess { dest, .. }
+            | IrInstruction::Index { dest, .. }
+            | IrInstruction::Length { dest, .. }
+            | IrInstruction::TypeHash { dest, .. }
+            | IrInstruction::CollectionNew { dest, .. }
+            | IrInstruction::CollectionCapacity { dest, .. }
+            | IrInstruction::CollectionContains { dest, .. }
+            | IrInstruction::CollectionRemove { dest, .. }
+            | IrInstruction::CollectionPop { dest, .. }
+            | IrInstruction::BoundedCellLoad { dest, .. }
+            | IrInstruction::BoundedPlanLoad { dest, .. }
+            | IrInstruction::ReadRef { dest, .. }
+            | IrInstruction::Create { dest, .. }
+            | IrInstruction::CreateUnique { dest, .. }
+            | IrInstruction::ReplaceUnique { dest, .. }
+            | IrInstruction::Transfer { dest, .. }
+            | IrInstruction::Claim { dest, .. }
+            | IrInstruction::Settle { dest, .. }
+            | IrInstruction::Move { dest, .. }
+            | IrInstruction::Tuple { dest, .. }
+            | IrInstruction::EnumConstruct { dest, .. }
+            | IrInstruction::EnumTag { dest, .. }
+            | IrInstruction::EnumPayload { dest, .. }
+            | IrInstruction::Call { dest: Some(dest), .. } => Some(dest.id),
+            _ => None,
+        };
+        let mut seen = self.param_vars.clone();
+        let mut reassigned = BTreeSet::new();
+        for instruction in body.blocks.iter().flat_map(|block| &block.instructions) {
+            if let Some(id) = destination(instruction)
+                && !seen.insert(id)
+            {
+                reassigned.insert(id);
+            }
+        }
         let mut named_stack_collections = HashMap::<String, usize>::new();
         for block in &body.blocks {
             for instruction in &block.instructions {
+                if destination(instruction).is_some_and(|id| reassigned.contains(&id)) {
+                    continue;
+                }
                 match instruction {
                     IrInstruction::StoreVar { name, src: IrOperand::Var(src) } => {
                         if self.stack_collection_vars.contains(&src.id) {

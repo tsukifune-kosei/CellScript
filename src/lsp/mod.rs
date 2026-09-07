@@ -282,6 +282,11 @@ impl LspServer {
                 items.extend(self.member_completions(uri, &type_name));
             }
             CompletionContext::Namespace { type_name } => {
+                // These built-in namespaces do not require a complete AST:
+                // completion commonly runs while `witness::` is unfinished.
+                if matches!(type_name.as_str(), "witness" | "ckb") {
+                    items.extend(self.member_completions(uri, &type_name));
+                }
                 if let Some(ast) = self.ast_cache.get(uri) {
                     items.extend(self.namespace_symbol_completions(ast, &type_name));
                 }
@@ -615,6 +620,25 @@ impl LspServer {
                         insert_text: Some(format!("witness::{}(${{1:source::group_input(0)}})", name)),
                     });
                 }
+                for (name, insert) in [
+                    ("count", "witness::count()"),
+                    ("byte", "witness::byte(${1:source::input(0)}, ${2:0})"),
+                    ("u32_le", "witness::u32_le(${1:source::input(0)}, ${2:0})"),
+                    ("u64_le", "witness::u64_le(${1:source::input(0)}, ${2:0})"),
+                    ("blake2b_span", "witness::blake2b_span(${1:source::input(0)}, ${2:0}, ${3:32})"),
+                    ("bytes32", "witness::bytes32(${1:source::input(0)}, ${2:0})"),
+                    ("blake2b_select_chunks", "witness::blake2b_select_chunks(${1:source::input(0)}, ${2:0}, ${3:1}, ${4:selection}, ${5:prefix}, ${6:suffix})"),
+                ] {
+                    items.push(CompletionItem {
+                        label: name.to_string(),
+                        kind: CompletionItemKind::Function,
+                        detail: Some(format!("witness::{}", name)),
+                        documentation: Some(
+                            "Exact raw witness access; short reads fail closed; count includes extra witnesses".to_string(),
+                        ),
+                        insert_text: Some(insert.to_string()),
+                    });
+                }
                 return items;
             }
             "script" => {
@@ -667,6 +691,11 @@ impl LspServer {
                     ("cell_lock_hash_low", "ckb::cell_lock_hash_low(${1:source::group_input(0)})"),
                     ("cell_type_hash_low", "ckb::cell_type_hash_low(${1:source::group_input(0)})"),
                     ("cell_lock_hash", "ckb::cell_lock_hash(${1:source::group_input(0)})"),
+                    ("cell_data_blake2b_span", "ckb::cell_data_blake2b_span(${1:source::input(0)}, ${2:0}, ${3:32})"),
+                    ("raw_transaction_hash_without_cell_deps", "ckb::raw_transaction_hash_without_cell_deps()"),
+                    ("transaction_u32_le", "ckb::transaction_u32_le(${1:0})"),
+                    ("transaction_blake2b_gather", "ckb::transaction_blake2b_gather(${1:offsets}, ${2:lengths}, ${3:prefix}, ${4:suffix})"),
+                    ("cell_data_hash_field", "ckb::cell_data_hash_field(${1:source::cell_dep(0)})"),
                     ("cell_type_hash", "ckb::cell_type_hash(${1:source::group_input(0)})"),
                     ("cell_lock_code_hash", "ckb::cell_lock_code_hash(${1:source::group_input(0)})"),
                     ("cell_type_code_hash", "ckb::cell_type_code_hash(${1:source::group_input(0)})"),
@@ -767,6 +796,20 @@ impl LspServer {
                         "ckb::require_lock_match_master_out_point_pairs_from_data(${1:source::input(0)}, ${2:source::output(0)}, ${3:action_offset}, ${4:tx_hash_offset}, ${5:index_offset})",
                     ),
                     ("cell_data_size", "ckb::cell_data_size(${1:source::group_input(0)})"),
+                    ("cell_count", "ckb::cell_count(${1:source::input(0)})"),
+                    ("cell_has_type", "ckb::cell_has_type(${1:source::input(0)})"),
+                    ("cell_data_u8", "ckb::cell_data_u8(${1:source::group_input(0)}, ${2:0})"),
+                    ("cell_lock_size", "ckb::cell_lock_size(${1:source::group_input(0)})"),
+                    ("cell_type_size", "ckb::cell_type_size(${1:source::group_input(0)})"),
+                    ("cell_lock_u8", "ckb::cell_lock_u8(${1:source::group_input(0)}, ${2:0})"),
+                    ("cell_type_u8", "ckb::cell_type_u8(${1:source::group_input(0)}, ${2:0})"),
+                    ("input_since_at", "ckb::input_since_at(${1:source::input(0)})"),
+                    ("exec_cell_dep_u8_args", "ckb::exec_cell_dep_u8_args(${1:0}, ${2:0}, ${3:0}, ${4:0}, ${5:0}, ${6:0})"),
+                    ("trusted_exec_cell_dep_u8_args", "ckb::trusted_exec_cell_dep_u8_args(${1:0}, ${2:code_hash}, ${3:0}, ${4:0}, ${5:0}, ${6:0}, ${7:0})"),
+                    ("exec_cell_dep_hex4", "ckb::exec_cell_dep_hex4(${1:0}, ${2:bytes}, ${3:0}, ${4:0}, ${5:0}, ${6:0})"),
+                    ("trusted_exec_cell_dep_hex4", "ckb::trusted_exec_cell_dep_hex4(${1:0}, ${2:code_hash}, ${3:bytes}, ${4:0}, ${5:0}, ${6:0}, ${7:0})"),
+                    ("spawn_wait_cell_dep_hex4", "ckb::spawn_wait_cell_dep_hex4(${1:0}, ${2:bytes}, ${3:0}, ${4:0}, ${5:0}, ${6:0})"),
+                    ("trusted_spawn_wait_cell_dep_hex4", "ckb::trusted_spawn_wait_cell_dep_hex4(${1:0}, ${2:code_hash}, ${3:bytes}, ${4:0}, ${5:0}, ${6:0}, ${7:0})"),
                     ("cell_data_u32_le", "ckb::cell_data_u32_le(${1:source::group_input(0)}, ${2:0})"),
                     ("cell_data_u64_le", "ckb::cell_data_u64_le(${1:source::group_input(0)}, ${2:0})"),
                 ] {
@@ -3026,6 +3069,8 @@ mod tests {
 
         let witness = server.member_completions("file:///test.cell", "witness");
         assert!(witness.iter().any(|item| item.label == "lock"));
+        assert!(witness.iter().any(|item| item.label == "blake2b_span"));
+        assert!(witness.iter().any(|item| item.label == "bytes32"));
 
         let script = server.member_completions("file:///test.cell", "script");
         assert!(script.iter().any(|item| item.label == "new"));
@@ -3047,6 +3092,9 @@ mod tests {
         assert!(ckb.iter().any(|item| item.label == "require_bounded_cell_dep_data_hash"));
         assert!(ckb.iter().any(|item| item.label == "hash_sha256d"));
         assert!(ckb.iter().any(|item| item.label == "require_sha256d_merkle_root"));
+        assert!(ckb.iter().any(|item| item.label == "raw_transaction_hash_without_cell_deps"));
+        assert!(ckb.iter().any(|item| item.label == "trusted_exec_cell_dep_u8_args"));
+        assert!(ckb.iter().any(|item| item.label == "trusted_spawn_wait_cell_dep_hex4"));
 
         let bip340 = server.member_completions("file:///test.cell", "verifier::btc::bip340");
         assert!(bip340.iter().any(|item| item.label == "require_signature_from_cell_dep"));

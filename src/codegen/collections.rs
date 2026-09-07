@@ -200,10 +200,11 @@ impl CodeGenerator {
             _ => self.emit("li t1, 0"),
         }
 
-        // Bounds check: index < len
+        // Indexes are unsigned: high-bit u64 values must not compare as
+        // negative and escape the upper bound before pointer arithmetic.
         let bounds_ok = self.fresh_label("idx_bounds_ok");
         self.emit(format!("li t2, {}", len));
-        self.emit("slt t3, t1, t2");
+        self.emit("sltu t3, t1, t2");
         self.emit(format!("bnez t3, {}", bounds_ok));
         self.emit_fail(CellScriptRuntimeError::BoundsCheckFailed);
         self.emit_label(&bounds_ok);

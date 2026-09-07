@@ -505,12 +505,22 @@ pub struct IrBody {
     pub write_intents: Vec<WriteIntent>,
     pub bounded_collection_ops: Vec<IrBoundedCollectionOp>,
     pub borrow_regions: Vec<IrBorrowRegion>,
+    /// External verifier calls whose target identity is bound in the emitted
+    /// machine code and whose trust claim must be supplied by Cell.toml.
+    pub trusted_external_calls: Vec<IrTrustedExternalCall>,
     /// Source-level `require`/Edition 2027 `enforce` conditions that were
     /// lowered to an explicit fail-closed branch. These bindings let the
     /// semantic foundation distinguish the claim itself from auxiliary
     /// ProofPlan/runtime obligations.
     pub enforced_claims: Vec<IrEnforcedClaim>,
     pub blocks: Vec<IrBlock>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IrTrustedExternalCall {
+    pub operation: String,
+    pub adapter: String,
+    pub code_hash: [u8; 32],
 }
 
 #[derive(Debug, Clone)]
@@ -1040,6 +1050,7 @@ pub struct IrGenerator {
     call_target_labels: HashMap<String, String>,
     lowering_lock_entry: bool,
     borrow_regions: Vec<IrBorrowRegion>,
+    trusted_external_calls: Vec<IrTrustedExternalCall>,
     enforced_claims: Vec<IrEnforcedClaim>,
     loop_targets: Vec<LoopTarget>,
     errors: Vec<CompileError>,
@@ -1286,6 +1297,7 @@ impl IrGenerator {
             call_target_labels: HashMap::new(),
             lowering_lock_entry: false,
             borrow_regions: Vec::new(),
+            trusted_external_calls: Vec::new(),
             enforced_claims: Vec::new(),
             loop_targets: Vec::new(),
             errors: Vec::new(),
@@ -2708,6 +2720,7 @@ impl IrGenerator {
             }
         }
         let borrow_regions = std::mem::take(&mut self.borrow_regions);
+        let trusted_external_calls = std::mem::take(&mut self.trusted_external_calls);
         let enforced_claims = std::mem::take(&mut self.enforced_claims);
         self.transition_param_ids.clear();
         self.transition_coverable_value_ids.clear();
@@ -2723,6 +2736,7 @@ impl IrGenerator {
                 write_intents,
                 bounded_collection_ops,
                 borrow_regions,
+                trusted_external_calls,
                 enforced_claims,
                 blocks,
             },
@@ -4400,6 +4414,15 @@ impl IrGenerator {
         };
         let source_ty = self.operand_type(&lowered.operand);
         let target_ty = Self::convert_type(&cast.ty);
+        // Widening must retain the target type in typed IR even when both
+        // values fit one register. u128 additionally changes representation
+        // from a scalar to two stored limbs. Neither conversion needs a
+        // range guard, but erasing it gives later operations the wrong type.
+        if unsigned_ir_bits(&source_ty).zip(unsigned_ir_bits(&target_ty)).is_some_and(|(source, target)| target > source) {
+            let cast_value = self.new_var("cast_value", target_ty);
+            self.block_mut(blocks, active).instructions.push(IrInstruction::Move { dest: cast_value.clone(), src: lowered.operand });
+            return LoweredExpr { operand: IrOperand::Var(cast_value), current: Some(active) };
+        }
         let Some(maximum) = checked_cast_maximum(&source_ty, &target_ty) else {
             return LoweredExpr { operand: lowered.operand, current: Some(active) };
         };
@@ -6803,6 +6826,15 @@ impl IrGenerator {
                     blocks,
                     vars,
                 ),
+                "ckb::cell_data_hash_field" if call.args.len() == 1 => self.lower_simple_runtime_call(
+                    "__ckb_cell_data_hash_field",
+                    "cell_data_hash_field",
+                    IrType::Hash,
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
                 "ckb::cell_data_hash" if call.args.len() == 1 => self.lower_simple_runtime_call(
                     "__ckb_cell_data_hash",
                     "ckb_cell_data_hash",
@@ -6812,6 +6844,59 @@ impl IrGenerator {
                     blocks,
                     vars,
                 ),
+                "ckb::raw_transaction_hash_without_cell_deps" if call.args.is_empty() => self.lower_simple_runtime_call(
+                    "__ckb_raw_transaction_hash_without_cell_deps",
+                    "raw_transaction_hash_without_cell_deps",
+                    IrType::Hash,
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
+                "ckb::transaction_u32_le" if call.args.len() == 1 => self.lower_simple_runtime_call(
+                    "__ckb_transaction_u32_le",
+                    "transaction_u32_le",
+                    IrType::U64,
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
+                "witness::bytes32" if call.args.len() == 2 => self.lower_simple_runtime_call(
+                    "__ckb_witness_bytes32",
+                    "witness_bytes32",
+                    IrType::Hash,
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
+                "ckb::transaction_blake2b_gather" if call.args.len() == 4 => self.lower_simple_runtime_call(
+                    "__ckb_transaction_blake2b_gather",
+                    "transaction_blake2b_gather",
+                    IrType::Hash,
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
+                "witness::blake2b_select_chunks" if call.args.len() == 6 => self.lower_simple_runtime_call(
+                    "__ckb_witness_blake2b_select_chunks",
+                    "witness_blake2b_select_chunks",
+                    IrType::Hash,
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
+                "ckb::cell_data_blake2b_span" | "witness::blake2b_span" if call.args.len() == 3 => {
+                    let (helper, result_name) = if name == "ckb::cell_data_blake2b_span" {
+                        ("__ckb_cell_data_blake2b_span", "cell_data_blake2b_span")
+                    } else {
+                        ("__ckb_witness_blake2b_span", "witness_blake2b_span")
+                    };
+                    self.lower_simple_runtime_call(helper, result_name, IrType::Hash, &call.args, current, blocks, vars)
+                }
                 "ckb::cell_data_hash_at" if call.args.len() == 2 => self.lower_simple_runtime_call(
                     "__ckb_cell_data_hash_at",
                     "ckb_cell_data_hash_at",
@@ -7008,9 +7093,73 @@ impl IrGenerator {
                     blocks,
                     vars,
                 ),
+                "ckb::exec_cell_dep_u8_args" if call.args.len() == 6 => {
+                    self.lower_void_runtime_call("__ckb_exec_cell_dep_u8_args", &call.args, current, blocks, vars)
+                }
+                "ckb::trusted_exec_cell_dep_u8_args" if call.args.len() == 7 => self.lower_trusted_external_call(
+                    "exec",
+                    "__ckb_exec_cell_dep_u8_args",
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                    call.span,
+                ),
+                "ckb::exec_cell_dep_hex4" if call.args.len() == 6 => {
+                    self.lower_void_runtime_call("__ckb_exec_cell_dep_hex4", &call.args, current, blocks, vars)
+                }
+                "ckb::trusted_exec_cell_dep_hex4" if call.args.len() == 7 => {
+                    self.lower_trusted_external_call("exec", "__ckb_exec_cell_dep_hex4", &call.args, current, blocks, vars, call.span)
+                }
+                "ckb::spawn_wait_cell_dep_hex4" if call.args.len() == 6 => {
+                    self.lower_void_runtime_call("__ckb_spawn_wait_cell_dep_hex4", &call.args, current, blocks, vars)
+                }
+                "ckb::trusted_spawn_wait_cell_dep_hex4" if call.args.len() == 7 => self.lower_trusted_external_call(
+                    "spawn-wait",
+                    "__ckb_spawn_wait_cell_dep_hex4",
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                    call.span,
+                ),
+                "ckb::cell_count" | "ckb::cell_has_type" if call.args.len() == 1 => self.lower_simple_runtime_call(
+                    if name == "ckb::cell_count" { "__ckb_cell_count" } else { "__ckb_cell_has_type" },
+                    if name == "ckb::cell_count" { "ckb_cell_count" } else { "ckb_cell_has_type" },
+                    if name == "ckb::cell_count" { IrType::U64 } else { IrType::Bool },
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
+                "ckb::cell_lock_size" | "ckb::cell_type_size" | "ckb::input_since_at" if call.args.len() == 1 => {
+                    let (helper, result) = match name.as_str() {
+                        "ckb::cell_lock_size" => ("__ckb_cell_lock_size", "cell_lock_size"),
+                        "ckb::cell_type_size" => ("__ckb_cell_type_size", "cell_type_size"),
+                        _ => ("__ckb_input_since_at", "input_since_at"),
+                    };
+                    self.lower_simple_runtime_call(helper, result, IrType::U64, &call.args, current, blocks, vars)
+                }
+                "ckb::cell_lock_u8" | "ckb::cell_type_u8" if call.args.len() == 2 => {
+                    let (helper, result) = if name == "ckb::cell_lock_u8" {
+                        ("__ckb_cell_lock_u8", "cell_lock_u8")
+                    } else {
+                        ("__ckb_cell_type_u8", "cell_type_u8")
+                    };
+                    self.lower_simple_runtime_call(helper, result, IrType::U64, &call.args, current, blocks, vars)
+                }
                 "ckb::cell_data_size" if call.args.len() == 1 => self.lower_simple_runtime_call(
                     "__ckb_cell_data_size",
                     "ckb_cell_data_size",
+                    IrType::U64,
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
+                "ckb::cell_data_u8" if call.args.len() == 2 => self.lower_simple_runtime_call(
+                    "__ckb_cell_data_u8",
+                    "ckb_cell_data_u8",
                     IrType::U64,
                     &call.args,
                     current,
@@ -7149,6 +7298,23 @@ impl IrGenerator {
                     blocks,
                     vars,
                 ),
+                "witness::count" if call.args.is_empty() => self.lower_simple_runtime_call(
+                    "__ckb_witness_count",
+                    "witness_count",
+                    IrType::U64,
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                ),
+                "witness::byte" | "witness::u32_le" | "witness::u64_le" if call.args.len() == 2 => {
+                    let (helper, result_name) = match name.as_str() {
+                        "witness::byte" => ("__ckb_witness_u8", "witness_u8"),
+                        "witness::u32_le" => ("__ckb_witness_u32_le", "witness_u32_le"),
+                        _ => ("__ckb_witness_u64_le", "witness_u64_le"),
+                    };
+                    self.lower_simple_runtime_call(helper, result_name, IrType::U64, &call.args, current, blocks, vars)
+                }
                 "witness::raw" if call.args.len() == 1 => {
                     self.lower_simple_runtime_call("__ckb_witness_raw", "witness_raw", IrType::Hash, &call.args, current, blocks, vars)
                 }
@@ -8262,6 +8428,61 @@ impl IrGenerator {
             dest: None,
             func: func.to_string(),
             args: lowered_args,
+        });
+        Some(LoweredExpr { operand: IrOperand::Const(IrConst::Unit), current: Some(active) })
+    }
+
+    fn lower_trusted_external_call(
+        &mut self,
+        operation: &str,
+        runtime_helper: &str,
+        args: &[Expr],
+        current: BlockId,
+        blocks: &mut Vec<IrBlock>,
+        vars: &mut HashMap<String, IrVar>,
+        span: Span,
+    ) -> Option<LoweredExpr> {
+        let mut active = current;
+        let mut lowered = Vec::with_capacity(args.len());
+        for arg in args {
+            let value = self.lower_expr(arg, active, blocks, vars);
+            active = value.current?;
+            lowered.push(value.operand);
+        }
+        let code_hash = match lowered.get(1) {
+            Some(IrOperand::Const(IrConst::Hash(hash))) => *hash,
+            _ => {
+                self.record_error("trusted external verifier code_hash must be a compile-time Hash literal", span);
+                [0; 32]
+            }
+        };
+        let source = self.new_var("trusted_external_cell_dep", IrType::Named("CellDepView".to_string()));
+        self.block_mut(blocks, active).instructions.extend([
+            IrInstruction::Call {
+                dest: Some(source.clone()),
+                func: "__ckb_source_cell_dep".to_string(),
+                args: vec![lowered[0].clone()],
+            },
+            IrInstruction::Call {
+                dest: None,
+                func: "__ckb_require_cell_data_hash".to_string(),
+                args: vec![IrOperand::Var(source), lowered[1].clone()],
+            },
+            IrInstruction::Call {
+                dest: None,
+                func: runtime_helper.to_string(),
+                args: std::iter::once(lowered[0].clone()).chain(lowered[2..].iter().cloned()).collect(),
+            },
+        ]);
+        let adapter = match runtime_helper {
+            "__ckb_exec_cell_dep_u8_args" => "u8-args-v1",
+            "__ckb_exec_cell_dep_hex4" | "__ckb_spawn_wait_cell_dep_hex4" => "hex4-v1",
+            _ => unreachable!("trusted external calls use a closed runtime-helper set"),
+        };
+        self.trusted_external_calls.push(IrTrustedExternalCall {
+            operation: operation.to_string(),
+            adapter: adapter.to_string(),
+            code_hash,
         });
         Some(LoweredExpr { operand: IrOperand::Const(IrConst::Unit), current: Some(active) })
     }

@@ -8,6 +8,10 @@ Production compilation means `--production` or `--deny-fail-closed`; both stop b
 
 | ID | Layer | Status | Production policy | Conditions | Fail-closed features |
 |---|---|---|---|---|---|
+| `runtime:gather-hash-arguments` | runtime | shape-gated | accepted only when the shape classifier reports no fail-closed feature | Experimental gathered hashes require proven local byte/offset vectors and checked transaction span bounds. | `gather-hash-materialization` |
+| `runtime:spawn-hex4-arguments` | runtime | shape-gated | accepted only when the shape classifier reports no fail-closed feature | Experimental returning four-argument hex SPAWN/WAIT requires a proven local Vec<u8>; the external child verifier remains separately unresolved. | `spawn-argv-materialization` |
+| `runtime:exec-hex4-arguments` | runtime | shape-gated | accepted only when the shape classifier reports no fail-closed feature | Experimental four-argument hex EXEC requires a proven local Vec<u8>; external-verifier delegation remains separately unresolved. | `exec-argv-materialization` |
+| `runtime:trusted-external-delegation` | runtime | bounded | accepted only when the shape classifier reports no fail-closed feature | EXEC or SPAWN/WAIT is admitted only through a trusted_* intrinsic with a compile-time 32-byte DATA_HASH, an exact versioned Cell.toml declaration, an emitted pre-delegation identity check, and a trusted-external evidence record that never claims to prove the verifier's internals. | `none` |
 | `type:u8` | type | complete | accepted | One-byte unsigned scalar with checked source representability. | `none` |
 | `type:u16` | type | complete | accepted | Two-byte little-endian unsigned scalar. | `none` |
 | `type:u32` | type | complete | accepted | Four-byte little-endian unsigned scalar. | `none` |

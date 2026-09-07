@@ -466,6 +466,7 @@ fn proof_plan_requires_concrete_reads(plan: &ProofPlanMetadata) -> bool {
                     | "Input/Output"
                     | "Input/HeaderDep"
                     | "SourceView"
+                    | "Transaction"
             )
         });
     }
@@ -486,6 +487,7 @@ fn expected_reads_for_cell_access(plan: &ProofPlanMetadata) -> &'static [&'stati
         return &[];
     };
     match source {
+        "Transaction" => &["transaction"],
         "Input" => &["input"],
         "Output" => &["output"],
         "GroupInput" => &["group_input"],

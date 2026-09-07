@@ -194,6 +194,7 @@ pub(crate) fn build(module: &ir::IrModule, metadata: &CompileMetadata) -> TypedS
             entries
         },
         instantiations,
+        trusted_external_verifiers: metadata.runtime.trusted_external_verifiers.clone(),
         foundation: SemanticFoundationRecord::default(),
     };
     record.canonicalize();

@@ -18,7 +18,7 @@ pub fn compile_artifact(
 ) -> Result<CompileResult> {
     let ast = crate::generics::monomorphize(&crate::frontend::parse(source, options.edition)?)?;
     let scope = CompileEntryScope::Artifact(declaration);
-    let mut result = crate::compile_ast_with_build(&ast, &options, None, None, Some(&scope), policy)?;
+    let mut result = crate::compile_ast_with_build(&ast, &options, None, None, None, Some(&scope), policy)?;
     crate::bind_compile_result_source_metadata(
         &mut result,
         vec![crate::source_unit_from_bytes("<memory>", "memory", source.as_bytes())],
@@ -32,7 +32,7 @@ pub fn compile_artifact(
 pub fn compile_artifact_metadata(source: &str, options: CompileOptions, declaration: ArtifactDeclaration) -> Result<CompileMetadata> {
     let ast = crate::generics::monomorphize(&crate::frontend::parse(source, options.edition)?)?;
     let scope = CompileEntryScope::Artifact(declaration);
-    let mut metadata = metadata_from_ast(&ast, &options, None, None, Some(&scope))?;
+    let mut metadata = metadata_from_ast(&ast, &options, None, None, None, Some(&scope))?;
     crate::bind_source_metadata(&mut metadata, vec![crate::source_unit_from_bytes("<memory>", "memory", source.as_bytes())]);
     crate::validate_compile_metadata(&metadata, crate::ArtifactFormat::from_target(crate::resolve_target(&options, None))?)?;
     Ok(metadata)
@@ -52,8 +52,15 @@ pub fn compile_sources_artifact(
     validate_project(&project, &options)?;
     let entry = project.entry();
     let scope = CompileEntryScope::Artifact(declaration);
-    let mut result =
-        crate::compile_ast_with_build(&entry.ast, &options, Some((&project.resolver, &entry.ast.name)), None, Some(&scope), policy)?;
+    let mut result = crate::compile_ast_with_build(
+        &entry.ast,
+        &options,
+        Some((&project.resolver, &entry.ast.name)),
+        None,
+        None,
+        Some(&scope),
+        policy,
+    )?;
     crate::bind_compile_result_source_metadata(&mut result, source_units(sources, entry_path))?;
     result.validate()?;
     Ok(result)
@@ -71,7 +78,7 @@ pub fn compile_sources_artifact_metadata(
     validate_project(&project, &options)?;
     let entry = project.entry();
     let scope = CompileEntryScope::Artifact(declaration);
-    let mut metadata = metadata_from_ast(&entry.ast, &options, Some((&project.resolver, &entry.ast.name)), None, Some(&scope))?;
+    let mut metadata = metadata_from_ast(&entry.ast, &options, Some((&project.resolver, &entry.ast.name)), None, None, Some(&scope))?;
     crate::bind_source_metadata(&mut metadata, source_units(sources, entry_path));
     crate::validate_compile_metadata(&metadata, crate::ArtifactFormat::from_target(crate::resolve_target(&options, None))?)?;
     Ok(metadata)
@@ -96,8 +103,14 @@ pub fn compile_path_artifact_metadata<P: AsRef<camino::Utf8Path>>(
     validate_project(&project, &options)?;
     let entry = project.entry();
     let scope = CompileEntryScope::Artifact(declaration);
-    let mut metadata =
-        metadata_from_ast(&entry.ast, &options, Some((&project.resolver, &entry.ast.name)), Some(&manifest.build), Some(&scope))?;
+    let mut metadata = metadata_from_ast(
+        &entry.ast,
+        &options,
+        Some((&project.resolver, &entry.ast.name)),
+        Some(&manifest.build),
+        manifest.deploy.ckb.as_ref().map(|ckb| ckb.trusted_external_verifiers.as_slice()),
+        Some(&scope),
+    )?;
     crate::bind_source_metadata(&mut metadata, source_units);
     crate::apply_manifest_deploy_metadata(&mut metadata, &manifest)?;
     crate::validate_compile_metadata(
@@ -133,6 +146,7 @@ fn metadata_from_ast(
     options: &CompileOptions,
     resolver: Option<(&crate::ModuleResolver, &str)>,
     build: Option<&crate::package::BuildConfig>,
+    trusted_external_verifiers: Option<&[crate::package::CkbTrustedExternalVerifierConfig]>,
     scope: Option<&CompileEntryScope>,
 ) -> Result<CompileMetadata> {
     crate::validate_compile_options(options)?;
@@ -144,6 +158,7 @@ fn metadata_from_ast(
     let mut metadata =
         crate::compile_metadata_from_ir(&ir, artifact_format, target_profile, options.edition, options.primitive_compat.as_deref());
     crate::bind_public_interface(&mut metadata, lowering_ast);
+    crate::apply_trusted_external_verifiers(&mut metadata, &ir, trusted_external_verifiers.unwrap_or_default())?;
     crate::bind_typed_semantics(&mut metadata, &ir);
     // Executable-surface policy intentionally does not reject metadata-only
     // inspection. Target/profile shape checks still apply to the requested view.
