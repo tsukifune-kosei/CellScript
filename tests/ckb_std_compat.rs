@@ -118,6 +118,7 @@ fn ckb_abi_since_malformed_cases_match_ckb_std() {
     assert!(Since::from_block_number(ckb_abi::since::VALUE_MASK + 1, true).is_none());
     assert!(Since::from_timestamp(ckb_abi::since::VALUE_MASK, true).is_some());
     assert!(Since::from_timestamp(ckb_abi::since::VALUE_MASK + 1, true).is_none());
+    assert_eq!(ckb_abi::since::TIMESTAMP_VALUE_BOUND, u64::MAX / 1_000 + 1);
 
     assert!(!Since::new(ckb_abi::since::REMAIN_FLAGS_BITS | 1).flags_is_valid());
     assert!(!Since::new(ckb_abi::since::METRIC_TYPE_FLAG_MASK | 1).flags_is_valid());

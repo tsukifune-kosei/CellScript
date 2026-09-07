@@ -2219,8 +2219,18 @@ fn is_integer_type(ty: &str) -> bool {
 }
 
 fn is_ckb_temporal_ordered_type(ty: &str) -> bool {
-    matches!(ty, "EpochNumber" | "BlockNumber" | "EpochLength" | "AbsoluteEpochSince" | "RelativeEpochSince")
-        || ty.starts_with("Since<Absolute, ")
+    matches!(
+        ty,
+        "EpochNumber"
+            | "BlockNumber"
+            | "EpochLength"
+            | "AbsoluteBlockSince"
+            | "AbsoluteEpochSince"
+            | "AbsoluteTimestampSince"
+            | "RelativeBlockSince"
+            | "RelativeEpochSince"
+            | "RelativeTimestampSince"
+    ) || ty.starts_with("Since<Absolute, ")
         || ty.starts_with("Since<Relative, ")
 }
 

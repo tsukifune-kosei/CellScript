@@ -7437,7 +7437,7 @@ fn cellc_explain_profile_reports_ckb_v0_14_contract() {
     assert_eq!(summary["lock_args_abi"], "ckb-script-args-typed-fixed-bytes");
     assert_eq!(summary["source_encoding"], "ckb-source-group-high-bit");
     assert_eq!(summary["spawn_ipc_abi"], "ckb-vm-v2-spawn-ipc-syscalls-2601-2608");
-    assert_eq!(summary["since_abi"], "ckb-since-block-timestamp-epoch-number-with-fraction");
+    assert_eq!(summary["since_abi"], "ckb-since-rfc0017-typed-v1");
     assert_eq!(summary["cell_dep_abi"], "ckb-cell-dep-outpoint-and-dep-group");
     assert_eq!(summary["script_ref_abi"], "ckb-script-code-hash-hash-type-args");
     assert_eq!(summary["output_data_abi"], "ckb-outputs-and-outputs-data-index-aligned");

@@ -40,9 +40,22 @@
   equivalent fractions, helper calls, and malformed zero-length input. Keep
   the older constructors and `input_since_at` as `u64`, and advance the
   artifact cache identity to
-  `project-source-set-v33-0.30-dev1-temporal-domains`. Block/timestamp variants,
-  decoded Since, checked duration arithmetic, migration, and the complete
-  business corpus remain open under issue #12.
+  `project-source-set-v33-0.30-dev1-temporal-domains`.
+
+- Complete the RFC0017 mode/metric product with distinct absolute and relative
+  block-number, epoch-fraction, and timestamp `Since` types. Add checked
+  block/timestamp constructors, `DecodedSince`, strict decoding from opaque
+  input or explicit raw bits, six mode/metric narrowing operations, and typed
+  flag/metric/value projections. Decoding rejects reserved bits, metric `11`,
+  malformed epoch fractions, and timestamp values whose consensus
+  seconds-to-milliseconds conversion overflows. CKB-VM tests bind exact vectors
+  for all six domains and stable error 37 for bad flags, scalar bounds,
+  timestamp overflow, and mismatched narrowing; checker mutations reject both
+  changed mode and changed metric. Advance the artifact cache identity to
+  `project-source-set-v34-0.30-dev1-since-domains` and bind target/deployment
+  metadata to `since_abi = ckb-since-rfc0017-typed-v1`. Header
+  timestamp/full-block readers, checked duration arithmetic, migration, and the
+  complete business corpus remain open under issue #12.
 
 ## 0.26b - Experimental semantic-foundation branch
 

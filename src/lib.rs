@@ -222,7 +222,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v33-0.30-dev1-temporal-domains";
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v34-0.30-dev1-since-domains";
 pub const METADATA_SCHEMA_VERSION: u32 = 68;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -316,7 +316,7 @@ impl TargetProfile {
                 lock_args_abi: "ckb-script-args-typed-fixed-bytes".to_string(),
                 source_encoding: "ckb-source-group-high-bit".to_string(),
                 spawn_ipc_abi: "ckb-vm-v2-spawn-ipc-syscalls-2601-2608".to_string(),
-                since_abi: "ckb-since-block-timestamp-epoch-number-with-fraction".to_string(),
+                since_abi: "ckb-since-rfc0017-typed-v1".to_string(),
                 cell_dep_abi: "ckb-cell-dep-outpoint-and-dep-group".to_string(),
                 script_ref_abi: "ckb-script-code-hash-hash-type-args".to_string(),
                 output_data_abi: "ckb-outputs-and-outputs-data-index-aligned".to_string(),
@@ -17097,6 +17097,36 @@ fn body_ckb_runtime_features(
                 ir::IrInstruction::Call { func, .. }
                     if matches!(
                         func.as_str(),
+                        "__ckb_since_block_absolute"
+                            | "__ckb_since_block_relative"
+                            | "__ckb_since_timestamp_absolute"
+                            | "__ckb_since_timestamp_relative"
+                    ) =>
+                {
+                    features.insert("ckb-since-scalar-encoding".to_string());
+                }
+                ir::IrInstruction::Call { func, .. }
+                    if matches!(
+                        func.as_str(),
+                        "__ckb_since_decode"
+                            | "__ckb_since_from_raw_checked"
+                            | "__ckb_since_as_absolute_block"
+                            | "__ckb_since_as_relative_block"
+                            | "__ckb_since_as_absolute_epoch"
+                            | "__ckb_since_as_relative_epoch"
+                            | "__ckb_since_as_absolute_timestamp"
+                            | "__ckb_since_as_relative_timestamp"
+                            | "__ckb_since_is_relative"
+                            | "__ckb_since_is_disabled"
+                            | "__ckb_since_metric"
+                            | "__ckb_since_value"
+                    ) =>
+                {
+                    features.insert("ckb-since-checked-decoding".to_string());
+                }
+                ir::IrInstruction::Call { func, .. }
+                    if matches!(
+                        func.as_str(),
                         "__ckb_input_out_point_index"
                             | "__ckb_input_out_point_tx_hash_low"
                             | "__ckb_input_out_point_tx_hash"
@@ -17905,6 +17935,44 @@ fn ckb_v014_runtime_access(func: &str) -> Option<(&'static str, &'static str, &'
         "__ckb_since_epoch_relative" => {
             Some(("since-epoch-relative", "CKB_SINCE_ENCODING", "Expression", "ckb::since_epoch_relative"))
         }
+        "__ckb_since_block_absolute" => {
+            Some(("since-block-absolute", "CKB_SINCE_ENCODING", "Expression", "ckb::since_absolute_block"))
+        }
+        "__ckb_since_block_relative" => {
+            Some(("since-block-relative", "CKB_SINCE_ENCODING", "Expression", "ckb::since_relative_block"))
+        }
+        "__ckb_since_timestamp_absolute" => {
+            Some(("since-timestamp-absolute", "CKB_SINCE_ENCODING", "Expression", "ckb::since_absolute_timestamp"))
+        }
+        "__ckb_since_timestamp_relative" => {
+            Some(("since-timestamp-relative", "CKB_SINCE_ENCODING", "Expression", "ckb::since_relative_timestamp"))
+        }
+        "__ckb_since_decode" => Some(("since-decode-checked", "CKB_SINCE_ENCODING", "Expression", "ckb::since_decode")),
+        "__ckb_since_from_raw_checked" => {
+            Some(("since-from-raw-checked", "CKB_SINCE_ENCODING", "Expression", "ckb::since_from_raw_checked"))
+        }
+        "__ckb_since_as_absolute_block" => {
+            Some(("since-narrow-absolute-block", "CKB_SINCE_ENCODING", "Expression", "ckb::since_as_absolute_block"))
+        }
+        "__ckb_since_as_relative_block" => {
+            Some(("since-narrow-relative-block", "CKB_SINCE_ENCODING", "Expression", "ckb::since_as_relative_block"))
+        }
+        "__ckb_since_as_absolute_epoch" => {
+            Some(("since-narrow-absolute-epoch", "CKB_SINCE_ENCODING", "Expression", "ckb::since_as_absolute_epoch"))
+        }
+        "__ckb_since_as_relative_epoch" => {
+            Some(("since-narrow-relative-epoch", "CKB_SINCE_ENCODING", "Expression", "ckb::since_as_relative_epoch"))
+        }
+        "__ckb_since_as_absolute_timestamp" => {
+            Some(("since-narrow-absolute-timestamp", "CKB_SINCE_ENCODING", "Expression", "ckb::since_as_absolute_timestamp"))
+        }
+        "__ckb_since_as_relative_timestamp" => {
+            Some(("since-narrow-relative-timestamp", "CKB_SINCE_ENCODING", "Expression", "ckb::since_as_relative_timestamp"))
+        }
+        "__ckb_since_is_relative" => Some(("since-relative-flag", "CKB_SINCE_ENCODING", "Expression", "ckb::since_is_relative")),
+        "__ckb_since_is_disabled" => Some(("since-disabled", "CKB_SINCE_ENCODING", "Expression", "ckb::since_is_disabled")),
+        "__ckb_since_metric" => Some(("since-metric", "CKB_SINCE_ENCODING", "Expression", "ckb::since_metric")),
+        "__ckb_since_value" => Some(("since-value", "CKB_SINCE_ENCODING", "Expression", "ckb::since_value")),
         "__ckb_cell_capacity" => Some(("cell-capacity", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::cell_capacity")),
         "__ckb_cell_occupied_capacity" => {
             Some(("cell-occupied-capacity", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::cell_occupied_capacity"))

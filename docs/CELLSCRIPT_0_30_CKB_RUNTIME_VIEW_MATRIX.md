@@ -70,7 +70,7 @@ hash; it does not prove existence, deployment, or authorization.
 | Cell scalars and fixed bytes | capacity/occupied/unoccupied, count, type presence, data size, exact u8/u32/u64 reads, serialized Script byte/size reads | Executable or executable limited. Every byte offset is checked; fixed reads never allocate an unbounded buffer. |
 | Cell identities | data/lock/type hash reads and requirements, Script code-hash/hash-type/args checks, current Script args checks | Executable fixed 32-byte or scalar reads. Absent Type Script and wrong Script domain fail closed. |
 | Input lineage | full OutPoint transaction hash/index requirements and MetaPoint pair helpers | Executable fixed-width helpers. Pair scanners are protocol-neutral but have separately documented cardinality bounds. |
-| Temporal and DAO | typed HeaderDep fields, opaque `InputView.since`, `since_absolute_epoch`, `since_relative_epoch`, explicit raw conversions, legacy raw constructors, DAO accumulated-rate/header-lineage/maturity helpers | The additive epoch subset is executable under the typed temporal contract. Same-domain epoch-Since comparisons use canonical fraction ordering. Block/timestamp variants, decoded Since, and duration arithmetic remain owned by issue #12. |
+| Temporal and DAO | typed HeaderDep fields; opaque and decoded `InputView.since`; six absolute/relative block, epoch, and timestamp `Since` domains; checked narrowing; explicit raw conversions; legacy raw constructors; DAO accumulated-rate/header-lineage/maturity helpers | The additive six-domain `Since` subset is executable under the typed temporal contract. Decoding validates RFC0017 flags and payloads; same-domain epoch-Since comparisons use canonical fraction ordering. Full-header temporal readers and duration arithmetic remain owned by issue #12. |
 | Witness | count/size, exact byte/u32/u64/bytes32 reads, bounded spans, selected gather hashing, fixed 32-byte WitnessArgs fields | Executable limited. Arbitrary materialization of a variable-length witness or WitnessArgs field is deferred. |
 | Transaction preimage | `transaction_u32_le`, bounded gather BLAKE2b, raw-transaction hash without CellDeps | Executable limited to the declared offsets/chunks. Canonical CKB sighash-all remains fail-closed until its message and witness-ownership contract is implemented. |
 | Hashing | CKB BLAKE2b data/span helpers, fixed SHA-256/SHA256d values and pairs, bounded SHA256d Merkle proofs | Executable fixed-width or literal-bounded operations. No allocator-backed streaming hash surface is implied. |
@@ -87,7 +87,7 @@ hash; it does not prove existence, deployment, or authorization.
 | 4 | `exact-size-mismatch` | Fixed-width syscall result did not have the exact required size. |
 | 33 | `out-point-mismatch` | Input lineage differs from the required OutPoint. |
 | 34 | `script-field-malformed` | Serialized Script field is absent or malformed for the requested projection. |
-| 37 | `ckb-since-malformed` | Since flags or epoch-fraction components violate the admitted encoding. |
+| 37 | `ckb-since-malformed` | Since flags, metric, scalar bound, timestamp conversion, epoch-fraction components, or requested narrowing violate the admitted encoding. |
 | 38 | `script-args-mismatch` | Script args violate the declared exact/empty rule. |
 | 41 | `script-identity-mismatch` | Script code hash or hash type differs from the required identity. |
 | 42 | `witness-malformed` | WitnessArgs or entry envelope is not canonical Molecule data. |
@@ -103,8 +103,9 @@ hash; it does not prove existence, deployment, or authorization.
 `tests/typed_runtime_views.rs` executes the new Cell, input, CellDep, and
 HeaderDep fields in CKB-VM. It covers a nonzero header epoch at index zero, the
 derived epoch-start block number, a one-past-last HeaderDep, exact absolute and
-relative Since wire vectors, canonical epoch-fraction comparisons, a malformed
-fraction, an exact CellDep data hash, and a substituted hash.
+relative wire vectors for all six Since domains, checked decoding and
+narrowing, canonical epoch-fraction comparisons, malformed flags/fractions and
+scalar bounds, an exact CellDep data hash, and a substituted hash.
 `tests/authoring_replace.rs` exercises the
 `ScriptHash` domain against real output Lock Script hashes. Existing
 `tests/ickb_diff.rs`, `tests/crypto_primitives.rs`, and artifact-checker mutation
@@ -118,8 +119,8 @@ The following work remains before issue #24 can close:
   ownership shared across #8, #13, and #22;
 - full-header decoding for timestamp, block number, and header hash when the
   frozen business corpus requires them;
-- the remaining block/timestamp, decoded-Since, duration-arithmetic, migration,
-  and business-fixture work owned by #12;
+- the remaining full-header temporal readers, duration arithmetic, migration,
+  interface versioning, and business-fixture work owned by #12;
 - persistent-policy and generated-builder parity for every admitted row;
 - standalone-checker machine mutations for the new HeaderDep source/index,
   field selector, exact width, syscall status, and terminal error;

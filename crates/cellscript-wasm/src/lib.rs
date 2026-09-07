@@ -276,7 +276,10 @@ fn browser_metadata_value(metadata: &cellscript::CompileMetadata) -> serde_json:
         "artifact_format": metadata.artifact_format,
         "artifact_hash": metadata.artifact_hash,
         "artifact_size_bytes": metadata.artifact_size_bytes,
-        "target_profile": { "name": metadata.target_profile.name },
+        "target_profile": {
+            "name": metadata.target_profile.name,
+            "since_abi": metadata.target_profile.since_abi,
+        },
         "types": types,
         "actions": actions,
         "runtime": {
@@ -539,6 +542,30 @@ lock_script VaultOwner on lock_group {
             assert_eq!(language["diagnostics"].as_array().map(Vec::len), Some(0));
             assert!(language["completions"].as_array().is_some_and(|items| items.iter().any(|item| item["label"] == "lock_script")));
         }
+    }
+
+    #[test]
+    fn wasm_accepts_the_edition_2027_typed_since_surface() {
+        let source = r#"
+module demo
+
+resource Token has store { amount: u64 }
+
+action inspect() -> bool {
+    verification
+        let input = ckb::input<Token>(0)
+        let decoded = ckb::since_decode(input.since)
+        let block = ckb::since_absolute_block(42)
+        let timestamp = ckb::since_relative_timestamp(3600)
+        return ckb::since_metric(decoded) <= 2
+            && ckb::since_to_raw(block) == 42
+            && ckb::since_to_raw(timestamp) == 13835058055282167312
+}
+"#;
+        let result: serde_json::Value = serde_json::from_str(&compile_metadata_json(source, "2027", None)).unwrap();
+        assert!(result.get("error").is_none(), "unexpected wasm compile error: {result}");
+        assert_eq!(result["edition"], "2027");
+        assert_eq!(result["target_profile"]["since_abi"], "ckb-since-rfc0017-typed-v1");
     }
 
     #[test]

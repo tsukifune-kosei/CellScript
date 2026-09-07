@@ -267,7 +267,9 @@ impl CellScriptRuntimeError {
             Self::DaoMaturityViolation => {
                 "Check the withdrawal request since value and ensure the consumed DAO input has reached the required maturity."
             }
-            Self::CkbSinceMalformed => "Check since flags, metric type, epoch number/index/length bounds, and index < length.",
+            Self::CkbSinceMalformed => {
+                "Check reserved flags, metric type, scalar and timestamp bounds, epoch number/index/length, and requested mode/metric."
+            }
             Self::ScriptArgsMismatch => "Check lock/type script args and whether this protocol path requires empty script args.",
             Self::MetaPointMismatch => "Check the paired input OutPoints or output indexes and the signed relative-distance field.",
             Self::MetaPointCardinalityMismatch => {

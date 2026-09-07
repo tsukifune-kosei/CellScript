@@ -34,6 +34,16 @@ action inspect(witness expected_data_hash: Hash) -> u64 {
     let two_fifths = ckb::since_absolute_epoch(42, 2, 5)
     let equivalent_half = ckb::since_absolute_epoch(42, 2, 4)
     let relative = ckb::since_relative_epoch(2, 1, 4)
+    let absolute_block = ckb::since_absolute_block(123)
+    let later_absolute_block = ckb::since_absolute_block(124)
+    let relative_block = ckb::since_relative_block(7)
+    let absolute_timestamp = ckb::since_absolute_timestamp(1700000000)
+    let later_absolute_timestamp = ckb::since_absolute_timestamp(1700000001)
+    let relative_timestamp = ckb::since_relative_timestamp(3600)
+    let disabled = ckb::since_decode(input.since)
+    let decoded_epoch = ckb::since_from_raw_checked(2305854004380303402)
+    let decoded_zero_fraction = ckb::since_from_raw_checked(2305843009213693994)
+    let decoded_relative_timestamp = ckb::since_from_raw_checked(13835058055282167312)
     require ckb::since_to_raw(earlier) == 2305854004380303402
     require earlier < later
     require earlier <= later
@@ -43,6 +53,24 @@ action inspect(witness expected_data_hash: Hash) -> u64 {
     require half == equivalent_half
     require half != two_fifths
     require ckb::since_to_raw(relative) == 11529219444131758082
+    require ckb::since_to_raw(absolute_block) == 123
+    require ckb::since_to_raw(relative_block) == 9223372036854775815
+    require absolute_block < later_absolute_block
+    require ckb::since_to_raw(absolute_timestamp) == 4611686020127387904
+    require ckb::since_to_raw(relative_timestamp) == 13835058055282167312
+    require absolute_timestamp < later_absolute_timestamp
+    require ckb::since_is_disabled(disabled)
+    require !ckb::since_is_relative(disabled)
+    require ckb::since_metric(disabled) == 0
+    require ckb::since_value(disabled) == 0
+    require ckb::since_metric(decoded_epoch) == 1
+    require ckb::since_value(decoded_epoch) == 10995166609450
+    require ckb::since_as_absolute_epoch(decoded_epoch) == earlier
+    require ckb::since_as_absolute_epoch(decoded_zero_fraction) == ckb::since_absolute_epoch(42, 0, 1)
+    require ckb::since_is_relative(decoded_relative_timestamp)
+    require ckb::since_metric(decoded_relative_timestamp) == 2
+    require ckb::since_value(decoded_relative_timestamp) == 3600
+    require ckb::since_as_relative_timestamp(decoded_relative_timestamp) == relative_timestamp
     require ckb::since_to_raw(input.since) == 0
     require input.occupied_capacity <= input.capacity
     require input.unoccupied_capacity + input.occupied_capacity == input.capacity
@@ -112,4 +140,22 @@ fn typed_cell_input_and_header_views_execute_and_fail_closed() {
         fixture(Bytes::from_static(b"cellscript-0.30-runtime-view"), witness(&malformed_since_result, expected_hash));
     let execution = execute_cellscript_script(strip_vm_abi_trailer(&malformed_since_result.artifact_bytes), &malformed_since);
     assert_eq!(execution.exit_code, 37, "a zero-length epoch fraction must use ckb-since-malformed");
+
+    for source in [
+        SOURCE.replace("ckb::since_absolute_block(123)", "ckb::since_absolute_block(72057594037927936)"),
+        SOURCE.replace("ckb::since_absolute_timestamp(1700000000)", "ckb::since_absolute_timestamp(18446744073709552)"),
+        SOURCE.replace("ckb::since_from_raw_checked(2305854004380303402)", "ckb::since_from_raw_checked(72057594037927936)"),
+        SOURCE.replace("ckb::since_from_raw_checked(2305854004380303402)", "ckb::since_from_raw_checked(6917529027641081856)"),
+        SOURCE.replace("ckb::since_from_raw_checked(2305854004380303402)", "ckb::since_from_raw_checked(2305844108742098986)"),
+        SOURCE.replace("ckb::since_from_raw_checked(2305854004380303402)", "ckb::since_from_raw_checked(4630132762501097456)"),
+        SOURCE.replace(
+            "require ckb::since_as_absolute_epoch(decoded_epoch) == earlier",
+            "require ckb::since_to_raw(ckb::since_as_relative_epoch(decoded_epoch)) >= 0",
+        ),
+    ] {
+        let result = compile(&source);
+        let invalid = fixture(Bytes::from_static(b"cellscript-0.30-runtime-view"), witness(&result, expected_hash));
+        let execution = execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &invalid);
+        assert_eq!(execution.exit_code, 37, "malformed or mismatched typed Since values must fail closed");
+    }
 }

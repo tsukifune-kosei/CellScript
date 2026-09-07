@@ -1367,6 +1367,33 @@ action main() -> bool {
     binary.operands[1].ty = "RelativeEpochSince".to_string();
     changed.rebind_typed_semantics();
     assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
+
+    let valid = Fixture::from_source(
+        r#"
+module checker::temporal_scalar
+
+action main() -> bool {
+    verification
+        let left = ckb::since_absolute_block(42)
+        let right = ckb::since_absolute_block(43)
+        return left < right
+}
+"#,
+    );
+    let mut changed = valid.clone();
+    let binary = changed
+        .record
+        .typed_semantics
+        .entries
+        .iter_mut()
+        .flat_map(|entry| &mut entry.blocks)
+        .flat_map(|block| &mut block.operations)
+        .find(|operation| matches!(&operation.detail, TypedSemanticOperationDetail::BinaryOperator { operator } if operator == "lt"))
+        .expect("fixture must contain the temporal comparison");
+    assert!(binary.operands.iter().all(|operand| operand.ty == "AbsoluteBlockSince"));
+    binary.operands[1].ty = "AbsoluteTimestampSince".to_string();
+    changed.rebind_typed_semantics();
+    assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
 }
 
 #[test]

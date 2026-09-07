@@ -192,6 +192,86 @@ impl StdLib {
                 ],
                 return_type: Some(IrType::Named("RelativeEpochSince".to_string())),
             },
+            StdFunction {
+                name: "ckb_since_absolute_block".to_string(),
+                params: vec![("value".to_string(), IrType::U64)],
+                return_type: Some(IrType::Named("AbsoluteBlockSince".to_string())),
+            },
+            StdFunction {
+                name: "ckb_since_relative_block".to_string(),
+                params: vec![("value".to_string(), IrType::U64)],
+                return_type: Some(IrType::Named("RelativeBlockSince".to_string())),
+            },
+            StdFunction {
+                name: "ckb_since_absolute_timestamp".to_string(),
+                params: vec![("seconds".to_string(), IrType::U64)],
+                return_type: Some(IrType::Named("AbsoluteTimestampSince".to_string())),
+            },
+            StdFunction {
+                name: "ckb_since_relative_timestamp".to_string(),
+                params: vec![("seconds".to_string(), IrType::U64)],
+                return_type: Some(IrType::Named("RelativeTimestampSince".to_string())),
+            },
+            StdFunction {
+                name: "ckb_since_decode".to_string(),
+                params: vec![("encoded".to_string(), IrType::Named("EncodedSince".to_string()))],
+                return_type: Some(IrType::Named("DecodedSince".to_string())),
+            },
+            StdFunction {
+                name: "ckb_since_from_raw_checked".to_string(),
+                params: vec![("raw".to_string(), IrType::U64)],
+                return_type: Some(IrType::Named("DecodedSince".to_string())),
+            },
+            StdFunction {
+                name: "ckb_since_as_absolute_block".to_string(),
+                params: vec![("decoded".to_string(), IrType::Named("DecodedSince".to_string()))],
+                return_type: Some(IrType::Named("AbsoluteBlockSince".to_string())),
+            },
+            StdFunction {
+                name: "ckb_since_as_relative_block".to_string(),
+                params: vec![("decoded".to_string(), IrType::Named("DecodedSince".to_string()))],
+                return_type: Some(IrType::Named("RelativeBlockSince".to_string())),
+            },
+            StdFunction {
+                name: "ckb_since_as_absolute_epoch".to_string(),
+                params: vec![("decoded".to_string(), IrType::Named("DecodedSince".to_string()))],
+                return_type: Some(IrType::Named("AbsoluteEpochSince".to_string())),
+            },
+            StdFunction {
+                name: "ckb_since_as_relative_epoch".to_string(),
+                params: vec![("decoded".to_string(), IrType::Named("DecodedSince".to_string()))],
+                return_type: Some(IrType::Named("RelativeEpochSince".to_string())),
+            },
+            StdFunction {
+                name: "ckb_since_as_absolute_timestamp".to_string(),
+                params: vec![("decoded".to_string(), IrType::Named("DecodedSince".to_string()))],
+                return_type: Some(IrType::Named("AbsoluteTimestampSince".to_string())),
+            },
+            StdFunction {
+                name: "ckb_since_as_relative_timestamp".to_string(),
+                params: vec![("decoded".to_string(), IrType::Named("DecodedSince".to_string()))],
+                return_type: Some(IrType::Named("RelativeTimestampSince".to_string())),
+            },
+            StdFunction {
+                name: "ckb_since_is_relative".to_string(),
+                params: vec![("decoded".to_string(), IrType::Named("DecodedSince".to_string()))],
+                return_type: Some(IrType::Bool),
+            },
+            StdFunction {
+                name: "ckb_since_is_disabled".to_string(),
+                params: vec![("decoded".to_string(), IrType::Named("DecodedSince".to_string()))],
+                return_type: Some(IrType::Bool),
+            },
+            StdFunction {
+                name: "ckb_since_metric".to_string(),
+                params: vec![("decoded".to_string(), IrType::Named("DecodedSince".to_string()))],
+                return_type: Some(IrType::U64),
+            },
+            StdFunction {
+                name: "ckb_since_value".to_string(),
+                params: vec![("decoded".to_string(), IrType::Named("DecodedSince".to_string()))],
+                return_type: Some(IrType::U64),
+            },
             StdFunction { name: "ckb_current_role".to_string(), params: vec![], return_type: Some(IrType::U64) },
             StdFunction {
                 name: "ckb_cell_capacity".to_string(),

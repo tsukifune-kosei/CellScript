@@ -682,6 +682,22 @@ impl LspServer {
                     ("since_epoch_relative", "ckb::since_epoch_relative(${1:number}, ${2:index}, ${3:length})"),
                     ("since_absolute_epoch", "ckb::since_absolute_epoch(${1:number}, ${2:index}, ${3:length})"),
                     ("since_relative_epoch", "ckb::since_relative_epoch(${1:number}, ${2:index}, ${3:length})"),
+                    ("since_absolute_block", "ckb::since_absolute_block(${1:block_number})"),
+                    ("since_relative_block", "ckb::since_relative_block(${1:block_count})"),
+                    ("since_absolute_timestamp", "ckb::since_absolute_timestamp(${1:seconds})"),
+                    ("since_relative_timestamp", "ckb::since_relative_timestamp(${1:seconds})"),
+                    ("since_decode", "ckb::since_decode(${1:encoded})"),
+                    ("since_from_raw_checked", "ckb::since_from_raw_checked(${1:raw})"),
+                    ("since_as_absolute_block", "ckb::since_as_absolute_block(${1:decoded})"),
+                    ("since_as_relative_block", "ckb::since_as_relative_block(${1:decoded})"),
+                    ("since_as_absolute_epoch", "ckb::since_as_absolute_epoch(${1:decoded})"),
+                    ("since_as_relative_epoch", "ckb::since_as_relative_epoch(${1:decoded})"),
+                    ("since_as_absolute_timestamp", "ckb::since_as_absolute_timestamp(${1:decoded})"),
+                    ("since_as_relative_timestamp", "ckb::since_as_relative_timestamp(${1:decoded})"),
+                    ("since_is_relative", "ckb::since_is_relative(${1:decoded})"),
+                    ("since_is_disabled", "ckb::since_is_disabled(${1:decoded})"),
+                    ("since_metric", "ckb::since_metric(${1:decoded})"),
+                    ("since_value", "ckb::since_value(${1:decoded})"),
                     ("since_to_raw", "ckb::since_to_raw(${1:since})"),
                     ("epoch_number_to_u64", "ckb::epoch_number_to_u64(${1:epoch})"),
                     ("block_number_to_u64", "ckb::block_number_to_u64(${1:block})"),
@@ -1166,6 +1182,18 @@ impl LspServer {
             "String",
             "Address",
             "Hash",
+            "ScriptHash",
+            "EpochNumber",
+            "BlockNumber",
+            "EpochLength",
+            "EncodedSince",
+            "DecodedSince",
+            "AbsoluteBlockSince",
+            "AbsoluteEpochSince",
+            "AbsoluteTimestampSince",
+            "RelativeBlockSince",
+            "RelativeEpochSince",
+            "RelativeTimestampSince",
             "Bytes",
             "Option",
             "Vec",
@@ -3062,6 +3090,9 @@ mod tests {
         let types = server.type_completions();
         assert!(types.iter().any(|item| item.label == "BoundedCellSet"));
         assert!(types.iter().any(|item| item.label == "BoundedList"));
+        assert!(types.iter().any(|item| item.label == "DecodedSince"));
+        assert!(types.iter().any(|item| item.label == "AbsoluteBlockSince"));
+        assert!(types.iter().any(|item| item.label == "RelativeTimestampSince"));
     }
 
     #[test]
@@ -3093,6 +3124,14 @@ mod tests {
         assert!(ckb.iter().any(|item| item.label == "since_epoch_relative"));
         assert!(ckb.iter().any(|item| item.label == "since_absolute_epoch"));
         assert!(ckb.iter().any(|item| item.label == "since_relative_epoch"));
+        assert!(ckb.iter().any(|item| item.label == "since_absolute_block"));
+        assert!(ckb.iter().any(|item| item.label == "since_relative_block"));
+        assert!(ckb.iter().any(|item| item.label == "since_absolute_timestamp"));
+        assert!(ckb.iter().any(|item| item.label == "since_relative_timestamp"));
+        assert!(ckb.iter().any(|item| item.label == "since_decode"));
+        assert!(ckb.iter().any(|item| item.label == "since_from_raw_checked"));
+        assert!(ckb.iter().any(|item| item.label == "since_as_absolute_epoch"));
+        assert!(ckb.iter().any(|item| item.label == "since_metric"));
         assert!(ckb.iter().any(|item| item.label == "since_to_raw"));
         assert!(ckb.iter().any(|item| item.label == "epoch_number_to_u64"));
         assert!(ckb.iter().any(|item| item.label == "cell_lock_code_hash"));

@@ -394,8 +394,13 @@ const CKB_EPOCH_NUMBER_TYPE: &str = "EpochNumber";
 const CKB_BLOCK_NUMBER_TYPE: &str = "BlockNumber";
 const CKB_EPOCH_LENGTH_TYPE: &str = "EpochLength";
 const CKB_ENCODED_SINCE_TYPE: &str = "EncodedSince";
+const CKB_DECODED_SINCE_TYPE: &str = "DecodedSince";
+const CKB_ABSOLUTE_BLOCK_SINCE_TYPE: &str = "AbsoluteBlockSince";
 const CKB_ABSOLUTE_EPOCH_SINCE_TYPE: &str = "AbsoluteEpochSince";
+const CKB_ABSOLUTE_TIMESTAMP_SINCE_TYPE: &str = "AbsoluteTimestampSince";
+const CKB_RELATIVE_BLOCK_SINCE_TYPE: &str = "RelativeBlockSince";
 const CKB_RELATIVE_EPOCH_SINCE_TYPE: &str = "RelativeEpochSince";
+const CKB_RELATIVE_TIMESTAMP_SINCE_TYPE: &str = "RelativeTimestampSince";
 
 fn param_source_repr(source: ParamSource) -> &'static str {
     match source {
@@ -6773,6 +6778,73 @@ impl<'a> TypeChecker<'a> {
                                 .to_string(),
                             )
                         }
+                        (
+                            "ckb",
+                            "since_absolute_block" | "since_relative_block" | "since_absolute_timestamp" | "since_relative_timestamp",
+                        ) => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if arg_types[0] != Type::U64 {
+                                return Err(CompileError::new(format!("{} expects a u64 metric value", name), call.span));
+                            }
+                            let result = match suffix {
+                                "since_absolute_block" => CKB_ABSOLUTE_BLOCK_SINCE_TYPE,
+                                "since_relative_block" => CKB_RELATIVE_BLOCK_SINCE_TYPE,
+                                "since_absolute_timestamp" => CKB_ABSOLUTE_TIMESTAMP_SINCE_TYPE,
+                                _ => CKB_RELATIVE_TIMESTAMP_SINCE_TYPE,
+                            };
+                            Type::Named(result.to_string())
+                        }
+                        ("ckb", "since_decode") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if arg_types[0] != Type::Named(CKB_ENCODED_SINCE_TYPE.to_string()) {
+                                return Err(CompileError::new("ckb::since_decode expects an EncodedSince value", call.span));
+                            }
+                            Type::Named(CKB_DECODED_SINCE_TYPE.to_string())
+                        }
+                        ("ckb", "since_from_raw_checked") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if arg_types[0] != Type::U64 {
+                                return Err(CompileError::new("ckb::since_from_raw_checked expects a u64 value", call.span));
+                            }
+                            Type::Named(CKB_DECODED_SINCE_TYPE.to_string())
+                        }
+                        (
+                            "ckb",
+                            "since_as_absolute_block"
+                            | "since_as_relative_block"
+                            | "since_as_absolute_epoch"
+                            | "since_as_relative_epoch"
+                            | "since_as_absolute_timestamp"
+                            | "since_as_relative_timestamp",
+                        ) => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if arg_types[0] != Type::Named(CKB_DECODED_SINCE_TYPE.to_string()) {
+                                return Err(CompileError::new(format!("{} expects a DecodedSince value", name), call.span));
+                            }
+                            let result = match suffix {
+                                "since_as_absolute_block" => CKB_ABSOLUTE_BLOCK_SINCE_TYPE,
+                                "since_as_relative_block" => CKB_RELATIVE_BLOCK_SINCE_TYPE,
+                                "since_as_absolute_epoch" => CKB_ABSOLUTE_EPOCH_SINCE_TYPE,
+                                "since_as_relative_epoch" => CKB_RELATIVE_EPOCH_SINCE_TYPE,
+                                "since_as_absolute_timestamp" => CKB_ABSOLUTE_TIMESTAMP_SINCE_TYPE,
+                                _ => CKB_RELATIVE_TIMESTAMP_SINCE_TYPE,
+                            };
+                            Type::Named(result.to_string())
+                        }
+                        ("ckb", "since_is_relative" | "since_is_disabled") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if arg_types[0] != Type::Named(CKB_DECODED_SINCE_TYPE.to_string()) {
+                                return Err(CompileError::new(format!("{} expects a DecodedSince value", name), call.span));
+                            }
+                            Type::Bool
+                        }
+                        ("ckb", "since_metric" | "since_value") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if arg_types[0] != Type::Named(CKB_DECODED_SINCE_TYPE.to_string()) {
+                                return Err(CompileError::new(format!("{} expects a DecodedSince value", name), call.span));
+                            }
+                            Type::U64
+                        }
                         ("ckb", "since_to_raw") => {
                             self.validate_builtin_arity(name, 1, arg_types, call.span)?;
                             if !Self::is_ckb_since_type(&arg_types[0]) {
@@ -8110,8 +8182,13 @@ impl<'a> TypeChecker<'a> {
             | CKB_BLOCK_NUMBER_TYPE
             | CKB_EPOCH_LENGTH_TYPE
             | CKB_ENCODED_SINCE_TYPE
+            | CKB_DECODED_SINCE_TYPE
+            | CKB_ABSOLUTE_BLOCK_SINCE_TYPE
             | CKB_ABSOLUTE_EPOCH_SINCE_TYPE
+            | CKB_ABSOLUTE_TIMESTAMP_SINCE_TYPE
+            | CKB_RELATIVE_BLOCK_SINCE_TYPE
             | CKB_RELATIVE_EPOCH_SINCE_TYPE
+            | CKB_RELATIVE_TIMESTAMP_SINCE_TYPE
             | "Since"
             | "Absolute"
             | "Relative"
@@ -8411,8 +8488,12 @@ impl<'a> TypeChecker<'a> {
                     CKB_EPOCH_NUMBER_TYPE
                         | CKB_BLOCK_NUMBER_TYPE
                         | CKB_EPOCH_LENGTH_TYPE
+                        | CKB_ABSOLUTE_BLOCK_SINCE_TYPE
                         | CKB_ABSOLUTE_EPOCH_SINCE_TYPE
+                        | CKB_ABSOLUTE_TIMESTAMP_SINCE_TYPE
+                        | CKB_RELATIVE_BLOCK_SINCE_TYPE
                         | CKB_RELATIVE_EPOCH_SINCE_TYPE
+                        | CKB_RELATIVE_TIMESTAMP_SINCE_TYPE
                 )
         )
     }
@@ -8422,8 +8503,13 @@ impl<'a> TypeChecker<'a> {
             ty,
             Type::Named(name)
                 if name == CKB_ENCODED_SINCE_TYPE
+                    || name == CKB_DECODED_SINCE_TYPE
+                    || name == CKB_ABSOLUTE_BLOCK_SINCE_TYPE
                     || name == CKB_ABSOLUTE_EPOCH_SINCE_TYPE
+                    || name == CKB_ABSOLUTE_TIMESTAMP_SINCE_TYPE
+                    || name == CKB_RELATIVE_BLOCK_SINCE_TYPE
                     || name == CKB_RELATIVE_EPOCH_SINCE_TYPE
+                    || name == CKB_RELATIVE_TIMESTAMP_SINCE_TYPE
                     || name.starts_with("Since<Absolute, ")
                     || name.starts_with("Since<Relative, ")
         )
@@ -10220,12 +10306,21 @@ action inspect() -> bool {
         let header = ckb::header_dep(0)
         let absolute = ckb::since_absolute_epoch(42, 3, 10)
         let another_absolute = ckb::since_absolute_epoch(43, 0, 10)
+        let absolute_block = ckb::since_absolute_block(42)
+        let another_absolute_block = ckb::since_absolute_block(43)
+        let absolute_timestamp = ckb::since_absolute_timestamp(1700000000)
+        let another_absolute_timestamp = ckb::since_absolute_timestamp(1700000001)
         let encoded = ckb::input<Token>(0).since
+        let decoded = ckb::since_decode(encoded)
         require absolute < another_absolute
+        require absolute_block < another_absolute_block
+        require absolute_timestamp < another_absolute_timestamp
         return ckb::epoch_number_to_u64(header.epoch_number) == 42
             && ckb::block_number_to_u64(header.epoch_start_block_number) == 97
             && ckb::epoch_length_to_u64(header.epoch_length) == 10
             && ckb::since_to_raw(encoded) >= 0
+            && ckb::since_to_raw(decoded) >= 0
+            && ckb::since_metric(decoded) <= 2
             && ckb::since_epoch_absolute(1, 0, 1) >= 0
             && ckb::input_since_at(source::input(0)) >= 0
 }
@@ -10235,6 +10330,9 @@ action inspect() -> bool {
 
         for (expression, expected) in [
             ("ckb::since_absolute_epoch(1, 0, 1) == ckb::since_relative_epoch(1, 0, 1)", "comparison requires matching types"),
+            ("ckb::since_absolute_block(1) == ckb::since_relative_block(1)", "comparison requires matching types"),
+            ("ckb::since_absolute_block(1) == ckb::since_absolute_timestamp(1)", "comparison requires matching types"),
+            ("ckb::since_decode(ckb::input<Token>(0).since) == ckb::since_absolute_block(0)", "comparison requires matching types"),
             ("ckb::header_dep(0).epoch_number == ckb::header_dep(0).epoch_start_block_number", "comparison requires matching types"),
             ("ckb::input<Token>(0).since == 0", "comparison requires matching types"),
         ] {

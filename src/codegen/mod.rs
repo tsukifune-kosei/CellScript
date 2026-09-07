@@ -49,10 +49,14 @@ const CKB_DAO_HEADER_ACCUMULATED_RATE_ABSOLUTE_OFFSET: u64 = 160 + 8;
 const CKB_DAO_TYPE_HASH_WORDS_LE: [i64; 4] = [-8442554211429484596, 7297449809414763189, -7890662964692133976, 6381290010727626424];
 const CKB_INPUT_FIELD_OUT_POINT: u64 = ckb_abi::input_field::OUT_POINT;
 const CKB_INPUT_FIELD_SINCE: u64 = ckb_abi::input_field::SINCE;
+const CKB_SINCE_RELATIVE_FLAG: u64 = ckb_abi::since::RELATIVE_FLAG;
 const CKB_SINCE_METRIC_TYPE_FLAG_MASK: u64 = ckb_abi::since::METRIC_TYPE_FLAG_MASK;
+const CKB_SINCE_BLOCK_NUMBER_FLAG: u64 = ckb_abi::since::BLOCK_NUMBER_FLAG;
 const CKB_SINCE_EPOCH_NUMBER_WITH_FRACTION_FLAG: u64 = ckb_abi::since::EPOCH_NUMBER_WITH_FRACTION_FLAG;
+const CKB_SINCE_TIMESTAMP_FLAG: u64 = ckb_abi::since::TIMESTAMP_FLAG;
 const CKB_SINCE_REMAIN_FLAGS_BITS: u64 = ckb_abi::since::REMAIN_FLAGS_BITS;
 const CKB_SINCE_VALUE_MASK: u64 = ckb_abi::since::VALUE_MASK;
+const CKB_SINCE_TIMESTAMP_BOUND: u64 = ckb_abi::since::TIMESTAMP_VALUE_BOUND;
 const CKB_EPOCH_NUMBER_BOUND: u64 = ckb_abi::since::EPOCH_NUMBER_BOUND;
 const CKB_EPOCH_FRACTION_BOUND: u64 = ckb_abi::since::EPOCH_FRACTION_BOUND;
 const CKB_EPOCH_NUMBER_MASK: u64 = CKB_EPOCH_NUMBER_BOUND - 1;
@@ -284,6 +288,22 @@ fn is_v014_runtime_helper(func: &str) -> bool {
             | "__ckb_source_group_output"
             | "__ckb_since_epoch_absolute"
             | "__ckb_since_epoch_relative"
+            | "__ckb_since_block_absolute"
+            | "__ckb_since_block_relative"
+            | "__ckb_since_timestamp_absolute"
+            | "__ckb_since_timestamp_relative"
+            | "__ckb_since_decode"
+            | "__ckb_since_from_raw_checked"
+            | "__ckb_since_as_absolute_block"
+            | "__ckb_since_as_relative_block"
+            | "__ckb_since_as_absolute_epoch"
+            | "__ckb_since_as_relative_epoch"
+            | "__ckb_since_as_absolute_timestamp"
+            | "__ckb_since_as_relative_timestamp"
+            | "__ckb_since_is_relative"
+            | "__ckb_since_is_disabled"
+            | "__ckb_since_metric"
+            | "__ckb_since_value"
             | "__ckb_since_to_raw"
             | "__ckb_epoch_number_to_u64"
             | "__ckb_block_number_to_u64"
@@ -542,8 +562,20 @@ fn fixed_scalar_width(ty: &IrType, fixed_size: Option<usize>) -> Option<usize> {
 }
 
 fn is_ckb_temporal_scalar_name(name: &str) -> bool {
-    matches!(name, "EpochNumber" | "BlockNumber" | "EpochLength" | "EncodedSince" | "AbsoluteEpochSince" | "RelativeEpochSince")
-        || name.starts_with("Since<Absolute, ")
+    matches!(
+        name,
+        "EpochNumber"
+            | "BlockNumber"
+            | "EpochLength"
+            | "EncodedSince"
+            | "DecodedSince"
+            | "AbsoluteBlockSince"
+            | "AbsoluteEpochSince"
+            | "AbsoluteTimestampSince"
+            | "RelativeBlockSince"
+            | "RelativeEpochSince"
+            | "RelativeTimestampSince"
+    ) || name.starts_with("Since<Absolute, ")
         || name.starts_with("Since<Relative, ")
 }
 

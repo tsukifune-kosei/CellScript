@@ -84,6 +84,9 @@ pub mod since {
     pub const TIMESTAMP_FLAG: u64 = 0x4000_0000_0000_0000;
     pub const REMAIN_FLAGS_BITS: u64 = 0x1f00_0000_0000_0000;
     pub const VALUE_MASK: u64 = 0x00ff_ffff_ffff_ffff;
+    /// Exclusive upper bound for a timestamp payload whose consensus
+    /// seconds-to-milliseconds conversion remains inside `u64`.
+    pub const TIMESTAMP_VALUE_BOUND: u64 = u64::MAX / 1_000 + 1;
     pub const EPOCH_NUMBER_BOUND: u64 = 1 << 24;
     pub const EPOCH_FRACTION_BOUND: u64 = 1 << 16;
     pub const EPOCH_NUMBER_MASK: u64 = EPOCH_NUMBER_BOUND - 1;
