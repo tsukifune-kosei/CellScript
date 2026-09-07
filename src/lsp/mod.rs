@@ -682,6 +682,7 @@ impl LspServer {
                     ("since_epoch_relative", "ckb::since_epoch_relative(${1:number}, ${2:index}, ${3:length})"),
                     ("current_role", "ckb::current_role()"),
                     ("current_script_hash", "ckb::current_script_hash()"),
+                    ("script_hash", "ckb::script_hash(${1:hash})"),
                     ("cell_capacity", "ckb::cell_capacity(${1:source::group_input(0)})"),
                     ("cell_occupied_capacity", "ckb::cell_occupied_capacity(${1:source::group_input(0)})"),
                     ("cell_unoccupied_capacity", "ckb::cell_unoccupied_capacity(${1:source::group_input(0)})"),

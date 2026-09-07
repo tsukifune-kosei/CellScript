@@ -7,11 +7,17 @@ production quality, with no loss of Edition 2026's supported functionality or
 feature completeness. This includes the complete language and toolchain, not
 only a Token example or acceptance of old source text.
 
-Work is in progress on `0.26b`. No production-completion claim is made here.
-The current source contract is
-`cellscript-source-semantics-2027-authoring1`; the workspace release version and
+Work is in progress on `0.30`. No production-completion claim is made here. The
+first capability slice advances the experimental source contract from the
+recorded `cellscript-source-semantics-2027-authoring1` baseline to
+`cellscript-source-semantics-2027-0.30-dev1`; the workspace release version and
 existing single-entry payload/placement ABIs are unchanged. Explicit persistent
 Type policies have a separate, opt-in `cellscript-policy-witness-v1` envelope.
+The implementation may become the next stable release without publishing a
+stable 0.26 line. The 0.30 scope and its broader Rust-comparable business
+acceptance portfolio are tracked in the
+[0.30 capability closure RFC](CELLSCRIPT_0_30_CAPABILITY_CLOSURE_RFC.md); neither
+the release name nor this development evidence changes a compatibility identity.
 
 The first implementation step restores familiar authoring over the shared
 declaration, type, value, and statement grammar. Ordinary action/lock bodies
@@ -42,13 +48,13 @@ are not implementation of a required supported feature.
 | Direct semantic elaboration | Structured relation nodes with spans, typed schema resolution, and checked lowering; no generated preview4 text reparsing. | Implemented for `replace`: parser, AST, type checking and IR elaborate the relation directly, including concrete-schema `same except`; other constructor forms remain pending. |
 | Path-sensitive successor relations | Assigned/preserved fields, identity, lock, capacity and output correspondence compose inside ordinary `if`/`match`; every accepting path accounts for roles. | Implemented for authoring relations: source-level completeness (conditional skip, double disposal and loop disposal rejected) and relations in each branch of an `if` compile and validate after sibling arms stopped reusing non-dominating schema-field materializations. |
 | `same except` and upgrades | Concrete schema identity, exhaustive expansion, reproducible focused acknowledgement, changed/stale/missing acknowledgement rejection, no implicit repin. | `data = same except` expands against the resolved concrete schema with unknown/duplicate-field rejection; the schema acknowledgement workflow remains pending. |
-| Constructor defaults | A1-A6 policies are total under resolved context; lock omission, capacity alternatives, identity, group coverage, alias rejection and pool domains have one checked meaning. | Relations require explicit data, lock, capacity and identity treatments (omission is rejected, not defaulted); `lock = exact(address)` and `lock = same` are executable with checked conservation; `exact_hash` stays reserved pending the Script-hash value contract; other constructors pending. |
+| Constructor defaults | A1-A6 policies are total under resolved context; lock omission, capacity alternatives, identity, group coverage, alias rejection and pool domains have one checked meaning. | Relations require explicit data, lock, capacity and identity treatments (omission is rejected, not defaulted); `lock = exact(address)`, `lock = exact_hash(script_hash)`, and `lock = same` are executable with checked conservation. `exact_hash` requires the dedicated `ScriptHash` domain; other constructors remain pending. |
 | Exact artifact entry | Codegen, semantic metadata, CLI execution and explicit entry scoping agree, including selected actions calling other retained actions. | Shared selection, terminal scalar/Unit helper failure and VM regressions implemented; policy Cell-bearing and complex-ABI callee closure remains pending. |
 | Resolved physical bindings | One typed per-binding source/ordinal/identity plan drives codegen, provenance, roles and independent checks; mixed Cell/read/witness/Script.args layouts cannot disagree. | Fixed-Cell runtime plan and typed projection checks implemented; full ABI and machine-dataflow closure remain pending. |
 | One deployed multi-action policy | Declared action set and explicit versioned dispatch bind selectors, payloads, common checks, artifact identity and builders. | Bounded fixed-role Type policy implemented in compiler/VM, metadata/expansion and package/builders; full consumer and deployment closure remains pending. |
 | Dispatch rejection | Reject unknown/duplicate/ambiguous tags, wrong versions, malformed/oversized/trailing payload, branch confusion and missing policy checks. | Focused real VM negatives implemented for the bounded envelope and all four fixed cardinalities; independent machine dispatch verification remains pending. |
 | Lock authorization | Actual transaction-bound credential proof; reject copied owner values, missing/invalid proof and signed-transaction tampering. | Real multisig spending and the issuer-authorized mint/transfer/merge/burn VM lifecycle are implemented with credential and post-signing tamper negatives; the precise source-level Script identity/authorization API and chain evidence remain pending. |
-| Script identity API | Distinguish address decoding, full Script construction/hash comparison and signature verification; wrong-domain values fail typing or checked conversion. | Pending. |
+| Script identity API | Distinguish address decoding, full Script construction/hash comparison and signature verification; wrong-domain values fail typing or checked conversion. | Partially implemented: typed transaction views expose complete hashes as `ScriptHash`; `ckb::script_hash(Hash)` is an explicit domain conversion; and authoring `exact_hash` rejects `Address` and raw `Hash`. Address parsing, source-level complete Script hashing, deployment/existence proof, and signature verification remain pending. |
 | Orthogonal obligations | Compose lifecycle, identity, asset accounting, capacity and authorization without double counting; scope and authenticated external guarantees remain distinct. | Executable relation sugar produces the same typed obligation set as its spelled-out 2026 form for data, capacity, identity and exact-lock treatment. Bounded trusted-external EXEC/SPAWN now binds exact CellDep data identity and scoped guarantee claims under a separate evidence tier; broader constructor composition remains pending. |
 | Witness ABI contexts | Type input/output-only entries, Lock entries and shared witnesses have bounded, non-overlapping ownership; preserve old ABI bytes where compatible. | Empty-group fallback, canonical bounded multi-record Type envelope, independent host/adapter codecs and pre-signing placement implemented; full signed shared-policy integration remains pending. |
 | Token lifecycle | Execute generated Token Type Script under one persistent policy through authorized mint, transfer, merge and burn, with positive/negative VM and chain evidence. | Real CKB-VM coverage executes the complete issuer-authorized lifecycle under identical policy bytes, using earlier verified outputs as later inputs, across both editions and optimization levels 0-3; node admission, chain confirmation and deployment evidence remain pending. |
@@ -99,20 +105,25 @@ its checks: `data { f = same | f = expr }` and `data = same except { f = expr }`
 resolve against the concrete schema of the bound predecessor (exhaustive
 coverage, unknown and duplicate fields rejected), `capacity = same` and
 `identity = same` lower to the canonical capacity and type-identity
-preservation checks, and `lock = exact(address)` binds the successor through
-the create kernel exactly like `std::lifecycle::transfer`. Elaboration stays
-at the structured AST/IR level — no preview4 text is generated or reparsed —
-and `tests/authoring_replace.rs` holds the relation to the spelled-out
-Edition 2026 form (identical obligation set, formatter round-trip) plus real
-CKB-VM positives and negatives. The 2026 grammar keeps `replace` as an
-ordinary identifier.
+preservation checks. `lock = exact(address)` binds the successor through the
+create kernel exactly like `std::lifecycle::transfer`.
+`lock = exact_hash(script_hash)` uses the same machine comparison but accepts
+only the dedicated `ScriptHash` source domain. Complete Lock and Type Script
+hashes read through typed CKB transaction views already inhabit this domain;
+`ckb::script_hash(hash)` explicitly treats a trusted raw `Hash` as a complete
+Script hash without claiming that the Script exists, is deployed, or provides
+authorization. An `Address` or unconverted `Hash` fails typing.
 
-Two boundaries are deliberate and tested. `exact_hash(...)` is rejected
-until the authoring target freezes its Script-hash value contract. And a
-relation whose successor would need to bind more than the relation states is
-rejected rather than defaulted. Source-level successor completeness is
-enforced for the authoring route: a role disposed anywhere must be disposed
-exactly once on every accepting path, and disposal inside loops is rejected.
+Elaboration stays at the structured AST/IR level — no preview4 text is
+generated or reparsed — and `tests/authoring_replace.rs` holds the relation to
+the spelled-out Edition 2026 form (identical obligation set, formatter
+round-trip) plus real CKB-VM positives and negatives for address and complete
+hash locks. The 2026 grammar keeps `replace` as an ordinary identifier.
+
+A relation whose successor would need to bind more than the relation states is
+rejected rather than defaulted. Source-level successor completeness is enforced
+for the authoring route: a role disposed anywhere must be disposed exactly once
+on every accepting path, and disposal inside loops is rejected.
 
 `lock = same` is executable: conservation recognizes the updated-successor
 shape, where every field is either a verbatim alias of the consumed input or

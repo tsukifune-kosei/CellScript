@@ -13,3 +13,12 @@ action transfer(input token: Token, witness recipient: Address) -> next: Token {
         identity = same
     }
 }
+
+action transfer_hash(input token: Token, witness recipient_hash: Hash) -> next: Token {
+    replace token -> next {
+        data { amount = same }
+        lock = exact_hash(ckb::script_hash(recipient_hash))
+        capacity = same
+        identity = same
+    }
+}

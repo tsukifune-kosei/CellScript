@@ -932,6 +932,7 @@ impl Formatter {
                 let lock = match &relation.lock {
                     ReplaceLockTreatment::Same => "lock = same".to_string(),
                     ReplaceLockTreatment::Exact(lock) => format!("lock = exact({})", self.format_expr(lock)),
+                    ReplaceLockTreatment::ExactHash(lock) => format!("lock = exact_hash({})", self.format_expr(lock)),
                 };
                 format!(
                     "replace {} -> {} {{\n{}\n{}\ncapacity = same\nidentity = same\n}}",

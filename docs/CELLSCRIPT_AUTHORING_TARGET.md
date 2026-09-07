@@ -150,12 +150,19 @@ serialized complete Script; hashing an address string or comparing only
 `code_hash` is not that operation. See the
 [CKB Script hash definition](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0022-transaction-structure/0022-transaction-structure.md#script-hash).
 
-Current preview4 `exact_hash(expr)` accepts the legacy `Address` representation
-and lowers to comparison with the expected 32-byte output Lock Script hash.
-It performs no address parsing or signature verification. The authoring target
-must give such values a precise contract, potentially a dedicated Script-hash
-type; the name and conversion API are not frozen. Verifying an already-known
-complete Script hash need not require constructing a Script object in source.
+Current preview4 `exact_hash(expr)` continues to accept the legacy `Address`
+representation and lowers to comparison with the expected 32-byte output Lock
+Script hash. It performs no address parsing or signature verification.
+
+The 0.30 authoring route now freezes the narrower source-value contract:
+`exact_hash(expr)` requires `ScriptHash`. Complete Lock and Type Script hashes
+read from typed CKB transaction views have that type. A trusted raw `Hash` must
+cross the domain explicitly through `ckb::script_hash(hash)`; that conversion
+does not prove that a corresponding Script exists, is deployed, or authenticates
+the transaction. Verifying an already-known complete Script hash therefore does
+not require constructing a Script object in source. Address decoding, hashing a
+newly constructed complete Script, and signature verification remain separate
+API work under the 0.30 closure plan.
 
 ### A3. Preservation and schema evolution
 

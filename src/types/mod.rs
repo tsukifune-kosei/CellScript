@@ -3257,7 +3257,7 @@ impl<'a> TypeChecker<'a> {
             | Expr::Identifier(_)
             | Expr::ReadRef(_) => {}
             Expr::ReplaceRelation(relation) => {
-                if let ReplaceLockTreatment::Exact(lock) = &relation.lock {
+                if let ReplaceLockTreatment::Exact(lock) | ReplaceLockTreatment::ExactHash(lock) = &relation.lock {
                     self.validate_spawn_ipc_fd_usage_expr(lock, state)?;
                 }
                 match &relation.data {
@@ -4260,14 +4260,29 @@ impl<'a> TypeChecker<'a> {
                     ));
                 }
                 env.consume(&relation.before).map_err(|error| CompileError::new(error.to_string(), relation.span))?;
-                if let ReplaceLockTreatment::Exact(lock) = &relation.lock {
-                    let lock_ty = self.infer_expr(env, lock)?;
-                    if lock_ty != Type::Address {
-                        return Err(CompileError::new(
-                            format!("replace relation lock expects an Address, found {}", type_repr(&lock_ty)),
-                            relation.span,
-                        ));
+                match &relation.lock {
+                    ReplaceLockTreatment::Exact(lock) => {
+                        let lock_ty = self.infer_expr(env, lock)?;
+                        if lock_ty != Type::Address {
+                            return Err(CompileError::new(
+                                format!("replace relation `exact` lock expects an Address, found {}", type_repr(&lock_ty)),
+                                relation.span,
+                            ));
+                        }
                     }
+                    ReplaceLockTreatment::ExactHash(lock) => {
+                        let lock_ty = self.infer_expr(env, lock)?;
+                        if lock_ty != Type::Named(CKB_SCRIPT_HASH_TYPE.to_string()) {
+                            return Err(CompileError::new(
+                                format!(
+                                    "replace relation `exact_hash` lock expects a ScriptHash, found {}; convert a trusted Hash explicitly with ckb::script_hash(hash)",
+                                    type_repr(&lock_ty)
+                                ),
+                                relation.span,
+                            ));
+                        }
+                    }
+                    ReplaceLockTreatment::Same => {}
                 }
                 Ok(Type::Bool)
             }
@@ -6666,6 +6681,16 @@ impl<'a> TypeChecker<'a> {
                             self.validate_builtin_arity(name, 0, arg_types, call.span)?;
                             Type::Hash
                         }
+                        ("ckb", "script_hash") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if arg_types[0] != Type::Hash {
+                                return Err(CompileError::new(
+                                    "ckb::script_hash expects a Hash and explicitly treats it as a complete CKB Script hash",
+                                    call.span,
+                                ));
+                            }
+                            Type::Named(CKB_SCRIPT_HASH_TYPE.to_string())
+                        }
                         ("ckb", "transaction_u32_le") => {
                             self.validate_builtin_arity(name, 1, arg_types, call.span)?;
                             if arg_types[0] != Type::U64 {
@@ -8512,7 +8537,7 @@ fn expr_uses_identifier(expr: &Expr, expected: &str) -> bool {
             relation.before == expected
                 || relation.after == expected
                 || match &relation.lock {
-                    ReplaceLockTreatment::Exact(lock) => expr_uses_identifier(lock, expected),
+                    ReplaceLockTreatment::Exact(lock) | ReplaceLockTreatment::ExactHash(lock) => expr_uses_identifier(lock, expected),
                     ReplaceLockTreatment::Same => false,
                 }
                 || match &relation.data {

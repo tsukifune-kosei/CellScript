@@ -1205,14 +1205,17 @@ pub enum ReplaceFieldTreatment {
 }
 
 /// Omission cannot silently release the lock constraint, so a treatment is
-/// required. `exact_hash(...)` is rejected until the authoring target freezes
-/// its Script-hash value contract.
+/// required. Address and complete Script-hash targets remain distinct in the
+/// AST so later phases cannot silently mix the two authorization domains.
 #[derive(Debug, Clone)]
 pub enum ReplaceLockTreatment {
     /// `lock = same` — the complete output Lock Script hash is preserved.
     Same,
     /// `lock = exact(expr)` — the successor is created with this lock.
     Exact(Box<Expr>),
+    /// `lock = exact_hash(expr)` — the successor is created with the complete
+    /// Lock Script hash represented by a `ScriptHash` value.
+    ExactHash(Box<Expr>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1231,7 +1234,7 @@ impl ReplaceRelation {
     /// The lock target expression, when the successor is created explicitly.
     pub fn lock_expr(&self) -> Option<&Expr> {
         match &self.lock {
-            ReplaceLockTreatment::Exact(lock) => Some(lock),
+            ReplaceLockTreatment::Exact(lock) | ReplaceLockTreatment::ExactHash(lock) => Some(lock),
             ReplaceLockTreatment::Same => None,
         }
     }

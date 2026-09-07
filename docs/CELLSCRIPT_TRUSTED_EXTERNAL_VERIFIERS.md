@@ -164,12 +164,18 @@ enforced. It also addresses the authenticated-external portion of the #10/#11
 issue reconciliation without treating an ordinary source type, audit label, or
 owner value as foreign authority.
 
-The implementation intentionally does not close the broader Script identity
-API item. Version 1 binds CellDep `DATA_HASH`; it does not introduce a general
-`ScriptHash` source type, parse an address, construct a Lock Script, validate a
-Type ID, or define the still-reserved relation form `exact_hash(...)`. Those
-remain separate decisions. No new keyword or statement grammar is introduced,
-so Edition 2026 parsing and contextual identifier behavior are unchanged.
+The trusted-external implementation intentionally does not close the broader
+Script identity API item. Version 1 binds CellDep `DATA_HASH`; it does not parse
+an address, construct a Lock Script, validate a Type ID, or authenticate a
+caller.
+
+The 0.30 authoring work separately introduces a bounded `ScriptHash` source
+domain for typed transaction-view fields and `lock = exact_hash(...)`, plus
+`ckb::script_hash(Hash)` as an explicit conversion for already trusted complete
+hashes. That conversion does not inherit the trusted-external declaration's
+identity or guarantee claims and does not prove Script existence, deployment,
+or authorization. Edition 2026 parsing and contextual identifier behavior are
+unchanged.
 
 ## Deployment and review checklist
 

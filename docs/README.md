@@ -3,8 +3,10 @@
 This directory is organized by document role. Keep new docs in the smallest
 stable category that matches how readers should use them.
 
-The experimental `0.26b` implementation uses metadata schema 67. The finalized
-0.26 release record below remains the historical schema 62 contract.
+The experimental `0.26b` implementation uses metadata schema 67. The existing
+unreleased 0.26 implementation record below retains the historical schema 62
+baseline; its contents may be folded into 0.30 without publishing a stable 0.26
+release.
 
 ## Stable Tutorials
 
@@ -71,6 +73,9 @@ matrices.
 
 High-value active references include:
 
+- [CELLSCRIPT_0_30_CAPABILITY_CLOSURE_RFC.md](CELLSCRIPT_0_30_CAPABILITY_CLOSURE_RFC.md)
+  for the proposed direct 0.25-to-0.30 release path, issue coverage, missing
+  work owners, bounded Rust-comparable business portfolio, and release gates
 - [CELLSCRIPT_AUTHORING_TARGET.md](CELLSCRIPT_AUTHORING_TARGET.md) for the
   adopted 2026-style authoring direction, shared-policy multi-action contracts,
   schema review, authorization boundaries, and required acceptance examples
@@ -88,8 +93,9 @@ High-value active references include:
   issue/conflict reconciliation, staged acceptance gates, and the experimental
   `0.26b` implementation boundary
 - `CELLSCRIPT_2027_PREVIEW_GRAMMAR.md` for the exact bounded native grammar,
-  lowering, diagnostics, issue constraints, and deferred surface implemented
-  by the retained preview4 native grammar within `cellscript-source-semantics-2027-authoring1`
+  lowering, diagnostics, issue constraints, and deferred surface introduced by
+  preview4, recorded under `cellscript-source-semantics-2027-authoring1`, and
+  retained by the current `cellscript-source-semantics-2027-0.30-dev1` route
 - `releases/CELLSCRIPT_0_13_2_RELEASE_NOTES.md` for the final 0.13 syntax
   governance summary
 - `CELLSCRIPT_GATE_POLICY.md`

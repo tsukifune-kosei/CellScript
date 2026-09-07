@@ -503,10 +503,11 @@ fixed-width handle need not carry Cell lifecycle authority.
 
 The following spelling is an implementation reference, not the adopted authoring
 target. It was introduced by
-`cellscript-source-semantics-2027-preview4` and remains accepted under
-`cellscript-source-semantics-2027-authoring1`. It remains experimental and does
-not freeze the complete grammar or select a new payload ABI. The exact bounded
-contract and EBNF are specified in the
+`cellscript-source-semantics-2027-preview4`, was recorded under
+`cellscript-source-semantics-2027-authoring1`, and remains accepted by the
+`cellscript-source-semantics-2027-0.30-dev1` development route. It remains
+experimental and does not freeze the complete grammar or select a new payload
+ABI. The exact bounded contract and EBNF are specified in the
 [Edition 2027 preview grammar](CELLSCRIPT_2027_PREVIEW_GRAMMAR.md).
 
 ```cellscript

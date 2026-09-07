@@ -4,6 +4,9 @@
 comes from `nightly-0.26`; the economic-backend closure below is implemented
 on `0.26b`. This document does
 not claim that the experimental branch is a stable or production-ready release.
+The project may fold this evidence into the proposed 0.30 capability release
+without publishing a stable 0.26 artifact; see the
+[0.30 capability closure RFC](../CELLSCRIPT_0_30_CAPABILITY_CLOSURE_RFC.md).
 
 0.26 turns the narrow fixed-width bounded Cell lifecycle shape from a 0.25
 fail-closed placeholder into an executable CKB Type Script contract. This is

@@ -2543,14 +2543,17 @@ impl<'a> Parser<'a> {
             self.expect(TokenKind::RParen)?;
             return Ok(ReplaceLockTreatment::Exact(Box::new(lock)));
         }
-        if matches!(&self.current().kind, TokenKind::Identifier(name) if name == "exact_hash") {
-            return Err(CompileError::new(
-                "`lock = exact_hash(...)` is not available yet: the authoring target has not frozen the Script-hash value contract; use `lock = same` or `lock = exact(address)`",
-                self.current().span,
-            ));
+        if matches!(&self.current().kind, TokenKind::Identifier(name) if name == "exact_hash")
+            && matches!(&self.peek(1).kind, TokenKind::LParen)
+        {
+            self.advance();
+            self.expect(TokenKind::LParen)?;
+            let lock = self.parse_expr()?;
+            self.expect(TokenKind::RParen)?;
+            return Ok(ReplaceLockTreatment::ExactHash(Box::new(lock)));
         }
         Err(CompileError::new(
-            "expected `lock = same`, `lock = exact(address)` or the rejected `exact_hash` form",
+            "expected `lock = same`, `lock = exact(address)` or `lock = exact_hash(script_hash)`",
             self.current().span,
         ))
     }

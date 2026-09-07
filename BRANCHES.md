@@ -1,5 +1,30 @@
 # Branch Context
 
+## 0.30
+
+`0.30` is the active capability-closure implementation branch, forked from
+`0.26b` at `08c0ef38`. The current planning target permits the next stable
+release after 0.25 to be 0.30. The experimental `0.26b` work may be absorbed
+into that release without a published 0.26 stable line. No stable tag, Cargo
+version, source edition, metadata schema, ABI, or deployment identity exists
+merely because the branch and roadmap use the 0.30 name. See
+[`docs/CELLSCRIPT_0_30_CAPABILITY_CLOSURE_RFC.md`](docs/CELLSCRIPT_0_30_CAPABILITY_CLOSURE_RFC.md)
+for the issue coverage, bounded Rust-comparable business portfolio, missing work
+owners, staging, and release acceptance criteria.
+
+The first Stage 1 slice gives authoring successor relations a precise complete
+Script-hash domain: `lock = exact_hash(value)` accepts only `ScriptHash`, typed
+CKB transaction-view hash fields produce that type, and
+`ckb::script_hash(hash)` performs an explicit conversion from a trusted raw
+`Hash`. This conversion does not establish Script existence, deployment, or
+authorization. Real CKB-VM tests cover matching and substituted output Lock
+Script hashes while the existing `lock = exact(address)` form remains intact.
+
+Until this branch passes those criteria, treat it as development work, use
+`0.26b` only as its experimental implementation baseline, and retain 0.25 as
+the predecessor release contract. Do not publish a 0.26 tag solely to preserve
+sequential version numbering.
+
 ## 0.26b
 
 `0.26b` is the experimental implementation branch for the post-0.26 semantic
@@ -36,6 +61,8 @@ It is implementation evidence for
 the umbrella RFC, not a
 stable release, accepted grammar, production-equivalence claim, or 1.0
 readiness claim. Edition 2026 remains the stable source-semantics default.
+The branch may feed the planned 0.30 capability release directly; that possible
+promotion does not turn `0.26b` itself into a stable 0.26 release candidate.
 
 The [adopted authoring target](docs/CELLSCRIPT_AUTHORING_TARGET.md) preserves
 `resource`, `action`, `lock`, and `require` while requiring concise successor

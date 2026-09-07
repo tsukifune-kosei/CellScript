@@ -54,6 +54,36 @@ action transfer(input token: Token, witness recipient: Address) -> next: Token {
 }
 "#;
 
+const EXACT_HASH_LOCK_RELATION: &str = r#"
+module authoring_replace::transfer_hash
+resource Token has store, replace, relock { amount: u64 }
+
+action transfer(input token: Token, witness recipient_hash: Hash) -> next: Token {
+    require token.amount > 0
+    replace token -> next {
+        data { amount = same }
+        lock = exact_hash(ckb::script_hash(recipient_hash))
+        capacity = same
+        identity = same
+    }
+}
+"#;
+
+const OBSERVED_HASH_LOCK_RELATION: &str = r#"
+module authoring_replace::observed_hash
+resource Token has store, replace, relock { amount: u64 }
+
+action transfer(input token: Token) -> next: Token {
+    let observed = ckb::input<Token>(0)
+    replace token -> next {
+        data { amount = same }
+        lock = exact_hash(observed.lock_hash)
+        capacity = same
+        identity = same
+    }
+}
+"#;
+
 const EXACT_LOCK_LEGACY: &str = r#"
 module authoring_replace::transfer
 resource Token has store, replace, relock { amount: u64 }
@@ -180,6 +210,13 @@ fn transfer_witness(result: &CompileResult, recipient_lock_hash: [u8; 32]) -> By
     packed::WitnessArgs::new_builder().input_type(Some(Bytes::from(payload)).pack()).build().as_bytes()
 }
 
+fn transfer_hash_witness(result: &CompileResult, recipient_lock_hash: [u8; 32]) -> Bytes {
+    let payload = result.metadata.actions[0]
+        .entry_witness_args(&[EntryWitnessArg::Hash(recipient_lock_hash)])
+        .expect("encode declared Script-hash argument");
+    packed::WitnessArgs::new_builder().input_type(Some(Bytes::from(payload)).pack()).build().as_bytes()
+}
+
 #[test]
 fn exact_lock_relation_executes_and_rejects_in_the_real_vm() {
     let result = compile_2027(EXACT_LOCK_RELATION);
@@ -213,6 +250,31 @@ fn exact_lock_relation_executes_and_rejects_in_the_real_vm() {
     };
     let (exit, _, _) = run(transfer_witness(&result, wrong_recipient), 7, 7);
     assert_ne!(exit, 0, "a successor locked to another recipient must reject");
+}
+
+#[test]
+fn exact_hash_relation_accepts_only_the_explicit_script_hash_domain_and_executes_in_the_real_vm() {
+    let result = compile_2027(EXACT_HASH_LOCK_RELATION);
+    let recipient = deterministic_always_success_lock_hash();
+    let run = |witness: Bytes| {
+        let mut fixture = transfer_fixture(7, 7);
+        fixture.witnesses = vec![witness];
+        execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &fixture).exit_code
+    };
+
+    assert_eq!(run(transfer_hash_witness(&result, recipient)), 0, "the complete output Lock Script hash must match");
+    let mut wrong_recipient = recipient;
+    wrong_recipient[0] ^= 0xff;
+    assert_ne!(run(transfer_hash_witness(&result, wrong_recipient)), 0, "a different complete Lock Script hash must reject");
+
+    let formatted = cellscript::fmt::format_default(&result.ast).expect("format exact_hash relation source");
+    assert!(formatted.contains("lock = exact_hash(ckb::script_hash(recipient_hash))"), "{formatted}");
+    compile_2027(&formatted);
+
+    let observed = compile_2027(OBSERVED_HASH_LOCK_RELATION);
+    let fixture = transfer_fixture(7, 7);
+    let execution = execute_cellscript_script(strip_vm_abi_trailer(&observed.artifact_bytes), &fixture);
+    assert_eq!(execution.exit_code, 0, "a typed InputView.lock_hash must remain in the ScriptHash domain");
 }
 
 #[test]
@@ -310,7 +372,23 @@ action transfer(input token: Token, witness recipient: Address) -> next: Token {
     }
 }
 "#,
-            "exact_hash",
+            "expects a ScriptHash, found Address",
+        ),
+        (
+            r#"
+module authoring_replace::untyped_hash
+resource Token has store, replace, relock { amount: u64 }
+
+action transfer(input token: Token, witness recipient_hash: Hash) -> next: Token {
+    replace token -> next {
+        data { amount = same }
+        lock = exact_hash(recipient_hash)
+        capacity = same
+        identity = same
+    }
+}
+"#,
+            "convert a trusted Hash explicitly with ckb::script_hash(hash)",
         ),
         (
             r#"

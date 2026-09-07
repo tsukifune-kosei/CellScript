@@ -2534,7 +2534,7 @@ impl IrGenerator {
             Expr::ReplaceRelation(relation) => {
                 footprint.has_consume = true;
                 footprint.has_create = true;
-                if let ReplaceLockTreatment::Exact(lock) = &relation.lock {
+                if let ReplaceLockTreatment::Exact(lock) | ReplaceLockTreatment::ExactHash(lock) = &relation.lock {
                     self.check_expr_effects(lock, footprint);
                 }
                 match &relation.data {
@@ -4607,7 +4607,7 @@ impl IrGenerator {
             ty: resource_ty.clone(),
             fields: field_values.clone(),
             lock: match &relation.lock {
-                ReplaceLockTreatment::Exact(lock) => Some(lock.clone()),
+                ReplaceLockTreatment::Exact(lock) | ReplaceLockTreatment::ExactHash(lock) => Some(lock.clone()),
                 ReplaceLockTreatment::Same => None,
             },
             span,
@@ -6671,6 +6671,7 @@ impl IrGenerator {
                     blocks,
                     vars,
                 ),
+                "ckb::script_hash" if call.args.len() == 1 => Some(self.lower_expr(&call.args[0], current, blocks, vars)),
                 "ckb::cell_capacity" if call.args.len() == 1 => self.lower_simple_runtime_call(
                     "__ckb_cell_capacity",
                     "ckb_cell_capacity",
@@ -9007,7 +9008,7 @@ fn ir_validity_predicates_with_constants(
 
 fn replace_relation_inner_exprs(relation: &ReplaceRelation) -> Vec<&Expr> {
     let mut inner = Vec::new();
-    if let ReplaceLockTreatment::Exact(lock) = &relation.lock {
+    if let ReplaceLockTreatment::Exact(lock) | ReplaceLockTreatment::ExactHash(lock) = &relation.lock {
         inner.push(lock.as_ref());
     }
     match &relation.data {
@@ -9234,7 +9235,7 @@ fn qualify_validity_dependencies(
 ) {
     match expr {
         Expr::ReplaceRelation(relation) => {
-            if let ReplaceLockTreatment::Exact(lock) = &mut relation.lock {
+            if let ReplaceLockTreatment::Exact(lock) | ReplaceLockTreatment::ExactHash(lock) = &mut relation.lock {
                 qualify_validity_dependencies(lock, owner_module, resolver, fields, constant_dependencies);
             }
             if let ReplaceDataTreatment::Fields(treatments) = &mut relation.data {

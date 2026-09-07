@@ -1174,6 +1174,9 @@ fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Expr>) -> Expr {
             let lock = match &relation.lock {
                 ReplaceLockTreatment::Same => ReplaceLockTreatment::Same,
                 ReplaceLockTreatment::Exact(lock) => ReplaceLockTreatment::Exact(Box::new(substitute_expr(lock, substitutions))),
+                ReplaceLockTreatment::ExactHash(lock) => {
+                    ReplaceLockTreatment::ExactHash(Box::new(substitute_expr(lock, substitutions)))
+                }
             };
             let data = match &relation.data {
                 ReplaceDataTreatment::Fields(treatments) => ReplaceDataTreatment::Fields(

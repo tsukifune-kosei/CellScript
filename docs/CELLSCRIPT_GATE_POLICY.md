@@ -317,11 +317,12 @@ canonical foundation object. The human rendering is deterministic but is not
 a hash boundary. Source paths and spans live only in source-map v2, while
 source bytes have a separate `SourceDigest`.
 
-The gate treats Edition 2027 as experimental, not a release claim. The
-`authoring1` frontend shares the 2026 value/declaration/statement kernel while
-retaining an independently selected entry-body grammar. Ordinary modules retain
-legacy default provenance and lifecycle meanings and may contain multiple
-actions/locks; those source declarations do not create runtime dispatch.
+The gate treats Edition 2027 as experimental, not a release claim. The current
+`cellscript-source-semantics-2027-0.30-dev1` frontend inherits the `authoring1`
+2026 value/declaration/statement kernel while retaining an independently
+selected entry-body grammar. Ordinary modules retain legacy default provenance
+and lifecycle meanings and may contain multiple actions/locks; those source
+declarations do not create runtime dispatch.
 Artifacts remain `SingleEntry` until a versioned dispatch ABI is implemented
 and verified. The retained `preview4` native slice separately checks the
 native `type_script` or `lock_script` container. It checks exact Type or Lock

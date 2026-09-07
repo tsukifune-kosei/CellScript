@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.30 - Capability closure development branch
+
+- Introduce the first authoring-level CKB Script identity contract. Edition
+  2027 successor relations now accept `lock = exact_hash(script_hash)` and
+  require the expression to have the dedicated `ScriptHash` type. Typed CKB
+  transaction views retain that type for complete Lock/Type Script hashes;
+  `ckb::script_hash(hash)` is the explicit conversion from a trusted raw
+  `Hash`. The conversion is a type-domain assertion and does not prove that a
+  Script exists, is deployed, or authorizes the transaction. Parser, AST,
+  typing, formatter, LSP completion, IR lowering, optimizer traversal, syntax
+  audit, and real CKB-VM positive/substitution-negative tests share the same
+  boundary. The existing `lock = exact(address)` form and preview4's legacy
+  `Address`-typed `exact_hash` surface remain compatible. Advance the
+  experimental Edition 2027 source identity to
+  `cellscript-source-semantics-2027-0.30-dev1` and the artifact cache identity
+  to `project-source-set-v31-0.30-dev1-script-hash`; the final 0.30 source
+  identity remains gated on the complete adopted grammar.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,
