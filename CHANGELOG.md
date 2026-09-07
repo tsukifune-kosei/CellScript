@@ -71,7 +71,11 @@
   temporarily install `--cellscript-fungible-artifact` in Fiber's dev
   SimpleUDT slot, records its SHA-256, CKB data hash, byte length and Data2
   identity, restores the original fixture before reporting, and refuses to
-  reuse prior execution when either repository or the artifact changes.
+  reuse prior execution when either repository or the artifact changes. Live
+  runs pin Fiber's Bruno CLI at the same `1.20.0` used by upstream CI and
+  override `UDT_CODE_HASH` with the installed CellScript artifact's data hash.
+  Runtime-generated, untracked node backups are reported after restoration but
+  do not masquerade as tracked source drift.
 
 - Add the bounded real-contract interoperability primitives exercised by the
   separate Spore and Fiber comparison work: exact witness/data/Lock/Type byte

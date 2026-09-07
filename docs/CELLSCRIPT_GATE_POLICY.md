@@ -205,7 +205,10 @@ temporarily installs that exact ELF in Fiber's dev SimpleUDT contract slot and
 restores the original fixture before returning. Its report binds the artifact
 SHA-256, CKB data hash, byte length and Data2 selector together with clean
 CellScript and Fiber revisions. Cached workflow results are reusable only when
-all three identities remain exact. This mode still produces bounded local
+all three identities remain exact. The runner pins Bruno CLI `1.20.0` to match
+Fiber CI and passes the installed ELF's CKB data hash as `UDT_CODE_HASH`.
+Tracked Fiber state must return to its baseline; runtime-generated untracked
+node backups are disclosed separately. This mode still produces bounded local
 devnet evidence rather than a mainnet or operator-identity claim.
 
 Static mode runs the dedicated CKB-VM transaction matrix, adapter tests, and
