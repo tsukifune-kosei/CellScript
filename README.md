@@ -972,7 +972,7 @@ the manual, CI, recovery, and external-wallet path.
 | `cellc abi` | Explain `_cellscript_entry` witness ABI layout for an action or lock |
 | `cellc entry-witness` | Encode `_cellscript_entry` witness bytes |
 | `cellc action build` | Emit a semantic action-builder contract, transaction draft, and compile-only action scan selectors |
-| `cellc gen-builder --target typescript` | Generate a TypeScript action-builder package from metadata, lockfile, and optional deployment facts |
+| `cellc gen-builder --target typescript` | Generate a TypeScript action-builder package with artifact identity, ProtocolBundle v1 state-machine types, resumable external signing, and runtime adapter contracts |
 | `cellc scheduler-plan` | Consume scheduler hints and report serial/conflict policy |
 | `cellc ckb-hash` | Compute CKB default Blake2b-256 hashes for builders and release evidence |
 | `cellc explain assumptions` | Emit v0.16 builder-assumption evidence from ProofPlan metadata |
@@ -1014,7 +1014,9 @@ artifact's code Cell or complete dep-group membership, admitted ELF data hash,
 and data-hash or type-hash Script identity against the same transaction. The
 adapter can then run supplied CKB SDK unlockers, preserve entry-witness fields,
 dry-run the signed bytes, require tx-pool acceptance, and submit with a hash-bound
-uncommitted receipt.
+uncommitted receipt. Generated TypeScript packages expose the same ordered
+states and an artifact binding tied to their metadata, ELF, interface, and
+builder-manifest identities; signing requests carry no private keys.
 | `cellc publish` / `cellc publish --offline` / `cellc registry add` / `cellc registry edit --yank` | Public publish plus explicit local/offline registry metadata flow; public registry policy makes bare `cellc publish` an authenticated registry write, with Git/static metadata retained for audit and fallback |
 | `cellc auth capability create/submit/revoke` / public registry write API / non-CellScript artifact install | Typed wallet-rooted publication policy and future-facing artifact profiles; fail-closed where unsupported |
 

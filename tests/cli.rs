@@ -10035,6 +10035,10 @@ action mint(amount: u64, owner: Address) -> Token {
     assert!(summary["metadata_hash"].as_str().is_some_and(|hash| hash.len() == 64));
     assert_eq!(summary["cell_data_codec_abi"], "molecule");
     assert_eq!(summary["raw_cell_data_required"], false);
+    assert_eq!(summary["protocol_bundle_api_schema"], "cellscript-protocol-bundle-v1");
+    assert_eq!(summary["protocol_bundle_artifact_binding_schema"], "cellscript-protocol-bundle-artifact-binding-v1");
+    assert_eq!(summary["resumable_external_signing"], true);
+    assert_eq!(summary["private_keys_in_generated_api"], false);
 
     let package_json: serde_json::Value = serde_json::from_slice(&std::fs::read(output_dir.join("package.json")).unwrap()).unwrap();
     assert_eq!(package_json["name"], "@demo/token-builder");
@@ -10064,6 +10068,10 @@ action mint(amount: u64, owner: Address) -> Token {
     assert_eq!(manifest["runtime_contract"]["action_scan_selector_source"], "transaction_runtime_input_requirements");
     assert_eq!(manifest["actions"][0]["action_scan_selectors"]["schema"], "cellscript-action-scan-selectors-v0.21");
     assert_eq!(manifest["actions"][0]["action_scan_selectors"]["source"], "transaction_runtime_input_requirements");
+    assert_eq!(manifest["protocol_bundle_contract"]["schema"], "cellscript-protocol-bundle-v1");
+    assert_eq!(manifest["protocol_bundle_contract"]["runtime_adapter"], "cellscript-ckb-adapter");
+    assert_eq!(manifest["protocol_bundle_contract"]["private_keys"], "never-in-bundle-or-evidence");
+    assert_eq!(manifest["protocol_bundle_contract"]["states"].as_array().unwrap().len(), 8);
     assert_eq!(
         manifest["actions"][0]["action_scan_selectors"]["selector_count"],
         manifest["actions"][0]["runtime_input_requirements"]
@@ -10104,6 +10112,11 @@ action mint(amount: u64, owner: Address) -> Token {
     assert!(index_ts.contains("cell_data_codec_materialization"), "{index_ts}");
     assert!(index_ts.contains("export const metadata = {"), "{index_ts}");
     assert!(!index_ts.contains("import metadataJson"), "{index_ts}");
+    assert!(index_ts.contains("PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA"), "{index_ts}");
+    assert!(index_ts.contains("bindProtocolBundleArtifact"), "{index_ts}");
+    assert!(index_ts.contains("createProtocolBundleClient"), "{index_ts}");
+    assert!(index_ts.contains("ProtocolBundleSigningRequest"), "{index_ts}");
+    assert!(index_ts.contains("privateKeysIncluded: false"), "{index_ts}");
 
     let builder_test = std::fs::read_to_string(output_dir.join("test").join("builder.test.mjs")).unwrap();
     assert!(builder_test.contains("node:test"), "{builder_test}");
@@ -10120,6 +10133,7 @@ action mint(amount: u64, owner: Address) -> Token {
     assert!(builder_test.contains("rejects mismatched lockfile identity"), "{builder_test}");
     assert!(builder_test.contains("rejects mismatched deployment identity"), "{builder_test}");
     assert!(builder_test.contains("trust policy requires a deployment record"), "{builder_test}");
+    assert!(builder_test.contains("resumable ProtocolBundle runtime state machine without private keys"), "{builder_test}");
 
     let generated_metadata: serde_json::Value =
         serde_json::from_slice(&std::fs::read(output_dir.join("src").join("metadata.json")).unwrap()).unwrap();

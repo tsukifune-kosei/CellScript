@@ -200,6 +200,12 @@ The signing path is an ordered state machine:
 
 Private keys are never fields in the ProtocolBundle or its evidence. Hardware,
 wallet, and software signers remain behind CKB SDK `ScriptUnlocker` interfaces.
+Generated TypeScript builders expose the same rule through
+`ProtocolBundleSigningRequest.privateKeysIncluded = false`. Their
+`createProtocolBundleClient` rejects duplicate artifact IDs, wrong stage names,
+and any bundle or raw-transaction identity change between stages. Each package
+also exports `bindProtocolBundleArtifact`, which refuses a deployment ELF hash
+different from the generated builder's admitted artifact hash.
 
 `CkbSdkAcceptance::dry_run_protocol_bundle` sends that exact packed transaction
 to CKB `estimate_cycles`. A successful response emits

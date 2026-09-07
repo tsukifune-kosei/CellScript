@@ -176,6 +176,15 @@ before calling `send_transaction` and rejects a returned hash that differs from
 the raw transaction hash. Its receipt says `submitted-uncommitted`; commitment
 still requires a later status query.
 
+Generated TypeScript builders export `bindProtocolBundleArtifact()` and
+`createProtocolBundleClient()`. The artifact binding fixes the package,
+metadata, ELF, public-interface, builder schema, deployment, and selected entry
+identity. The client mirrors the Rust adapter state order and exposes a
+`ProtocolBundleSigningRequest` containing only an opaque unsigned transaction
+handle plus bundle/transaction hashes. A wallet, hardware signer, or service
+returns signed bytes through `resumeSigned`; no key material enters the
+generated package.
+
 `CkbSdkAcceptance::dry_run_protocol_bundle()` and the equivalent
 `CellScriptAdapter` method call CKB `estimate_cycles` with that exact
 transaction. A successful result produces

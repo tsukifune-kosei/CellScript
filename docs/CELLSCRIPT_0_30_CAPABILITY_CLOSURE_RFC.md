@@ -241,6 +241,13 @@ measured per-group cycles, generated SDK/ecosystem alignment, and the remaining
 runtime-adapter work remain required before issue #9 is complete. See
 [CellScript ProtocolBundle v1](CELLSCRIPT_PROTOCOL_BUNDLE.md).
 
+Generated TypeScript action builders now expose the same ProtocolBundle v1
+state names and artifact-binding schema as the Rust adapter. Their client
+orders offline checking, live resolution, external signing resumption, signed
+node execution, tx-pool acceptance, and submission. It accepts opaque signer
+results and never accepts a private key field. Registry discovery and website
+documentation remain the ecosystem-alignment work for this phase.
+
 Extend trusted external verification through exact artifact, interface,
 deployment, argument-adapter, and result contracts. General process or pipe
 programming is not required for parity. A new bounded IPC adapter is admitted

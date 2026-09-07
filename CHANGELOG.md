@@ -269,6 +269,15 @@
   and fee, and submission is refused before RPC unless the exact signed bytes
   already carry tx-pool evidence. Submission receipts remain uncommitted.
 
+- Extend generated TypeScript action builders with a typed ProtocolBundle v1
+  client. Each package exports its metadata/artifact/interface identity, binds
+  an exact deployment without accepting a mismatched ELF hash, and sequences
+  offline check, materialization, live inputs, live dependencies, readiness,
+  resumable external signing, signed dry-run, tx-pool acceptance, and
+  submission. Signing requests contain an opaque transaction handle and
+  explicitly contain no private keys. Generated packages compile with `tsc`
+  and exercise both the positive state order and wrong-state rejection.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

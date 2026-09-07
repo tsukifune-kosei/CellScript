@@ -8319,6 +8319,10 @@ fn write_typescript_builder_package(
         "raw_cell_data_required": metadata.cell_data_codec_manifest.raw_bytes_required,
         "lockfile_verified": locked_identity.is_some(),
         "deployment_verified": deployment_identity.is_some(),
+        "protocol_bundle_api_schema": "cellscript-protocol-bundle-v1",
+        "protocol_bundle_artifact_binding_schema": "cellscript-protocol-bundle-artifact-binding-v1",
+        "resumable_external_signing": true,
+        "private_keys_in_generated_api": false,
         "lockfile": lockfile_path.map(|path| path.display().to_string()),
         "deployed": deployed_path.map(|path| path.display().to_string()),
         "action_count": actions.len(),
@@ -8440,6 +8444,23 @@ fn typescript_builder_manifest(
             .collect::<Vec<_>>(),
         "transaction_view_handles": metadata.runtime.transaction_view_handles,
         "signing_message_domains": metadata.runtime.signing_message_domains,
+        "protocol_bundle_contract": {
+            "schema": "cellscript-protocol-bundle-v1",
+            "report_schema": "cellscript-protocol-bundle-report-v1",
+            "artifact_binding_schema": "cellscript-protocol-bundle-artifact-binding-v1",
+            "runtime_adapter": "cellscript-ckb-adapter",
+            "states": [
+                "MaterializedProtocolBundleTx",
+                "LiveResolvedProtocolBundleTx",
+                "LiveDependenciesResolvedProtocolBundleTx",
+                "ReadyToSignProtocolBundleTx",
+                "SignedProtocolBundleTx",
+                "SignedDryRunProtocolBundleTx",
+                "TxPoolAcceptedProtocolBundleTx",
+                "SubmittedProtocolBundleTx"
+            ],
+            "private_keys": "never-in-bundle-or-evidence"
+        },
         "runtime_error_catalog": runtime_error_catalog_json(),
         "runtime_contract": {
             "requires_live_cell_resolution": true,
@@ -8510,6 +8531,199 @@ fn typescript_tsconfig_json() -> serde_json::Value {
     })
 }
 
+fn typescript_protocol_bundle_api() -> &'static str {
+    r#"
+export const PROTOCOL_BUNDLE_SCHEMA = "cellscript-protocol-bundle-v1" as const;
+export const PROTOCOL_BUNDLE_REPORT_SCHEMA = "cellscript-protocol-bundle-report-v1" as const;
+export const PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA = "cellscript-protocol-bundle-artifact-binding-v1" as const;
+
+export type ProtocolBundleScriptRole = "lock" | "type" | "spawned-verifier";
+
+export interface ProtocolBundleDeploymentBinding {
+  network: { chainId: string; genesisHash: HexString };
+  artifactHash: string;
+  script: { codeHash: HexString; hashType: "data" | "data1" | "data2" | "type"; args: HexString };
+  codeCellDep: { outPoint: { txHash: HexString; index: number }; depType: "code" | "dep_group" };
+}
+
+export interface ProtocolBundleArtifactBinding {
+  schema: typeof PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA;
+  id: string;
+  packageName: string;
+  metadataHash: string;
+  artifactHash: string;
+  interfaceHash: string;
+  builderManifestSchema: typeof CELLSCRIPT_BUILDER_SCHEMA;
+  entry: { kind: "action" | "lock"; name: string };
+  scriptRole: ProtocolBundleScriptRole;
+  deployment: ProtocolBundleDeploymentBinding;
+}
+
+export const protocolBundleArtifactIdentity = Object.freeze({
+  packageName: builderManifest.package_name,
+  metadataHash: builderManifest.metadata_hash,
+  artifactHash: builderManifest.artifact_hash,
+  interfaceHash: metadata.interface_hash,
+  builderManifestSchema: CELLSCRIPT_BUILDER_SCHEMA,
+});
+
+export function bindProtocolBundleArtifact(options: {
+  id: string;
+  entry: { kind: "action" | "lock"; name: string };
+  scriptRole: ProtocolBundleScriptRole;
+  deployment: ProtocolBundleDeploymentBinding;
+}): ProtocolBundleArtifactBinding {
+  if (!options.id || !options.entry.name) throw new Error("ProtocolBundle artifact id and entry name are required");
+  const artifactHash = protocolBundleArtifactIdentity.artifactHash;
+  if (typeof artifactHash !== "string") {
+    throw new Error("generated artifact has no deployable artifact hash");
+  }
+  if (options.deployment.artifactHash !== artifactHash) {
+    throw new Error("ProtocolBundle deployment artifact hash does not match generated builder identity");
+  }
+  if (!options.deployment.network.chainId || !/^0x[0-9a-f]{64}$/.test(options.deployment.network.genesisHash)) {
+    throw new Error("ProtocolBundle deployment network identity is invalid");
+  }
+  return Object.freeze({
+    schema: PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA,
+    id: options.id,
+    packageName: protocolBundleArtifactIdentity.packageName,
+    metadataHash: protocolBundleArtifactIdentity.metadataHash,
+    artifactHash,
+    interfaceHash: protocolBundleArtifactIdentity.interfaceHash,
+    builderManifestSchema: protocolBundleArtifactIdentity.builderManifestSchema,
+    entry: Object.freeze({ ...options.entry }),
+    scriptRole: options.scriptRole,
+    deployment: Object.freeze(options.deployment),
+  });
+}
+
+export interface CheckedProtocolBundle {
+  schema: typeof PROTOCOL_BUNDLE_REPORT_SCHEMA;
+  status: "ok";
+  bundle_hash: string;
+  bundle: unknown;
+  evidence: unknown;
+}
+
+export interface ProtocolBundleStage<S extends string> {
+  state: S;
+  bundleHash: string;
+  rawTransactionHash: string;
+  transaction: unknown;
+  evidence: unknown;
+}
+
+export type MaterializedProtocolBundle = ProtocolBundleStage<"MaterializedProtocolBundleTx">;
+export type LiveResolvedProtocolBundle = ProtocolBundleStage<"LiveResolvedProtocolBundleTx">;
+export type DependencyResolvedProtocolBundle = ProtocolBundleStage<"LiveDependenciesResolvedProtocolBundleTx">;
+export type ReadyToSignProtocolBundle = ProtocolBundleStage<"ReadyToSignProtocolBundleTx">;
+export type SignedProtocolBundle = ProtocolBundleStage<"SignedProtocolBundleTx">;
+export type SignedDryRunProtocolBundle = ProtocolBundleStage<"SignedDryRunProtocolBundleTx">;
+export type TxPoolAcceptedProtocolBundle = ProtocolBundleStage<"TxPoolAcceptedProtocolBundleTx">;
+export type SubmittedProtocolBundle = ProtocolBundleStage<"SubmittedProtocolBundleTx">;
+
+export interface ProtocolBundleSigningRequest {
+  state: "ProtocolBundleSigningRequest";
+  bundleHash: string;
+  rawTransactionHash: string;
+  unsignedTransaction: unknown;
+  privateKeysIncluded: false;
+}
+
+export interface ProtocolBundleRuntime {
+  checkBundle(input: unknown, artifacts: readonly ProtocolBundleArtifactBinding[]): Promise<CheckedProtocolBundle>;
+  materializeBundle(checked: CheckedProtocolBundle): Promise<MaterializedProtocolBundle>;
+  resolveLiveInputs(materialized: MaterializedProtocolBundle): Promise<LiveResolvedProtocolBundle>;
+  resolveLiveDependencies(
+    materialized: MaterializedProtocolBundle,
+    live: LiveResolvedProtocolBundle,
+  ): Promise<DependencyResolvedProtocolBundle>;
+  readyToSign(
+    materialized: MaterializedProtocolBundle,
+    live: LiveResolvedProtocolBundle,
+    dependencies: DependencyResolvedProtocolBundle,
+  ): Promise<ReadyToSignProtocolBundle>;
+  bindSignedTransaction(
+    prepared: ReadyToSignProtocolBundle,
+    signedTransaction: unknown,
+  ): Promise<SignedProtocolBundle>;
+  dryRunSigned(signed: SignedProtocolBundle): Promise<SignedDryRunProtocolBundle>;
+  testTxPool(signed: SignedProtocolBundle, dryRun: SignedDryRunProtocolBundle): Promise<TxPoolAcceptedProtocolBundle>;
+  submit(signed: SignedProtocolBundle, accepted: TxPoolAcceptedProtocolBundle): Promise<SubmittedProtocolBundle>;
+}
+
+function assertProtocolBundleStage<S extends string>(value: ProtocolBundleStage<S>, state: S, previous?: ProtocolBundleStage<string>): void {
+  if (!value || value.state !== state || !value.bundleHash || !value.rawTransactionHash) {
+    throw new Error(`ProtocolBundle runtime returned invalid ${state} evidence`);
+  }
+  if (previous && (value.bundleHash !== previous.bundleHash || value.rawTransactionHash !== previous.rawTransactionHash)) {
+    throw new Error(`ProtocolBundle runtime changed transaction identity at ${state}`);
+  }
+}
+
+export function createProtocolBundleClient(runtime: ProtocolBundleRuntime) {
+  return {
+    async prepare(input: unknown, artifacts: readonly ProtocolBundleArtifactBinding[]) {
+      if (artifacts.length < 2) throw new Error("ProtocolBundle requires at least two artifacts");
+      if (new Set(artifacts.map((artifact) => artifact.id)).size !== artifacts.length) {
+        throw new Error("ProtocolBundle artifact ids must be unique");
+      }
+      if (artifacts.some((artifact) => artifact.schema !== PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA)) {
+        throw new Error("ProtocolBundle artifact binding schema mismatch");
+      }
+      const checked = await runtime.checkBundle(input, artifacts);
+      if (!checked || checked.schema !== PROTOCOL_BUNDLE_REPORT_SCHEMA || checked.status !== "ok" || !checked.bundle_hash) {
+        throw new Error("ProtocolBundle offline check did not return a successful canonical report");
+      }
+      const materialized = await runtime.materializeBundle(checked);
+      assertProtocolBundleStage(materialized, "MaterializedProtocolBundleTx");
+      if (materialized.bundleHash !== checked.bundle_hash) throw new Error("ProtocolBundle materialization changed bundle identity");
+      const live = await runtime.resolveLiveInputs(materialized);
+      assertProtocolBundleStage(live, "LiveResolvedProtocolBundleTx", materialized);
+      const dependencies = await runtime.resolveLiveDependencies(materialized, live);
+      assertProtocolBundleStage(dependencies, "LiveDependenciesResolvedProtocolBundleTx", live);
+      const prepared = await runtime.readyToSign(materialized, live, dependencies);
+      assertProtocolBundleStage(prepared, "ReadyToSignProtocolBundleTx", dependencies);
+      return { checked, materialized, live, dependencies, prepared } as const;
+    },
+    signingRequest(prepared: ReadyToSignProtocolBundle): ProtocolBundleSigningRequest {
+      assertProtocolBundleStage(prepared, "ReadyToSignProtocolBundleTx");
+      return Object.freeze({
+        state: "ProtocolBundleSigningRequest" as const,
+        bundleHash: prepared.bundleHash,
+        rawTransactionHash: prepared.rawTransactionHash,
+        unsignedTransaction: prepared.transaction,
+        privateKeysIncluded: false as const,
+      });
+    },
+    async resumeSigned(prepared: ReadyToSignProtocolBundle, signedTransaction: unknown) {
+      assertProtocolBundleStage(prepared, "ReadyToSignProtocolBundleTx");
+      const signed = await runtime.bindSignedTransaction(prepared, signedTransaction);
+      assertProtocolBundleStage(signed, "SignedProtocolBundleTx", prepared);
+      return signed;
+    },
+    async acceptSigned(signed: SignedProtocolBundle) {
+      assertProtocolBundleStage(signed, "SignedProtocolBundleTx");
+      const dryRun = await runtime.dryRunSigned(signed);
+      assertProtocolBundleStage(dryRun, "SignedDryRunProtocolBundleTx", signed);
+      const accepted = await runtime.testTxPool(signed, dryRun);
+      assertProtocolBundleStage(accepted, "TxPoolAcceptedProtocolBundleTx", dryRun);
+      return { dryRun, accepted } as const;
+    },
+    async submit(signed: SignedProtocolBundle, accepted: TxPoolAcceptedProtocolBundle) {
+      assertProtocolBundleStage(signed, "SignedProtocolBundleTx");
+      assertProtocolBundleStage(accepted, "TxPoolAcceptedProtocolBundleTx", signed);
+      const submitted = await runtime.submit(signed, accepted);
+      assertProtocolBundleStage(submitted, "SubmittedProtocolBundleTx", accepted);
+      return submitted;
+    },
+  };
+}
+
+"#
+}
+
 fn typescript_builder_index(
     package_name: &str,
     metadata: &CompileMetadata,
@@ -8553,11 +8767,12 @@ fn typescript_builder_index(
     ts.push_str("export const cellDataCodecManifest = metadata.cell_data_codec_manifest;\n");
     ts.push_str("export const temporalContract = metadata.public_interface.runtime_contract.temporal;\n");
     ts.push_str("export const runtimeAccessProvenanceContract = metadata.runtime.ckb_runtime_access_provenance_contract;\n");
-    ts.push_str("export const transactionViewHandles = metadata.runtime.transaction_view_handles;\n");
+    ts.push_str("export const transactionViewHandles = builderManifest.transaction_view_handles;\n");
     ts.push_str(&format!("export const signingMessageDomains = {signing_message_domains_json} as const;\n"));
     ts.push_str(&format!("export const actionSpecs = {action_specs_json} as const;\n\n"));
     ts.push_str(&format!("export const actionErrorContexts = {action_error_contexts_json} as const;\n"));
     ts.push_str(&format!("export const runtimeErrorCatalog = {runtime_error_catalog_json} as const;\n\n"));
+    ts.push_str(typescript_protocol_bundle_api());
     ts.push_str(
         "export type HexString = `0x${string}`;\n\
          export type CellScriptScalarInput = bigint | number | string;\n\
@@ -9482,6 +9697,50 @@ fn typescript_builder_test(actions: &[&crate::ActionMetadata]) -> Result<String>
     js.push_str(&format!("const actionCases = {cases_json};\n"));
     js.push_str(&format!("const dynamicIndexCases = {dynamic_index_cases_json};\n"));
     js.push_str("const WRONG_HASH = \"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\";\n\n");
+    js.push_str(
+        "test(\"exposes a resumable ProtocolBundle runtime state machine without private keys\", async () => {\n\
+           const artifactHash = builder.protocolBundleArtifactIdentity.artifactHash;\n\
+           assert.equal(typeof artifactHash, \"string\");\n\
+           const deployment = {\n\
+             network: { chainId: \"ckb-testnet\", genesisHash: \"0x\" + \"0\".repeat(64) },\n\
+             artifactHash,\n\
+             script: { codeHash: \"0x\" + artifactHash, hashType: \"data2\", args: \"0x\" },\n\
+             codeCellDep: { outPoint: { txHash: \"0x\" + \"1\".repeat(64), index: 0 }, depType: \"code\" },\n\
+           };\n\
+           const first = builder.bindProtocolBundleArtifact({\n\
+             id: \"first\", entry: { kind: \"action\", name: actionCases[0].name }, scriptRole: \"type\", deployment,\n\
+           });\n\
+           const second = Object.freeze({ ...first, id: \"second\" });\n\
+           const calls = [];\n\
+           const stage = (state, previous, transaction = { state }) => ({\n\
+             state, bundleHash: previous?.bundleHash ?? \"bundle-hash\",\n\
+             rawTransactionHash: previous?.rawTransactionHash ?? \"raw-tx-hash\", transaction, evidence: { state },\n\
+           });\n\
+           const runtime = {\n\
+             async checkBundle(_input, artifacts) { calls.push(\"check\"); assert.equal(artifacts.length, 2); return { schema: builder.PROTOCOL_BUNDLE_REPORT_SCHEMA, status: \"ok\", bundle_hash: \"bundle-hash\", bundle: {}, evidence: {} }; },\n\
+             async materializeBundle() { calls.push(\"materialize\"); return stage(\"MaterializedProtocolBundleTx\"); },\n\
+             async resolveLiveInputs(value) { calls.push(\"live-inputs\"); return stage(\"LiveResolvedProtocolBundleTx\", value); },\n\
+             async resolveLiveDependencies(_materialized, value) { calls.push(\"live-dependencies\"); return stage(\"LiveDependenciesResolvedProtocolBundleTx\", value); },\n\
+             async readyToSign(_materialized, _live, value) { calls.push(\"ready\"); return stage(\"ReadyToSignProtocolBundleTx\", value); },\n\
+             async bindSignedTransaction(value, signedTransaction) { calls.push(\"signed\"); return stage(\"SignedProtocolBundleTx\", value, signedTransaction); },\n\
+             async dryRunSigned(value) { calls.push(\"dry-run\"); return stage(\"SignedDryRunProtocolBundleTx\", value); },\n\
+             async testTxPool(_signed, value) { calls.push(\"tx-pool\"); return stage(\"TxPoolAcceptedProtocolBundleTx\", value); },\n\
+             async submit(_signed, value) { calls.push(\"submit\"); return stage(\"SubmittedProtocolBundleTx\", value); },\n\
+           };\n\
+           const client = builder.createProtocolBundleClient(runtime);\n\
+           const prepared = await client.prepare({}, [first, second]);\n\
+           const request = client.signingRequest(prepared.prepared);\n\
+           assert.equal(request.privateKeysIncluded, false);\n\
+           assert.equal(Object.hasOwn(request, \"privateKey\"), false);\n\
+           const signed = await client.resumeSigned(prepared.prepared, { signed: true });\n\
+           const accepted = await client.acceptSigned(signed);\n\
+           const submitted = await client.submit(signed, accepted.accepted);\n\
+           assert.equal(submitted.state, \"SubmittedProtocolBundleTx\");\n\
+           assert.deepEqual(calls, [\"check\", \"materialize\", \"live-inputs\", \"live-dependencies\", \"ready\", \"signed\", \"dry-run\", \"tx-pool\", \"submit\"]);\n\
+           const wrongRuntime = { ...runtime, async resolveLiveInputs(value) { return stage(\"WrongState\", value); } };\n\
+           await assert.rejects(() => builder.createProtocolBundleClient(wrongRuntime).prepare({}, [first, second]), /invalid LiveResolvedProtocolBundleTx evidence/);\n\
+         });\n\n",
+    );
     js.push_str(
         "function selectorEvidenceForPlan(plan) {\n\
            const selectors = Array.isArray(plan.actionScanSelectors?.selectors) ? plan.actionScanSelectors.selectors : [];\n\

@@ -808,6 +808,26 @@ fn validate_builder_manifest(input: &ProtocolArtifactInput, metadata: &CompileMe
         ("cell_data_codec_manifest", serde_json::to_value(&metadata.cell_data_codec_manifest)),
         ("transaction_view_handles", serde_json::to_value(&metadata.runtime.transaction_view_handles)),
         ("signing_message_domains", serde_json::to_value(&metadata.runtime.signing_message_domains)),
+        (
+            "protocol_bundle_contract",
+            Ok(serde_json::json!({
+                "schema": "cellscript-protocol-bundle-v1",
+                "report_schema": "cellscript-protocol-bundle-report-v1",
+                "artifact_binding_schema": "cellscript-protocol-bundle-artifact-binding-v1",
+                "runtime_adapter": "cellscript-ckb-adapter",
+                "states": [
+                    "MaterializedProtocolBundleTx",
+                    "LiveResolvedProtocolBundleTx",
+                    "LiveDependenciesResolvedProtocolBundleTx",
+                    "ReadyToSignProtocolBundleTx",
+                    "SignedProtocolBundleTx",
+                    "SignedDryRunProtocolBundleTx",
+                    "TxPoolAcceptedProtocolBundleTx",
+                    "SubmittedProtocolBundleTx"
+                ],
+                "private_keys": "never-in-bundle-or-evidence"
+            })),
+        ),
     ];
     for (field, expected) in structural_checks {
         let expected = expected.map_err(|error| {
