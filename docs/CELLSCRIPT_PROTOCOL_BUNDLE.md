@@ -283,6 +283,13 @@ accepts a receipt/value returned by a successful bundle check only when its
 role, entry, interface, typed semantics, ELF, profile, ABI, verified bundle,
 deployment, and fixed-width shape match the generated artifact. Cryptographic
 receipt/value recomputation remains the Rust checker's responsibility.
+The compiler-side `script_handle::exact_script_handle_value_hash` function
+computes the CKB Blake2b-256 literal consumed by source-level exact-handle
+runtime helpers. It hashes the full fixed value, so changing any receipt,
+interface, artifact, profile, ABI, role, or Script identity byte changes the
+literal.
+Successful bundle artifacts and closed-role participants emit that value as
+`exact_handle_hash`; generated TypeScript binders retain it as `handleHash`.
 
 Registry verified-build evidence makes that capability discoverable without
 weakening admission. A release carries `protocol_bundle_schema`,

@@ -305,6 +305,9 @@ impl CodeGenerator {
         }
         self.emit(format!("# call {}", func));
 
+        if self.emit_runtime_exact_script_handle_requirement_call(func, args)? {
+            return Ok(());
+        }
         if self.emit_runtime_fixed_hash_requirement_call(func, args)? {
             return Ok(());
         }
@@ -941,6 +944,48 @@ impl CodeGenerator {
         Ok(true)
     }
 
+    fn emit_runtime_exact_script_handle_requirement_call(&mut self, func: &str, args: &[IrOperand]) -> Result<bool> {
+        if !matches!(
+            func,
+            "__ckb_require_cell_lock_exact_handle"
+                | "__ckb_require_cell_type_exact_handle"
+                | "__ckb_require_cell_dep_exact_verifier_handle"
+        ) {
+            return Ok(false);
+        }
+        if args.len() != 3 {
+            return Ok(false);
+        }
+
+        let Some(handle) = self.expected_fixed_byte_source(&args[1], crate::script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES) else {
+            self.emit_fail(CellScriptRuntimeError::ExactScriptHandleInvalid);
+            return Ok(true);
+        };
+        let Some(receipt_hash) = self.expected_fixed_byte_source(&args[2], 32) else {
+            self.emit_fail(CellScriptRuntimeError::ExactScriptHandleInvalid);
+            return Ok(true);
+        };
+        self.emit_prepare_fixed_byte_source(&handle, crate::script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES, "exact Script handle");
+        self.emit_prepare_fixed_byte_source(&receipt_hash, 32, "exact Script handle receipt hash");
+        self.emit_operand_to_register("a0", &args[0]);
+        if !self.emit_fixed_byte_source_pointer_or_const_to("a1", &handle) {
+            self.emit_fail(CellScriptRuntimeError::ExactScriptHandleInvalid);
+            return Ok(true);
+        }
+        self.emit(format!("li a2, {}", crate::script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES));
+        if !self.emit_fixed_byte_source_pointer_or_const_to("a3", &receipt_hash) {
+            self.emit_fail(CellScriptRuntimeError::ExactScriptHandleInvalid);
+            return Ok(true);
+        }
+        self.emit(format!("li a4, {}", crate::script_handle_contract::EXACT_SCRIPT_HANDLE_HASH_BYTES));
+        self.emit(format!("call {func}"));
+        let ok = self.fresh_label("exact_script_handle_requirement_ok");
+        self.emit(format!("beqz a0, {ok}"));
+        self.emit_process_failure_status();
+        self.emit_label(&ok);
+        Ok(true)
+    }
+
     fn emit_runtime_bounded_cell_dep_requirement_call(&mut self, func: &str, args: &[IrOperand]) -> Result<bool> {
         if func != "__ckb_require_bounded_cell_dep_data_hash" {
             return Ok(false);
@@ -1450,6 +1495,24 @@ impl CodeGenerator {
         if let Some(width) = self.generic_value_type_width(&param.ty) {
             self.emit(format!(
                 "# cellscript abi: call {} fixed named-value param {} pointer={} length={} size={}",
+                func,
+                param.name,
+                abi_arg_label(*abi_index),
+                abi_arg_label(*abi_index + 1),
+                width
+            ));
+            if !self.emit_call_pointer_arg(func, &param.name, abi_index, arg, Some(width), outgoing_stack_arg_bytes) {
+                return false;
+            }
+            if !self.emit_call_length_arg(func, &param.name, abi_index, arg, CallLengthKind::FixedBytes, outgoing_stack_arg_bytes) {
+                return false;
+            }
+            return true;
+        }
+        if matches!(&param.ty, IrType::Named(name) if name == crate::script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE) {
+            let width = crate::script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES;
+            self.emit(format!(
+                "# cellscript abi: call {} exact Script handle param {} pointer={} length={} size={}",
                 func,
                 param.name,
                 abi_arg_label(*abi_index),

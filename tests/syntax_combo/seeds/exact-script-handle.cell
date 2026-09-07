@@ -1,0 +1,16 @@
+// audit:edition=2027
+// audit:phase=accept
+module cellscript::audit::seed_exact_script_handle
+
+resource Token has store { amount: u64 }
+
+action inspect(witness handle: ExactScriptHandle) -> u64 {
+    verification
+        let dep = ckb::cell_dep(0)
+        ckb::require_cell_dep_exact_verifier_handle(
+            dep,
+            handle,
+            Hash::from_bytes(b"0123456789abcdef0123456789abcdef")
+        )
+        return 0
+}

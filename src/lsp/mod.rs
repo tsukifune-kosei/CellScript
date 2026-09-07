@@ -767,6 +767,18 @@ impl LspServer {
                     ("require_cell_type_hash", "ckb::require_cell_type_hash(${1:source::group_input(0)}, ${2:expected_type_hash})"),
                     ("require_cell_data_hash", "ckb::require_cell_data_hash(${1:source::cell_dep(0)}, ${2:expected_data_hash})"),
                     (
+                        "require_cell_lock_exact_handle",
+                        "ckb::require_cell_lock_exact_handle(${1:source::group_input(0)}, ${2:handle}, ${3:expected_handle_hash})",
+                    ),
+                    (
+                        "require_cell_type_exact_handle",
+                        "ckb::require_cell_type_exact_handle(${1:source::group_input(0)}, ${2:handle}, ${3:expected_handle_hash})",
+                    ),
+                    (
+                        "require_cell_dep_exact_verifier_handle",
+                        "ckb::require_cell_dep_exact_verifier_handle(${1:source::cell_dep(0)}, ${2:handle}, ${3:expected_handle_hash})",
+                    ),
+                    (
                         "require_bounded_cell_dep_data_hash",
                         "ckb::require_bounded_cell_dep_data_hash(${1:8}, ${2:expected_data_hash})",
                     ),
@@ -1222,6 +1234,7 @@ impl LspServer {
             "Address",
             "Hash",
             "ScriptHash",
+            "ExactScriptHandle",
             "SighashAllDigest",
             "EpochNumber",
             "EpochDuration",

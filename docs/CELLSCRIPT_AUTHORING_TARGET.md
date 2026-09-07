@@ -164,6 +164,15 @@ not require constructing a Script object in source. Address decoding, hashing a
 newly constructed complete Script, and signature verification remain separate
 API work under the 0.30 closure plan.
 
+The exact-artifact path is now executable through the ordinary fixed-width
+`ExactScriptHandle` value. A consuming contract embeds the CKB Blake2b-256 hash
+of the complete checked handle as a `Hash` literal, then calls one of the
+`ckb::require_cell_*_exact_handle` helpers. The runtime checks all 202 handle
+bytes and the selected full Script hash or verifier CellDep data hash. This is
+an exact deployed-artifact reference; it does not perform Registry lookup,
+grant Cell lifecycle authority, establish signature authorization, or accept a
+compatible upgrade. See [Exact Script handles](CELLSCRIPT_EXACT_SCRIPT_HANDLES.md).
+
 ### A3. Preservation and schema evolution
 
 For a concrete schema, `same except` can produce exhaustive checks. Accept it

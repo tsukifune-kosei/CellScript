@@ -7287,6 +7287,30 @@ impl IrGenerator {
                 "ckb::require_cell_type_hash" if call.args.len() == 2 => {
                     self.lower_void_runtime_call("__ckb_require_cell_type_hash", &call.args, current, blocks, vars)
                 }
+                "ckb::require_cell_lock_exact_handle" if call.args.len() == 3 => self.lower_exact_script_handle_requirement(
+                    "__ckb_require_cell_lock_exact_handle",
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                    call.span,
+                ),
+                "ckb::require_cell_type_exact_handle" if call.args.len() == 3 => self.lower_exact_script_handle_requirement(
+                    "__ckb_require_cell_type_exact_handle",
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                    call.span,
+                ),
+                "ckb::require_cell_dep_exact_verifier_handle" if call.args.len() == 3 => self.lower_exact_script_handle_requirement(
+                    "__ckb_require_cell_dep_exact_verifier_handle",
+                    &call.args,
+                    current,
+                    blocks,
+                    vars,
+                    call.span,
+                ),
                 "ckb::require_cell_data_hash" if call.args.len() == 2 => {
                     self.lower_void_runtime_call("__ckb_require_cell_data_hash", &call.args, current, blocks, vars)
                 }
@@ -8858,6 +8882,33 @@ impl IrGenerator {
             operation: operation.to_string(),
             adapter: adapter.to_string(),
             code_hash,
+        });
+        Some(LoweredExpr { operand: IrOperand::Const(IrConst::Unit), current: Some(active) })
+    }
+
+    fn lower_exact_script_handle_requirement(
+        &mut self,
+        runtime_helper: &str,
+        args: &[Expr],
+        current: BlockId,
+        blocks: &mut Vec<IrBlock>,
+        vars: &mut HashMap<String, IrVar>,
+        span: Span,
+    ) -> Option<LoweredExpr> {
+        let mut active = current;
+        let mut lowered = Vec::with_capacity(args.len());
+        for arg in args {
+            let value = self.lower_expr(arg, active, blocks, vars);
+            active = value.current?;
+            lowered.push(value.operand);
+        }
+        if !matches!(lowered.get(2), Some(IrOperand::Const(IrConst::Hash(_)))) {
+            self.record_error("exact Script handle handle_hash must be a compile-time Hash literal", span);
+        }
+        self.block_mut(blocks, active).instructions.push(IrInstruction::Call {
+            dest: None,
+            func: runtime_helper.to_string(),
+            args: lowered,
         });
         Some(LoweredExpr { operand: IrOperand::Const(IrConst::Unit), current: Some(active) })
     }

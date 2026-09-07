@@ -1,8 +1,8 @@
 use cellscript::{compile, CompileOptions, CompileResult, NEXT_EDITION};
 use cellscript_artifact_checker::{
     canonical_bytes, canonical_hash, check_bundle, check_bundle_values, parse_elf, CheckerBudgets, CheckerRejectionCode, EdgeKind,
-    SourceArtifactMap, TypedSemanticConstant, TypedSemanticOperationDetail, VerifiedLoweringRecord, LOWERING_RECORD_SCHEMA,
-    SOURCE_MAP_SCHEMA,
+    SourceArtifactMap, TypedSemanticConstant, TypedSemanticOperation, TypedSemanticOperationDetail, VerifiedLoweringRecord,
+    LOWERING_RECORD_SCHEMA, SOURCE_MAP_SCHEMA,
 };
 use serde_json::Value;
 
@@ -56,6 +56,22 @@ action inspect() -> u64 {
     verification
         let digest = env::sighash_all_zero_lock(4, 8, 4, 4096)
         return 0
+}
+"#;
+
+const EXACT_HANDLE_SOURCE: &str = r#"
+module artifact_checker_exact_handle
+
+resource Token has store { amount: u64 }
+
+action inspect(witness handle: ExactScriptHandle) -> u64 {
+    let dep = ckb::cell_dep(0)
+    ckb::require_cell_dep_exact_verifier_handle(
+        dep,
+        handle,
+        Hash::from_bytes(b"0123456789abcdef0123456789abcdef")
+    )
+    return 0
 }
 "#;
 
@@ -157,6 +173,18 @@ fn bounded_lock_handle(metadata: &mut Value) -> &mut Value {
         .iter_mut()
         .find(|handle| handle["handle_type"] == "WitnessBytesView<lock,64>")
         .expect("bounded lock witness handle")
+}
+
+fn exact_handle_operation(fixture: &mut Fixture) -> &mut TypedSemanticOperation {
+    fixture
+        .record
+        .typed_semantics
+        .entries
+        .iter_mut()
+        .flat_map(|entry| &mut entry.blocks)
+        .flat_map(|block| &mut block.operations)
+        .find(|operation| operation.call.as_ref().is_some_and(|call| call.target == "__ckb_require_cell_dep_exact_verifier_handle"))
+        .expect("exact verifier handle operation")
 }
 
 #[test]
@@ -1242,6 +1270,50 @@ action main() -> u64 {
         assert_eq!(error.code, CheckerRejectionCode::V2419TypedSemanticsInvalid);
         assert!(error.message.contains("deferred sighash call"), "{error}");
     }
+}
+
+#[test]
+fn exact_handle_contract_cannot_be_reclassified_after_hash_rebinding() {
+    let fixture = Fixture::from_result(
+        compile(
+            EXACT_HANDLE_SOURCE,
+            CompileOptions {
+                edition: NEXT_EDITION,
+                opt_level: 0,
+                target: Some("riscv64-elf".to_string()),
+                target_profile: Some("ckb".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    );
+
+    let mut changed = fixture.clone();
+    exact_handle_operation(&mut changed).call.as_mut().unwrap().target = "__foreign_exact_handle".to_string();
+    changed.rebind_typed_semantics();
+    assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
+
+    let mut changed = fixture.clone();
+    exact_handle_operation(&mut changed).call.as_mut().unwrap().effect = "Pure".to_string();
+    changed.rebind_typed_semantics();
+    assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
+
+    let mut changed = fixture.clone();
+    let operation = exact_handle_operation(&mut changed);
+    operation.operands[2].ty = "address".to_string();
+    operation.operands[2].constant = Some(TypedSemanticConstant::Address("00".repeat(32)));
+    operation.call.as_mut().unwrap().params[2] = "address".to_string();
+    changed.rebind_typed_semantics();
+    assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
+
+    let mut changed = fixture;
+    let operation = exact_handle_operation(&mut changed);
+    let Some(TypedSemanticConstant::Hash(hash)) = operation.operands[2].constant.as_mut() else {
+        panic!("expected exact-handle hash constant")
+    };
+    hash.replace_range(0..2, "ff");
+    changed.rebind_typed_semantics();
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
 }
 
 #[test]

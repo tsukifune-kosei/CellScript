@@ -176,7 +176,79 @@ pub fn build_for_body(
     );
     plans
         .extend(body.borrow_regions.iter().enumerate().map(|(index, region)| plan_for_borrow_region(scope_kind, name, index, region)));
+    plans.extend(exact_script_handle_plans(scope_kind, name, body));
 
+    plans
+}
+
+fn exact_script_handle_plans(scope_kind: &str, scope_name: &str, body: &ir::IrBody) -> Vec<ProofPlanMetadata> {
+    let mut plans = Vec::new();
+    for (block_index, block) in body.blocks.iter().enumerate() {
+        for (operation_index, instruction) in block.instructions.iter().enumerate() {
+            let IrInstruction::Call { func, args, .. } = instruction else {
+                continue;
+            };
+            let (role, identity) = match func.as_str() {
+                "__ckb_require_cell_lock_exact_handle" => ("lock", "complete-script-hash"),
+                "__ckb_require_cell_type_exact_handle" => ("type", "complete-script-hash"),
+                "__ckb_require_cell_dep_exact_verifier_handle" => ("spawned-verifier", "cell-dep-data-hash"),
+                _ => continue,
+            };
+            let handle_hash = match args.get(2) {
+                Some(ir::IrOperand::Const(ir::IrConst::Hash(hash))) => hex::encode(hash),
+                _ => "invalid-non-constant-handle-hash".to_string(),
+            };
+            let feature = format!("{role}:{handle_hash}");
+            plans.push(ProofPlanMetadata {
+                name: format!("{}#exact-script-handle-{}-{}", scope_name, block_index, operation_index),
+                origin: format!("{}:{}#exact-script-handle:{}:{}", scope_kind, scope_name, block_index, operation_index),
+                category: "exact-script-handle".to_string(),
+                feature: feature.clone(),
+                evidence_tier: EvidenceTier::CheckedRuntime,
+                source_span: None,
+                trigger: trigger_for_scope_kind(scope_kind).to_string(),
+                scope: "selected-ckb-source-view".to_string(),
+                reads: vec![
+                    "source-view".to_string(),
+                    "witness".to_string(),
+                    "ExactScriptHandle".to_string(),
+                    "handle-hash-literal".to_string(),
+                ],
+                coverage: vec![
+                    "encoding:CSHDLv1-fixed-202".to_string(),
+                    "magic:CSHDLv1\\0".to_string(),
+                    format!("class-and-role:{role}"),
+                    format!("handle-hash:{handle_hash}"),
+                    "receipt-commitment:bound-by-full-handle-hash".to_string(),
+                    format!("identity:{identity}"),
+                ],
+                input_output_relation_checks: Vec::new(),
+                group_cardinality: "one-selected-source-view".to_string(),
+                identity_lifecycle_policy: "read-only exact artifact identity check; grants no Cell lifecycle authority".to_string(),
+                preserved_fields: Vec::new(),
+                witness_fields: vec!["ExactScriptHandle".to_string()],
+                lock_args_fields: Vec::new(),
+                on_chain_checked: true,
+                on_chain_checked_obligations: vec![
+                    format!("exact-script-handle:{feature}=checked-runtime"),
+                    "the complete fixed-width handle, class, role, receipt commitment, and selected CKB identity are checked"
+                        .to_string(),
+                ],
+                builder_assumptions: Vec::new(),
+                codegen_coverage_status: "covered".to_string(),
+                status: "checked-runtime".to_string(),
+                detail: format!(
+                    "{func} binds the selected CKB value to an exact {role} handle committed by full handle hash 0x{handle_hash}"
+                ),
+                diagnostics: vec![ProofPlanDiagnosticMetadata {
+                    severity: "info".to_string(),
+                    message:
+                        "exact handles are non-linear fixed values; the runtime check does not authorize Cell consumption or creation"
+                            .to_string(),
+                }],
+            });
+        }
+    }
     plans
 }
 

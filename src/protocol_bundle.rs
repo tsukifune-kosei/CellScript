@@ -9,8 +9,8 @@
 use crate::assumptions::validate_transaction_against_metadata;
 use crate::error::{CompileError, Result};
 use crate::script_handle::{
-    build_exact_script_handle, compile_metadata_abi_hash, ExactScriptHandleReceipt, ExactScriptHandleReceiptInput,
-    ExactScriptHandleValue,
+    build_exact_script_handle, compile_metadata_abi_hash, exact_script_handle_value_hash, ExactScriptHandleReceipt,
+    ExactScriptHandleReceiptInput, ExactScriptHandleValue,
 };
 use crate::{ckb_blake2b256, hex_encode, validate_artifact_metadata, CompileMetadata, TxValidationReport};
 use cellscript_artifact_checker::{canonical_hash, check_bundle, CheckerBudgets, CheckerReport, EvidenceState};
@@ -391,6 +391,7 @@ pub struct ProtocolArtifactIdentity {
     pub runtime_abi_hash: String,
     pub exact_handle_receipt: ExactScriptHandleReceipt,
     pub exact_handle: ExactScriptHandleValue,
+    pub exact_handle_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub builder_manifest_hash: Option<String>,
     pub verified_bundle_id: String,
@@ -408,6 +409,7 @@ pub struct ProtocolClosedRoleParticipant {
     pub artifact_hash: String,
     pub deployment: ProtocolDeploymentIdentity,
     pub exact_handle: ExactScriptHandleValue,
+    pub exact_handle_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -869,6 +871,7 @@ fn admit_artifact(input: &ProtocolArtifactInput, base: &Path) -> Result<(Protoco
         verified_bundle_id: &verified_bundle_id,
         deployment: &input.deployment,
     })?;
+    let exact_handle_hash = exact_script_handle_value_hash(&exact_handle)?;
     Ok((
         ProtocolArtifactIdentity {
             id: input.id.clone(),
@@ -891,6 +894,7 @@ fn admit_artifact(input: &ProtocolArtifactInput, base: &Path) -> Result<(Protoco
             runtime_abi_hash,
             exact_handle_receipt,
             exact_handle,
+            exact_handle_hash,
             builder_manifest_hash,
             verified_bundle_id,
         },
@@ -955,6 +959,8 @@ fn validate_builder_manifest(input: &ProtocolArtifactInput, metadata: &CompileMe
                 "exact_handle_receipt_schema": "cellscript-exact-script-handle-receipt-v1",
                 "exact_handle_value_schema": "cellscript-exact-script-handle-value-v1",
                 "exact_handle_encoding": "CSHDLv1-fixed-202",
+                "exact_handle_hash_algorithm": "ckb-blake2b-256",
+                "exact_handle_hash_personalization": "ckb-default-hash",
                 "runtime_adapter": "cellscript-ckb-adapter",
                 "states": [
                     "MaterializedProtocolBundleTx",
@@ -1173,6 +1179,7 @@ fn resolve_closed_role_participant(
             artifact_hash: artifact.artifact_hash.clone(),
             deployment: artifact.deployment.clone(),
             exact_handle: artifact.exact_handle.clone(),
+            exact_handle_hash: artifact.exact_handle_hash.clone(),
         },
         source,
     ))
@@ -1890,6 +1897,7 @@ mod tests {
             deployment: &deployment,
         })
         .unwrap();
+        let exact_handle_hash = exact_script_handle_value_hash(&exact_handle).unwrap();
         ProtocolArtifactIdentity {
             id: id.to_string(),
             package_coordinate,
@@ -1911,6 +1919,7 @@ mod tests {
             runtime_abi_hash,
             exact_handle_receipt,
             exact_handle,
+            exact_handle_hash,
             builder_manifest_hash: None,
             verified_bundle_id,
         }

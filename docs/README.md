@@ -89,6 +89,9 @@ High-value active references include:
 - [CELLSCRIPT_AUTHORING_IMPLEMENTATION.md](CELLSCRIPT_AUTHORING_IMPLEMENTATION.md)
   for the complete implementation goal, 2026 parity requirements, current
   evidence, and remaining production acceptance work
+- [CELLSCRIPT_EXACT_SCRIPT_HANDLES.md](CELLSCRIPT_EXACT_SCRIPT_HANDLES.md) for
+  the fixed exact-artifact handle layout, source API, on-chain checks, and the
+  boundary before generic compatible/open handles
 - [CELLSCRIPT_POLICY_WITNESS_ABI.md](CELLSCRIPT_POLICY_WITNESS_ABI.md) for
   explicit policy selection, tagged multi-record witnesses, builder contracts,
   and signature-field ownership

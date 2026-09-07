@@ -2646,6 +2646,15 @@ fn validate_typed_operation(
                 return fail();
             }
             let Some(call) = &operation.call else { return fail() };
+            let is_exact_handle_call = matches!(
+                call.target.as_str(),
+                "__ckb_require_cell_lock_exact_handle"
+                    | "__ckb_require_cell_type_exact_handle"
+                    | "__ckb_require_cell_dep_exact_verifier_handle"
+            );
+            if operation.operands.iter().any(|operand| operand.ty == "ExactScriptHandle") && !is_exact_handle_call {
+                return typed_error("ExactScriptHandle operand is passed to an unrecognized runtime helper".to_string());
+            }
             // This known helper has no executable digest contract in this
             // schema. It must not be relabelled as an ordinary value-producing
             // helper after rebinding the enclosing artifact hashes.
@@ -2679,6 +2688,33 @@ fn validate_typed_operation(
                     || !valid_bounds
                 {
                     return typed_error("bounded zero-lock sighash call does not declare its canonical runtime contract".to_string());
+                }
+            }
+            if is_exact_handle_call {
+                let first_type = call.params.first().map(String::as_str).unwrap_or_default();
+                let source_type_valid = if call.target == "__ckb_require_cell_dep_exact_verifier_handle" {
+                    first_type == "CellDepView"
+                } else {
+                    matches!(first_type.split('<').next().unwrap_or(first_type), "InputView" | "OutputView" | "CellDepView")
+                };
+                let handle_hash_is_constant = matches!(
+                    operation.operands.get(2).and_then(|operand| operand.constant.as_ref()),
+                    Some(TypedSemanticConstant::Hash(_))
+                );
+                if call.contract != "versioned-runtime-helper"
+                    || call.effect != "runtime-contract"
+                    || call.return_type != "unit"
+                    || operation.destinations.len() != 0
+                    || operation.operands.len() != 3
+                    || !source_type_valid
+                    || call.params.get(1).map(String::as_str) != Some("ExactScriptHandle")
+                    || canonical_abi_type(call.params.get(2).map(String::as_str).unwrap_or_default()) != "hash"
+                    || !handle_hash_is_constant
+                {
+                    return typed_error(
+                        "exact Script handle call does not declare its canonical full-handle commitment and runtime contract"
+                            .to_string(),
+                    );
                 }
             }
             if call.contract == "typed-local" {

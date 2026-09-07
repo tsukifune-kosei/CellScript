@@ -8497,6 +8497,8 @@ fn typescript_builder_manifest(
         serde_json::json!("cellscript-exact-script-handle-receipt-v1");
     manifest["protocol_bundle_contract"]["exact_handle_value_schema"] = serde_json::json!("cellscript-exact-script-handle-value-v1");
     manifest["protocol_bundle_contract"]["exact_handle_encoding"] = serde_json::json!("CSHDLv1-fixed-202");
+    manifest["protocol_bundle_contract"]["exact_handle_hash_algorithm"] = serde_json::json!("ckb-blake2b-256");
+    manifest["protocol_bundle_contract"]["exact_handle_hash_personalization"] = serde_json::json!("ckb-default-hash");
     if let Some(policy) = &metadata.runtime.policy_artifact {
         manifest["policy_artifact"] = serde_json::json!(policy);
         manifest["runtime_contract"]["requires_policy_witness_bundle"] = serde_json::json!(true);
@@ -8686,6 +8688,7 @@ export interface BoundExactScriptHandle {
   artifact: ProtocolBundleArtifactBinding;
   receipt: ExactScriptHandleReceipt;
   value: ExactScriptHandleValue;
+  handleHash: string;
 }
 
 function exactDeploymentMatches(artifact: ProtocolBundleArtifactBinding, receipt: ExactScriptHandleReceipt): boolean {
@@ -8705,10 +8708,11 @@ function exactDeploymentMatches(artifact: ProtocolBundleArtifactBinding, receipt
 /** Bind a receipt/value pair returned by the successful ProtocolBundle checker. */
 export function bindCheckedExactScriptHandle(
   artifact: ProtocolBundleArtifactBinding,
-  checked: { exact_handle_receipt: ExactScriptHandleReceipt; exact_handle: ExactScriptHandleValue },
+  checked: { exact_handle_receipt: ExactScriptHandleReceipt; exact_handle: ExactScriptHandleValue; exact_handle_hash: string },
 ): BoundExactScriptHandle {
   const receipt = checked.exact_handle_receipt;
   const value = checked.exact_handle;
+  const handleHash = checked.exact_handle_hash;
   if (typeof artifact.verifiedBundleId !== "string") {
     throw new Error("generated artifact has no verified bundle identity for an exact Script handle");
   }
@@ -8738,7 +8742,10 @@ export function bindCheckedExactScriptHandle(
     || value.encoding !== EXACT_SCRIPT_HANDLE_ENCODING || !/^0x[0-9a-f]{404}$/.test(value.encoded)) {
     throw new Error("checked exact Script handle value has an invalid schema or fixed-width encoding");
   }
-  return Object.freeze({ artifact, receipt: Object.freeze(receipt), value: Object.freeze(value) });
+  if (!/^[0-9a-f]{64}$/.test(handleHash)) {
+    throw new Error("checked exact Script handle has an invalid full-value CKB Blake2b-256 hash");
+  }
+  return Object.freeze({ artifact, receipt: Object.freeze(receipt), value: Object.freeze(value), handleHash });
 }
 
 export interface ProtocolBundleClosedRoleInput {
@@ -8812,6 +8819,7 @@ export function exactScriptHandleFromCheckedBundle(
   return bindCheckedExactScriptHandle(artifact, candidate as unknown as {
     exact_handle_receipt: ExactScriptHandleReceipt;
     exact_handle: ExactScriptHandleValue;
+    exact_handle_hash: string;
   });
 }
 
@@ -9971,10 +9979,11 @@ fn typescript_builder_test(actions: &[&crate::ActionMetadata]) -> Result<String>
                schema: builder.EXACT_SCRIPT_HANDLE_VALUE_SCHEMA, version: 1, encoding: builder.EXACT_SCRIPT_HANDLE_ENCODING,\n\
                encoded: \"0x\" + \"0\".repeat(404),\n\
              };\n\
-             const exactHandle = builder.bindCheckedExactScriptHandle(first, { exact_handle_receipt: exactReceipt, exact_handle: exactValue });\n\
+             const exactHandle = builder.bindCheckedExactScriptHandle(first, { exact_handle_receipt: exactReceipt, exact_handle: exactValue, exact_handle_hash: \"0\".repeat(64) });\n\
              assert.equal(exactHandle.value.encoding, \"CSHDLv1-fixed-202\");\n\
+             assert.equal(exactHandle.handleHash, \"0\".repeat(64));\n\
              assert.throws(() => builder.bindCheckedExactScriptHandle(first, {\n\
-               exact_handle_receipt: { ...exactReceipt, runtime_abi_hash: WRONG_HASH.slice(2) }, exact_handle: exactValue,\n\
+               exact_handle_receipt: { ...exactReceipt, runtime_abi_hash: WRONG_HASH.slice(2) }, exact_handle: exactValue, exact_handle_hash: \"0\".repeat(64),\n\
              }), /does not match generated artifact/);\n\
            } else {\n\
              assert.throws(() => builder.bindCheckedExactScriptHandle(first, {}), /no verified bundle identity/);\n\

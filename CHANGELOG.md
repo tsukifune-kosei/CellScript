@@ -331,6 +331,23 @@
   `VerifierHandle<I>` construction and runtime-selected/open roles remain
   later issue #11 phases.
 
+- Add the source/runtime exact-handle phase of issue #11. `ExactScriptHandle`
+  is an ordinary fixed 202-byte ABI value accepted by three checked helpers:
+  `ckb::require_cell_lock_exact_handle`,
+  `ckb::require_cell_type_exact_handle`, and
+  `ckb::require_cell_dep_exact_verifier_handle`. Each call requires the CKB
+  Blake2b-256 hash of the complete handle as a compile-time `Hash` literal,
+  validates magic/class/role and every committed byte, then compares the
+  selected full Lock/Type Script hash or CellDep data hash. Stable error 70
+  covers malformed values and every substitution class. Typed semantics,
+  ProofPlan, runtime provenance, LSP completion, syntax governance, the
+  standalone checker, and real CKB-VM positive/negative tests share this
+  contract. ProtocolBundle artifacts and closed-role participants expose the
+  already recomputed `exact_handle_hash`, and generated TypeScript binders
+  retain it as `handleHash`. Generic `ScriptHandle<I>`, compatible/open handles, and
+  deployment-line upgrades remain later phases. Advance the artifact cache
+  identity to `project-source-set-v43-0.30-dev1-exact-script-handle`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

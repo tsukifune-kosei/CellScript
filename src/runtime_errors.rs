@@ -68,6 +68,7 @@ pub enum CellScriptRuntimeError {
     WitnessFieldAbsent = 67,
     WitnessBoundExceeded = 68,
     SighashBoundExceeded = 69,
+    ExactScriptHandleInvalid = 70,
 }
 
 impl CellScriptRuntimeError {
@@ -139,6 +140,7 @@ impl CellScriptRuntimeError {
             Self::WitnessFieldAbsent => "witness-field-absent",
             Self::WitnessBoundExceeded => "witness-bound-exceeded",
             Self::SighashBoundExceeded => "sighash-bound-exceeded",
+            Self::ExactScriptHandleInvalid => "exact-script-handle-invalid",
         }
     }
 
@@ -225,6 +227,9 @@ impl CellScriptRuntimeError {
             Self::WitnessBoundExceeded => "A raw witness or WitnessArgs field exceeded its compile-time maximum byte count.",
             Self::SighashBoundExceeded => {
                 "The current signing-message domain exceeded a compile-time input, group, extra-witness, or witness-byte bound."
+            }
+            Self::ExactScriptHandleInvalid => {
+                "An exact Script handle had the wrong canonical encoding, receipt commitment, role, or selected transaction Script identity."
             }
         }
     }
@@ -335,6 +340,9 @@ impl CellScriptRuntimeError {
             Self::SighashBoundExceeded => {
                 "Raise the explicit sighash bound within the supported maximum, or reduce the transaction group or witness domain."
             }
+            Self::ExactScriptHandleInvalid => {
+                "Use the checked CSHDLv1 receipt value and keep its complete Script or CellDep artifact identity unchanged."
+            }
         }
     }
 
@@ -402,6 +410,7 @@ impl CellScriptRuntimeError {
             67 => Some(Self::WitnessFieldAbsent),
             68 => Some(Self::WitnessBoundExceeded),
             69 => Some(Self::SighashBoundExceeded),
+            70 => Some(Self::ExactScriptHandleInvalid),
             _ => None,
         }
     }
@@ -478,6 +487,7 @@ pub const ALL_RUNTIME_ERRORS: &[CellScriptRuntimeError] = &[
     CellScriptRuntimeError::WitnessFieldAbsent,
     CellScriptRuntimeError::WitnessBoundExceeded,
     CellScriptRuntimeError::SighashBoundExceeded,
+    CellScriptRuntimeError::ExactScriptHandleInvalid,
 ];
 
 pub const RESERVED_RUNTIME_ERROR_CODES: &[u64] = &[6, 19, 27, 28, 29, 30, 31];

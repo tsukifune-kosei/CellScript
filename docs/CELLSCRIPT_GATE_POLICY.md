@@ -328,6 +328,16 @@ differential and adversarial bound/mutation cases. This evidence admits only
 the all-zero lock-placeholder domain; the generic `env::sighash_all(source)`
 and prefix-preserving multisig construction remain outside this contract.
 
+The exact-handle tranche adds `ExactScriptHandle` as a 202-byte fixed ABI
+value and three role-specific runtime requirements. `dev` and `ci` must retain
+type/IR/metadata/LSP/syntax coverage, standalone-checker rebound mutations,
+and the real CKB-VM cases in `tests/exact_script_handles.rs`. The positive case
+binds the complete handle hash and verifier CellDep data hash. Negative cases
+mutate each fixed identity region and the selected artifact and must exit with
+stable code 70. A runtime-selected expected handle hash, legacy numeric source
+index, or unknown helper target must reject. See
+[the exact Script handle contract](CELLSCRIPT_EXACT_SCRIPT_HANDLES.md).
+
 ### 0.26b semantic-foundation evidence
 
 The `0.26b` experimental branch advances compile metadata to schema 67,

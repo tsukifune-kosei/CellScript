@@ -2629,7 +2629,12 @@ lock authorize(witness approved: bool) -> bool {
         .arg("--json")
         .output()
         .unwrap();
-    assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
+    assert!(
+        first.status.success(),
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&first.stderr),
+        String::from_utf8_lossy(&first.stdout)
+    );
     let (materialized, materialization) = cellscript_ckb_adapter::materialize_protocol_bundle_report(&first.stdout).unwrap();
     assert_eq!(materialized.inputs().len(), 1);
     assert_eq!(materialized.outputs().len(), 1);
@@ -2664,10 +2669,18 @@ lock authorize(witness approved: bool) -> bool {
         assert_eq!(identity.target_profile_hash, identity.exact_handle_receipt.target_profile_hash);
         assert_eq!(identity.exact_handle.encoded.len(), 2 + cellscript::script_handle::EXACT_SCRIPT_HANDLE_BYTES * 2);
         cellscript::script_handle::validate_exact_script_handle(&identity.exact_handle_receipt, &identity.exact_handle).unwrap();
+        assert_eq!(
+            identity.exact_handle_hash,
+            cellscript::script_handle::exact_script_handle_value_hash(&identity.exact_handle).unwrap()
+        );
     }
     assert_eq!(
         first["bundle"]["closed_roles"][0]["provider"]["exact_handle"],
         identities.iter().find(|identity| identity["id"] == "token").unwrap()["exact_handle"]
+    );
+    assert_eq!(
+        first["bundle"]["closed_roles"][0]["provider"]["exact_handle_hash"],
+        identities.iter().find(|identity| identity["id"] == "token").unwrap()["exact_handle_hash"]
     );
     assert_eq!(
         first["bundle"]["artifacts"]
@@ -10159,6 +10172,8 @@ action mint(amount: u64, owner: Address) -> Token {
     assert_eq!(manifest["protocol_bundle_contract"]["exact_handle_receipt_schema"], "cellscript-exact-script-handle-receipt-v1");
     assert_eq!(manifest["protocol_bundle_contract"]["exact_handle_value_schema"], "cellscript-exact-script-handle-value-v1");
     assert_eq!(manifest["protocol_bundle_contract"]["exact_handle_encoding"], "CSHDLv1-fixed-202");
+    assert_eq!(manifest["protocol_bundle_contract"]["exact_handle_hash_algorithm"], "ckb-blake2b-256");
+    assert_eq!(manifest["protocol_bundle_contract"]["exact_handle_hash_personalization"], "ckb-default-hash");
     assert!(manifest["runtime_abi_hash"].as_str().is_some());
     assert!(manifest["target_profile_hash"].as_str().is_some());
     assert_eq!(manifest["protocol_bundle_contract"]["runtime_adapter"], "cellscript-ckb-adapter");

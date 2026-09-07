@@ -8,6 +8,14 @@ use crate::error::{CompileError, Result};
 use crate::protocol_bundle::{
     validate_deployment, ProtocolDeploymentIdentity, ProtocolEntryIdentity, ProtocolScriptIdentity, ProtocolScriptRole,
 };
+use crate::script_handle_contract::{
+    EXACT_SCRIPT_HANDLE_ARTIFACT_HASH_OFFSET, EXACT_SCRIPT_HANDLE_CLASS_OFFSET, EXACT_SCRIPT_HANDLE_CLASS_SCRIPT,
+    EXACT_SCRIPT_HANDLE_CLASS_VERIFIER, EXACT_SCRIPT_HANDLE_INTERFACE_HASH_OFFSET, EXACT_SCRIPT_HANDLE_MAGIC,
+    EXACT_SCRIPT_HANDLE_RECEIPT_HASH_OFFSET, EXACT_SCRIPT_HANDLE_ROLE_LOCK, EXACT_SCRIPT_HANDLE_ROLE_OFFSET,
+    EXACT_SCRIPT_HANDLE_ROLE_SPAWNED_VERIFIER, EXACT_SCRIPT_HANDLE_ROLE_TYPE, EXACT_SCRIPT_HANDLE_RUNTIME_ABI_HASH_OFFSET,
+    EXACT_SCRIPT_HANDLE_SCRIPT_HASH_OFFSET, EXACT_SCRIPT_HANDLE_TARGET_PROFILE_HASH_OFFSET,
+};
+pub use crate::script_handle_contract::{EXACT_SCRIPT_HANDLE_BYTES, EXACT_SCRIPT_HANDLE_ENCODING};
 use crate::{ckb_blake2b256, hex_encode, CompileMetadata};
 use cellscript_artifact_checker::canonical_hash;
 use serde::{Deserialize, Serialize};
@@ -15,9 +23,6 @@ use serde::{Deserialize, Serialize};
 pub const EXACT_SCRIPT_HANDLE_RECEIPT_SCHEMA: &str = "cellscript-exact-script-handle-receipt-v1";
 pub const EXACT_SCRIPT_HANDLE_VALUE_SCHEMA: &str = "cellscript-exact-script-handle-value-v1";
 pub const EXACT_SCRIPT_HANDLE_RECEIPT_HASH_DOMAIN: &str = "cellscript-exact-script-handle-receipt-v1";
-pub const EXACT_SCRIPT_HANDLE_ENCODING: &str = "CSHDLv1-fixed-202";
-pub const EXACT_SCRIPT_HANDLE_BYTES: usize = 202;
-const EXACT_SCRIPT_HANDLE_MAGIC: &[u8; 8] = b"CSHDLv1\0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -183,6 +188,24 @@ pub fn validate_exact_script_handle(receipt: &ExactScriptHandleReceipt, value: &
     Ok(())
 }
 
+/// CKB Blake2b-256 commitment consumed by the on-chain exact-handle helpers.
+///
+/// Binding the complete 202-byte value makes substitutions of the receipt,
+/// interface, artifact, target profile, runtime ABI, Script identity, class,
+/// role, or encoding fail as one closed runtime check.
+pub fn exact_script_handle_value_hash(value: &ExactScriptHandleValue) -> Result<String> {
+    if value.schema != EXACT_SCRIPT_HANDLE_VALUE_SCHEMA || value.version != 1 || value.encoding != EXACT_SCRIPT_HANDLE_ENCODING {
+        return Err(CompileError::without_span("unsupported exact Script handle value schema/version/encoding"));
+    }
+    let bytes = canonical_hex_bytes(&value.encoded, "exact Script handle value")?;
+    if bytes.len() != EXACT_SCRIPT_HANDLE_BYTES {
+        return Err(CompileError::without_span(format!(
+            "exact Script handle value must contain exactly {EXACT_SCRIPT_HANDLE_BYTES} bytes"
+        )));
+    }
+    Ok(hex_encode(&ckb_blake2b256(&bytes)))
+}
+
 pub fn ckb_script_identity_hash(script: &ProtocolScriptIdentity) -> Result<String> {
     let code_hash = prefixed_hash32(&script.code_hash, "Script code_hash")?;
     let hash_type = match script.hash_type.as_str() {
@@ -220,21 +243,27 @@ fn encode_exact_script_handle(receipt: &ExactScriptHandleReceipt) -> Result<Exac
     let target_profile_hash = raw_hash32(&receipt.target_profile_hash, "target_profile_hash")?;
     let runtime_abi_hash = raw_hash32(&receipt.runtime_abi_hash, "runtime_abi_hash")?;
 
-    let mut bytes = Vec::with_capacity(EXACT_SCRIPT_HANDLE_BYTES);
-    bytes.extend_from_slice(EXACT_SCRIPT_HANDLE_MAGIC);
-    bytes.push(match receipt.class {
-        ExactHandleClass::Script => 0,
-        ExactHandleClass::Verifier => 1,
-    });
-    bytes.push(match receipt.script_role {
-        ProtocolScriptRole::Lock => 0,
-        ProtocolScriptRole::Type => 1,
-        ProtocolScriptRole::SpawnedVerifier => 2,
-    });
-    for hash in [receipt_hash, script_hash, interface_hash, artifact_hash, target_profile_hash, runtime_abi_hash] {
-        bytes.extend_from_slice(&hash);
+    let mut bytes = vec![0u8; EXACT_SCRIPT_HANDLE_BYTES];
+    bytes[..EXACT_SCRIPT_HANDLE_MAGIC.len()].copy_from_slice(EXACT_SCRIPT_HANDLE_MAGIC);
+    bytes[EXACT_SCRIPT_HANDLE_CLASS_OFFSET] = match receipt.class {
+        ExactHandleClass::Script => EXACT_SCRIPT_HANDLE_CLASS_SCRIPT,
+        ExactHandleClass::Verifier => EXACT_SCRIPT_HANDLE_CLASS_VERIFIER,
+    };
+    bytes[EXACT_SCRIPT_HANDLE_ROLE_OFFSET] = match receipt.script_role {
+        ProtocolScriptRole::Lock => EXACT_SCRIPT_HANDLE_ROLE_LOCK,
+        ProtocolScriptRole::Type => EXACT_SCRIPT_HANDLE_ROLE_TYPE,
+        ProtocolScriptRole::SpawnedVerifier => EXACT_SCRIPT_HANDLE_ROLE_SPAWNED_VERIFIER,
+    };
+    for (offset, hash) in [
+        (EXACT_SCRIPT_HANDLE_RECEIPT_HASH_OFFSET, receipt_hash),
+        (EXACT_SCRIPT_HANDLE_SCRIPT_HASH_OFFSET, script_hash),
+        (EXACT_SCRIPT_HANDLE_INTERFACE_HASH_OFFSET, interface_hash),
+        (EXACT_SCRIPT_HANDLE_ARTIFACT_HASH_OFFSET, artifact_hash),
+        (EXACT_SCRIPT_HANDLE_TARGET_PROFILE_HASH_OFFSET, target_profile_hash),
+        (EXACT_SCRIPT_HANDLE_RUNTIME_ABI_HASH_OFFSET, runtime_abi_hash),
+    ] {
+        bytes[offset..offset + hash.len()].copy_from_slice(&hash);
     }
-    debug_assert_eq!(bytes.len(), EXACT_SCRIPT_HANDLE_BYTES);
     Ok(ExactScriptHandleValue {
         schema: EXACT_SCRIPT_HANDLE_VALUE_SCHEMA.to_string(),
         version: 1,
@@ -411,6 +440,12 @@ mod tests {
         assert_eq!(value.encoding, EXACT_SCRIPT_HANDLE_ENCODING);
         assert_eq!(value.encoded.len(), 2 + EXACT_SCRIPT_HANDLE_BYTES * 2);
         validate_exact_script_handle(&receipt, &value).unwrap();
+        let value_bytes = hex::decode(value.encoded.strip_prefix("0x").unwrap()).unwrap();
+        assert_eq!(exact_script_handle_value_hash(&value).unwrap(), hex_encode(&ckb_blake2b256(&value_bytes)));
+
+        let mut changed_value = value.clone();
+        changed_value.encoded.replace_range(2..4, "ff");
+        assert_ne!(exact_script_handle_value_hash(&changed_value).unwrap(), exact_script_handle_value_hash(&value).unwrap());
 
         for mutate in [
             |receipt: &mut ExactScriptHandleReceipt| receipt.interface_hash = hash("6"),

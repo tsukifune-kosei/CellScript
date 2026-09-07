@@ -44,6 +44,7 @@ pub mod resolve;
 pub mod runtime_errors;
 #[cfg(not(feature = "wasm"))]
 pub mod script_handle;
+mod script_handle_contract;
 #[cfg(not(feature = "wasm"))]
 pub mod semantic_expansion;
 pub mod simulate;
@@ -227,7 +228,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v42-0.30-dev1-sighash-zero-lock";
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v43-0.30-dev1-exact-script-handle";
 pub const METADATA_SCHEMA_VERSION: u32 = 71;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -6265,6 +6266,9 @@ pub(crate) fn entry_witness_static_type_len(ty: &str) -> Option<usize> {
         "u64" => return Some(8),
         "u128" => return Some(16),
         "Address" | "Hash" => return Some(32),
+        other if other == script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE => {
+            return Some(script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES)
+        }
         other if ir::is_ckb_temporal_scalar_name(other) => return Some(8),
         _ => {}
     }
@@ -18027,6 +18031,12 @@ fn metadata_fixed_byte_width(ty: &ir::IrType, fixed_size: Option<usize>) -> Opti
     match (ty, fixed_size) {
         (ir::IrType::Address | ir::IrType::Hash, Some(32)) => Some(32),
         (ir::IrType::Array(inner, len), Some(size)) if matches!(inner.as_ref(), ir::IrType::U8) && *len == size => Some(size),
+        (ir::IrType::Named(name), Some(size))
+            if name == script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE
+                && size == script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES =>
+        {
+            Some(size)
+        }
         (ir::IrType::Ref(inner) | ir::IrType::MutRef(inner), _) => metadata_fixed_byte_width(inner, type_static_length(inner)),
         _ => None,
     }
@@ -18446,6 +18456,9 @@ fn body_ckb_runtime_features(
                             | "__ckb_require_cell_type_args_hash"
                             | "__ckb_require_cell_lock_args_exact"
                             | "__ckb_require_cell_type_args_exact"
+                            | "__ckb_require_cell_lock_exact_handle"
+                            | "__ckb_require_cell_type_exact_handle"
+                            | "__ckb_require_cell_dep_exact_verifier_handle"
                             | "__ckb_require_cell_lock_args_prefix_hash"
                             | "__ckb_require_cell_type_args_prefix_hash"
                             | "__ckb_require_cell_lock_args_suffix_hash"
@@ -18493,6 +18506,14 @@ fn body_ckb_runtime_features(
                     }
                     if matches!(func.as_str(), "__ckb_require_cell_lock_args_exact" | "__ckb_require_cell_type_args_exact") {
                         features.insert("ckb-script-construction".to_string());
+                    }
+                    if matches!(
+                        func.as_str(),
+                        "__ckb_require_cell_lock_exact_handle"
+                            | "__ckb_require_cell_type_exact_handle"
+                            | "__ckb_require_cell_dep_exact_verifier_handle"
+                    ) {
+                        features.insert("ckb-exact-script-handle-v1".to_string());
                     }
                     if matches!(
                         func.as_str(),
@@ -18854,6 +18875,9 @@ fn runtime_range_for_call(func: &str, args: &[ir::IrOperand]) -> CkbRuntimeRange
         | "__ckb_witness_lock_exact32"
         | "__ckb_witness_input_type_exact32"
         | "__ckb_witness_output_type_exact32" => Some(32),
+        "__ckb_require_cell_lock_exact_handle"
+        | "__ckb_require_cell_type_exact_handle"
+        | "__ckb_require_cell_dep_exact_verifier_handle" => Some(32),
         // These helpers load and size-check the complete packed Header before
         // reading the typed field at its canonical RawHeader offset.
         "__ckb_header_dep_block_number" | "__ckb_header_dep_timestamp_millis" => Some(208),
@@ -19585,6 +19609,18 @@ fn ckb_v014_runtime_access(func: &str) -> Option<(&'static str, &'static str, &'
         "__ckb_require_cell_type_hash" => {
             Some(("cell-type-hash-require", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::require_cell_type_hash"))
         }
+        "__ckb_require_cell_lock_exact_handle" => {
+            Some(("exact-handle-lock-script-binding", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::require_cell_lock_exact_handle"))
+        }
+        "__ckb_require_cell_type_exact_handle" => {
+            Some(("exact-handle-type-script-binding", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::require_cell_type_exact_handle"))
+        }
+        "__ckb_require_cell_dep_exact_verifier_handle" => Some((
+            "exact-handle-verifier-artifact-binding",
+            "LOAD_CELL_BY_FIELD",
+            "CellDep",
+            "ckb::require_cell_dep_exact_verifier_handle",
+        )),
         "__ckb_require_cell_data_hash" => {
             Some(("cell-data-hash-require", "LOAD_CELL_BY_FIELD", "SourceView", "ckb::require_cell_data_hash"))
         }
@@ -21184,6 +21220,9 @@ fn operand_fixed_byte_width(operand: &ir::IrOperand) -> Option<usize> {
         ir::IrOperand::Var(var) => match &var.ty {
             ir::IrType::Address | ir::IrType::Hash => Some(32),
             ir::IrType::Array(inner, len) if matches!(inner.as_ref(), ir::IrType::U8) => Some(*len),
+            ir::IrType::Named(name) if name == script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE => {
+                Some(script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES)
+            }
             _ => None,
         },
         _ => None,
@@ -21206,6 +21245,9 @@ fn type_static_length(ty: &ir::IrType) -> Option<usize> {
         ir::IrType::Unit => Some(0),
         ir::IrType::Ref(inner) | ir::IrType::MutRef(inner) => type_static_length(inner),
         ir::IrType::Named(name) if ir::is_ckb_temporal_scalar_name(name) => Some(8),
+        ir::IrType::Named(name) if name == script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE => {
+            Some(script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES)
+        }
         ir::IrType::Named(_) => None,
     }
 }
@@ -21258,7 +21300,9 @@ fn param_metadata(
     let named_type = named_type_name(&param.ty);
     let enum_fixed_len =
         named_type.and_then(|name| enum_layouts.get(name)).filter(|layout| layout.has_payload()).map(|layout| layout.encoded_size);
-    let schema_pointer_abi = named_type.is_some_and(|name| !ir::is_ckb_temporal_scalar_name(name)) && enum_fixed_len.is_none();
+    let schema_pointer_abi = named_type
+        .is_some_and(|name| !ir::is_ckb_temporal_scalar_name(name) && name != script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE)
+        && enum_fixed_len.is_none();
     let fixed_byte_len = enum_fixed_len.or_else(|| {
         metadata_fixed_byte_width(&param.ty, type_static_length(&param.ty))
             .filter(|width| *width > 8)
