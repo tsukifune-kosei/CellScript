@@ -9,13 +9,14 @@
 use anyhow::{bail, Context, Result};
 use cellscript_artifact_checker::canonical_hash;
 use ckb_hash::blake2b_256;
-use ckb_jsonrpc_types::EstimateCycles;
+use ckb_jsonrpc_types::{EntryCompleted, EstimateCycles};
 use ckb_sdk::core::TransactionBuilder;
 use ckb_types::{
     bytes::Bytes,
     core::{Capacity, DepType, ScriptHashType, TransactionView},
     packed::{CellDep, CellInput, CellOutput, OutPoint, OutPointVec, Script, WitnessArgs},
     prelude::*,
+    H256,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -193,6 +194,84 @@ pub struct ProtocolBundleDependencyResolutionEvidence {
     pub cell_deps: Vec<ProtocolBundleCodeCellEvidence>,
     pub artifact_count: usize,
     pub unique_cell_dep_count: usize,
+    pub chain_evidence: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleReadyToSignEvidence {
+    pub schema: &'static str,
+    pub state: &'static str,
+    pub bundle_hash: String,
+    pub raw_transaction_hash: String,
+    pub unsigned_serialized_transaction_hash: String,
+    pub unsigned_serialized_transaction_size_bytes: usize,
+    pub network_chain_id: String,
+    pub network_genesis_hash: String,
+    pub live_input_count: usize,
+    pub verified_artifact_dependency_count: usize,
+    pub signing_authority: &'static str,
+    pub chain_evidence: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleSignedTransactionEvidence {
+    pub schema: &'static str,
+    pub state: &'static str,
+    pub bundle_hash: String,
+    pub raw_transaction_hash: String,
+    pub unsigned_serialized_transaction_hash: String,
+    pub signed_serialized_transaction_hash: String,
+    pub signed_serialized_transaction_size_bytes: usize,
+    pub witness_count: usize,
+    pub changed_lock_witness_indexes: Vec<u32>,
+    pub entry_witness_fields_preserved: bool,
+    pub sdk_unlocker_count: usize,
+    pub all_lock_groups_processed: bool,
+    pub signature_verification: &'static str,
+    pub chain_evidence: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleSignedDryRunEvidence {
+    pub schema: &'static str,
+    pub state: &'static str,
+    pub bundle_hash: String,
+    pub raw_transaction_hash: String,
+    pub signed_serialized_transaction_hash: String,
+    pub signed_serialized_transaction_size_bytes: usize,
+    pub aggregate_cycles: u64,
+    pub groups: Vec<ProtocolBundleGroupDryRunEvidence>,
+    pub ckb_vm_execution: &'static str,
+    pub cycle_attribution: &'static str,
+    pub signature_verification: &'static str,
+    pub tx_pool_acceptance: bool,
+    pub chain_evidence: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleTxPoolEvidence {
+    pub schema: &'static str,
+    pub state: &'static str,
+    pub bundle_hash: String,
+    pub raw_transaction_hash: String,
+    pub signed_serialized_transaction_hash: String,
+    pub aggregate_dry_run_cycles: u64,
+    pub tx_pool_cycles: u64,
+    pub fee_shannons: u64,
+    pub tx_pool_accepted: bool,
+    pub chain_evidence: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleSubmissionEvidence {
+    pub schema: &'static str,
+    pub state: &'static str,
+    pub bundle_hash: String,
+    pub raw_transaction_hash: String,
+    pub signed_serialized_transaction_hash: String,
+    pub submitted_transaction_hash: String,
+    pub tx_pool_accepted: bool,
+    pub committed: bool,
     pub chain_evidence: &'static str,
 }
 
@@ -616,6 +695,206 @@ pub fn protocol_bundle_dependency_resolution_evidence(
     })
 }
 
+/// Advance an exact transaction to the adapter-owned signing boundary only
+/// after live inputs and artifact code dependencies have both been verified.
+pub fn protocol_bundle_ready_to_sign_evidence(
+    tx: &TransactionView,
+    materialization: &ProtocolBundleMaterializationEvidence,
+    live_resolution: &ProtocolBundleLiveResolutionEvidence,
+    dependency_resolution: &ProtocolBundleDependencyResolutionEvidence,
+) -> Result<ProtocolBundleReadyToSignEvidence> {
+    validate_materialized_transaction(tx, materialization, "signing preparation")?;
+    validate_live_resolution_binding(materialization, live_resolution)?;
+    validate_dependency_resolution_binding(materialization, dependency_resolution)?;
+    Ok(ProtocolBundleReadyToSignEvidence {
+        schema: "cellscript-protocol-bundle-ready-to-sign-v1",
+        state: "ReadyToSignProtocolBundleTx",
+        bundle_hash: materialization.bundle_hash.clone(),
+        raw_transaction_hash: materialization.raw_transaction_hash.clone(),
+        unsigned_serialized_transaction_hash: materialization.serialized_transaction_hash.clone(),
+        unsigned_serialized_transaction_size_bytes: materialization.serialized_transaction_size_bytes,
+        network_chain_id: materialization.network_chain_id.clone(),
+        network_genesis_hash: materialization.network_genesis_hash.clone(),
+        live_input_count: live_resolution.inputs.len(),
+        verified_artifact_dependency_count: dependency_resolution.cell_deps.len(),
+        signing_authority: "adapter-supplied-sdk-unlockers",
+        chain_evidence: "live-input-and-code-cell-resolution-uncommitted",
+    })
+}
+
+/// Bind the result of SDK unlockers to the prepared raw transaction while
+/// requiring all compiler-owned WitnessArgs fields to remain byte-identical.
+/// Lock fields may change; inputs, outputs, deps, headers, and the raw
+/// transaction hash may not.
+pub(crate) fn protocol_bundle_signed_transaction_evidence(
+    unsigned_tx: &TransactionView,
+    signed_tx: &TransactionView,
+    preparation: &ProtocolBundleReadyToSignEvidence,
+    sdk_unlocker_count: usize,
+) -> Result<ProtocolBundleSignedTransactionEvidence> {
+    validate_prepared_unsigned_transaction(unsigned_tx, preparation)?;
+    let signed_raw_hash = format!("0x{}", hex::encode(signed_tx.hash().as_slice()));
+    if signed_raw_hash != preparation.raw_transaction_hash {
+        bail!("ProtocolBundle signing changed the raw transaction");
+    }
+    let unsigned_witnesses = unsigned_tx.witnesses();
+    let signed_witnesses = signed_tx.witnesses();
+    if unsigned_witnesses.len() != signed_witnesses.len() {
+        bail!("ProtocolBundle signing changed the witness count");
+    }
+    let mut changed_lock_witness_indexes = Vec::new();
+    for index in 0..unsigned_witnesses.len() {
+        let unsigned = WitnessArgs::from_slice(unsigned_witnesses.get(index).expect("bounded witness index").raw_data().as_ref())
+            .map_err(|error| anyhow::anyhow!("unsigned ProtocolBundle witness {index} is not canonical WitnessArgs: {error}"))?;
+        let signed = WitnessArgs::from_slice(signed_witnesses.get(index).expect("bounded witness index").raw_data().as_ref())
+            .map_err(|error| anyhow::anyhow!("signed ProtocolBundle witness {index} is not canonical WitnessArgs: {error}"))?;
+        if unsigned.input_type().as_slice() != signed.input_type().as_slice()
+            || unsigned.output_type().as_slice() != signed.output_type().as_slice()
+        {
+            bail!("ProtocolBundle signing changed compiler-owned witness fields at index {index}");
+        }
+        if unsigned.lock().as_slice() != signed.lock().as_slice() {
+            changed_lock_witness_indexes
+                .push(u32::try_from(index).context("changed ProtocolBundle witness index does not fit in u32")?);
+        }
+    }
+    let signed_serialized = signed_tx.data();
+    Ok(ProtocolBundleSignedTransactionEvidence {
+        schema: "cellscript-protocol-bundle-signed-transaction-v1",
+        state: "SignedProtocolBundleTx",
+        bundle_hash: preparation.bundle_hash.clone(),
+        raw_transaction_hash: preparation.raw_transaction_hash.clone(),
+        unsigned_serialized_transaction_hash: preparation.unsigned_serialized_transaction_hash.clone(),
+        signed_serialized_transaction_hash: hash_hex(signed_serialized.as_slice()),
+        signed_serialized_transaction_size_bytes: signed_serialized.as_slice().len(),
+        witness_count: signed_witnesses.len(),
+        changed_lock_witness_indexes,
+        entry_witness_fields_preserved: true,
+        sdk_unlocker_count,
+        all_lock_groups_processed: true,
+        signature_verification: "pending-node-execution",
+        chain_evidence: "signed-uncommitted",
+    })
+}
+
+/// Bind successful node execution of the signed transaction to all direct
+/// Script Groups. This is the first evidence tier that verifies signatures.
+pub fn protocol_bundle_signed_dry_run_evidence(
+    signed_tx: &TransactionView,
+    materialization: &ProtocolBundleMaterializationEvidence,
+    signing: &ProtocolBundleSignedTransactionEvidence,
+    estimate: &EstimateCycles,
+) -> Result<ProtocolBundleSignedDryRunEvidence> {
+    validate_signed_transaction(signed_tx, materialization, signing, "signed dry-run")?;
+    let mut groups = Vec::with_capacity(materialization.script_groups.len());
+    for group in &materialization.script_groups {
+        groups.push(ProtocolBundleGroupDryRunEvidence {
+            artifact: group.artifact.clone(),
+            script_role: group.script_role.clone(),
+            script_hash: group.script_hash.clone(),
+            transaction_bytes_hash: signing.signed_serialized_transaction_hash.clone(),
+            acceptance: if group.direct_script_group {
+                "accepted-by-signed-aggregate-estimate-cycles".to_string()
+            } else {
+                "not-independently-observed".to_string()
+            },
+            cycles: None,
+        });
+    }
+    if !groups.iter().any(|group| group.acceptance == "accepted-by-signed-aggregate-estimate-cycles") {
+        bail!("ProtocolBundle signed dry-run evidence contains no direct Script Group");
+    }
+    Ok(ProtocolBundleSignedDryRunEvidence {
+        schema: "cellscript-protocol-bundle-signed-dry-run-v1",
+        state: "SignedDryRunProtocolBundleTx",
+        bundle_hash: materialization.bundle_hash.clone(),
+        raw_transaction_hash: materialization.raw_transaction_hash.clone(),
+        signed_serialized_transaction_hash: signing.signed_serialized_transaction_hash.clone(),
+        signed_serialized_transaction_size_bytes: signing.signed_serialized_transaction_size_bytes,
+        aggregate_cycles: estimate.cycles.value(),
+        groups,
+        ckb_vm_execution: "accepted-by-node-estimate-cycles",
+        cycle_attribution: "aggregate-only-rpc-does-not-report-per-group-cycles",
+        signature_verification: "verified-by-node-execution",
+        tx_pool_acceptance: false,
+        chain_evidence: "node-signed-dry-run-uncommitted",
+    })
+}
+
+/// Bind a successful `test_tx_pool_accept` result to the exact signed and
+/// dry-run transaction. The node-computed fee must equal the live input fee.
+pub fn protocol_bundle_tx_pool_evidence(
+    signed_tx: &TransactionView,
+    materialization: &ProtocolBundleMaterializationEvidence,
+    signing: &ProtocolBundleSignedTransactionEvidence,
+    dry_run: &ProtocolBundleSignedDryRunEvidence,
+    accepted: &EntryCompleted,
+) -> Result<ProtocolBundleTxPoolEvidence> {
+    validate_signed_transaction(signed_tx, materialization, signing, "tx-pool acceptance")?;
+    if dry_run.schema != "cellscript-protocol-bundle-signed-dry-run-v1"
+        || dry_run.state != "SignedDryRunProtocolBundleTx"
+        || dry_run.bundle_hash != signing.bundle_hash
+        || dry_run.raw_transaction_hash != signing.raw_transaction_hash
+        || dry_run.signed_serialized_transaction_hash != signing.signed_serialized_transaction_hash
+        || dry_run.signed_serialized_transaction_size_bytes != signing.signed_serialized_transaction_size_bytes
+        || dry_run.signature_verification != "verified-by-node-execution"
+        || dry_run.groups.iter().any(|group| group.transaction_bytes_hash != signing.signed_serialized_transaction_hash)
+    {
+        bail!("ProtocolBundle signed dry-run evidence is not bound to the signed transaction");
+    }
+    let fee_shannons = accepted.fee.value();
+    if fee_shannons != materialization.fee_shannons {
+        bail!("ProtocolBundle tx-pool fee differs from the live-resolved transaction fee");
+    }
+    Ok(ProtocolBundleTxPoolEvidence {
+        schema: "cellscript-protocol-bundle-tx-pool-v1",
+        state: "TxPoolAcceptedProtocolBundleTx",
+        bundle_hash: signing.bundle_hash.clone(),
+        raw_transaction_hash: signing.raw_transaction_hash.clone(),
+        signed_serialized_transaction_hash: signing.signed_serialized_transaction_hash.clone(),
+        aggregate_dry_run_cycles: dry_run.aggregate_cycles,
+        tx_pool_cycles: accepted.cycles.value(),
+        fee_shannons,
+        tx_pool_accepted: true,
+        chain_evidence: "tx-pool-accepted-uncommitted",
+    })
+}
+
+/// Bind the node-returned submission hash to the exact tx-pool-accepted
+/// ProtocolBundle transaction. This record does not claim commitment.
+pub fn protocol_bundle_submission_evidence(
+    signed_tx: &TransactionView,
+    signing: &ProtocolBundleSignedTransactionEvidence,
+    tx_pool: &ProtocolBundleTxPoolEvidence,
+    submitted_hash: &H256,
+) -> Result<ProtocolBundleSubmissionEvidence> {
+    let raw_transaction_hash = format!("0x{}", hex::encode(signed_tx.hash().as_slice()));
+    let submitted_transaction_hash = format!("0x{}", hex::encode(submitted_hash.as_bytes()));
+    if signing.state != "SignedProtocolBundleTx"
+        || signing.raw_transaction_hash != raw_transaction_hash
+        || tx_pool.schema != "cellscript-protocol-bundle-tx-pool-v1"
+        || tx_pool.state != "TxPoolAcceptedProtocolBundleTx"
+        || tx_pool.bundle_hash != signing.bundle_hash
+        || tx_pool.raw_transaction_hash != raw_transaction_hash
+        || tx_pool.signed_serialized_transaction_hash != signing.signed_serialized_transaction_hash
+        || !tx_pool.tx_pool_accepted
+        || submitted_transaction_hash != raw_transaction_hash
+    {
+        bail!("ProtocolBundle submission result is not bound to the tx-pool-accepted signed transaction");
+    }
+    Ok(ProtocolBundleSubmissionEvidence {
+        schema: "cellscript-protocol-bundle-submission-v1",
+        state: "SubmittedProtocolBundleTx",
+        bundle_hash: signing.bundle_hash.clone(),
+        raw_transaction_hash: raw_transaction_hash.clone(),
+        signed_serialized_transaction_hash: signing.signed_serialized_transaction_hash.clone(),
+        submitted_transaction_hash: raw_transaction_hash,
+        tx_pool_accepted: true,
+        committed: false,
+        chain_evidence: "submitted-uncommitted",
+    })
+}
+
 /// Bind a successful node `estimate_cycles` response to the exact packed
 /// transaction and its ProtocolBundle materialization evidence.
 ///
@@ -728,6 +1007,91 @@ fn validate_live_resolution_binding(
         })
     {
         bail!("ProtocolBundle live-input evidence does not preserve every exact input observation");
+    }
+    Ok(())
+}
+
+fn validate_dependency_resolution_binding(
+    materialization: &ProtocolBundleMaterializationEvidence,
+    dependency_resolution: &ProtocolBundleDependencyResolutionEvidence,
+) -> Result<()> {
+    let expected_unique_count = materialization
+        .code_cell_dep_expectations
+        .iter()
+        .map(|expected| expected.transaction_cell_dep_index)
+        .collect::<HashSet<_>>()
+        .len();
+    if dependency_resolution.schema != "cellscript-protocol-bundle-dependency-resolution-v1"
+        || dependency_resolution.state != "LiveDependenciesResolvedProtocolBundleTx"
+        || dependency_resolution.bundle_hash != materialization.bundle_hash
+        || dependency_resolution.raw_transaction_hash != materialization.raw_transaction_hash
+        || dependency_resolution.serialized_transaction_hash != materialization.serialized_transaction_hash
+        || dependency_resolution.serialized_transaction_size_bytes != materialization.serialized_transaction_size_bytes
+        || dependency_resolution.network_chain_id != materialization.network_chain_id
+        || dependency_resolution.network_genesis_hash != materialization.network_genesis_hash
+        || dependency_resolution.artifact_count != materialization.code_cell_dep_expectations.len()
+        || dependency_resolution.unique_cell_dep_count != expected_unique_count
+        || dependency_resolution.cell_deps.len() != materialization.code_cell_dep_expectations.len()
+    {
+        bail!("ProtocolBundle dependency evidence is not bound to the materialized transaction");
+    }
+    for expected in &materialization.code_cell_dep_expectations {
+        let Some(observed) = dependency_resolution.cell_deps.iter().find(|observed| observed.artifact == expected.artifact) else {
+            bail!("ProtocolBundle dependency evidence is missing artifact '{}'", expected.artifact);
+        };
+        if observed.transaction_cell_dep_index != expected.transaction_cell_dep_index
+            || observed.dep_type != expected.dep_type
+            || observed.root_out_point_tx_hash != expected.out_point_tx_hash
+            || observed.root_out_point_index != expected.out_point_index
+            || observed.artifact_hash != expected.artifact_hash
+            || observed.code_data_hash != expected.artifact_hash
+            || observed.script_code_hash != expected.script_code_hash
+            || observed.script_hash_type != expected.script_hash_type
+            || observed.status != "live-code-verified"
+            || (observed.dep_type == "code"
+                && (observed.resolved_code_out_point_tx_hash != observed.root_out_point_tx_hash
+                    || observed.resolved_code_out_point_index != observed.root_out_point_index))
+        {
+            bail!("ProtocolBundle dependency evidence for artifact '{}' is inconsistent", expected.artifact);
+        }
+    }
+    Ok(())
+}
+
+fn validate_prepared_unsigned_transaction(tx: &TransactionView, preparation: &ProtocolBundleReadyToSignEvidence) -> Result<()> {
+    let serialized = tx.data();
+    if preparation.schema != "cellscript-protocol-bundle-ready-to-sign-v1"
+        || preparation.state != "ReadyToSignProtocolBundleTx"
+        || format!("0x{}", hex::encode(tx.hash().as_slice())) != preparation.raw_transaction_hash
+        || hash_hex(serialized.as_slice()) != preparation.unsigned_serialized_transaction_hash
+        || serialized.as_slice().len() != preparation.unsigned_serialized_transaction_size_bytes
+        || preparation.signing_authority != "adapter-supplied-sdk-unlockers"
+    {
+        bail!("ProtocolBundle signing preparation is not bound to the unsigned transaction");
+    }
+    Ok(())
+}
+
+fn validate_signed_transaction(
+    signed_tx: &TransactionView,
+    materialization: &ProtocolBundleMaterializationEvidence,
+    signing: &ProtocolBundleSignedTransactionEvidence,
+    operation: &str,
+) -> Result<()> {
+    let serialized = signed_tx.data();
+    if signing.schema != "cellscript-protocol-bundle-signed-transaction-v1"
+        || signing.state != "SignedProtocolBundleTx"
+        || signing.bundle_hash != materialization.bundle_hash
+        || signing.raw_transaction_hash != materialization.raw_transaction_hash
+        || signing.unsigned_serialized_transaction_hash != materialization.serialized_transaction_hash
+        || format!("0x{}", hex::encode(signed_tx.hash().as_slice())) != signing.raw_transaction_hash
+        || hash_hex(serialized.as_slice()) != signing.signed_serialized_transaction_hash
+        || serialized.as_slice().len() != signing.signed_serialized_transaction_size_bytes
+        || signed_tx.witnesses().len() != signing.witness_count
+        || !signing.entry_witness_fields_preserved
+        || !signing.all_lock_groups_processed
+    {
+        bail!("ProtocolBundle {operation} transaction does not match signing evidence");
     }
     Ok(())
 }
@@ -1528,6 +1892,54 @@ mod tests {
         assert_eq!(evidence.artifact_count, 2);
         assert_eq!(evidence.unique_cell_dep_count, 2);
         assert!(evidence.cell_deps.iter().all(|dep| dep.status == "live-code-verified"));
+
+        let preparation = protocol_bundle_ready_to_sign_evidence(&transaction, &materialization, &live_resolution, &evidence).unwrap();
+        let unsigned_witness = WitnessArgs::from_slice(transaction.witnesses().get(0).unwrap().raw_data().as_ref()).unwrap();
+        let signed_witness = unsigned_witness.clone().as_builder().lock(Some(Bytes::from(vec![0xabu8; 65])).pack()).build();
+        let signed_transaction = transaction.as_advanced_builder().set_witnesses(vec![signed_witness.as_bytes().pack()]).build();
+        let signing = protocol_bundle_signed_transaction_evidence(&transaction, &signed_transaction, &preparation, 1).unwrap();
+        assert_eq!(signing.changed_lock_witness_indexes, vec![0]);
+        assert_eq!(signing.signature_verification, "pending-node-execution");
+        let dry_run = protocol_bundle_signed_dry_run_evidence(
+            &signed_transaction,
+            &materialization,
+            &signing,
+            &EstimateCycles { cycles: 45_000u64.into() },
+        )
+        .unwrap();
+        assert_eq!(dry_run.signature_verification, "verified-by-node-execution");
+        let tx_pool = protocol_bundle_tx_pool_evidence(
+            &signed_transaction,
+            &materialization,
+            &signing,
+            &dry_run,
+            &EntryCompleted { cycles: 45_100u64.into(), fee: materialization.fee_shannons.into() },
+        )
+        .unwrap();
+        assert!(tx_pool.tx_pool_accepted);
+        let mut submitted_hash = [0u8; 32];
+        submitted_hash.copy_from_slice(signed_transaction.hash().as_slice());
+        let submission =
+            protocol_bundle_submission_evidence(&signed_transaction, &signing, &tx_pool, &H256::from(submitted_hash)).unwrap();
+        assert_eq!(submission.state, "SubmittedProtocolBundleTx");
+        assert!(!submission.committed);
+
+        let error = protocol_bundle_submission_evidence(&signed_transaction, &signing, &tx_pool, &H256::from([0xffu8; 32]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not bound"), "{error}");
+
+        let changed_payload = unsigned_witness
+            .as_builder()
+            .lock(Some(Bytes::from(vec![0xabu8; 65])).pack())
+            .input_type(Some(Bytes::from_static(b"changed-entry-payload")).pack())
+            .build();
+        let changed_payload_transaction =
+            transaction.as_advanced_builder().set_witnesses(vec![changed_payload.as_bytes().pack()]).build();
+        let error = protocol_bundle_signed_transaction_evidence(&transaction, &changed_payload_transaction, &preparation, 1)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("compiler-owned witness fields"), "{error}");
 
         let mut changed_live_resolution = live_resolution.clone();
         changed_live_resolution.inputs[0].data_hash = format!("0x{}", "f".repeat(64));

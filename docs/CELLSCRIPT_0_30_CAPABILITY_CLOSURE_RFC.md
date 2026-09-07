@@ -233,9 +233,12 @@ resolution now verifies each ordered OutPoint, packed CellOutput, data,
 capacity, and fee before dry-run. Live deployment resolution also verifies
 direct code Cells and fully expanded dep groups against each admitted ELF hash
 and Script code identity under the same transaction and chain evidence.
-Builder-derived live selection, independently measured per-group execution,
-and the remaining runtime-adapter work remain required before issue #9 is
-complete. See
+The adapter now gates signing on both live receipts, delegates key operations to
+caller-supplied SDK unlockers, preserves compiler-owned witness fields, verifies
+the signed bytes through node execution and tx-pool acceptance, and gates
+submission on that evidence. Builder-derived live selection, independently
+measured per-group cycles, generated SDK/ecosystem alignment, and the remaining
+runtime-adapter work remain required before issue #9 is complete. See
 [CellScript ProtocolBundle v1](CELLSCRIPT_PROTOCOL_BUNDLE.md).
 
 Extend trusted external verification through exact artifact, interface,

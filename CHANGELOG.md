@@ -260,6 +260,15 @@
   is bound to the exact transaction and prior live-input evidence and remains
   explicitly uncommitted.
 
+- Add the ProtocolBundle signing and submission state machine. Exact live-input
+  and live-dependency receipts produce `ReadyToSignProtocolBundleTx`; the
+  adapter runs caller-supplied CKB SDK unlockers, refuses remaining Lock Script
+  Groups, preserves compiler-owned witness fields, and permits only witness
+  lock changes over the same raw transaction. Signed node dry-run verifies
+  signatures and every direct group, `test_tx_pool_accept` binds node cycles
+  and fee, and submission is refused before RPC unless the exact signed bytes
+  already carry tx-pool evidence. Submission receipts remain uncommitted.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

@@ -184,6 +184,23 @@ Script hash. The dependency evidence is rejected unless the earlier live-input
 record preserves every input observation and the exact materialized transaction
 identity.
 
+The signing path is an ordered state machine:
+
+1. `protocol_bundle_ready_to_sign_evidence` requires exact live-input and
+   live-dependency evidence.
+2. `unlock_protocol_bundle_transaction` runs caller-supplied CKB SDK unlockers,
+   rejects remaining Lock Groups, preserves the raw transaction and all
+   compiler-owned witness fields, and records only changed witness lock indexes.
+3. `dry_run_signed_protocol_bundle` executes those signed bytes and upgrades
+   signature verification from pending to node-verified.
+4. `test_signed_protocol_bundle` binds tx-pool cycles and the node-computed fee
+   to the same signed serialization hash.
+5. `submit_signed_protocol_bundle` checks that evidence before RPC submission
+   and emits an explicitly uncommitted receipt.
+
+Private keys are never fields in the ProtocolBundle or its evidence. Hardware,
+wallet, and software signers remain behind CKB SDK `ScriptUnlocker` interfaces.
+
 `CkbSdkAcceptance::dry_run_protocol_bundle` sends that exact packed transaction
 to CKB `estimate_cycles`. A successful response emits
 `cellscript-protocol-bundle-dry-run-v1`: every direct Lock/Type group is marked
@@ -214,7 +231,7 @@ The next bundle phases must add, without weakening this hash boundary:
 - per-Script-Group CKB-VM execution over byte-identical transaction bytes;
 - live-backed capacity, fee, and change evidence plus independently attributed
   per-group cycles;
-- freshness-safe signing, tx-pool acceptance, submission, and confirmation;
+- freshness-safe confirmation and reorg handling;
 - generated TypeScript/Rust-facing APIs with resumable signing.
 
 The original compiler report remains offline structural evidence. Adapter

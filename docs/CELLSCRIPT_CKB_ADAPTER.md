@@ -161,6 +161,21 @@ the live code Cell's Type Script hash, while all four modes independently
 require the admitted ELF data hash. The result remains uncommitted and bound to
 the same bundle, network, raw transaction, and complete serialization hash.
 
+`protocol_bundle_ready_to_sign_evidence()` requires both live records before
+signing. `unlock_protocol_bundle_transaction()` accepts caller-owned CKB SDK
+`ScriptUnlocker` implementations, refuses any Lock Script Group left locked,
+and never accepts private keys as an adapter data field. It requires the raw
+transaction and all `WitnessArgs.input_type`/`output_type` fields to remain
+byte-identical; only witness lock fields may change.
+
+`dry_run_signed_protocol_bundle()` binds node execution and signature
+verification to the signed serialization hash. `test_signed_protocol_bundle()`
+then requires that dry-run and records the node's tx-pool cycles and fee.
+`submit_signed_protocol_bundle()` validates the complete signed/tx-pool chain
+before calling `send_transaction` and rejects a returned hash that differs from
+the raw transaction hash. Its receipt says `submitted-uncommitted`; commitment
+still requires a later status query.
+
 `CkbSdkAcceptance::dry_run_protocol_bundle()` and the equivalent
 `CellScriptAdapter` method call CKB `estimate_cycles` with that exact
 transaction. A successful result produces

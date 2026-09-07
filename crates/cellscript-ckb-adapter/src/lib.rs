@@ -3,7 +3,14 @@ use ckb_hash::blake2b_256;
 use ckb_jsonrpc_types::{
     EntryCompleted, EstimateCycles, OutputsValidator, Status, Transaction as RpcTransaction, TransactionWithStatusResponse,
 };
-use ckb_sdk::{core::TransactionBuilder, traits::CellDepResolver, unlock::SecpSighashScriptSigner, CkbRpcClient};
+use ckb_sdk::{
+    core::TransactionBuilder,
+    traits::{CellDepResolver, TransactionDependencyProvider},
+    tx_builder::unlock_tx,
+    types::ScriptId,
+    unlock::{ScriptUnlocker, SecpSighashScriptSigner},
+    CkbRpcClient,
+};
 use ckb_types::{
     bytes::Bytes,
     core::{Capacity, DepType, ScriptHashType, TransactionView},
@@ -24,11 +31,14 @@ mod protocol_bundle;
 
 pub use protocol_bundle::{
     materialize_protocol_bundle_report, protocol_bundle_dependency_resolution_evidence, protocol_bundle_dry_run_evidence,
-    protocol_bundle_live_resolution_evidence, ProtocolBundleCellDepObservation, ProtocolBundleCodeCellDepExpectation,
-    ProtocolBundleCodeCellEvidence, ProtocolBundleDependencyResolutionEvidence, ProtocolBundleDryRunEvidence,
-    ProtocolBundleGroupDryRunEvidence, ProtocolBundleIndexBinding, ProtocolBundleLiveCellObservation, ProtocolBundleLiveInputEvidence,
-    ProtocolBundleLiveInputExpectation, ProtocolBundleLiveResolutionEvidence, ProtocolBundleMaterializationEvidence,
-    ProtocolBundleScriptGroupEvidence,
+    protocol_bundle_live_resolution_evidence, protocol_bundle_ready_to_sign_evidence, protocol_bundle_signed_dry_run_evidence,
+    protocol_bundle_submission_evidence, protocol_bundle_tx_pool_evidence, ProtocolBundleCellDepObservation,
+    ProtocolBundleCodeCellDepExpectation, ProtocolBundleCodeCellEvidence, ProtocolBundleDependencyResolutionEvidence,
+    ProtocolBundleDryRunEvidence, ProtocolBundleGroupDryRunEvidence, ProtocolBundleIndexBinding, ProtocolBundleLiveCellObservation,
+    ProtocolBundleLiveInputEvidence, ProtocolBundleLiveInputExpectation, ProtocolBundleLiveResolutionEvidence,
+    ProtocolBundleMaterializationEvidence, ProtocolBundleReadyToSignEvidence, ProtocolBundleScriptGroupEvidence,
+    ProtocolBundleSignedDryRunEvidence, ProtocolBundleSignedTransactionEvidence, ProtocolBundleSubmissionEvidence,
+    ProtocolBundleTxPoolEvidence,
 };
 
 pub const ACTION_PLAN_POLICY: &str = "cellscript-action-builder-plan-v1";
@@ -1527,6 +1537,40 @@ impl<'a> CkbSdkAcceptance<'a> {
         protocol_bundle_dry_run_evidence(tx, materialization, &estimate)
     }
 
+    pub fn dry_run_signed_protocol_bundle(
+        &self,
+        signed_tx: &TransactionView,
+        materialization: &ProtocolBundleMaterializationEvidence,
+        signing: &ProtocolBundleSignedTransactionEvidence,
+    ) -> Result<ProtocolBundleSignedDryRunEvidence> {
+        let estimate = self.estimate_cycles(signed_tx)?;
+        protocol_bundle_signed_dry_run_evidence(signed_tx, materialization, signing, &estimate)
+    }
+
+    pub fn test_signed_protocol_bundle(
+        &self,
+        signed_tx: &TransactionView,
+        materialization: &ProtocolBundleMaterializationEvidence,
+        signing: &ProtocolBundleSignedTransactionEvidence,
+        dry_run: &ProtocolBundleSignedDryRunEvidence,
+    ) -> Result<ProtocolBundleTxPoolEvidence> {
+        let accepted = self.test_tx_pool_accept(signed_tx)?;
+        protocol_bundle_tx_pool_evidence(signed_tx, materialization, signing, dry_run, &accepted)
+    }
+
+    pub fn submit_signed_protocol_bundle(
+        &self,
+        signed_tx: &TransactionView,
+        signing: &ProtocolBundleSignedTransactionEvidence,
+        tx_pool: &ProtocolBundleTxPoolEvidence,
+    ) -> Result<ProtocolBundleSubmissionEvidence> {
+        let mut expected_hash = [0u8; 32];
+        expected_hash.copy_from_slice(signed_tx.hash().as_slice());
+        protocol_bundle_submission_evidence(signed_tx, signing, tx_pool, &H256::from(expected_hash))?;
+        let submitted_hash = self.send_transaction(signed_tx)?;
+        protocol_bundle_submission_evidence(signed_tx, signing, tx_pool, &submitted_hash)
+    }
+
     pub fn verify_protocol_bundle_live_inputs(
         &self,
         tx: &TransactionView,
@@ -1744,6 +1788,24 @@ pub struct SigningAdapterEvidence {
     pub signed: bool,
 }
 
+/// Run caller-supplied CKB SDK unlockers without taking ownership of private
+/// keys, require every Lock Script Group to be processed, and bind the signed
+/// witnesses to an exact prepared ProtocolBundle transaction.
+pub fn unlock_protocol_bundle_transaction(
+    unsigned_tx: &TransactionView,
+    preparation: &ProtocolBundleReadyToSignEvidence,
+    tx_dep_provider: &dyn TransactionDependencyProvider,
+    unlockers: &HashMap<ScriptId, Box<dyn ScriptUnlocker>>,
+) -> Result<(TransactionView, ProtocolBundleSignedTransactionEvidence)> {
+    let (signed_tx, remaining) = unlock_tx(unsigned_tx.clone(), tx_dep_provider, unlockers)?;
+    if !remaining.is_empty() {
+        bail!("{} ProtocolBundle Lock Script Group(s) remain locked after SDK unlockers", remaining.len());
+    }
+    let evidence =
+        protocol_bundle::protocol_bundle_signed_transaction_evidence(unsigned_tx, &signed_tx, preparation, unlockers.len())?;
+    Ok((signed_tx, evidence))
+}
+
 /// Adapter-level capacity balancing that wraps `ckb_sdk::CapacityBalancer`.
 ///
 /// Provides a typed interface for the common pattern of funding a transaction
@@ -1878,6 +1940,46 @@ impl CellScriptAdapter {
     ) -> Result<ProtocolBundleDryRunEvidence> {
         let estimate = self.estimate_cycles(tx)?;
         protocol_bundle_dry_run_evidence(tx, materialization, &estimate)
+    }
+
+    /// Execute an SDK-unlocked ProtocolBundle transaction and bind node-level
+    /// signature and Script acceptance to its signed serialization hash.
+    pub fn dry_run_signed_protocol_bundle(
+        &self,
+        signed_tx: &TransactionView,
+        materialization: &ProtocolBundleMaterializationEvidence,
+        signing: &ProtocolBundleSignedTransactionEvidence,
+    ) -> Result<ProtocolBundleSignedDryRunEvidence> {
+        let estimate = self.estimate_cycles(signed_tx)?;
+        protocol_bundle_signed_dry_run_evidence(signed_tx, materialization, signing, &estimate)
+    }
+
+    /// Require a prior signed dry-run, then bind `test_tx_pool_accept` cycles
+    /// and node-computed fee to the exact signed ProtocolBundle transaction.
+    pub fn test_signed_protocol_bundle(
+        &self,
+        signed_tx: &TransactionView,
+        materialization: &ProtocolBundleMaterializationEvidence,
+        signing: &ProtocolBundleSignedTransactionEvidence,
+        dry_run: &ProtocolBundleSignedDryRunEvidence,
+    ) -> Result<ProtocolBundleTxPoolEvidence> {
+        let accepted = self.test_tx_pool_accept(signed_tx)?;
+        protocol_bundle_tx_pool_evidence(signed_tx, materialization, signing, dry_run, &accepted)
+    }
+
+    /// Submit only an exact signed transaction that already carries bound
+    /// tx-pool acceptance evidence. The returned receipt remains uncommitted.
+    pub fn submit_signed_protocol_bundle(
+        &self,
+        signed_tx: &TransactionView,
+        signing: &ProtocolBundleSignedTransactionEvidence,
+        tx_pool: &ProtocolBundleTxPoolEvidence,
+    ) -> Result<ProtocolBundleSubmissionEvidence> {
+        let mut expected_hash = [0u8; 32];
+        expected_hash.copy_from_slice(signed_tx.hash().as_slice());
+        protocol_bundle_submission_evidence(signed_tx, signing, tx_pool, &H256::from(expected_hash))?;
+        let submitted_hash = self.submit_transaction(signed_tx)?;
+        protocol_bundle_submission_evidence(signed_tx, signing, tx_pool, &submitted_hash)
     }
 
     /// Resolve every input through `get_live_cell`, verify the exact expected

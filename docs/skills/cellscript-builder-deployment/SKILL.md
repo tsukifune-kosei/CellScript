@@ -59,3 +59,7 @@ Validation defaults:
 - call `verify_protocol_bundle_live_dependencies` with that live-input record;
   require every artifact code CellDep or expanded dep-group member to match its
   admitted ELF data hash and Script hash type before signing.
+- build `ReadyToSignProtocolBundleTx`, run caller-owned SDK unlockers through
+  `unlock_protocol_bundle_transaction`, dry-run the signed bytes, require bound
+  tx-pool acceptance, and only then call `submit_signed_protocol_bundle`;
+  submitted evidence remains uncommitted.
