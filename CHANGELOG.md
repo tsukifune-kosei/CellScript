@@ -313,6 +313,24 @@
   export the same schema and a `bindClosedProtocolRole` constructor. Open or
   runtime-selected roles remain assigned to the separate Script-handle work.
 
+- Add issue #11's exact-artifact receipt and fixed-width value foundation.
+  Every independently admitted ProtocolBundle artifact now carries a
+  `cellscript-exact-script-handle-receipt-v1` record that binds its selected
+  entry, exact `Cell.lock` node, Lock/Type/spawned-verifier role, interface,
+  typed semantics, exact ELF, target profile, existing package/Registry ABI
+  hash, verified bundle,
+  complete deployed CKB Script, code CellDep, and chain identity. Its ordinary
+  `CSHDLv1-fixed-202` value commits to the receipt plus the complete Script,
+  interface, artifact, profile, and ABI identities without granting Cell
+  lifecycle authority. Data-hash deployment policy remains distinct from
+  Type-hash code-Cell identity, and the CKB Script hash implementation is
+  checked against `ckb-types` for all four supported hash types. Closed-role
+  participants copy the exact handle, generated TypeScript packages expose a
+  checked-handle binder, and builder manifests bind the same ABI/profile and
+  handle schemas. Source-level generic `ScriptHandle<I>` /
+  `VerifierHandle<I>` construction and runtime-selected/open roles remain
+  later issue #11 phases.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

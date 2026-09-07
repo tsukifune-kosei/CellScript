@@ -2,7 +2,9 @@
 
 Status: 0.30 development contract for issues
 [#9](https://github.com/CellScript-Labs/CellScript/issues/9) and
-[#10](https://github.com/CellScript-Labs/CellScript/issues/10).
+[#10](https://github.com/CellScript-Labs/CellScript/issues/10), plus the exact
+artifact identity layer of
+[#11](https://github.com/CellScript-Labs/CellScript/issues/11).
 
 ## Boundary
 
@@ -16,7 +18,8 @@ more independently compiled CKB Script artifacts. The offline checker:
    metadata validator;
 3. binds the selected entry, package/lock identity, exact ELF hash, interface,
    typed semantics, target profile, deployment, code CellDep, and generated
-   builder projection;
+   builder projection, then derives an exact Script/verifier receipt and
+   fixed-width handle;
 4. merges explicitly named input, output, witness, CellDep, HeaderDep, fee,
    and change claims against one deterministic transaction skeleton;
 5. validates that same skeleton and its explicit builder-assumption evidence
@@ -80,6 +83,26 @@ the checked ELF's CKB hash. A `type` deployment binds the separately supplied
 Type-hash identity. All deployments must use a hash type admitted by the
 artifact target profile.
 
+Every resolved artifact contains two additional issue #11 identities:
+
+- `exact_handle_receipt` uses
+  `cellscript-exact-script-handle-receipt-v1` to bind package coordinate,
+  exact `Cell.lock` node, selected entry, Script role, interface, typed
+  semantics, ELF, target profile, the package/Registry ABI hash, verified
+  bundle, deployment Script, code CellDep, and chain identity;
+- `exact_handle` uses `cellscript-exact-script-handle-value-v1` and
+  `CSHDLv1-fixed-202`, a 202-byte value containing a magic/version class,
+  explicit Script role, and six 32-byte commitments for the receipt, complete
+  CKB Script, interface, ELF, target profile, and runtime ABI.
+
+The complete Script commitment is CKB Blake2b-256 over canonical Molecule
+`Script` bytes. Its encoding is checked against `ckb-types` for `data`,
+`data1`, `data2`, and `type`. Data-hash deployments require the Script
+`code_hash` to equal the admitted ELF hash; Type-hash deployments retain an
+explicit exact-code-Cell policy and bind the ELF and code CellDep separately.
+The handle is a copyable identity value. It does not own, create, consume,
+replace, relock, execute, or authorize a Cell.
+
 Paths must be relative, must resolve to regular files inside the input
 document's directory, and are read only after byte budgets are checked. The
 standalone checker must report verified binding, structure, lowering, and
@@ -132,9 +155,10 @@ same resource/ABI as `schema_identity.type_name`. Checked metadata for every
 participant must expose that exact Molecule type name and schema hash.
 
 The resolved record copies each participant's package coordinate, selected
-entry, Script role, interface hash, ELF hash, and complete deployment identity
-into the canonical bundle. This makes the relation auditable and hash-bound;
-it does not mean that CKB-VM links the ELFs or calls one Script from another.
+entry, Script role, interface hash, ELF hash, complete deployment identity,
+and exact fixed-width handle into the canonical bundle. This makes the relation
+auditable and hash-bound; it does not mean that CKB-VM links the ELFs or calls
+one Script from another.
 Runtime-selected/open roles remain outside this schema until the separately
 versioned Script-handle contract is admitted.
 
@@ -253,6 +277,12 @@ expose the exact Molecule type/hash before producing a closed-role input. Their
 and any bundle or raw-transaction identity change between stages. Each package
 also exports `bindProtocolBundleArtifact`, which refuses a deployment ELF hash
 different from the generated builder's admitted artifact hash.
+Builder manifests bind the exact receipt/value schemas, fixed-width encoding,
+target-profile hash, and existing ABI hash. `bindCheckedExactScriptHandle`
+accepts a receipt/value returned by a successful bundle check only when its
+role, entry, interface, typed semantics, ELF, profile, ABI, verified bundle,
+deployment, and fixed-width shape match the generated artifact. Cryptographic
+receipt/value recomputation remains the Rust checker's responsibility.
 
 Registry verified-build evidence makes that capability discoverable without
 weakening admission. A release carries `protocol_bundle_schema`,

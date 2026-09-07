@@ -43,6 +43,8 @@ pub mod repl;
 pub mod resolve;
 pub mod runtime_errors;
 #[cfg(not(feature = "wasm"))]
+pub mod script_handle;
+#[cfg(not(feature = "wasm"))]
 pub mod semantic_expansion;
 pub mod simulate;
 pub mod stdlib;

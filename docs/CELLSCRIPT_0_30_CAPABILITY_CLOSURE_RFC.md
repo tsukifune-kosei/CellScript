@@ -118,7 +118,7 @@ form a complete 0.30 business-capability plan.
 | Bounded output plans and one-to-one output correspondence | [#8](https://github.com/CellScript-Labs/CellScript/issues/8) | Partial. The runtime foundation exists on the 0.26 development line, while authoring, shared-witness composition, builders, and complete independent machine evidence remain release work. |
 | Multi-Script transaction construction and conflict handling | [#9](https://github.com/CellScript-Labs/CellScript/issues/9) | Covered as the architecture owner. The ProtocolBundle must precede any `.celltx` convenience syntax. |
 | Typed roles across Script boundaries | [#10](https://github.com/CellScript-Labs/CellScript/issues/10) | Closed artifact-known Cell/witness roles are implemented in ProtocolBundle with exact schema/interface/ELF/deployment identity. Open/runtime-selected roles remain dependent on #11. |
-| Runtime Script and verifier handles | [#11](https://github.com/CellScript-Labs/CellScript/issues/11) | Covered as the identity and ABI owner. Current exact-hash trusted delegation is a bounded precursor, not full closure. |
+| Runtime Script and verifier handles | [#11](https://github.com/CellScript-Labs/CellScript/issues/11) | Exact artifact receipts and fixed-width values are implemented for independently checked ProtocolBundle artifacts. Source-level generic handles, checked runtime construction, and open/runtime-selected roles remain open. |
 | Timelocks, epochs, timestamps, and `Since` | [#12](https://github.com/CellScript-Labs/CellScript/issues/12) | Covered for typed temporal domains. It does not own the rest of the transaction-view and syscall surface. |
 | Digest-committed substate and authenticated openings | [#13](https://github.com/CellScript-Labs/CellScript/issues/13) | Covered for commitments and opening correspondence. It must share the entry witness envelope with output plans and verifier proofs. |
 | Honest capability and product-completeness claims | [#14](https://github.com/CellScript-Labs/CellScript/issues/14) | Covered as a governance rule. It is not an implementation owner for the missing capabilities. |
@@ -254,14 +254,27 @@ bundle. `PB213` reports type, ownership, correspondence, or closed-foreign
 identity conflicts. Runtime-selected/open participants remain blocked on #11's
 typed Script-handle contract.
 
+The first #11 identity layer is now implemented at that artifact boundary.
+Each admitted artifact receives an exact receipt over package/lock-node/entry/role,
+interface and typed-semantics hashes, ELF, target profile, the existing package
+ABI identity, verified bundle, complete CKB Script, code CellDep, and chain.
+The corresponding `CSHDLv1-fixed-202` value commits to the receipt and the
+runtime-relevant hash axes while remaining an ordinary value with no Cell
+lifecycle authority. Data-hash and Type-hash code identity are explicit
+separate policies. This establishes a stable exact handle for closed artifacts;
+it does not yet implement generic source types, runtime-selected construction,
+upgrade-line handles, compatible-open handles, or open cross-Script roles.
+
 Generated TypeScript action builders now expose the same ProtocolBundle v1
 state names and artifact-binding schema as the Rust adapter. Their client
 orders offline checking, live resolution, external signing resumption, signed
 node execution, tx-pool acceptance, and submission. It accepts opaque signer
 results and never accepts a private key field. Generated artifacts expose their
 checked Molecule schema contracts, and `bindClosedProtocolRole` refuses a
-provider or consumer that lacks the exact requested type/hash. Registry
-verified-build evidence
+provider or consumer that lacks the exact requested type/hash. They also bind
+the exact-handle schemas and ABI/profile identities in their manifest and can
+attach a successful checker-returned receipt/value only when all generated
+artifact and deployment axes agree. Registry verified-build evidence
 publishes the same bundle schema, artifact-binding schema, and runtime-adapter
 identity only for complete independently checked CKB ELF bundles; source-only
 and generic hash-bound artifacts remain unmarked. The website-rendered

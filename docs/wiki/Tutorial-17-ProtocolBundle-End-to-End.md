@@ -25,6 +25,11 @@ Generated TypeScript builders use
 to its exact metadata, ELF, interface, builder manifest, selected entry, Script
 role, and deployment. Closed cross-Script roles use
 `cellscript-protocol-closed-role-v1`.
+Successful admission also returns
+`cellscript-exact-script-handle-receipt-v1` plus the fixed-width
+`cellscript-exact-script-handle-value-v1` representation. The receipt explains
+which checked entry/interface/artifact/deployment the value identifies; the
+value itself grants no lifecycle or authorization capability.
 
 The bundle hash is the CKB Blake2b-256 digest of the domain string, a zero byte,
 and canonical JSON for the resolved bundle. Local file paths do not enter that
@@ -179,6 +184,8 @@ fields in a ProtocolBundle or evidence record.
 Every generated TypeScript action-builder package exports:
 
 - `bindProtocolBundleArtifact`;
+- `bindCheckedExactScriptHandle` and
+  `exactScriptHandleFromCheckedBundle`;
 - `bindClosedProtocolRole`;
 - `createProtocolBundleClient`;
 - the same nine state names;
@@ -192,6 +199,8 @@ wallet:
 ```typescript
 const artifact = builder.bindProtocolBundleArtifact({
   id: "token-type",
+  packageCoordinate: "example/token@1.0.0",
+  lockNodeId: "token@1.0.0|registry:example/token@1.0.0|env=ckb-testnet",
   entry: { kind: "action", name: "transfer" },
   scriptRole: "type",
   deployment,
@@ -212,6 +221,10 @@ bundleInput.closed_roles = [builder.bindClosedProtocolRole({
 
 const client = builder.createProtocolBundleClient(runtime);
 const flow = await client.prepare(bundleInput, [artifact, authArtifact]);
+const exactHandle = builder.exactScriptHandleFromCheckedBundle(
+  flow.checked,
+  artifact,
+);
 const request = client.signingRequest(flow.prepared);
 
 // Send request.unsignedTransaction to a wallet or hardware signer.

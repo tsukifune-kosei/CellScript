@@ -2655,6 +2655,20 @@ lock authorize(witness approved: bool) -> bool {
     assert_eq!(first["bundle"]["closed_roles"][0]["consumers"].as_array().unwrap().len(), 2);
     assert!(first["bundle"]["closed_roles"][0]["provider"]["interface_hash"].as_str().is_some());
     assert!(first["bundle"]["closed_roles"][0]["provider"]["deployment"]["script"]["code_hash"].as_str().is_some());
+    let identities = first["bundle"]["artifacts"].as_array().unwrap();
+    for identity in identities {
+        let identity: cellscript::protocol_bundle::ProtocolArtifactIdentity = serde_json::from_value(identity.clone()).unwrap();
+        assert_eq!(identity.runtime_abi_hash, identity.exact_handle_receipt.runtime_abi_hash);
+        assert_eq!(identity.interface_hash, identity.exact_handle_receipt.interface_hash);
+        assert_eq!(identity.typed_semantics_hash, identity.exact_handle_receipt.typed_semantics_hash);
+        assert_eq!(identity.target_profile_hash, identity.exact_handle_receipt.target_profile_hash);
+        assert_eq!(identity.exact_handle.encoded.len(), 2 + cellscript::script_handle::EXACT_SCRIPT_HANDLE_BYTES * 2);
+        cellscript::script_handle::validate_exact_script_handle(&identity.exact_handle_receipt, &identity.exact_handle).unwrap();
+    }
+    assert_eq!(
+        first["bundle"]["closed_roles"][0]["provider"]["exact_handle"],
+        identities.iter().find(|identity| identity["id"] == "token").unwrap()["exact_handle"]
+    );
     assert_eq!(
         first["bundle"]["artifacts"]
             .as_array()
@@ -10105,6 +10119,9 @@ action mint(amount: u64, owner: Address) -> Token {
     assert_eq!(summary["raw_cell_data_required"], false);
     assert_eq!(summary["protocol_bundle_api_schema"], "cellscript-protocol-bundle-v1");
     assert_eq!(summary["protocol_bundle_artifact_binding_schema"], "cellscript-protocol-bundle-artifact-binding-v1");
+    assert_eq!(summary["exact_script_handle_receipt_schema"], "cellscript-exact-script-handle-receipt-v1");
+    assert_eq!(summary["exact_script_handle_value_schema"], "cellscript-exact-script-handle-value-v1");
+    assert_eq!(summary["exact_script_handle_encoding"], "CSHDLv1-fixed-202");
     assert_eq!(summary["protocol_bundle_closed_role_schema"], "cellscript-protocol-closed-role-v1");
     assert_eq!(summary["resumable_external_signing"], true);
     assert_eq!(summary["private_keys_in_generated_api"], false);
@@ -10139,6 +10156,11 @@ action mint(amount: u64, owner: Address) -> Token {
     assert_eq!(manifest["actions"][0]["action_scan_selectors"]["source"], "transaction_runtime_input_requirements");
     assert_eq!(manifest["protocol_bundle_contract"]["schema"], "cellscript-protocol-bundle-v1");
     assert_eq!(manifest["protocol_bundle_contract"]["closed_role_schema"], "cellscript-protocol-closed-role-v1");
+    assert_eq!(manifest["protocol_bundle_contract"]["exact_handle_receipt_schema"], "cellscript-exact-script-handle-receipt-v1");
+    assert_eq!(manifest["protocol_bundle_contract"]["exact_handle_value_schema"], "cellscript-exact-script-handle-value-v1");
+    assert_eq!(manifest["protocol_bundle_contract"]["exact_handle_encoding"], "CSHDLv1-fixed-202");
+    assert!(manifest["runtime_abi_hash"].as_str().is_some());
+    assert!(manifest["target_profile_hash"].as_str().is_some());
     assert_eq!(manifest["protocol_bundle_contract"]["runtime_adapter"], "cellscript-ckb-adapter");
     assert_eq!(manifest["protocol_bundle_contract"]["private_keys"], "never-in-bundle-or-evidence");
     assert_eq!(manifest["protocol_bundle_contract"]["states"].as_array().unwrap().len(), 9);
@@ -10188,6 +10210,10 @@ action mint(amount: u64, owner: Address) -> Token {
     assert!(index_ts.contains("PROTOCOL_CLOSED_ROLE_SCHEMA"), "{index_ts}");
     assert!(index_ts.contains("bindClosedProtocolRole"), "{index_ts}");
     assert!(index_ts.contains("schemaContracts"), "{index_ts}");
+    assert!(index_ts.contains("EXACT_SCRIPT_HANDLE_RECEIPT_SCHEMA"), "{index_ts}");
+    assert!(index_ts.contains("bindCheckedExactScriptHandle"), "{index_ts}");
+    assert!(index_ts.contains("exactScriptHandleFromCheckedBundle"), "{index_ts}");
+    assert!(index_ts.contains("CSHDLv1-fixed-202"), "{index_ts}");
     assert!(index_ts.contains("createProtocolBundleClient"), "{index_ts}");
     assert!(index_ts.contains("ProtocolBundleSigningRequest"), "{index_ts}");
     assert!(index_ts.contains("ProtocolBundleConfirmationPolicy"), "{index_ts}");
@@ -10211,6 +10237,7 @@ action mint(amount: u64, owner: Address) -> Token {
     assert!(builder_test.contains("trust policy requires a deployment record"), "{builder_test}");
     assert!(builder_test.contains("resumable ProtocolBundle runtime state machine without private keys"), "{builder_test}");
     assert!(builder_test.contains("shared-token"), "{builder_test}");
+    assert!(builder_test.contains("bindCheckedExactScriptHandle"), "{builder_test}");
 
     let generated_metadata: serde_json::Value =
         serde_json::from_slice(&std::fs::read(output_dir.join("src").join("metadata.json")).unwrap()).unwrap();

@@ -972,7 +972,7 @@ the manual, CI, recovery, and external-wallet path.
 | `cellc abi` | Explain `_cellscript_entry` witness ABI layout for an action or lock |
 | `cellc entry-witness` | Encode `_cellscript_entry` witness bytes |
 | `cellc action build` | Emit a semantic action-builder contract, transaction draft, and compile-only action scan selectors |
-| `cellc gen-builder --target typescript` | Generate a TypeScript action-builder package with artifact identity, ProtocolBundle v1 state-machine types, resumable external signing, and runtime adapter contracts |
+| `cellc gen-builder --target typescript` | Generate a TypeScript action-builder package with exact artifact-handle identity, ProtocolBundle v1 state-machine types, resumable external signing, and runtime adapter contracts |
 | `cellc scheduler-plan` | Consume scheduler hints and report serial/conflict policy |
 | `cellc ckb-hash` | Compute CKB default Blake2b-256 hashes for builders and release evidence |
 | `cellc explain assumptions` | Emit v0.16 builder-assumption evidence from ProofPlan metadata |
@@ -1020,9 +1020,12 @@ transaction identities; the receipt remains a bounded observation rather than
 an absolute-finality claim. Closed cross-Script Cell and witness roles can bind
 one provider and one or more consumers through an exact Molecule schema,
 interface, ELF, and deployment identity; open/runtime-selected roles remain a
-separate Script-handle boundary. Generated TypeScript packages expose the same ordered
-states and an artifact binding tied to their metadata, ELF, interface, and
-builder-manifest identities; signing requests carry no private keys.
+separate Script-handle boundary. Each admitted artifact also carries a
+recomputable exact receipt plus an ordinary `CSHDLv1-fixed-202` value binding
+its entry, role, interface, typed semantics, ELF, profile, ABI, verified
+bundle, complete Script, code CellDep, and chain. Generated TypeScript packages
+expose the same ordered states, an artifact binding, and a checked exact-handle
+binder tied to those identities; signing requests carry no private keys.
 Registry verified-build evidence exposes the same bundle schema, binding
 schema, and `cellscript-ckb-adapter` identity only after a CKB ELF's metadata,
 lowering record, and source map pass the independent artifact checker.

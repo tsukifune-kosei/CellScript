@@ -8279,7 +8279,7 @@ fn write_typescript_builder_package(
     std::fs::create_dir_all(&src_dir)?;
     std::fs::create_dir_all(&test_dir)?;
 
-    let manifest = typescript_builder_manifest(package_name, metadata, actions, metadata_hash, locked_identity, deployment_identity);
+    let manifest = typescript_builder_manifest(package_name, metadata, actions, metadata_hash, locked_identity, deployment_identity)?;
 
     let package_json_path = output_dir.join("package.json");
     let tsconfig_path = output_dir.join("tsconfig.json");
@@ -8322,6 +8322,9 @@ fn write_typescript_builder_package(
         "protocol_bundle_api_schema": "cellscript-protocol-bundle-v1",
         "protocol_bundle_artifact_binding_schema": "cellscript-protocol-bundle-artifact-binding-v1",
         "protocol_bundle_closed_role_schema": "cellscript-protocol-closed-role-v1",
+        "exact_script_handle_receipt_schema": "cellscript-exact-script-handle-receipt-v1",
+        "exact_script_handle_value_schema": "cellscript-exact-script-handle-value-v1",
+        "exact_script_handle_encoding": "CSHDLv1-fixed-202",
         "resumable_external_signing": true,
         "private_keys_in_generated_api": false,
         "lockfile": lockfile_path.map(|path| path.display().to_string()),
@@ -8409,7 +8412,10 @@ fn typescript_builder_manifest(
     metadata_hash: &str,
     locked_identity: Option<&serde_json::Value>,
     deployment_identity: Option<&serde_json::Value>,
-) -> serde_json::Value {
+) -> Result<serde_json::Value> {
+    let runtime_abi_hash = metadata_abi_hash(metadata)?;
+    let target_profile_hash = cellscript_artifact_checker::canonical_hash("cellscript-target-profile", &metadata.target_profile)
+        .map_err(|error| CompileError::without_span(format!("failed to hash generated builder target profile: {error}")))?;
     let mut manifest = serde_json::json!({
         "schema": "cellscript-generated-action-builder-v0.23-edition-2026",
         "target": "typescript",
@@ -8482,6 +8488,15 @@ fn typescript_builder_manifest(
             "temporal_interface": metadata.public_interface.runtime_contract.temporal,
         }
     });
+    manifest["target_profile_hash"] = serde_json::json!(target_profile_hash);
+    manifest["runtime_abi_hash"] = serde_json::json!(runtime_abi_hash);
+    manifest["interface_hash"] = serde_json::json!(metadata.interface_hash);
+    manifest["typed_semantics_hash"] = serde_json::json!(metadata.typed_semantics_hash);
+    manifest["verified_bundle_id"] = serde_json::json!(metadata.verified_artifact.verified_bundle_id);
+    manifest["protocol_bundle_contract"]["exact_handle_receipt_schema"] =
+        serde_json::json!("cellscript-exact-script-handle-receipt-v1");
+    manifest["protocol_bundle_contract"]["exact_handle_value_schema"] = serde_json::json!("cellscript-exact-script-handle-value-v1");
+    manifest["protocol_bundle_contract"]["exact_handle_encoding"] = serde_json::json!("CSHDLv1-fixed-202");
     if let Some(policy) = &metadata.runtime.policy_artifact {
         manifest["policy_artifact"] = serde_json::json!(policy);
         manifest["runtime_contract"]["requires_policy_witness_bundle"] = serde_json::json!(true);
@@ -8495,7 +8510,7 @@ fn typescript_builder_manifest(
             action["policy_witness_required"] = serde_json::json!(true);
         }
     }
-    manifest
+    Ok(manifest)
 }
 
 fn typescript_package_json(package_name: &str) -> serde_json::Value {
@@ -8540,6 +8555,9 @@ export const PROTOCOL_BUNDLE_SCHEMA = "cellscript-protocol-bundle-v1" as const;
 export const PROTOCOL_BUNDLE_REPORT_SCHEMA = "cellscript-protocol-bundle-report-v1" as const;
 export const PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA = "cellscript-protocol-bundle-artifact-binding-v1" as const;
 export const PROTOCOL_CLOSED_ROLE_SCHEMA = "cellscript-protocol-closed-role-v1" as const;
+export const EXACT_SCRIPT_HANDLE_RECEIPT_SCHEMA = "cellscript-exact-script-handle-receipt-v1" as const;
+export const EXACT_SCRIPT_HANDLE_VALUE_SCHEMA = "cellscript-exact-script-handle-value-v1" as const;
+export const EXACT_SCRIPT_HANDLE_ENCODING = "CSHDLv1-fixed-202" as const;
 
 export type ProtocolBundleScriptRole = "lock" | "type" | "spawned-verifier";
 
@@ -8550,13 +8568,50 @@ export interface ProtocolBundleDeploymentBinding {
   codeCellDep: { outPoint: { txHash: HexString; index: number }; depType: "code" | "dep_group" };
 }
 
+export interface ExactScriptHandleReceipt {
+  schema: typeof EXACT_SCRIPT_HANDLE_RECEIPT_SCHEMA;
+  version: 1;
+  class: "script" | "verifier";
+  script_role: ProtocolBundleScriptRole;
+  package_coordinate: string;
+  lock_node_id: string;
+  entry: { kind: "action" | "lock" | "function"; name: string };
+  interface_hash: string;
+  typed_semantics_hash: string;
+  artifact_hash: string;
+  target_profile_hash: string;
+  runtime_abi_hash: string;
+  verified_bundle_id: string;
+  deployment: {
+    network: { chain_id: string; genesis_hash: HexString };
+    artifact_hash: string;
+    script: { code_hash: HexString; hash_type: "data" | "data1" | "data2" | "type"; args: HexString };
+    code_cell_dep: { out_point: { tx_hash: HexString; index: number }; dep_type: "code" | "dep_group" };
+  };
+  code_identity_policy: "data-hash-exact-artifact" | "type-hash-exact-code-cell";
+  upgrade_policy: "exact-artifact";
+}
+
+export interface ExactScriptHandleValue {
+  schema: typeof EXACT_SCRIPT_HANDLE_VALUE_SCHEMA;
+  version: 1;
+  encoding: typeof EXACT_SCRIPT_HANDLE_ENCODING;
+  encoded: HexString;
+}
+
 export interface ProtocolBundleArtifactBinding {
   schema: typeof PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA;
   id: string;
   packageName: string;
+  packageCoordinate: string;
+  lockNodeId: string;
   metadataHash: string;
   artifactHash: string;
   interfaceHash: string;
+  typedSemanticsHash: string;
+  targetProfileHash: string;
+  runtimeAbiHash: string;
+  verifiedBundleId: string | null;
   schemaContracts: readonly ProtocolBundleRoleSchemaIdentity[];
   builderManifestSchema: typeof CELLSCRIPT_BUILDER_SCHEMA;
   entry: { kind: "action" | "lock"; name: string };
@@ -8574,6 +8629,10 @@ export const protocolBundleArtifactIdentity = Object.freeze({
   metadataHash: builderManifest.metadata_hash,
   artifactHash: builderManifest.artifact_hash,
   interfaceHash: metadata.interface_hash,
+  typedSemanticsHash: builderManifest.typed_semantics_hash,
+  targetProfileHash: builderManifest.target_profile_hash,
+  runtimeAbiHash: builderManifest.runtime_abi_hash,
+  verifiedBundleId: builderManifest.verified_bundle_id,
   schemaContracts: Object.freeze(builderManifest.molecule_schema_manifest.entries.map((entry) => Object.freeze({
     type_name: entry.type_name,
     schema_hash: entry.schema_hash,
@@ -8583,11 +8642,15 @@ export const protocolBundleArtifactIdentity = Object.freeze({
 
 export function bindProtocolBundleArtifact(options: {
   id: string;
+  packageCoordinate: string;
+  lockNodeId: string;
   entry: { kind: "action" | "lock"; name: string };
   scriptRole: ProtocolBundleScriptRole;
   deployment: ProtocolBundleDeploymentBinding;
 }): ProtocolBundleArtifactBinding {
-  if (!options.id || !options.entry.name) throw new Error("ProtocolBundle artifact id and entry name are required");
+  if (!options.id || !options.packageCoordinate || !options.lockNodeId || !options.entry.name) {
+    throw new Error("ProtocolBundle artifact id, package coordinate, lock node, and entry name are required");
+  }
   const artifactHash = protocolBundleArtifactIdentity.artifactHash;
   if (typeof artifactHash !== "string") {
     throw new Error("generated artifact has no deployable artifact hash");
@@ -8602,15 +8665,80 @@ export function bindProtocolBundleArtifact(options: {
     schema: PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA,
     id: options.id,
     packageName: protocolBundleArtifactIdentity.packageName,
+    packageCoordinate: options.packageCoordinate,
+    lockNodeId: options.lockNodeId,
     metadataHash: protocolBundleArtifactIdentity.metadataHash,
     artifactHash,
     interfaceHash: protocolBundleArtifactIdentity.interfaceHash,
+    typedSemanticsHash: protocolBundleArtifactIdentity.typedSemanticsHash,
+    targetProfileHash: protocolBundleArtifactIdentity.targetProfileHash,
+    runtimeAbiHash: protocolBundleArtifactIdentity.runtimeAbiHash,
+    verifiedBundleId: protocolBundleArtifactIdentity.verifiedBundleId,
     schemaContracts: protocolBundleArtifactIdentity.schemaContracts,
     builderManifestSchema: protocolBundleArtifactIdentity.builderManifestSchema,
     entry: Object.freeze({ ...options.entry }),
     scriptRole: options.scriptRole,
     deployment: Object.freeze(options.deployment),
   });
+}
+
+export interface BoundExactScriptHandle {
+  artifact: ProtocolBundleArtifactBinding;
+  receipt: ExactScriptHandleReceipt;
+  value: ExactScriptHandleValue;
+}
+
+function exactDeploymentMatches(artifact: ProtocolBundleArtifactBinding, receipt: ExactScriptHandleReceipt): boolean {
+  const left = artifact.deployment;
+  const right = receipt.deployment;
+  return left.network.chainId === right.network.chain_id
+    && left.network.genesisHash === right.network.genesis_hash
+    && left.artifactHash === right.artifact_hash
+    && left.script.codeHash === right.script.code_hash
+    && left.script.hashType === right.script.hash_type
+    && left.script.args === right.script.args
+    && left.codeCellDep.outPoint.txHash === right.code_cell_dep.out_point.tx_hash
+    && left.codeCellDep.outPoint.index === right.code_cell_dep.out_point.index
+    && left.codeCellDep.depType === right.code_cell_dep.dep_type;
+}
+
+/** Bind a receipt/value pair returned by the successful ProtocolBundle checker. */
+export function bindCheckedExactScriptHandle(
+  artifact: ProtocolBundleArtifactBinding,
+  checked: { exact_handle_receipt: ExactScriptHandleReceipt; exact_handle: ExactScriptHandleValue },
+): BoundExactScriptHandle {
+  const receipt = checked.exact_handle_receipt;
+  const value = checked.exact_handle;
+  if (typeof artifact.verifiedBundleId !== "string") {
+    throw new Error("generated artifact has no verified bundle identity for an exact Script handle");
+  }
+  const expectedClass = artifact.scriptRole === "spawned-verifier" ? "verifier" : "script";
+  const expectedPolicy = artifact.deployment.script.hashType === "type"
+    ? "type-hash-exact-code-cell"
+    : "data-hash-exact-artifact";
+  if (!receipt || receipt.schema !== EXACT_SCRIPT_HANDLE_RECEIPT_SCHEMA || receipt.version !== 1
+    || receipt.class !== expectedClass || receipt.script_role !== artifact.scriptRole
+    || receipt.package_coordinate !== artifact.packageCoordinate || receipt.lock_node_id !== artifact.lockNodeId
+    || receipt.entry.kind !== artifact.entry.kind || receipt.entry.name !== artifact.entry.name
+    || receipt.interface_hash !== artifact.interfaceHash
+    || receipt.typed_semantics_hash !== artifact.typedSemanticsHash
+    || receipt.artifact_hash !== artifact.artifactHash
+    || receipt.target_profile_hash !== artifact.targetProfileHash
+    || receipt.runtime_abi_hash !== artifact.runtimeAbiHash
+    || receipt.verified_bundle_id !== artifact.verifiedBundleId
+    || receipt.code_identity_policy !== expectedPolicy || receipt.upgrade_policy !== "exact-artifact"
+    || !exactDeploymentMatches(artifact, receipt)) {
+    throw new Error("checked exact Script handle receipt does not match generated artifact/deployment identity");
+  }
+  if (expectedPolicy === "data-hash-exact-artifact"
+    && artifact.deployment.script.codeHash !== `0x${artifact.artifactHash}`) {
+    throw new Error("exact data-hash Script handle does not identify the generated artifact bytes");
+  }
+  if (!value || value.schema !== EXACT_SCRIPT_HANDLE_VALUE_SCHEMA || value.version !== 1
+    || value.encoding !== EXACT_SCRIPT_HANDLE_ENCODING || !/^0x[0-9a-f]{404}$/.test(value.encoded)) {
+    throw new Error("checked exact Script handle value has an invalid schema or fixed-width encoding");
+  }
+  return Object.freeze({ artifact, receipt: Object.freeze(receipt), value: Object.freeze(value) });
 }
 
 export interface ProtocolBundleClosedRoleInput {
@@ -8670,6 +8798,21 @@ export interface CheckedProtocolBundle {
   bundle_hash: string;
   bundle: unknown;
   evidence: unknown;
+}
+
+export function exactScriptHandleFromCheckedBundle(
+  checked: CheckedProtocolBundle,
+  artifact: ProtocolBundleArtifactBinding,
+): BoundExactScriptHandle {
+  const bundle = checked.bundle as { artifacts?: readonly Record<string, unknown>[] };
+  const candidate = bundle.artifacts?.find((item) => item.id === artifact.id);
+  if (!candidate) {
+    throw new Error(`successful ProtocolBundle report has no exact handle for artifact '${artifact.id}'`);
+  }
+  return bindCheckedExactScriptHandle(artifact, candidate as unknown as {
+    exact_handle_receipt: ExactScriptHandleReceipt;
+    exact_handle: ExactScriptHandleValue;
+  });
 }
 
 export interface ProtocolBundleStage<S extends string> {
@@ -8840,10 +8983,9 @@ fn typescript_builder_index(
     let action_specs_json = json_string_pretty("action specs", &action_specs)?;
     let action_error_contexts_json = json_string_pretty("action error contexts", &builder_action_error_contexts_json(actions))?;
     let runtime_error_catalog_json = json_string_pretty("runtime error catalog", &runtime_error_catalog_json())?;
-    let manifest_json = json_string_pretty(
-        "builder manifest",
-        &typescript_builder_manifest(package_name, metadata, actions, metadata_hash, locked_identity, deployment_identity),
-    )?;
+    let builder_manifest =
+        typescript_builder_manifest(package_name, metadata, actions, metadata_hash, locked_identity, deployment_identity)?;
+    let manifest_json = json_string_pretty("builder manifest", &builder_manifest)?;
     let metadata_json = json_string_pretty("metadata", metadata)?;
     let signing_message_domains_json = json_string_pretty("signing message domains", &metadata.runtime.signing_message_domains)?;
 
@@ -9796,7 +9938,9 @@ fn typescript_builder_test(actions: &[&crate::ActionMetadata]) -> Result<String>
              codeCellDep: { outPoint: { txHash: \"0x\" + \"1\".repeat(64), index: 0 }, depType: \"code\" },\n\
            };\n\
            const first = builder.bindProtocolBundleArtifact({\n\
-             id: \"first\", entry: { kind: \"action\", name: actionCases[0].name }, scriptRole: \"type\", deployment,\n\
+             id: \"first\", packageCoordinate: \"example/first@1.0.0\",\n\
+             lockNodeId: \"first@1.0.0|path:first|env=default|features=default\",\n\
+             entry: { kind: \"action\", name: actionCases[0].name }, scriptRole: \"type\", deployment,\n\
            });\n\
            const second = Object.freeze({ ...first, id: \"second\" });\n\
            const sharedSchema = first.schemaContracts[0];\n\
@@ -9808,6 +9952,33 @@ fn typescript_builder_test(actions: &[&crate::ActionMetadata]) -> Result<String>
            });\n\
            assert.equal(closedRole.schema, builder.PROTOCOL_CLOSED_ROLE_SCHEMA);\n\
            assert.deepEqual(closedRole.provider, { artifact: \"first\", claim: \"shared-output\" });\n\
+           if (typeof first.verifiedBundleId === \"string\") {\n\
+             const exactReceipt = {\n\
+               schema: builder.EXACT_SCRIPT_HANDLE_RECEIPT_SCHEMA, version: 1, class: \"script\", script_role: first.scriptRole,\n\
+               package_coordinate: first.packageCoordinate, lock_node_id: first.lockNodeId, entry: first.entry,\n\
+               interface_hash: first.interfaceHash, typed_semantics_hash: first.typedSemanticsHash,\n\
+               artifact_hash: first.artifactHash, target_profile_hash: first.targetProfileHash,\n\
+               runtime_abi_hash: first.runtimeAbiHash, verified_bundle_id: first.verifiedBundleId,\n\
+               deployment: {\n\
+                 network: { chain_id: deployment.network.chainId, genesis_hash: deployment.network.genesisHash },\n\
+                 artifact_hash: deployment.artifactHash,\n\
+                 script: { code_hash: deployment.script.codeHash, hash_type: deployment.script.hashType, args: deployment.script.args },\n\
+                 code_cell_dep: { out_point: { tx_hash: deployment.codeCellDep.outPoint.txHash, index: 0 }, dep_type: \"code\" },\n\
+               },\n\
+               code_identity_policy: \"data-hash-exact-artifact\", upgrade_policy: \"exact-artifact\",\n\
+             };\n\
+             const exactValue = {\n\
+               schema: builder.EXACT_SCRIPT_HANDLE_VALUE_SCHEMA, version: 1, encoding: builder.EXACT_SCRIPT_HANDLE_ENCODING,\n\
+               encoded: \"0x\" + \"0\".repeat(404),\n\
+             };\n\
+             const exactHandle = builder.bindCheckedExactScriptHandle(first, { exact_handle_receipt: exactReceipt, exact_handle: exactValue });\n\
+             assert.equal(exactHandle.value.encoding, \"CSHDLv1-fixed-202\");\n\
+             assert.throws(() => builder.bindCheckedExactScriptHandle(first, {\n\
+               exact_handle_receipt: { ...exactReceipt, runtime_abi_hash: WRONG_HASH.slice(2) }, exact_handle: exactValue,\n\
+             }), /does not match generated artifact/);\n\
+           } else {\n\
+             assert.throws(() => builder.bindCheckedExactScriptHandle(first, {}), /no verified bundle identity/);\n\
+           }\n\
            assert.throws(() => builder.bindClosedProtocolRole({\n\
              roleId: \"bad\", kind: \"cell\", schemaIdentity: sharedSchema,\n\
              provider: { artifact: first, claim: \"shared-output\" },\n\
@@ -12784,20 +12955,7 @@ fn metadata_schema_versions_json(metadata: &CompileMetadata) -> serde_json::Valu
 }
 
 fn metadata_abi_hash(metadata: &CompileMetadata) -> Result<String> {
-    let abi = serde_json::json!({
-        "metadata_schema_version": metadata.metadata_schema_version,
-        "metadata_schema_versions": metadata_schema_versions_json(metadata),
-        "edition": metadata.edition,
-        "compatibility_profile": &metadata.compatibility_profile,
-        "target_profile": metadata.target_profile.name.as_str(),
-        "types": &metadata.types,
-        "actions": &metadata.actions,
-        "functions": &metadata.functions,
-        "locks": &metadata.locks,
-        "molecule_schema_manifest": &metadata.molecule_schema_manifest,
-        "cell_data_codec_manifest": &metadata.cell_data_codec_manifest,
-    });
-    hash_json_value("abi", &abi)
+    crate::script_handle::compile_metadata_abi_hash(metadata)
 }
 
 fn hash_json_value<T: serde::Serialize>(label: &str, value: &T) -> Result<String> {
@@ -17528,7 +17686,8 @@ mod tests {
                 assert_eq!(action_requires_entry_witness(action), expected, "{edition:?}: {declarations}");
                 let contexts = builder_action_error_contexts_json(&[action]);
                 assert_eq!(contexts[0]["entry_witness_required"], expected, "error context must agree with payload ABI");
-                let manifest = typescript_builder_manifest("@test/bindings", &metadata, &[action], "test-metadata", None, None);
+                let manifest =
+                    typescript_builder_manifest("@test/bindings", &metadata, &[action], "test-metadata", None, None).unwrap();
                 assert_eq!(manifest["actions"][0]["entry_witness_required"], expected, "builder manifest must agree with payload ABI");
             }
         }

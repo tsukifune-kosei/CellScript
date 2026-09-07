@@ -8,6 +8,10 @@
 
 use crate::assumptions::validate_transaction_against_metadata;
 use crate::error::{CompileError, Result};
+use crate::script_handle::{
+    build_exact_script_handle, compile_metadata_abi_hash, ExactScriptHandleReceipt, ExactScriptHandleReceiptInput,
+    ExactScriptHandleValue,
+};
 use crate::{ckb_blake2b256, hex_encode, validate_artifact_metadata, CompileMetadata, TxValidationReport};
 use cellscript_artifact_checker::{canonical_hash, check_bundle, CheckerBudgets, CheckerReport, EvidenceState};
 use serde::{Deserialize, Serialize};
@@ -384,6 +388,9 @@ pub struct ProtocolArtifactIdentity {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub schema_contracts: Vec<ProtocolRoleSchemaIdentity>,
     pub target_profile_hash: String,
+    pub runtime_abi_hash: String,
+    pub exact_handle_receipt: ExactScriptHandleReceipt,
+    pub exact_handle: ExactScriptHandleValue,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub builder_manifest_hash: Option<String>,
     pub verified_bundle_id: String,
@@ -400,6 +407,7 @@ pub struct ProtocolClosedRoleParticipant {
     pub interface_hash: String,
     pub artifact_hash: String,
     pub deployment: ProtocolDeploymentIdentity,
+    pub exact_handle: ExactScriptHandleValue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -621,7 +629,7 @@ fn normalized_network(network: &ProtocolNetworkIdentity) -> Result<ProtocolNetwo
     })
 }
 
-fn validate_deployment(deployment: &ProtocolDeploymentIdentity) -> Result<()> {
+pub(crate) fn validate_deployment(deployment: &ProtocolDeploymentIdentity) -> Result<()> {
     validate_network(&deployment.network, "artifact deployment network")?;
     canonical_raw_hash32(&deployment.artifact_hash, "deployment artifact_hash")?;
     validate_script(&deployment.script, "deployment script")?;
@@ -828,6 +836,7 @@ fn admit_artifact(input: &ProtocolArtifactInput, base: &Path) -> Result<(Protoco
         .map_err(|error| CompileError::without_span(format!("failed to hash metadata for '{}': {error}", input.id)))?;
     let target_profile_hash = canonical_hash("cellscript-target-profile", &metadata.target_profile)
         .map_err(|error| CompileError::without_span(format!("failed to hash target profile for '{}': {error}", input.id)))?;
+    let runtime_abi_hash = compile_metadata_abi_hash(&metadata)?;
     let verified_bundle_id = metadata.verified_artifact.verified_bundle_id.clone().ok_or_else(|| {
         CompileError::without_span(format!("ProtocolBundle artifact '{}' metadata has no verified_bundle_id", input.id))
     })?;
@@ -847,6 +856,19 @@ fn admit_artifact(input: &ProtocolArtifactInput, base: &Path) -> Result<(Protoco
         .collect::<Vec<_>>();
     schema_contracts.sort();
     schema_contracts.dedup();
+    let (exact_handle_receipt, exact_handle) = build_exact_script_handle(ExactScriptHandleReceiptInput {
+        package_coordinate: &input.package_coordinate,
+        lock_node_id: &input.lock_node_id,
+        entry: &input.entry,
+        script_role: input.script_role,
+        interface_hash: &metadata.interface_hash,
+        typed_semantics_hash: &metadata.typed_semantics_hash,
+        artifact_hash,
+        target_profile_hash: &target_profile_hash,
+        runtime_abi_hash: &runtime_abi_hash,
+        verified_bundle_id: &verified_bundle_id,
+        deployment: &input.deployment,
+    })?;
     Ok((
         ProtocolArtifactIdentity {
             id: input.id.clone(),
@@ -866,6 +888,9 @@ fn admit_artifact(input: &ProtocolArtifactInput, base: &Path) -> Result<(Protoco
             interface_hash: metadata.interface_hash.clone(),
             schema_contracts,
             target_profile_hash,
+            runtime_abi_hash,
+            exact_handle_receipt,
+            exact_handle,
             builder_manifest_hash,
             verified_bundle_id,
         },
@@ -890,11 +915,19 @@ fn validate_builder_manifest(input: &ProtocolArtifactInput, metadata: &CompileMe
         &serde_json::to_vec(metadata)
             .map_err(|error| CompileError::without_span(format!("failed to hash metadata for builder validation: {error}")))?,
     ));
+    let expected_runtime_abi_hash = compile_metadata_abi_hash(metadata)?;
+    let expected_target_profile_hash = canonical_hash("cellscript-target-profile", &metadata.target_profile)
+        .map_err(|error| CompileError::without_span(format!("failed to hash builder target profile: {error}")))?;
     let checks = [
         ("metadata_hash", Some(expected_metadata_hash.as_str())),
         ("artifact_hash", metadata.artifact_hash.as_deref()),
         ("compiler_version", Some(metadata.compiler_version.as_str())),
         ("target_profile", Some(metadata.target_profile.name.as_str())),
+        ("target_profile_hash", Some(expected_target_profile_hash.as_str())),
+        ("runtime_abi_hash", Some(expected_runtime_abi_hash.as_str())),
+        ("interface_hash", Some(metadata.interface_hash.as_str())),
+        ("typed_semantics_hash", Some(metadata.typed_semantics_hash.as_str())),
+        ("verified_bundle_id", metadata.verified_artifact.verified_bundle_id.as_deref()),
     ];
     for (field, expected) in checks {
         if manifest.get(field).and_then(serde_json::Value::as_str) != expected {
@@ -919,6 +952,9 @@ fn validate_builder_manifest(input: &ProtocolArtifactInput, metadata: &CompileMe
                 "report_schema": "cellscript-protocol-bundle-report-v1",
                 "artifact_binding_schema": "cellscript-protocol-bundle-artifact-binding-v1",
                 "closed_role_schema": "cellscript-protocol-closed-role-v1",
+                "exact_handle_receipt_schema": "cellscript-exact-script-handle-receipt-v1",
+                "exact_handle_value_schema": "cellscript-exact-script-handle-value-v1",
+                "exact_handle_encoding": "CSHDLv1-fixed-202",
                 "runtime_adapter": "cellscript-ckb-adapter",
                 "states": [
                     "MaterializedProtocolBundleTx",
@@ -1136,6 +1172,7 @@ fn resolve_closed_role_participant(
             interface_hash: artifact.interface_hash.clone(),
             artifact_hash: artifact.artifact_hash.clone(),
             deployment: artifact.deployment.clone(),
+            exact_handle: artifact.exact_handle.clone(),
         },
         source,
     ))
@@ -1825,31 +1862,57 @@ mod tests {
 
     fn artifact(id: &str, network: ProtocolNetworkIdentity) -> ProtocolArtifactIdentity {
         let deployment_byte = if id == "order" { "a" } else { "b" };
+        let package_coordinate = format!("org/{id}@1.0.0");
+        let lock_node_id = format!("{id}@1.0.0|path:{id}|env=default|features=default");
+        let entry = ProtocolEntryIdentity { kind: ProtocolEntryKind::Action, name: "main".to_string() };
+        let deployment = ProtocolDeploymentIdentity {
+            network,
+            artifact_hash: raw_hash(deployment_byte),
+            script: script(deployment_byte),
+            code_cell_dep: cell_dep(deployment_byte, 0),
+        };
+        let interface_hash = raw_hash("f");
+        let typed_semantics_hash = raw_hash("c");
+        let target_profile_hash = raw_hash("1");
+        let runtime_abi_hash = raw_hash("8");
+        let verified_bundle_id = raw_hash("2");
+        let (exact_handle_receipt, exact_handle) = build_exact_script_handle(ExactScriptHandleReceiptInput {
+            package_coordinate: &package_coordinate,
+            lock_node_id: &lock_node_id,
+            entry: &entry,
+            script_role: ProtocolScriptRole::Type,
+            interface_hash: &interface_hash,
+            typed_semantics_hash: &typed_semantics_hash,
+            artifact_hash: &deployment.artifact_hash,
+            target_profile_hash: &target_profile_hash,
+            runtime_abi_hash: &runtime_abi_hash,
+            verified_bundle_id: &verified_bundle_id,
+            deployment: &deployment,
+        })
+        .unwrap();
         ProtocolArtifactIdentity {
             id: id.to_string(),
-            package_coordinate: format!("org/{id}@1.0.0"),
-            lock_node_id: format!("{id}@1.0.0|path:{id}|env=default|features=default"),
-            entry: ProtocolEntryIdentity { kind: ProtocolEntryKind::Action, name: "main".to_string() },
+            package_coordinate,
+            lock_node_id,
+            entry,
             script_role: ProtocolScriptRole::Type,
-            deployment: ProtocolDeploymentIdentity {
-                network,
-                artifact_hash: raw_hash(deployment_byte),
-                script: script(deployment_byte),
-                code_cell_dep: cell_dep(deployment_byte, 0),
-            },
+            deployment,
             compiler_version: "0.26.0".to_string(),
             edition: "2026".to_string(),
             metadata_schema_version: 71,
             artifact_hash: raw_hash(deployment_byte),
             metadata_hash: raw_hash("b"),
-            typed_semantics_hash: raw_hash("c"),
+            typed_semantics_hash,
             lowering_record_hash: raw_hash("d"),
             source_map_hash: raw_hash("e"),
-            interface_hash: raw_hash("f"),
+            interface_hash,
             schema_contracts: vec![ProtocolRoleSchemaIdentity { type_name: "SharedRecord".to_string(), schema_hash: raw_hash("7") }],
-            target_profile_hash: raw_hash("1"),
+            target_profile_hash,
+            runtime_abi_hash,
+            exact_handle_receipt,
+            exact_handle,
             builder_manifest_hash: None,
-            verified_bundle_id: raw_hash("2"),
+            verified_bundle_id,
         }
     }
 
