@@ -18,15 +18,23 @@ boundaries. It does not claim mainnet readiness or complete Fiber coverage.
 
 ## Exact source and runtime binding
 
-The live evidence was produced from a clean detached CellScript worktree at:
+The Fiber live evidence was produced from a clean detached CellScript worktree
+at:
 
 ```text
 babbe2d537493f42e6dcaa3c0ea1834a4496b5bf
 ```
 
-The final documentation and audited-Fiber-pin commit is later than that
-evidence commit and does not change the compiler, generated artifact, or live
-runner implementation.
+The final CKB production/backend replay was then produced from a clean detached
+worktree at:
+
+```text
+3189ae695b0c53ac6b599f8aed79d9ceb712471d
+```
+
+That commit adds the report and advances the audited Fiber pin, but does not
+change the compiler, generated Fiber artifact, or live runner implementation.
+The final report-only follow-up is later than both evidence commits.
 
 The CKB production replay used the clean parent CKB checkout already at the
 repository's exact acceptance pin:
@@ -53,8 +61,9 @@ improved coverage.
 ## CKB production business replay
 
 `scripts/cellscript_ckb_stateful_scenarios.sh` completed with exit status zero
-from the clean CellScript worktree. Its production report has SHA-256
-`dd8a95ba97bbd23cd81ab18e170ebf120bbeebb0f062eb61d4baf8c572df45a9`
+inside the full backend gate from the clean final-evidence worktree. Its
+production report has SHA-256
+`e81ad6d5fc2e2473d561f0fdddef6510be5b2e96214df2a3d62e010358426baf`
 and records:
 
 | Evidence | Result |
@@ -78,7 +87,7 @@ action-branch scenarios close the remaining source actions.
 The generated local report is:
 
 ```text
-target/ckb-cellscript-acceptance/1788779467-production-1666333/
+target/ckb-cellscript-acceptance/1788781390-production-1920906/
   ckb-cellscript-acceptance-report.json
 ```
 
@@ -99,6 +108,16 @@ The full ecosystem-reuse gate includes 13 `ckb-std` compatibility cases, 77
 CKB-adapter tests, three deployment CLI tests, two SDK-builder tests, adapter
 acceptance, CLI/action-boundary checks, and the corresponding strict clippy
 checks.
+
+The repository's complete `dev` and `ci` gates also passed. The final clean
+`backend` gate passed every one of its 14 recorded commands/features, including
+the full syntax-combination audit and the fresh CKB stateful replay above. Its
+strict-backend report has SHA-256
+`1a75b3f2380adca3cd788157ae3727d93e3f00952023d4a7410b8c207f6c67c8`
+with no failed commands or missing feature IDs. The `ci` run used the required
+Node 22 toolchain and included 905 compiler unit tests, all integration crates,
+strict clippy, package verification, Registry API/service tests, and production
+plus testnet website builds.
 
 The previously documented real Spore/Agent corpus is not counted as a fresh
 standalone pass in this report. Its experimental source checkout contains
