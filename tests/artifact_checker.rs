@@ -19,6 +19,20 @@ action main(value: u64) -> u64 {
 }
 "#;
 
+const RUNTIME_PROVENANCE_SOURCE: &str = r#"
+module artifact_checker_runtime_provenance
+
+resource Token has store { amount: u64 }
+
+action inspect(witness source_index: u64, witness expected_data_hash: Hash) -> u64 {
+    let input = ckb::input<Token>(source_index)
+    let dep = ckb::cell_dep(source_index)
+    require input.capacity > 0
+    require dep.data_hash == expected_data_hash
+    return 0
+}
+"#;
+
 #[derive(Clone)]
 struct Fixture {
     artifact: Vec<u8>,
@@ -125,6 +139,80 @@ fn checker_rejects_vm2_isa_or_data2_contract_tampering() {
 
     let mut changed = valid.clone();
     changed.metadata["target_profile"]["deployment_hash_types"] = serde_json::json!(["data1"]);
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+}
+
+#[test]
+fn checker_rejects_runtime_access_provenance_tampering_after_hash_rebinding() {
+    let valid = Fixture::from_result(
+        compile(
+            RUNTIME_PROVENANCE_SOURCE,
+            CompileOptions {
+                edition: NEXT_EDITION,
+                target: Some("riscv64-elf".to_string()),
+                target_profile: Some("ckb".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    );
+    assert_eq!(valid.metadata["metadata_schema_version"], Value::from(69));
+    assert_eq!(
+        valid.metadata["runtime"]["ckb_runtime_access_provenance_contract"],
+        Value::String("cellscript-ckb-runtime-access-provenance-v1".to_string())
+    );
+
+    let mut changed = valid.clone();
+    changed.metadata["runtime"]["ckb_runtime_access_provenance_contract"] = Value::String("tampered".to_string());
+    changed.rebind_sidecars();
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let mutate_matching_accesses = |metadata: &mut Value, mutation: fn(&mut Value)| {
+        for pointer in ["/runtime/ckb_runtime_accesses", "/actions/0/ckb_runtime_accesses"] {
+            let accesses = metadata.pointer_mut(pointer).and_then(Value::as_array_mut).unwrap();
+            let access = accesses
+                .iter_mut()
+                .find(|access| access["operation"] == "cell-data-hash-field")
+                .expect("dynamic CellDep data-hash access");
+            mutation(access);
+        }
+    };
+
+    let mut changed = valid.clone();
+    mutate_matching_accesses(&mut changed.metadata, |access| {
+        access["provenance"]["index"]["max_inclusive"] = Value::from(u64::from(u32::MAX) - 1);
+    });
+    changed.rebind_sidecars();
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let mut changed = valid.clone();
+    mutate_matching_accesses(&mut changed.metadata, |access| {
+        access["provenance"]["source"]["resolved_source"] = Value::String("HeaderDep".to_string());
+    });
+    changed.rebind_sidecars();
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let mut changed = valid.clone();
+    mutate_matching_accesses(&mut changed.metadata, |access| {
+        access["provenance"]["range"]["length"]["value"] = Value::from(0);
+    });
+    changed.rebind_sidecars();
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let mut changed = valid.clone();
+    changed.metadata["actions"][0]["ckb_runtime_accesses"][0]["binding"] = Value::String("tampered".to_string());
+    changed.rebind_sidecars();
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let mut changed = valid;
+    let handle = changed.metadata["runtime"]["transaction_view_handles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|handle| handle["handle_type"] == "InputView<Token>")
+        .expect("typed Input view handle");
+    handle["provenance"]["index"]["binding"] = Value::String(String::new());
+    changed.rebind_sidecars();
     assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
 }
 

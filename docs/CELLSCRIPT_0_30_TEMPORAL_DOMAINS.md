@@ -173,7 +173,7 @@ package-interface v2/v3 interoperation, Registry validation, metadata-only WASM,
 and Playground checks cover the same public contract. The canonical browser
 bundle uses a bounded summary construction path while native builds retain the
 complete interface, typed-semantics, ProofPlan, scheduler, Molecule, and
-artifact records. Its reproducible build is 543,507 bytes gzip, below the
+artifact records. Its current reproducible build is 544,037 bytes gzip, below the
 600 KB budget. Timelock, DAO, vesting, NFT-expiry, governance, and atomic-swap
 fixtures now compile through typed HeaderDep and Since operations without a
 legacy raw temporal diagnostic.

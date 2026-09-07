@@ -98,6 +98,22 @@
   the artifact cache identity to
   `project-source-set-v38-0.30-dev1-temporal-product`.
 
+- Advance compile metadata to schema 69 and add
+  `cellscript-ckb-runtime-access-provenance-v1`. Every CKB runtime access now
+  records its resolved source, source origin, static/dynamic/bounded index,
+  optional maximum, and fixed/whole/bounded byte range. The legacy numeric
+  `index` remains a compatibility projection and is zero for dynamic accesses;
+  the structured record is authoritative. Runtime source-view constructors
+  accept dynamic `u64` parameters but terminate with stable error 44 when a
+  value exceeds the packed 32-bit source-index domain. Generated TypeScript
+  builders preserve the same records and reject out-of-domain parameters. The
+  standalone artifact checker independently rejects source, index, range,
+  contract, and module/entry projection mutations even after outer sidecar
+  hashes are rebound. The canonical browser summary is 544,037 bytes gzip with
+  SHA-256 `f0128b364ca624506ddf78639ff2be8850ec88424f19707f72fc009a3536407a`.
+  Advance the artifact cache identity to
+  `project-source-set-v39-0.30-dev1-runtime-provenance`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

@@ -61,7 +61,7 @@ are not implementation of a required supported feature.
 | Schema-change lifecycle | Add `approval_nonce`, require reviewed reset on transfer, reject unchanged preservation and stale acknowledgement; retain old deployed-byte meaning. | Pending. |
 | Remaining business corpus | NFT capacity adjustment, fungible splits/merges, partial order, authenticated dependencies and interacting Script groups. | Pending. |
 | Independent artifact checking | Version and validate any new records, recompute identities, bind selected entries/relations/dispatch to machine evidence, and add adversarial mutations. | Typed policy, declaration/ABI and builder parameter projection checks implemented. Trusted-external records are independently bound to an ordered same-CellDep hash-check/delegation sequence with mutation negatives; independent policy selector/adapter machine proof remains pending. |
-| Language services and products | Parser, recovering diagnostics, formatter, LSP, editor, native CLI, WASM, package loading, public interfaces and builders agree. | Shared parser diagnostics, formatter round-trip, syntax matrix and VS Code snippet cover `replace`; trusted external calls use ordinary call formatting plus LSP completions and package-manifest loading. Typed temporal domains now have interface, builder, editor and Playground parity, and the canonical bounded-summary WASM is 543,507 bytes gzip. Complete product closure for the remaining 0.30 workstreams remains pending. |
+| Language services and products | Parser, recovering diagnostics, formatter, LSP, editor, native CLI, WASM, package loading, public interfaces and builders agree. | Shared parser diagnostics, formatter round-trip, syntax matrix and VS Code snippet cover `replace`; trusted external calls use ordinary call formatting plus LSP completions and package-manifest loading. Typed temporal domains now have interface, builder, editor and Playground parity, and the canonical bounded-summary WASM is 544,037 bytes gzip. Complete product closure for the remaining 0.30 workstreams remains pending. |
 | Reproducibility and compatibility | Source/cache/profile versions, package locks, mixed editions, interfaces and deployment changes are explicit and reproducible. | Source/cache identity advanced; later ABI/dispatch/schema migration pending. |
 | Production acceptance | Applicable `dev`, `ci`, `backend` and clean-source release evidence, exact artifacts, runtime negatives, cycle/size/capacity measurements and required independent review. | The relation and economic backend tranches pass their focused VM, parity, checker and cost-corpus suites. Clean-source production acceptance passes 43 action cases, 17 Lock cases and all 26 stateful scenarios / 46 committed steps after the three-layer identity rebind. The canonical WASM rebuild passes its budget; `ci`, release and independent-review evidence remain pending. |
 
@@ -293,7 +293,7 @@ whole WitnessArgs limit is 4,096 bytes with at most eight records. Host and CKB
 adapter codecs are independently implemented; placement preserves other fields,
 rejects occupied `input_type`, and must occur before signing.
 
-Metadata schema 68, `cellscript-typed-semantics-v8` and
+Metadata schema 69, `cellscript-typed-semantics-v8` and
 `cellscript-semantic-foundation-v3` bind the declared policy, selector provenance,
 resource layout, variant payload schemas, fixed counts and ordered common
 checks. Runtime metadata also binds `cellscript-ckb-runtime-view-v1`, the

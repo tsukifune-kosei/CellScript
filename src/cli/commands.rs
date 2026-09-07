@@ -8377,6 +8377,7 @@ fn typescript_builder_manifest(
                     "created_outputs": action.create_set.len(),
                     "mutated_outputs": action.mutate_set.len(),
                     "runtime_input_requirements": action.transaction_runtime_input_requirements.len(),
+                    "runtime_accesses": action.ckb_runtime_accesses,
                     "action_scan_selectors": action_scan_selectors_json(action),
                     "entry_witness_required": action_requires_entry_witness(action),
                 })
@@ -8395,6 +8396,7 @@ fn typescript_builder_manifest(
             "must_not_infer_protocol_semantics_from_action_name": true,
             "action_scan_selectors_schema": "cellscript-action-scan-selectors-v0.21",
             "action_scan_selector_source": "transaction_runtime_input_requirements",
+            "runtime_access_provenance": metadata.runtime.ckb_runtime_access_provenance_contract,
             "temporal_interface": metadata.public_interface.runtime_contract.temporal,
         }
     });
@@ -8469,6 +8471,7 @@ fn typescript_builder_index(
                 "readRefs": action.read_refs,
                 "verifierObligations": action.verifier_obligations,
                 "runtimeInputRequirements": action.transaction_runtime_input_requirements,
+                "runtimeAccesses": action.ckb_runtime_accesses,
                 "actionScanSelectors": action_scan_selectors_json(action),
                 "failClosedRuntimeFeatures": action.fail_closed_runtime_features,
             })
@@ -8490,6 +8493,7 @@ fn typescript_builder_index(
     ts.push_str(&format!("export const metadata = {metadata_json} as const;\n"));
     ts.push_str("export const cellDataCodecManifest = metadata.cell_data_codec_manifest;\n");
     ts.push_str("export const temporalContract = metadata.public_interface.runtime_contract.temporal;\n");
+    ts.push_str("export const runtimeAccessProvenanceContract = metadata.runtime.ckb_runtime_access_provenance_contract;\n");
     ts.push_str(&format!("export const actionSpecs = {action_specs_json} as const;\n\n"));
     ts.push_str(&format!("export const actionErrorContexts = {action_error_contexts_json} as const;\n"));
     ts.push_str(&format!("export const runtimeErrorCatalog = {runtime_error_catalog_json} as const;\n\n"));
@@ -8633,6 +8637,8 @@ fn typescript_builder_index(
          requiresDeploymentResolution: true;\n\
          cellDataCodecManifest: typeof cellDataCodecManifest;\n\
          temporalContract: typeof temporalContract;\n\
+         runtimeAccessProvenanceContract: typeof runtimeAccessProvenanceContract;\n\
+         runtimeAccesses: readonly unknown[];\n\
          runtimeInputRequirements: readonly unknown[];\n\
          actionScanSelectors: ActionScanSelectors;\n\
          verifierObligations: readonly unknown[];\n\
@@ -9102,7 +9108,40 @@ fn typescript_builder_index(
     }
 
     ts.push_str(
-        "function makeActionPlan<P extends CellScriptParams>(action: string, params: P, options: BuildOptions): ActionBuilderPlan<P> {\n  \
+        "function assertRuntimeAccessParams(accesses: readonly unknown[], params: CellScriptParams): void {\n  \
+         const values = params as Record<string, unknown>;\n  \
+         for (const candidate of accesses) {\n    \
+           if (typeof candidate !== \"object\" || candidate === null || Array.isArray(candidate)) {\n      continue;\n    }\n    \
+           const access = candidate as Record<string, unknown>;\n    \
+           const provenanceValue = access.provenance;\n    \
+           if (typeof provenanceValue !== \"object\" || provenanceValue === null || Array.isArray(provenanceValue)) {\n      continue;\n    }\n    \
+           const provenance = provenanceValue as Record<string, unknown>;\n    \
+           const indexValue = provenance.index;\n    \
+           if (typeof indexValue !== \"object\" || indexValue === null || Array.isArray(indexValue)) {\n      continue;\n    }\n    \
+           const index = indexValue as Record<string, unknown>;\n    \
+           if (index.kind !== \"dynamic\" || typeof index.binding !== \"string\" || !(index.binding in values)) {\n      continue;\n    }\n    \
+           const value = runtimeUnsignedBigInt(values[index.binding], index.binding);\n    \
+           const maximum = runtimeUnsignedBigInt(index.max_inclusive, index.binding + \" max_inclusive\");\n    \
+           if (value > maximum) {\n      \
+             throw new Error(\"CellScript runtime access index '\" + index.binding + \"' exceeds max_inclusive \" + maximum.toString());\n    \
+           }\n  \
+         }\n\
+       }\n\n\
+         function runtimeUnsignedBigInt(value: unknown, label: string): bigint {\n  \
+           if (typeof value === \"bigint\") {\n    \
+             if (value < 0n) {\n      throw new Error(\"CellScript runtime access index '\" + label + \"' must be unsigned\");\n    }\n    \
+             return value;\n  \
+           }\n  \
+           if (typeof value === \"number\") {\n    \
+             if (!Number.isSafeInteger(value) || value < 0) {\n      \
+               throw new Error(\"CellScript runtime access index '\" + label + \"' must be a non-negative safe integer\");\n    \
+             }\n    \
+             return BigInt(value);\n  \
+           }\n  \
+           if (typeof value === \"string\" && /^(0|[1-9]\\d*)$/.test(value)) {\n    return BigInt(value);\n  }\n  \
+           throw new Error(\"CellScript runtime access index '\" + label + \"' must be bigint, integer number, or unsigned decimal string\");\n\
+         }\n\n\
+         function makeActionPlan<P extends CellScriptParams>(action: string, params: P, options: BuildOptions): ActionBuilderPlan<P> {\n  \
          const actionSpec = actionSpecs.find((item) => item.name === action);\n  \
          if (!actionSpec) {\n    throw new Error(\"CellScript generated builder has no action spec for '\" + action + \"'\");\n  }\n",
     );
@@ -9111,8 +9150,9 @@ fn typescript_builder_index(
         "  if (options.deployment || options.liveDeploymentEvidence || options.trustPolicy) {\n    \
          assertCellScriptDeployment(options.lockfile, options.deployment, options.liveDeploymentEvidence, options.trustPolicy);\n  }\n",
     );
+    ts.push_str("  assertRuntimeAccessParams(actionSpec.runtimeAccesses, params);\n");
     ts.push_str(&format!(
-        "  return {{\n    schema: CELLSCRIPT_BUILDER_SCHEMA,\n    state: \"GeneratedActionPlan\",\n    status: \"requires-runtime-resolution\",\n    action,\n    params,\n    options,\n    metadataHash: {},\n    artifactHash: {},\n    targetProfile: {},\n    canSubmit: false,\n    requiresLiveCellResolution: true,\n    requiresDeploymentResolution: true,\n    cellDataCodecManifest,\n    temporalContract,\n    runtimeInputRequirements: [...actionSpec.runtimeInputRequirements],\n    actionScanSelectors: actionSpec.actionScanSelectors as ActionScanSelectors,\n    verifierObligations: [...actionSpec.verifierObligations],\n    failClosedRuntimeFeatures: [...actionSpec.failClosedRuntimeFeatures],\n    notProvenByGeneratedBuilder: [\n      \"live_cell_availability\",\n      \"deployment_live_chain_match\",\n      \"capacity_fee_balance\",\n      \"signature_authority\",\n      \"ckb_vm_execution\",\n      \"cell_data_codec_materialization\",\n      \"tx_pool_acceptance\",\n      \"submission\"\n    ] as const,\n  }};\n}}\n\n",
+        "  return {{\n    schema: CELLSCRIPT_BUILDER_SCHEMA,\n    state: \"GeneratedActionPlan\",\n    status: \"requires-runtime-resolution\",\n    action,\n    params,\n    options,\n    metadataHash: {},\n    artifactHash: {},\n    targetProfile: {},\n    canSubmit: false,\n    requiresLiveCellResolution: true,\n    requiresDeploymentResolution: true,\n    cellDataCodecManifest,\n    temporalContract,\n    runtimeAccessProvenanceContract,\n    runtimeAccesses: [...actionSpec.runtimeAccesses],\n    runtimeInputRequirements: [...actionSpec.runtimeInputRequirements],\n    actionScanSelectors: actionSpec.actionScanSelectors as ActionScanSelectors,\n    verifierObligations: [...actionSpec.verifierObligations],\n    failClosedRuntimeFeatures: [...actionSpec.failClosedRuntimeFeatures],\n    notProvenByGeneratedBuilder: [\n      \"live_cell_availability\",\n      \"deployment_live_chain_match\",\n      \"capacity_fee_balance\",\n      \"signature_authority\",\n      \"ckb_vm_execution\",\n      \"cell_data_codec_materialization\",\n      \"tx_pool_acceptance\",\n      \"submission\"\n    ] as const,\n  }};\n}}\n\n",
         typescript_string_literal(metadata_hash),
         metadata.artifact_hash.as_deref().map(typescript_string_literal).unwrap_or_else(|| "null".to_string()),
         typescript_string_literal(&metadata.target_profile.name)
@@ -9338,12 +9378,47 @@ fn typescript_builder_test(actions: &[&crate::ActionMetadata]) -> Result<String>
         })
         .collect::<Vec<_>>();
     let cases_json = json_string_pretty("builder test cases", &cases)?;
+    let dynamic_index_cases = actions
+        .iter()
+        .flat_map(|action| {
+            action.ckb_runtime_accesses.iter().filter_map(|access| {
+                let index = &access.provenance.index;
+                if index.kind != "dynamic" {
+                    return None;
+                }
+                let binding = index.binding.as_deref()?;
+                let max_inclusive = index.max_inclusive?;
+                action.params.iter().any(|param| param.name == binding).then(|| {
+                    serde_json::json!({
+                        "name": action.name,
+                        "plan": format!("plan{}", typescript_type_suffix(&action.name)),
+                        "binding": binding,
+                        "maxInclusive": max_inclusive,
+                    })
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    let dynamic_index_cases = dynamic_index_cases
+        .into_iter()
+        .fold(BTreeMap::<(String, String), serde_json::Value>::new(), |mut unique, value| {
+            let key = (
+                value["name"].as_str().expect("dynamic index action name").to_string(),
+                value["binding"].as_str().expect("dynamic index binding").to_string(),
+            );
+            unique.entry(key).or_insert(value);
+            unique
+        })
+        .into_values()
+        .collect::<Vec<_>>();
+    let dynamic_index_cases_json = json_string_pretty("dynamic source-index builder test cases", &dynamic_index_cases)?;
 
     let mut js = String::new();
     js.push_str("import assert from \"node:assert/strict\";\n");
     js.push_str("import test from \"node:test\";\n");
     js.push_str("import * as builder from \"../dist/index.js\";\n\n");
     js.push_str(&format!("const actionCases = {cases_json};\n"));
+    js.push_str(&format!("const dynamicIndexCases = {dynamic_index_cases_json};\n"));
     js.push_str("const WRONG_HASH = \"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\";\n\n");
     js.push_str(
         "function selectorEvidenceForPlan(plan) {\n\
@@ -9375,6 +9450,14 @@ fn typescript_builder_test(actions: &[&crate::ActionMetadata]) -> Result<String>
              assert.equal(plan.actionScanSelectors.source, \"transaction_runtime_input_requirements\");\n\
              assert.equal(plan.runtimeInputRequirements.length, plan.actionScanSelectors.selector_count);\n\
              assert.deepEqual(plan.params, actionCase.params);\n\
+           }\n\
+         });\n\n\
+         test(\"rejects dynamic source indexes above their declared bound\", () => {\n\
+           for (const dynamicCase of dynamicIndexCases) {\n\
+             const actionCase = actionCases.find((candidate) => candidate.name === dynamicCase.name);\n\
+             assert.ok(actionCase);\n\
+             const params = { ...actionCase.params, [dynamicCase.binding]: BigInt(dynamicCase.maxInclusive) + 1n };\n\
+             assert.throws(() => builder[dynamicCase.plan](params), /exceeds max_inclusive/);\n\
            }\n\
          });\n\n\
          test(\"delegates live-cell resolution and transaction build to runtime\", async () => {\n\
@@ -11603,6 +11686,7 @@ fn audit_bundle_json(metadata: &CompileMetadata) -> serde_json::Value {
                     "operation": access.operation,
                     "index": access.index,
                     "binding": access.binding,
+                    "provenance": access.provenance,
                 })).collect::<Vec<_>>(),
             })
         })
@@ -11627,6 +11711,7 @@ fn audit_bundle_json(metadata: &CompileMetadata) -> serde_json::Value {
                     "operation": access.operation,
                     "index": access.index,
                     "binding": access.binding,
+                    "provenance": access.provenance,
                 })).collect::<Vec<_>>(),
             })
         })
@@ -14013,7 +14098,15 @@ fn compile_test_runtime_summary(metadata: &crate::CompileMetadata) -> String {
     values.extend(metadata.runtime.ckb_runtime_features.iter().cloned());
     values.extend(metadata.runtime.fail_closed_runtime_features.iter().cloned());
     for access in &metadata.runtime.ckb_runtime_accesses {
-        values.push(format!("{}:{}:{}:{}:{}", access.operation, access.syscall, access.source, access.index, access.binding));
+        values.push(format!(
+            "{}:{}:{}:{}:{}:{}",
+            access.operation,
+            access.syscall,
+            access.source,
+            access.index,
+            access.binding,
+            serde_json::to_string(&access.provenance).expect("runtime access provenance must serialize")
+        ));
     }
     for obligation in &metadata.runtime.verifier_obligations {
         values.push(format!(

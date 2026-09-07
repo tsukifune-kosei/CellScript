@@ -223,12 +223,13 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v38-0.30-dev1-temporal-product";
-pub const METADATA_SCHEMA_VERSION: u32 = 68;
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v39-0.30-dev1-runtime-provenance";
+pub const METADATA_SCHEMA_VERSION: u32 = 69;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
 pub const CONSTRAINTS_METADATA_SCHEMA_VERSION: u32 = 4;
 pub const CKB_RUNTIME_VIEW_CONTRACT: &str = "cellscript-ckb-runtime-view-v1";
+pub const CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT: &str = "cellscript-ckb-runtime-access-provenance-v1";
 /// Maximum UTF-8 source bytes accepted by a single compiler input.
 ///
 /// This is a process-safety boundary shared by native, LSP, and WASM callers.
@@ -936,6 +937,8 @@ pub struct RuntimeMetadata {
     pub syscall_abi: String,
     #[serde(default)]
     pub ckb_runtime_view_contract: String,
+    #[serde(default)]
+    pub ckb_runtime_access_provenance_contract: String,
     pub vm_abi: VmAbiMetadata,
     pub pure_elf_runner: String,
     pub ckb_runtime_required: bool,
@@ -1005,6 +1008,8 @@ pub struct TransactionViewHandleMetadata {
     pub binding: String,
     pub handle_type: String,
     pub source: String,
+    #[serde(default)]
+    pub provenance: CkbRuntimeAccessProvenanceMetadata,
     pub ownership: String,
     pub lifecycle_authority: bool,
     pub typing_evidence_tier: EvidenceTier,
@@ -1203,6 +1208,12 @@ pub fn validate_compile_metadata(metadata: &CompileMetadata, artifact_format: Ar
         return Err(CompileError::without_span(format!(
             "metadata runtime.ckb_runtime_view_contract '{}' does not match current contract '{}'",
             metadata.runtime.ckb_runtime_view_contract, CKB_RUNTIME_VIEW_CONTRACT
+        )));
+    }
+    if metadata.runtime.ckb_runtime_access_provenance_contract != CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT {
+        return Err(CompileError::without_span(format!(
+            "metadata runtime.ckb_runtime_access_provenance_contract '{}' does not match current contract '{}'",
+            metadata.runtime.ckb_runtime_access_provenance_contract, CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT
         )));
     }
     #[cfg(not(feature = "wasm"))]
@@ -1794,6 +1805,7 @@ fn validate_transaction_view_handle_metadata(metadata: &CompileMetadata) -> Resu
                 prefix
             )));
         }
+        validate_ckb_runtime_access_provenance(&prefix, &handle.source, None, &handle.provenance)?;
     }
     Ok(())
 }
@@ -3932,13 +3944,22 @@ fn validate_fungible_type_group_entry_metadata(metadata: &CompileMetadata) -> Re
     Ok(())
 }
 
-type CkbRuntimeAccessFingerprint = (String, String, String, usize, String);
+type CkbRuntimeAccessFingerprint = (String, String, String, usize, String, String);
 
 fn ckb_runtime_access_fingerprints<'a>(
     accesses: impl Iterator<Item = &'a CkbRuntimeAccessMetadata>,
 ) -> Vec<CkbRuntimeAccessFingerprint> {
     accesses
-        .map(|access| (access.operation.clone(), access.syscall.clone(), access.source.clone(), access.index, access.binding.clone()))
+        .map(|access| {
+            (
+                access.operation.clone(),
+                access.syscall.clone(),
+                access.source.clone(),
+                access.index,
+                access.binding.clone(),
+                serde_json::to_string(&access.provenance).expect("runtime access provenance must serialize"),
+            )
+        })
         .collect()
 }
 
@@ -3987,6 +4008,183 @@ fn validate_ckb_runtime_access_list(scope: &str, name: &str, accesses: &[CkbRunt
             return Err(CompileError::without_span(format!(
                 "{} syscall '{}' does not allow source '{}'",
                 prefix, access.syscall, access.source
+            )));
+        }
+        validate_ckb_runtime_access_provenance(&prefix, &access.source, Some(access.index), &access.provenance)?;
+    }
+    Ok(())
+}
+
+fn validate_ckb_runtime_access_provenance(
+    prefix: &str,
+    declared_source: &str,
+    compatibility_index: Option<usize>,
+    provenance: &CkbRuntimeAccessProvenanceMetadata,
+) -> Result<()> {
+    if provenance.contract != CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT {
+        return Err(CompileError::without_span(format!(
+            "{}.provenance.contract '{}' does not match current contract '{}'",
+            prefix, provenance.contract, CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT
+        )));
+    }
+    if provenance.source.resolved_source.trim().is_empty() {
+        return Err(CompileError::without_span(format!("{}.provenance.source.resolved_source must not be empty", prefix)));
+    }
+    if !is_known_ckb_runtime_source(&provenance.source.resolved_source) {
+        return Err(CompileError::without_span(format!(
+            "{}.provenance.source.resolved_source '{}' is not a known CKB runtime source",
+            prefix, provenance.source.resolved_source
+        )));
+    }
+    if !matches!(
+        provenance.source.origin.as_str(),
+        "explicit-source-view"
+            | "inherited-source-view"
+            | "implicit-lowering"
+            | "bounded-scan"
+            | "metadata-summary"
+            | "external-adapter"
+    ) {
+        return Err(CompileError::without_span(format!(
+            "{}.provenance.source.origin '{}' is not admitted by the runtime access provenance contract",
+            prefix, provenance.source.origin
+        )));
+    }
+    match provenance.source.origin.as_str() {
+        "inherited-source-view" => {
+            if provenance.source.binding.as_deref().is_none_or(str::is_empty) {
+                return Err(CompileError::without_span(format!(
+                    "{}.provenance.source.binding is required for an inherited source view",
+                    prefix
+                )));
+            }
+        }
+        _ if provenance.source.binding.is_some() => {
+            return Err(CompileError::without_span(format!(
+                "{}.provenance.source.binding is only valid for an inherited source view",
+                prefix
+            )));
+        }
+        _ => {}
+    }
+    validate_ckb_runtime_scalar_provenance(&format!("{}.provenance.index", prefix), &provenance.index)?;
+    if matches!(provenance.source.origin.as_str(), "explicit-source-view" | "inherited-source-view")
+        && (!matches!(provenance.index.kind.as_str(), "static" | "dynamic")
+            || provenance.index.max_inclusive != Some(u64::from(u32::MAX)))
+    {
+        return Err(CompileError::without_span(format!(
+            "{}.provenance.index must bind a static or dynamic 32-bit source-view index",
+            prefix
+        )));
+    }
+    if let Some(compatibility_index) = compatibility_index {
+        let expected = provenance.index.value.and_then(|value| usize::try_from(value).ok()).unwrap_or_default();
+        if compatibility_index != expected {
+            return Err(CompileError::without_span(format!(
+                "{}.index {} does not match the structured provenance compatibility projection {}",
+                prefix, compatibility_index, expected
+            )));
+        }
+    }
+    validate_ckb_runtime_range_provenance(&format!("{}.provenance.range", prefix), &provenance.range)?;
+    if declared_source == "SourceView"
+        && !matches!(
+            provenance.source.resolved_source.as_str(),
+            "Input" | "Output" | "CellDep" | "GroupInput" | "GroupOutput" | "SourceView"
+        )
+    {
+        return Err(CompileError::without_span(format!(
+            "{}.provenance.source.resolved_source '{}' is incompatible with declared SourceView",
+            prefix, provenance.source.resolved_source
+        )));
+    }
+    Ok(())
+}
+
+fn validate_ckb_runtime_scalar_provenance(prefix: &str, value: &CkbRuntimeScalarProvenanceMetadata) -> Result<()> {
+    match value.kind.as_str() {
+        "not-applicable" => {
+            if value.value.is_some() || value.binding.is_some() || value.max_inclusive.is_some() {
+                return Err(CompileError::without_span(format!(
+                    "{} not-applicable value must not carry value, binding, or bound",
+                    prefix
+                )));
+            }
+        }
+        "static" | "metadata-ordinal" => {
+            let Some(static_value) = value.value else {
+                return Err(CompileError::without_span(format!("{} {} value requires a static value", prefix, value.kind)));
+            };
+            if value.binding.is_some() {
+                return Err(CompileError::without_span(format!("{} {} value must not carry a binding", prefix, value.kind)));
+            }
+            if value.max_inclusive.is_some_and(|maximum| static_value > maximum) {
+                return Err(CompileError::without_span(format!(
+                    "{} static value {} exceeds max_inclusive {:?}",
+                    prefix, static_value, value.max_inclusive
+                )));
+            }
+        }
+        "dynamic" => {
+            if value.value.is_some() || value.binding.as_deref().is_none_or(str::is_empty) {
+                return Err(CompileError::without_span(format!(
+                    "{} dynamic value requires a non-empty binding and no static value",
+                    prefix
+                )));
+            }
+        }
+        "bounded-scan" => {
+            if value.value.is_some() || value.binding.is_some() || value.max_inclusive.is_none() {
+                return Err(CompileError::without_span(format!("{} bounded scan requires only max_inclusive", prefix)));
+            }
+        }
+        _ => {
+            return Err(CompileError::without_span(format!(
+                "{}.kind '{}' is not admitted by the runtime access provenance contract",
+                prefix, value.kind
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_ckb_runtime_range_provenance(prefix: &str, range: &CkbRuntimeRangeProvenanceMetadata) -> Result<()> {
+    validate_ckb_runtime_scalar_provenance(&format!("{}.offset", prefix), &range.offset)?;
+    validate_ckb_runtime_scalar_provenance(&format!("{}.length", prefix), &range.length)?;
+    match range.kind.as_str() {
+        "not-applicable" | "whole-value" => {
+            if range.offset.kind != "not-applicable" || range.length.kind != "not-applicable" {
+                return Err(CompileError::without_span(format!(
+                    "{} {} range must not carry offset or length provenance",
+                    prefix, range.kind
+                )));
+            }
+        }
+        "fixed-width" => {
+            if range.offset.kind != "not-applicable"
+                || range.length.kind != "static"
+                || range.length.value.is_none_or(|length| length == 0)
+            {
+                return Err(CompileError::without_span(format!(
+                    "{} fixed-width range requires a positive static length and no offset",
+                    prefix
+                )));
+            }
+        }
+        "bounded-range" => {
+            if !matches!(range.offset.kind.as_str(), "static" | "dynamic")
+                || !matches!(range.length.kind.as_str(), "static" | "dynamic")
+            {
+                return Err(CompileError::without_span(format!(
+                    "{} bounded range requires static or dynamic offset and length provenance",
+                    prefix
+                )));
+            }
+        }
+        _ => {
+            return Err(CompileError::without_span(format!(
+                "{}.kind '{}' is not admitted by the runtime access provenance contract",
+                prefix, range.kind
             )));
         }
     }
@@ -4863,13 +5061,184 @@ pub fn validate_artifact_metadata(artifact_bytes: Vec<u8>, metadata: CompileMeta
     Ok(result)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CkbRuntimeScalarProvenanceMetadata {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_inclusive: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CkbRuntimeSourceProvenanceMetadata {
+    pub resolved_source: String,
+    pub origin: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CkbRuntimeRangeProvenanceMetadata {
+    pub kind: String,
+    #[serde(default)]
+    pub offset: CkbRuntimeScalarProvenanceMetadata,
+    #[serde(default)]
+    pub length: CkbRuntimeScalarProvenanceMetadata,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CkbRuntimeAccessProvenanceMetadata {
+    pub contract: String,
+    #[serde(default)]
+    pub source: CkbRuntimeSourceProvenanceMetadata,
+    #[serde(default)]
+    pub index: CkbRuntimeScalarProvenanceMetadata,
+    #[serde(default)]
+    pub range: CkbRuntimeRangeProvenanceMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CkbRuntimeAccessMetadata {
     pub operation: String,
     pub syscall: String,
     pub source: String,
+    /// Compatibility projection for consumers that predate structured index
+    /// provenance. Dynamic accesses use zero here; `provenance.index` is
+    /// authoritative in metadata schema 69 and later.
     pub index: usize,
     pub binding: String,
+    #[serde(default)]
+    pub provenance: CkbRuntimeAccessProvenanceMetadata,
+}
+
+fn runtime_scalar_not_applicable() -> CkbRuntimeScalarProvenanceMetadata {
+    CkbRuntimeScalarProvenanceMetadata { kind: "not-applicable".to_string(), ..Default::default() }
+}
+
+fn runtime_scalar_static(value: u64, max_inclusive: Option<u64>) -> CkbRuntimeScalarProvenanceMetadata {
+    CkbRuntimeScalarProvenanceMetadata { kind: "static".to_string(), value: Some(value), binding: None, max_inclusive }
+}
+
+fn runtime_scalar_dynamic(binding: impl Into<String>, max_inclusive: Option<u64>) -> CkbRuntimeScalarProvenanceMetadata {
+    CkbRuntimeScalarProvenanceMetadata { kind: "dynamic".to_string(), value: None, binding: Some(binding.into()), max_inclusive }
+}
+
+fn runtime_scalar_bounded_scan(max_inclusive: u64) -> CkbRuntimeScalarProvenanceMetadata {
+    CkbRuntimeScalarProvenanceMetadata {
+        kind: "bounded-scan".to_string(),
+        value: None,
+        binding: None,
+        max_inclusive: Some(max_inclusive),
+    }
+}
+
+fn runtime_scalar_metadata_ordinal(value: u64) -> CkbRuntimeScalarProvenanceMetadata {
+    CkbRuntimeScalarProvenanceMetadata { kind: "metadata-ordinal".to_string(), value: Some(value), binding: None, max_inclusive: None }
+}
+
+fn runtime_scalar_from_operand(operand: Option<&ir::IrOperand>, max_inclusive: Option<u64>) -> CkbRuntimeScalarProvenanceMetadata {
+    match operand {
+        Some(ir::IrOperand::Const(value)) => {
+            ir_const_u64(value).map(|value| runtime_scalar_static(value, max_inclusive)).unwrap_or_else(runtime_scalar_not_applicable)
+        }
+        Some(ir::IrOperand::Var(var)) => runtime_scalar_dynamic(var.name.clone(), max_inclusive),
+        None => runtime_scalar_not_applicable(),
+    }
+}
+
+fn ir_const_u64(value: &ir::IrConst) -> Option<u64> {
+    match value {
+        ir::IrConst::U8(value) => Some(u64::from(*value)),
+        ir::IrConst::U16(value) => Some(u64::from(*value)),
+        ir::IrConst::U32(value) => Some(u64::from(*value)),
+        ir::IrConst::U64(value) => Some(*value),
+        _ => None,
+    }
+}
+
+fn runtime_range_not_applicable() -> CkbRuntimeRangeProvenanceMetadata {
+    CkbRuntimeRangeProvenanceMetadata {
+        kind: "not-applicable".to_string(),
+        offset: runtime_scalar_not_applicable(),
+        length: runtime_scalar_not_applicable(),
+    }
+}
+
+fn runtime_range_whole_value() -> CkbRuntimeRangeProvenanceMetadata {
+    CkbRuntimeRangeProvenanceMetadata {
+        kind: "whole-value".to_string(),
+        offset: runtime_scalar_not_applicable(),
+        length: runtime_scalar_not_applicable(),
+    }
+}
+
+fn runtime_range_fixed(width: u64) -> CkbRuntimeRangeProvenanceMetadata {
+    CkbRuntimeRangeProvenanceMetadata {
+        kind: "fixed-width".to_string(),
+        offset: runtime_scalar_not_applicable(),
+        length: runtime_scalar_static(width, Some(width)),
+    }
+}
+
+fn runtime_range_at(offset: Option<&ir::IrOperand>, length: CkbRuntimeScalarProvenanceMetadata) -> CkbRuntimeRangeProvenanceMetadata {
+    CkbRuntimeRangeProvenanceMetadata { kind: "bounded-range".to_string(), offset: runtime_scalar_from_operand(offset, None), length }
+}
+
+fn runtime_access_metadata(
+    operation: impl Into<String>,
+    syscall: impl Into<String>,
+    source: impl Into<String>,
+    binding: impl Into<String>,
+    resolved_source: impl Into<String>,
+    source_origin: impl Into<String>,
+    source_binding: Option<String>,
+    index: CkbRuntimeScalarProvenanceMetadata,
+    range: CkbRuntimeRangeProvenanceMetadata,
+) -> CkbRuntimeAccessMetadata {
+    let compatibility_index = index.value.and_then(|value| usize::try_from(value).ok()).unwrap_or_default();
+    CkbRuntimeAccessMetadata {
+        operation: operation.into(),
+        syscall: syscall.into(),
+        source: source.into(),
+        index: compatibility_index,
+        binding: binding.into(),
+        provenance: CkbRuntimeAccessProvenanceMetadata {
+            contract: CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT.to_string(),
+            source: CkbRuntimeSourceProvenanceMetadata {
+                resolved_source: resolved_source.into(),
+                origin: source_origin.into(),
+                binding: source_binding,
+            },
+            index,
+            range,
+        },
+    }
+}
+
+fn static_runtime_access(
+    operation: impl Into<String>,
+    syscall: impl Into<String>,
+    source: impl Into<String>,
+    index: usize,
+    binding: impl Into<String>,
+) -> CkbRuntimeAccessMetadata {
+    let source = source.into();
+    let syscall = syscall.into();
+    let range = if syscall == "LOAD_CELL" { runtime_range_whole_value() } else { runtime_range_not_applicable() };
+    runtime_access_metadata(
+        operation,
+        syscall,
+        source.clone(),
+        binding,
+        source,
+        "implicit-lowering",
+        None,
+        runtime_scalar_static(index as u64, None),
+        range,
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -8455,6 +8824,7 @@ fn compile_metadata_from_ir(
             vm_version: String::new(),
             syscall_abi: String::new(),
             ckb_runtime_view_contract: CKB_RUNTIME_VIEW_CONTRACT.to_string(),
+            ckb_runtime_access_provenance_contract: CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT.to_string(),
             vm_abi: VmAbiMetadata {
                 format: String::new(),
                 version: 0,
@@ -8603,6 +8973,7 @@ fn compile_metadata_from_ir(
             vm_version: "VERSION2".to_string(),
             syscall_abi: "CKB store_data ABI: A0=buffer, A1=size pointer, A2=offset, A3=index, A4=source".to_string(),
             ckb_runtime_view_contract: CKB_RUNTIME_VIEW_CONTRACT.to_string(),
+            ckb_runtime_access_provenance_contract: CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT.to_string(),
             vm_abi: VmAbiMetadata {
                 format: "molecule".to_string(),
                 version: MOLECULE_VM_ABI_VERSION,
@@ -9954,20 +10325,70 @@ fn capability_identity_condition(identity: &ir::IrIdentityPolicy) -> Option<Stri
     metadata_identity_policy(identity).map(|policy| format!("identity({policy})"))
 }
 
+#[derive(Debug, Clone)]
+struct RuntimeViewProvenance {
+    resolved_source: String,
+    index: CkbRuntimeScalarProvenanceMetadata,
+}
+
+fn runtime_view_provenance_by_var(body: &ir::IrBody) -> HashMap<usize, RuntimeViewProvenance> {
+    let mut values = HashMap::new();
+    for block in &body.blocks {
+        for instruction in &block.instructions {
+            match instruction {
+                ir::IrInstruction::Call { dest: Some(dest), func, args } => {
+                    let Some(source) = runtime_source_for_constructor(func) else {
+                        continue;
+                    };
+                    values.insert(
+                        dest.id,
+                        RuntimeViewProvenance {
+                            resolved_source: source.to_string(),
+                            index: runtime_scalar_from_operand(args.first(), Some(u64::from(u32::MAX))),
+                        },
+                    );
+                }
+                ir::IrInstruction::Move { dest, src: ir::IrOperand::Var(src) } => {
+                    if let Some(provenance) = values.get(&src.id).cloned() {
+                        values.insert(dest.id, provenance);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    values
+}
+
+fn runtime_source_for_constructor(func: &str) -> Option<&'static str> {
+    match func {
+        "__ckb_source_input" => Some("Input"),
+        "__ckb_source_output" => Some("Output"),
+        "__ckb_source_cell_dep" => Some("CellDep"),
+        "__ckb_source_header_dep" => Some("HeaderDep"),
+        "__ckb_source_group_input" => Some("GroupInput"),
+        "__ckb_source_group_output" => Some("GroupOutput"),
+        _ => None,
+    }
+}
+
 fn body_transaction_view_handles(scope_kind: &str, scope_name: &str, body: &ir::IrBody) -> Vec<TransactionViewHandleMetadata> {
     let mut handles = Vec::new();
+    let source_values = runtime_view_provenance_by_var(body);
     let mut sources = HashMap::<usize, String>::new();
     for block in &body.blocks {
         for instruction in &block.instructions {
-            let (dest, explicit_source, inherited_source) = match instruction {
+            let (dest, explicit_source, inherited_source, source_origin, source_binding) = match instruction {
                 ir::IrInstruction::Call { dest: Some(dest), func, args } => {
                     let inherited = args.first().and_then(|operand| match operand {
                         ir::IrOperand::Var(var) => sources.get(&var.id).cloned(),
                         ir::IrOperand::Const(_) => None,
                     });
-                    (dest, transaction_view_source_for_constructor(func, &dest.ty), inherited)
+                    (dest, transaction_view_source_for_constructor(func, &dest.ty), inherited, "explicit-source-view", None)
                 }
-                ir::IrInstruction::Move { dest, src: ir::IrOperand::Var(src) } => (dest, None, sources.get(&src.id).cloned()),
+                ir::IrInstruction::Move { dest, src: ir::IrOperand::Var(src) } => {
+                    (dest, None, sources.get(&src.id).cloned(), "inherited-source-view", Some(src.name.clone()))
+                }
                 _ => continue,
             };
             let Some(handle_type) = transaction_view_handle_type(&dest.ty) else {
@@ -9975,12 +10396,26 @@ fn body_transaction_view_handles(scope_kind: &str, scope_name: &str, body: &ir::
             };
             let source = explicit_source.or(inherited_source).unwrap_or_else(|| "Derived".to_string());
             sources.insert(dest.id, source.clone());
+            let runtime_provenance = source_values.get(&dest.id);
+            let resolved_source =
+                runtime_provenance.map(|provenance| provenance.resolved_source.clone()).unwrap_or_else(|| source.clone());
+            let index = runtime_provenance.map(|provenance| provenance.index.clone()).unwrap_or_else(runtime_scalar_not_applicable);
             handles.push(TransactionViewHandleMetadata {
                 scope_kind: scope_kind.to_string(),
                 scope_name: scope_name.to_string(),
                 binding: dest.name.clone(),
                 handle_type,
                 source,
+                provenance: CkbRuntimeAccessProvenanceMetadata {
+                    contract: CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT.to_string(),
+                    source: CkbRuntimeSourceProvenanceMetadata {
+                        resolved_source,
+                        origin: source_origin.to_string(),
+                        binding: source_binding,
+                    },
+                    index,
+                    range: runtime_range_not_applicable(),
+                },
                 ownership: "read-only-view".to_string(),
                 lifecycle_authority: false,
                 typing_evidence_tier: EvidenceTier::CheckedStatic,
@@ -10066,15 +10501,22 @@ fn auto_lowered_aggregate_runtime_accesses_for_action(ir: &ir::IrModule, action:
     auto_lowered_aggregate_runtime_helpers_for_action(ir, action)
         .into_iter()
         .enumerate()
-        .map(|(index, helper)| CkbRuntimeAccessMetadata {
-            operation: match helper.as_str() {
+        .map(|(index, helper)| {
+            let operation = match helper.as_str() {
                 "xudt::require_group_amount_conserved" => "xudt-group-amount-conservation".to_string(),
                 _ => "auto-lowered-aggregate".to_string(),
-            },
-            syscall: "LOAD_CELL_DATA".to_string(),
-            source: "GroupInput/GroupOutput".to_string(),
-            index,
-            binding: helper,
+            };
+            runtime_access_metadata(
+                operation,
+                "LOAD_CELL_DATA",
+                "GroupInput/GroupOutput",
+                helper,
+                "GroupInput/GroupOutput",
+                "metadata-summary",
+                None,
+                runtime_scalar_metadata_ordinal(index as u64),
+                runtime_range_whole_value(),
+            )
         })
         .collect()
 }
@@ -17823,12 +18265,18 @@ fn param_ckb_runtime_accesses(params: &[ir::IrParam]) -> Vec<CkbRuntimeAccessMet
         .iter()
         .filter(|param| param.source == ast::ParamSource::LockArgs)
         .enumerate()
-        .map(|(index, param)| CkbRuntimeAccessMetadata {
-            operation: "lock-args".to_string(),
-            syscall: "LOAD_SCRIPT_ARGS".to_string(),
-            source: "ScriptArgs".to_string(),
-            index,
-            binding: param.name.clone(),
+        .map(|(index, param)| {
+            runtime_access_metadata(
+                "lock-args",
+                "LOAD_SCRIPT_ARGS",
+                "ScriptArgs",
+                param.name.clone(),
+                "ScriptArgs",
+                "metadata-summary",
+                None,
+                runtime_scalar_metadata_ordinal(index as u64),
+                runtime_range_whole_value(),
+            )
         })
         .collect()
 }
@@ -17939,6 +18387,160 @@ fn consumed_schema_var_id(instruction: &ir::IrInstruction) -> Option<usize> {
     }
 }
 
+fn runtime_range_for_call(func: &str, args: &[ir::IrOperand]) -> CkbRuntimeRangeProvenanceMetadata {
+    let fixed_width = match func {
+        "__ckb_header_dep_epoch_number"
+        | "__ckb_header_dep_epoch_start_block_number"
+        | "__ckb_header_dep_epoch_length"
+        | "__ckb_cell_capacity"
+        | "__ckb_cell_data_size"
+        | "__ckb_input_since_at"
+        | "__ckb_witness_u64_le"
+        | "__ckb_cell_data_u64_le" => Some(8),
+        "__ckb_input_out_point_index" | "__ckb_witness_u32_le" | "__ckb_cell_data_u32_le" => Some(4),
+        "__ckb_cell_lock_hash_type"
+        | "__ckb_cell_type_hash_type"
+        | "__ckb_witness_u8"
+        | "__ckb_cell_data_u8"
+        | "__ckb_cell_lock_u8"
+        | "__ckb_cell_type_u8" => Some(1),
+        "__ckb_cell_data_hash_field"
+        | "__ckb_cell_lock_hash"
+        | "__ckb_cell_type_hash"
+        | "__ckb_input_out_point_tx_hash"
+        | "__ckb_witness_raw"
+        | "__ckb_witness_lock"
+        | "__ckb_witness_input_type"
+        | "__ckb_witness_output_type" => Some(32),
+        // These helpers load and size-check the complete packed Header before
+        // reading the typed field at its canonical RawHeader offset.
+        "__ckb_header_dep_block_number" | "__ckb_header_dep_timestamp_millis" => Some(208),
+        _ => None,
+    };
+    if let Some(width) = fixed_width {
+        return if matches!(
+            func,
+            "__ckb_witness_u8"
+                | "__ckb_witness_u32_le"
+                | "__ckb_witness_u64_le"
+                | "__ckb_cell_data_u8"
+                | "__ckb_cell_data_u32_le"
+                | "__ckb_cell_data_u64_le"
+                | "__ckb_cell_lock_u8"
+                | "__ckb_cell_type_u8"
+        ) {
+            runtime_range_at(args.get(1), runtime_scalar_static(width, Some(width)))
+        } else {
+            runtime_range_fixed(width)
+        };
+    }
+    match func {
+        "__ckb_witness_bytes32" | "__ckb_cell_data_hash_at" => runtime_range_at(args.get(1), runtime_scalar_static(32, Some(32))),
+        "__ckb_cell_data_blake2b_span" | "__ckb_witness_blake2b_span" => {
+            runtime_range_at(args.get(1), runtime_scalar_from_operand(args.get(2), None))
+        }
+        "__ckb_cell_occupied_capacity"
+        | "__ckb_cell_unoccupied_capacity"
+        | "__ckb_cell_data_hash"
+        | "__ckb_cell_lock_code_hash"
+        | "__ckb_cell_type_code_hash"
+        | "__ckb_cell_lock_args_empty"
+        | "__ckb_cell_type_args_empty"
+        | "__ckb_cell_lock_args_hash"
+        | "__ckb_cell_type_args_hash"
+        | "__ckb_cell_lock_size"
+        | "__ckb_cell_type_size"
+        | "__ckb_witness_size"
+        | "__ckb_witness_count"
+        | "__ckb_require_witness_size_at_least" => runtime_range_whole_value(),
+        _ => runtime_range_not_applicable(),
+    }
+}
+
+fn runtime_access_for_call(
+    func: &str,
+    args: &[ir::IrOperand],
+    view_provenance: &HashMap<usize, RuntimeViewProvenance>,
+) -> Option<CkbRuntimeAccessMetadata> {
+    let (operation, syscall, source, binding) = ckb_v014_runtime_access(func)?;
+    if let Some(resolved_source) = runtime_source_for_constructor(func) {
+        return Some(runtime_access_metadata(
+            operation,
+            syscall,
+            source,
+            binding,
+            resolved_source,
+            "explicit-source-view",
+            None,
+            runtime_scalar_from_operand(args.first(), Some(u64::from(u32::MAX))),
+            runtime_range_not_applicable(),
+        ));
+    }
+    if func == "__ckb_require_bounded_cell_dep_data_hash" {
+        let maximum_count = args.first().and_then(|operand| match operand {
+            ir::IrOperand::Const(value) => ir_const_u64(value),
+            ir::IrOperand::Var(_) => None,
+        });
+        return Some(runtime_access_metadata(
+            operation,
+            syscall,
+            source,
+            binding,
+            "CellDep",
+            "bounded-scan",
+            None,
+            runtime_scalar_bounded_scan(maximum_count.unwrap_or(0).saturating_sub(1)),
+            runtime_range_fixed(32),
+        ));
+    }
+    if matches!(func, "__ckb_exec_cell_dep_u8_args" | "__ckb_exec_cell_dep_hex4" | "__ckb_spawn_wait_cell_dep_hex4" | "__ckb_spawn") {
+        return Some(runtime_access_metadata(
+            operation,
+            syscall,
+            source,
+            binding,
+            "CellDep",
+            "external-adapter",
+            None,
+            runtime_scalar_from_operand(args.first(), None),
+            runtime_range_not_applicable(),
+        ));
+    }
+    if func == "__dao_accumulated_rate" {
+        return Some(runtime_access_metadata(
+            operation,
+            syscall,
+            source,
+            binding,
+            "HeaderDep",
+            "implicit-lowering",
+            None,
+            runtime_scalar_from_operand(args.first(), None),
+            runtime_range_fixed(32),
+        ));
+    }
+    let inherited = args.first().and_then(|operand| match operand {
+        ir::IrOperand::Var(var) => view_provenance.get(&var.id).map(|provenance| (var, provenance)),
+        ir::IrOperand::Const(_) => None,
+    });
+    let (resolved_source, source_origin, source_binding, index) = if let Some((var, provenance)) = inherited {
+        (provenance.resolved_source.clone(), "inherited-source-view", Some(var.name.clone()), provenance.index.clone())
+    } else {
+        (source.to_string(), "implicit-lowering", None, runtime_scalar_not_applicable())
+    };
+    Some(runtime_access_metadata(
+        operation,
+        syscall,
+        source,
+        binding,
+        resolved_source,
+        source_origin,
+        source_binding,
+        index,
+        runtime_range_for_call(func, args),
+    ))
+}
+
 fn body_ckb_runtime_accesses(
     _name: &str,
     body: &ir::IrBody,
@@ -17946,198 +18548,213 @@ fn body_ckb_runtime_accesses(
     _type_layouts: &MetadataTypeLayouts,
 ) -> Vec<CkbRuntimeAccessMetadata> {
     let mut accesses = Vec::new();
+    let view_provenance = runtime_view_provenance_by_var(body);
     for (index, pattern) in body.consume_set.iter().enumerate() {
-        accesses.push(CkbRuntimeAccessMetadata {
-            operation: pattern.operation.clone(),
-            syscall: "LOAD_CELL".to_string(),
-            source: "Input".to_string(),
-            index,
-            binding: pattern.binding.clone(),
-        });
+        accesses.push(static_runtime_access(pattern.operation.clone(), "LOAD_CELL", "Input", index, pattern.binding.clone()));
     }
     for (index, pattern) in body.read_refs.iter().enumerate() {
-        accesses.push(CkbRuntimeAccessMetadata {
-            operation: "read_ref".to_string(),
-            syscall: "LOAD_CELL".to_string(),
-            source: "CellDep".to_string(),
-            index,
-            binding: pattern.binding.clone(),
-        });
+        accesses.push(static_runtime_access("read_ref", "LOAD_CELL", "CellDep", index, pattern.binding.clone()));
     }
     for (index, pattern) in body.create_set.iter().enumerate() {
-        accesses.push(CkbRuntimeAccessMetadata {
-            operation: pattern.operation.clone(),
-            syscall: "LOAD_CELL".to_string(),
-            source: "Output".to_string(),
-            index,
-            binding: pattern.binding.clone(),
-        });
+        accesses.push(static_runtime_access(pattern.operation.clone(), "LOAD_CELL", "Output", index, pattern.binding.clone()));
     }
     accesses.extend(body_unique_identity_runtime_accesses(body));
     for pattern in &body.mutate_set {
-        accesses.push(CkbRuntimeAccessMetadata {
-            operation: "mutate-input".to_string(),
-            syscall: "LOAD_CELL".to_string(),
-            source: "Input".to_string(),
-            index: pattern.input_index,
-            binding: pattern.binding.clone(),
-        });
-        accesses.push(CkbRuntimeAccessMetadata {
-            operation: "mutate-output".to_string(),
-            syscall: "LOAD_CELL".to_string(),
-            source: "Output".to_string(),
-            index: pattern.output_index,
-            binding: pattern.binding.clone(),
-        });
+        accesses.push(static_runtime_access("mutate-input", "LOAD_CELL", "Input", pattern.input_index, pattern.binding.clone()));
+        accesses.push(static_runtime_access("mutate-output", "LOAD_CELL", "Output", pattern.output_index, pattern.binding.clone()));
     }
     for block in &body.blocks {
         for instruction in &block.instructions {
-            if let ir::IrInstruction::BoundedCellLoad { element_type, .. } = instruction {
+            if let ir::IrInstruction::BoundedCellLoad { index, max_elements, element_type, element_width, .. } = instruction {
                 for (operation, syscall) in [
                     ("bounded-type-group-input-data", "LOAD_CELL_DATA"),
                     ("bounded-type-group-input-type-hash", "LOAD_CELL_BY_FIELD"),
                     ("bounded-type-group-input-lock-hash", "LOAD_CELL_BY_FIELD"),
                 ] {
-                    accesses.push(CkbRuntimeAccessMetadata {
-                        operation: operation.to_string(),
-                        syscall: syscall.to_string(),
-                        source: "GroupInput".to_string(),
-                        index: 0,
-                        binding: element_type.clone(),
-                    });
+                    let width = if syscall == "LOAD_CELL_DATA" { *element_width as u64 } else { 32 };
+                    accesses.push(runtime_access_metadata(
+                        operation,
+                        syscall,
+                        "GroupInput",
+                        element_type.clone(),
+                        "GroupInput",
+                        "bounded-scan",
+                        None,
+                        runtime_scalar_from_operand(Some(index), Some(*max_elements as u64)),
+                        runtime_range_fixed(width),
+                    ));
                 }
-                accesses.push(CkbRuntimeAccessMetadata {
-                    operation: "bounded-current-script-hash".to_string(),
-                    syscall: "LOAD_SCRIPT_HASH".to_string(),
-                    source: "CurrentScript".to_string(),
-                    index: 0,
-                    binding: element_type.clone(),
-                });
+                accesses.push(runtime_access_metadata(
+                    "bounded-current-script-hash",
+                    "LOAD_SCRIPT_HASH",
+                    "CurrentScript",
+                    element_type.clone(),
+                    "CurrentScript",
+                    "bounded-scan",
+                    None,
+                    runtime_scalar_not_applicable(),
+                    runtime_range_fixed(32),
+                ));
             }
-            if let ir::IrInstruction::BoundedPlanLoad { element_type, .. } = instruction {
-                accesses.push(CkbRuntimeAccessMetadata {
-                    operation: "bounded-output-plan-decode".to_string(),
-                    syscall: "LOAD_WITNESS".to_string(),
-                    source: "Witness".to_string(),
-                    index: 0,
-                    binding: element_type.clone(),
-                });
+            if let ir::IrInstruction::BoundedPlanLoad { index, max_elements, element_type, element_width, .. } = instruction {
+                accesses.push(runtime_access_metadata(
+                    "bounded-output-plan-decode",
+                    "LOAD_WITNESS",
+                    "Witness",
+                    element_type.clone(),
+                    "Witness",
+                    "bounded-scan",
+                    None,
+                    runtime_scalar_static(0, Some(0)),
+                    CkbRuntimeRangeProvenanceMetadata {
+                        kind: "bounded-range".to_string(),
+                        offset: runtime_scalar_from_operand(Some(index), Some(max_elements.saturating_sub(1) as u64)),
+                        length: runtime_scalar_static(*element_width as u64, Some(*element_width as u64)),
+                    },
+                ));
             }
-            if let ir::IrInstruction::BoundedOutputVerify { pattern, .. } = instruction {
+            if let ir::IrInstruction::BoundedOutputVerify { index, pattern, .. } = instruction {
                 for (operation, syscall) in [
                     ("bounded-group-output-data", "LOAD_CELL_DATA"),
                     ("bounded-group-output-lock-hash", "LOAD_CELL_BY_FIELD"),
                     ("bounded-group-output-capacity", "LOAD_CELL_BY_FIELD"),
                     ("bounded-current-script-hash", "LOAD_SCRIPT_HASH"),
                 ] {
-                    accesses.push(CkbRuntimeAccessMetadata {
-                        operation: operation.to_string(),
-                        syscall: syscall.to_string(),
-                        source: if syscall == "LOAD_SCRIPT_HASH" { "CurrentScript" } else { "GroupOutput" }.to_string(),
-                        index: 0,
-                        binding: pattern.ty.clone(),
-                    });
+                    let source = if syscall == "LOAD_SCRIPT_HASH" { "CurrentScript" } else { "GroupOutput" };
+                    let source_index = if source == "CurrentScript" {
+                        runtime_scalar_not_applicable()
+                    } else {
+                        runtime_scalar_from_operand(Some(index), None)
+                    };
+                    let range = match operation {
+                        "bounded-group-output-lock-hash" | "bounded-current-script-hash" => runtime_range_fixed(32),
+                        "bounded-group-output-capacity" => runtime_range_fixed(8),
+                        _ => runtime_range_whole_value(),
+                    };
+                    accesses.push(runtime_access_metadata(
+                        operation,
+                        syscall,
+                        source,
+                        pattern.ty.clone(),
+                        source,
+                        "bounded-scan",
+                        None,
+                        source_index,
+                        range,
+                    ));
                 }
             }
-            if let ir::IrInstruction::BoundedOutputEnd { .. } = instruction {
-                accesses.push(CkbRuntimeAccessMetadata {
-                    operation: "bounded-group-output-count-end".to_string(),
-                    syscall: "LOAD_CELL_BY_FIELD".to_string(),
-                    source: "GroupOutput".to_string(),
-                    index: 0,
-                    binding: "create_each".to_string(),
-                });
+            if let ir::IrInstruction::BoundedOutputEnd { index } = instruction {
+                accesses.push(runtime_access_metadata(
+                    "bounded-group-output-count-end",
+                    "LOAD_CELL_BY_FIELD",
+                    "GroupOutput",
+                    "create_each",
+                    "GroupOutput",
+                    "bounded-scan",
+                    None,
+                    runtime_scalar_from_operand(Some(index), None),
+                    runtime_range_not_applicable(),
+                ));
             }
             if matches!(instruction, ir::IrInstruction::Call { func, .. } if func == "__ckb_input_since") {
-                accesses.push(CkbRuntimeAccessMetadata {
-                    operation: "input-since".to_string(),
-                    syscall: "LOAD_INPUT_BY_FIELD".to_string(),
-                    source: "GroupInput".to_string(),
-                    index: 0,
-                    binding: "ckb::input_since".to_string(),
-                });
+                accesses.push(runtime_access_metadata(
+                    "input-since",
+                    "LOAD_INPUT_BY_FIELD",
+                    "GroupInput",
+                    "ckb::input_since",
+                    "GroupInput",
+                    "implicit-lowering",
+                    None,
+                    runtime_scalar_static(0, Some(0)),
+                    runtime_range_fixed(8),
+                ));
             }
             if let ir::IrInstruction::Call { func, args, .. } = instruction {
                 if func == "__ckb_spawn_wait_cell_dep_hex4" {
-                    accesses.push(CkbRuntimeAccessMetadata {
-                        operation: "spawn-child-exit-checked".to_string(),
-                        syscall: "WAIT".to_string(),
-                        source: "Process".to_string(),
-                        index: 0,
-                        binding: "ckb::spawn_wait_cell_dep_hex4".to_string(),
-                    });
+                    accesses.push(runtime_access_metadata(
+                        "spawn-child-exit-checked",
+                        "WAIT",
+                        "Process",
+                        "ckb::spawn_wait_cell_dep_hex4",
+                        "Process",
+                        "external-adapter",
+                        None,
+                        runtime_scalar_not_applicable(),
+                        runtime_range_not_applicable(),
+                    ));
                 }
                 if matches!(func.as_str(), "__novaseal_bip340_require_signature" | "__novaseal_bip340_require_signature_from_cell_dep")
                 {
                     let dep_index = if func == "__novaseal_bip340_require_signature_from_cell_dep" {
-                        args.first()
-                            .and_then(|arg| match arg {
-                                ir::IrOperand::Const(ir::IrConst::U64(value)) => usize::try_from(*value).ok(),
-                                _ => None,
-                            })
-                            .unwrap_or_default()
+                        runtime_scalar_from_operand(args.first(), Some(63))
                     } else {
-                        0
+                        runtime_scalar_static(0, Some(0))
                     };
                     accesses.extend([
-                        CkbRuntimeAccessMetadata {
-                            operation: "bip340-pipe".to_string(),
-                            syscall: "PIPE".to_string(),
-                            source: "Process".to_string(),
-                            index: 0,
-                            binding: "verifier::btc::bip340::require_signature".to_string(),
-                        },
-                        CkbRuntimeAccessMetadata {
-                            operation: "bip340-spawn".to_string(),
-                            syscall: "SPAWN".to_string(),
-                            source: "CellDep".to_string(),
-                            index: dep_index,
-                            binding: if func == "__novaseal_bip340_require_signature_from_cell_dep" {
+                        runtime_access_metadata(
+                            "bip340-pipe",
+                            "PIPE",
+                            "Process",
+                            "verifier::btc::bip340::require_signature",
+                            "Process",
+                            "external-adapter",
+                            None,
+                            runtime_scalar_not_applicable(),
+                            runtime_range_not_applicable(),
+                        ),
+                        runtime_access_metadata(
+                            "bip340-spawn",
+                            "SPAWN",
+                            "CellDep",
+                            if func == "__novaseal_bip340_require_signature_from_cell_dep" {
                                 "verifier::btc::bip340::require_signature_from_cell_dep".to_string()
                             } else {
                                 "cellscript_btc_bip340_verifier_riscv".to_string()
                             },
-                        },
-                        CkbRuntimeAccessMetadata {
-                            operation: "bip340-pipe-write-18-words".to_string(),
-                            syscall: "PIPE_WRITE".to_string(),
-                            source: "Process".to_string(),
-                            index: 0,
-                            binding: "cellscript-btc-bip340-ipc-v0".to_string(),
-                        },
-                        CkbRuntimeAccessMetadata {
-                            operation: "bip340-close".to_string(),
-                            syscall: "CLOSE".to_string(),
-                            source: "Process".to_string(),
-                            index: 0,
-                            binding: "cellscript-btc-bip340-ipc-v0".to_string(),
-                        },
-                        CkbRuntimeAccessMetadata {
-                            operation: "bip340-wait".to_string(),
-                            syscall: "WAIT".to_string(),
-                            source: "Process".to_string(),
-                            index: 0,
-                            binding: "cellscript_btc_bip340_verifier_riscv".to_string(),
-                        },
+                            "CellDep",
+                            "external-adapter",
+                            None,
+                            dep_index,
+                            runtime_range_not_applicable(),
+                        ),
+                        runtime_access_metadata(
+                            "bip340-pipe-write-18-words",
+                            "PIPE_WRITE",
+                            "Process",
+                            "cellscript-btc-bip340-ipc-v0",
+                            "Process",
+                            "external-adapter",
+                            None,
+                            runtime_scalar_not_applicable(),
+                            runtime_range_fixed(18 * 8),
+                        ),
+                        runtime_access_metadata(
+                            "bip340-close",
+                            "CLOSE",
+                            "Process",
+                            "cellscript-btc-bip340-ipc-v0",
+                            "Process",
+                            "external-adapter",
+                            None,
+                            runtime_scalar_not_applicable(),
+                            runtime_range_not_applicable(),
+                        ),
+                        runtime_access_metadata(
+                            "bip340-wait",
+                            "WAIT",
+                            "Process",
+                            "cellscript_btc_bip340_verifier_riscv",
+                            "Process",
+                            "external-adapter",
+                            None,
+                            runtime_scalar_not_applicable(),
+                            runtime_range_not_applicable(),
+                        ),
                     ]);
                 }
-                if func == "__ckb_require_bounded_cell_dep_data_hash" {
-                    accesses.push(CkbRuntimeAccessMetadata {
-                        operation: "bounded-cell-dep-data-hash-scan".to_string(),
-                        syscall: "LOAD_CELL_BY_FIELD".to_string(),
-                        source: "CellDep".to_string(),
-                        index: 0,
-                        binding: "ckb::require_bounded_cell_dep_data_hash".to_string(),
-                    });
-                }
-                if let Some((operation, syscall, source, binding)) = ckb_v014_runtime_access(func) {
-                    accesses.push(CkbRuntimeAccessMetadata {
-                        operation: operation.to_string(),
-                        syscall: syscall.to_string(),
-                        source: source.to_string(),
-                        index: 0,
-                        binding: binding.to_string(),
-                    });
+                if let Some(access) = runtime_access_for_call(func, args, &view_provenance) {
+                    accesses.push(access);
                 }
             }
         }
@@ -18224,13 +18841,9 @@ fn push_replace_unique_identity_accesses(
 }
 
 fn identity_runtime_access(operation: &str, source: &str, index: usize, binding: &str) -> CkbRuntimeAccessMetadata {
-    CkbRuntimeAccessMetadata {
-        operation: operation.to_string(),
-        syscall: "LOAD_CELL_BY_FIELD".to_string(),
-        source: source.to_string(),
-        index,
-        binding: binding.to_string(),
-    }
+    let mut access = static_runtime_access(operation, "LOAD_CELL_BY_FIELD", source, index, binding);
+    access.provenance.range = runtime_range_fixed(32);
+    access
 }
 
 fn ckb_v014_runtime_access(func: &str) -> Option<(&'static str, &'static str, &'static str, &'static str)> {
@@ -20635,8 +21248,8 @@ mod tests {
         compile_with_executable_surface_policy, decode_scheduler_witness_hex, default_output_path_for_input,
         encode_bounded_output_plan_v1, encode_entry_witness_args_for_params, incremental_cache_key, load_modules_for_input,
         prune_incremental_cache_entries, resolve_input_path, source_unit_from_bytes, validate_primitive_strict_017_metadata,
-        ActionMetadata, ArtifactFormat, CellScriptEdition, CkbRuntimeAccessMetadata, CompileOptions, EntryWitnessArg,
-        ExecutableSurfacePolicy, ENTRY_WITNESS_ABI_MAGIC, SCHEDULER_WITNESS_ABI_MOLECULE,
+        ActionMetadata, ArtifactFormat, CellScriptEdition, CompileOptions, EntryWitnessArg, ExecutableSurfacePolicy,
+        ENTRY_WITNESS_ABI_MAGIC, SCHEDULER_WITNESS_ABI_MOLECULE,
     };
     use crate::{ir, lexer, parser};
     use camino::{Utf8Path, Utf8PathBuf};
@@ -29160,7 +29773,7 @@ action now() -> u64 {
             "since helper did not document CKB input ABI:\n{}",
             asm
         );
-        assert!(result.metadata.runtime.ckb_runtime_features.contains(&"load-header-timepoint".to_string()));
+        assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-header-epoch-number".to_string()));
         assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-header-epoch-start-block-number".to_string()));
         assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-header-epoch-length".to_string()));
         assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-input-since".to_string()));
@@ -32141,13 +32754,17 @@ action run() -> u64 {
 "#;
 
         let mut result = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..Default::default() }).unwrap();
-        result.metadata.runtime.ckb_runtime_accesses.push(CkbRuntimeAccessMetadata {
-            operation: "xudt-group-amount-minted-delta".to_string(),
-            syscall: "LOAD_CELL_DATA".to_string(),
-            source: "GroupInput/GroupOutput".to_string(),
-            index: 0,
-            binding: "xudt::require_group_amount_minted".to_string(),
-        });
+        result.metadata.runtime.ckb_runtime_accesses.push(crate::runtime_access_metadata(
+            "xudt-group-amount-minted-delta",
+            "LOAD_CELL_DATA",
+            "GroupInput/GroupOutput",
+            "xudt::require_group_amount_minted",
+            "GroupInput/GroupOutput",
+            "metadata-summary",
+            None,
+            crate::runtime_scalar_metadata_ordinal(0),
+            crate::runtime_range_whole_value(),
+        ));
 
         let err = validate_primitive_strict_017_metadata(&result.metadata).unwrap_err();
 
@@ -35570,6 +36187,7 @@ action inspect() -> u64 {
 
         let result = compile(program, CompileOptions::default()).unwrap();
         assert_eq!(result.metadata.runtime.ckb_runtime_view_contract, crate::CKB_RUNTIME_VIEW_CONTRACT);
+        assert_eq!(result.metadata.runtime.ckb_runtime_access_provenance_contract, crate::CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT);
         assert!(result.metadata.runtime.transaction_view_handles.iter().any(|handle| {
             handle.handle_type == "InputView<Token>"
                 && handle.source == "Input"
@@ -35609,6 +36227,12 @@ action inspect() -> u64 {
         let error = crate::validate_compile_metadata(&tampered, result.artifact_format)
             .expect_err("runtime-view contract downgrade must fail");
         assert!(error.message.contains("ckb_runtime_view_contract"), "{error}");
+
+        let mut tampered = result.metadata.clone();
+        tampered.runtime.ckb_runtime_access_provenance_contract = "cellscript-ckb-runtime-access-provenance-v0".to_string();
+        let error = crate::validate_compile_metadata(&tampered, result.artifact_format)
+            .expect_err("runtime-access provenance contract downgrade must fail");
+        assert!(error.message.contains("ckb_runtime_access_provenance_contract"), "{error}");
     }
 
     #[test]

@@ -120,6 +120,54 @@ pub struct CheckerReport {
     pub elf: ElfSummary,
 }
 
+const CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT: &str = "cellscript-ckb-runtime-access-provenance-v1";
+const CKB_RUNTIME_ACCESS_PROVENANCE_METADATA_SCHEMA: u64 = 69;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeScalarProvenance {
+    kind: String,
+    value: Option<u64>,
+    binding: Option<String>,
+    max_inclusive: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeSourceProvenance {
+    resolved_source: String,
+    origin: String,
+    binding: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeRangeProvenance {
+    kind: String,
+    offset: RuntimeScalarProvenance,
+    length: RuntimeScalarProvenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeAccessProvenance {
+    contract: String,
+    source: RuntimeSourceProvenance,
+    index: RuntimeScalarProvenance,
+    range: RuntimeRangeProvenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeAccess {
+    operation: String,
+    syscall: String,
+    source: String,
+    index: u64,
+    binding: String,
+    provenance: RuntimeAccessProvenance,
+}
+
 pub fn canonical_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, CheckerError> {
     serde_json::to_vec(value).map_err(|error| {
         CheckerError::new(CheckerRejectionCode::V2401MalformedJson, format!("failed to serialize canonical checker value: {error}"))
@@ -323,6 +371,7 @@ fn validate_metadata_binding(
 ) -> Result<(), CheckerError> {
     crate::policy::validate_policy_metadata(metadata, &record.typed_semantics)?;
     validate_ckb_vm2_target_contract(metadata)?;
+    validate_runtime_access_provenance_metadata(metadata)?;
     let artifact_hash = hex_encode(&ckb_blake2b256(artifact));
     if artifact_hash != record.artifact_hash || artifact.len() as u64 != record.artifact_size_bytes {
         return Err(CheckerError::new(
@@ -544,6 +593,319 @@ fn validate_ckb_vm2_target_contract(metadata: &Value) -> Result<(), CheckerError
         ));
     }
     Ok(())
+}
+
+fn validate_runtime_access_provenance_metadata(metadata: &Value) -> Result<(), CheckerError> {
+    let schema = json_u64(metadata, &["metadata_schema_version"])
+        .ok_or_else(|| metadata_binding_error("compile metadata has no numeric metadata_schema_version"))?;
+    if schema < CKB_RUNTIME_ACCESS_PROVENANCE_METADATA_SCHEMA {
+        return Ok(());
+    }
+    if json_string(metadata, &["runtime", "ckb_runtime_access_provenance_contract"]) != Some(CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT) {
+        return Err(metadata_binding_error("compile metadata does not bind the current CKB runtime access provenance contract"));
+    }
+
+    let mut module_accesses =
+        parse_runtime_accesses(metadata.pointer("/runtime/ckb_runtime_accesses"), "runtime.ckb_runtime_accesses")?;
+    let mut entry_accesses = Vec::new();
+    for collection in ["actions", "functions", "locks"] {
+        let entries = metadata
+            .get(collection)
+            .and_then(Value::as_array)
+            .ok_or_else(|| metadata_binding_error(format!("compile metadata field '{collection}' is not an array")))?;
+        for (entry_index, entry) in entries.iter().enumerate() {
+            let entry_name = entry.get("name").and_then(Value::as_str).unwrap_or("<unnamed>");
+            let label = format!("{collection}[{entry_index}] '{entry_name}'.ckb_runtime_accesses");
+            entry_accesses.extend(parse_runtime_accesses(entry.get("ckb_runtime_accesses"), &label)?);
+        }
+    }
+    module_accesses.sort();
+    entry_accesses.sort();
+    if module_accesses != entry_accesses {
+        return Err(metadata_binding_error(
+            "compile metadata module runtime accesses differ from action/function/lock runtime accesses",
+        ));
+    }
+
+    let handles = match metadata.pointer("/runtime/transaction_view_handles") {
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| metadata_binding_error("compile metadata runtime.transaction_view_handles is not an array"))?
+            .as_slice(),
+        None => &[],
+    };
+    for (index, handle) in handles.iter().enumerate() {
+        let source = handle
+            .get("source")
+            .and_then(Value::as_str)
+            .ok_or_else(|| metadata_binding_error(format!("runtime.transaction_view_handles[{index}].source is invalid")))?;
+        let provenance = handle
+            .get("provenance")
+            .cloned()
+            .ok_or_else(|| metadata_binding_error(format!("runtime.transaction_view_handles[{index}].provenance is missing")))?;
+        let provenance: RuntimeAccessProvenance = serde_json::from_value(provenance).map_err(|error| {
+            metadata_binding_error(format!("runtime.transaction_view_handles[{index}].provenance has an invalid shape: {error}"))
+        })?;
+        validate_runtime_access_provenance(&format!("runtime.transaction_view_handles[{index}]"), source, None, &provenance)?;
+    }
+    Ok(())
+}
+
+fn parse_runtime_accesses(value: Option<&Value>, label: &str) -> Result<Vec<RuntimeAccess>, CheckerError> {
+    let value = value.cloned().ok_or_else(|| metadata_binding_error(format!("compile metadata field '{label}' is missing")))?;
+    let accesses: Vec<RuntimeAccess> = serde_json::from_value(value)
+        .map_err(|error| metadata_binding_error(format!("compile metadata field '{label}' has an invalid shape: {error}")))?;
+    for (index, access) in accesses.iter().enumerate() {
+        let prefix = format!("{label}[{index}]");
+        for (field, value) in [
+            ("operation", access.operation.as_str()),
+            ("syscall", access.syscall.as_str()),
+            ("source", access.source.as_str()),
+            ("binding", access.binding.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(metadata_binding_error(format!("{prefix}.{field} must not be empty")));
+            }
+        }
+        if !known_runtime_source(&access.source)
+            || !known_runtime_syscall(&access.syscall)
+            || !runtime_syscall_allows_source(&access.syscall, &access.source)
+        {
+            return Err(metadata_binding_error(format!(
+                "{prefix} has an unknown or incompatible CKB runtime syscall/source pair '{}/{}'",
+                access.syscall, access.source
+            )));
+        }
+        validate_runtime_access_provenance(&prefix, &access.source, Some(access.index), &access.provenance)?;
+    }
+    Ok(accesses)
+}
+
+fn validate_runtime_access_provenance(
+    prefix: &str,
+    declared_source: &str,
+    compatibility_index: Option<u64>,
+    provenance: &RuntimeAccessProvenance,
+) -> Result<(), CheckerError> {
+    if provenance.contract != CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT
+        || provenance.source.resolved_source.trim().is_empty()
+        || !known_runtime_source(&provenance.source.resolved_source)
+    {
+        return Err(metadata_binding_error(format!("{prefix}.provenance has an invalid contract or resolved source")));
+    }
+    if !matches!(
+        provenance.source.origin.as_str(),
+        "explicit-source-view"
+            | "inherited-source-view"
+            | "implicit-lowering"
+            | "bounded-scan"
+            | "metadata-summary"
+            | "external-adapter"
+    ) {
+        return Err(metadata_binding_error(format!(
+            "{prefix}.provenance.source.origin '{}' is not admitted",
+            provenance.source.origin
+        )));
+    }
+    match provenance.source.origin.as_str() {
+        "inherited-source-view" if provenance.source.binding.as_deref().is_none_or(str::is_empty) => {
+            return Err(metadata_binding_error(format!(
+                "{prefix}.provenance.source.binding is required for an inherited source view"
+            )));
+        }
+        "inherited-source-view" => {}
+        _ if provenance.source.binding.is_some() => {
+            return Err(metadata_binding_error(format!(
+                "{prefix}.provenance.source.binding is only valid for an inherited source view"
+            )));
+        }
+        _ => {}
+    }
+    validate_runtime_scalar(&format!("{prefix}.provenance.index"), &provenance.index)?;
+    if matches!(provenance.source.origin.as_str(), "explicit-source-view" | "inherited-source-view")
+        && (!matches!(provenance.index.kind.as_str(), "static" | "dynamic")
+            || provenance.index.max_inclusive != Some(u64::from(u32::MAX)))
+    {
+        return Err(metadata_binding_error(format!(
+            "{prefix}.provenance.index must bind a static or dynamic 32-bit source-view index"
+        )));
+    }
+    if let Some(compatibility_index) = compatibility_index {
+        let expected = provenance.index.value.unwrap_or(0);
+        if compatibility_index != expected {
+            return Err(metadata_binding_error(format!(
+                "{prefix}.index does not match the structured provenance compatibility projection"
+            )));
+        }
+    }
+    validate_runtime_range(&format!("{prefix}.provenance.range"), &provenance.range)?;
+    if declared_source == "SourceView"
+        && !matches!(
+            provenance.source.resolved_source.as_str(),
+            "Input" | "Output" | "CellDep" | "GroupInput" | "GroupOutput" | "SourceView"
+        )
+    {
+        return Err(metadata_binding_error(format!("{prefix}.provenance resolved source is incompatible with declared SourceView")));
+    }
+    Ok(())
+}
+
+fn validate_runtime_scalar(prefix: &str, value: &RuntimeScalarProvenance) -> Result<(), CheckerError> {
+    let valid = match value.kind.as_str() {
+        "not-applicable" => value.value.is_none() && value.binding.is_none() && value.max_inclusive.is_none(),
+        "static" | "metadata-ordinal" => {
+            value.value.is_some()
+                && value.binding.is_none()
+                && !value.value.zip(value.max_inclusive).is_some_and(|(actual, maximum)| actual > maximum)
+        }
+        "dynamic" => value.value.is_none() && value.binding.as_deref().is_some_and(|binding| !binding.is_empty()),
+        "bounded-scan" => value.value.is_none() && value.binding.is_none() && value.max_inclusive.is_some(),
+        _ => false,
+    };
+    if !valid {
+        return Err(metadata_binding_error(format!("{prefix} has invalid scalar provenance")));
+    }
+    Ok(())
+}
+
+fn validate_runtime_range(prefix: &str, range: &RuntimeRangeProvenance) -> Result<(), CheckerError> {
+    validate_runtime_scalar(&format!("{prefix}.offset"), &range.offset)?;
+    validate_runtime_scalar(&format!("{prefix}.length"), &range.length)?;
+    let valid = match range.kind.as_str() {
+        "not-applicable" | "whole-value" => range.offset.kind == "not-applicable" && range.length.kind == "not-applicable",
+        "fixed-width" => {
+            range.offset.kind == "not-applicable"
+                && range.length.kind == "static"
+                && range.length.value.is_some_and(|length| length > 0)
+        }
+        "bounded-range" => {
+            matches!(range.offset.kind.as_str(), "static" | "dynamic") && matches!(range.length.kind.as_str(), "static" | "dynamic")
+        }
+        _ => false,
+    };
+    if !valid {
+        return Err(metadata_binding_error(format!("{prefix} has invalid range provenance")));
+    }
+    Ok(())
+}
+
+fn known_runtime_source(source: &str) -> bool {
+    matches!(
+        source,
+        "Input"
+            | "Output"
+            | "CellDep"
+            | "HeaderDep"
+            | "GroupInput"
+            | "GroupOutput"
+            | "GroupCellDep"
+            | "GroupHeaderDep"
+            | "Witness"
+            | "ScriptArgs"
+            | "Expression"
+            | "SourceView"
+            | "Input/Output"
+            | "Input/GroupInput"
+            | "Input/HeaderDep"
+            | "GroupInput/GroupOutput"
+            | "CurrentScript"
+            | "CurrentScript/Output"
+            | "CurrentScript/SourceView"
+            | "CurrentScript/Input/GroupInput/GroupOutput"
+            | "Process"
+            | "Profile"
+            | "Transaction"
+    )
+}
+
+fn known_runtime_syscall(syscall: &str) -> bool {
+    matches!(
+        syscall,
+        "LOAD_CELL"
+            | "LOAD_TRANSACTION"
+            | "LOAD_CELL_BY_FIELD"
+            | "LOAD_CELL_DATA"
+            | "LOAD_HEADER"
+            | "LOAD_HEADER_BY_FIELD"
+            | "LOAD_INPUT_BY_FIELD"
+            | "LOAD_SCRIPT"
+            | "LOAD_SCRIPT_HASH"
+            | "LOAD_SCRIPT_ARGS"
+            | "SOURCE_VIEW"
+            | "CKB_SINCE_ENCODING"
+            | "CKB_EPOCH_ARITHMETIC"
+            | "LOAD_CELL_BY_FIELD+LOAD_CELL_DATA"
+            | "LOAD_CELL_BY_FIELD+LOAD_CELL_DATA+LOAD_WITNESS"
+            | "LOAD_INPUT_BY_FIELD/SOURCE_VIEW"
+            | "LOAD_SCRIPT+LOAD_CELL_BY_FIELD"
+            | "LOAD_SCRIPT+LOAD_CELL_BY_FIELD+LOAD_CELL_DATA"
+            | "LOAD_SCRIPT_HASH+LOAD_CELL_BY_FIELD"
+            | "LOAD_SCRIPT_HASH+LOAD_CELL_BY_FIELD+LOAD_INPUT_BY_FIELD/SOURCE_VIEW"
+            | "LOAD_SCRIPT_HASH+LOAD_CELL_BY_FIELD+LOAD_CELL_DATA+LOAD_INPUT_BY_FIELD"
+            | "LOAD_SCRIPT_HASH+LOAD_CELL_BY_FIELD+LOAD_CELL_DATA+LOAD_INPUT_BY_FIELD/SOURCE_VIEW"
+            | "LOAD_WITNESS"
+            | "LOAD_WITNESS_ARGS_LOCK"
+            | "LOAD_WITNESS_ARGS_INPUT_TYPE"
+            | "LOAD_WITNESS_ARGS_OUTPUT_TYPE"
+            | "CKB_SIGHASH_ALL"
+            | "EXIT"
+            | "CAPACITY_POLICY"
+            | "CKB_BLAKE2B"
+            | "SHA256"
+            | "SPAWN"
+            | "EXEC"
+            | "WAIT"
+            | "PROCESS_ID"
+            | "PIPE"
+            | "PIPE_WRITE"
+            | "PIPE_READ"
+            | "INHERITED_FD"
+            | "CLOSE"
+    )
+}
+
+fn runtime_syscall_allows_source(syscall: &str, source: &str) -> bool {
+    match syscall {
+        "LOAD_TRANSACTION" => source == "Transaction",
+        "LOAD_CELL" => matches!(source, "Input" | "Output" | "CellDep" | "GroupInput" | "GroupOutput"),
+        "LOAD_CELL_BY_FIELD" => {
+            matches!(source, "Input" | "Output" | "GroupInput" | "GroupOutput" | "CellDep" | "SourceView")
+        }
+        "LOAD_CELL_DATA" => {
+            matches!(source, "Input" | "Output" | "GroupInput" | "GroupOutput" | "SourceView" | "GroupInput/GroupOutput")
+        }
+        "LOAD_HEADER" => matches!(source, "HeaderDep" | "Input/GroupInput" | "Input/HeaderDep"),
+        "LOAD_HEADER_BY_FIELD" => source == "HeaderDep",
+        "LOAD_INPUT_BY_FIELD" => matches!(source, "GroupInput" | "SourceView" | "Input/GroupInput"),
+        "LOAD_SCRIPT" | "LOAD_SCRIPT_HASH" => source == "CurrentScript",
+        "CKB_SIGHASH_ALL" => source == "GroupInput",
+        "EXIT" => source == "Process",
+        "LOAD_SCRIPT_ARGS" => source == "ScriptArgs",
+        "SOURCE_VIEW" => {
+            matches!(source, "Input" | "Output" | "CellDep" | "HeaderDep" | "GroupInput" | "GroupOutput" | "SourceView" | "Expression")
+        }
+        "CKB_SINCE_ENCODING" | "CKB_EPOCH_ARITHMETIC" => source == "Expression",
+        "LOAD_CELL_BY_FIELD+LOAD_CELL_DATA" | "LOAD_CELL_BY_FIELD+LOAD_CELL_DATA+LOAD_WITNESS" => source == "SourceView",
+        "LOAD_INPUT_BY_FIELD/SOURCE_VIEW" => source == "Input/Output",
+        "LOAD_SCRIPT+LOAD_CELL_BY_FIELD" => source == "CurrentScript/Output",
+        "LOAD_SCRIPT+LOAD_CELL_BY_FIELD+LOAD_CELL_DATA" => source == "CurrentScript/Input/GroupInput/GroupOutput",
+        "LOAD_SCRIPT_HASH+LOAD_CELL_BY_FIELD" => source == "CurrentScript/SourceView",
+        "LOAD_SCRIPT_HASH+LOAD_CELL_BY_FIELD+LOAD_INPUT_BY_FIELD/SOURCE_VIEW"
+        | "LOAD_SCRIPT_HASH+LOAD_CELL_BY_FIELD+LOAD_CELL_DATA+LOAD_INPUT_BY_FIELD/SOURCE_VIEW"
+        | "LOAD_SCRIPT_HASH+LOAD_CELL_BY_FIELD+LOAD_CELL_DATA+LOAD_INPUT_BY_FIELD" => source == "Input/Output",
+        "LOAD_WITNESS" => source == "Witness",
+        "LOAD_WITNESS_ARGS_LOCK" | "LOAD_WITNESS_ARGS_INPUT_TYPE" => source == "GroupInput",
+        "LOAD_WITNESS_ARGS_OUTPUT_TYPE" => source == "GroupOutput",
+        "CAPACITY_POLICY" => source == "Output",
+        "CKB_BLAKE2B" | "SHA256" => source == "Profile",
+        "SPAWN" | "EXEC" => source == "CellDep",
+        "WAIT" | "PROCESS_ID" | "PIPE" | "PIPE_WRITE" | "PIPE_READ" | "INHERITED_FD" | "CLOSE" => source == "Process",
+        _ => false,
+    }
+}
+
+fn metadata_binding_error(message: impl Into<String>) -> CheckerError {
+    CheckerError::new(CheckerRejectionCode::V2410MetadataBindingMismatch, message)
 }
 
 fn validate_typed_semantics(record: &VerifiedLoweringRecord) -> Result<(), CheckerError> {

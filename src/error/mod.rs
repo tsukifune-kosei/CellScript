@@ -629,7 +629,7 @@ mod tests {
         for info in COMPILER_ERROR_INFOS {
             assert!(codes.insert(info.code), "duplicate compiler error code {}", info.code);
             assert_eq!(compiler_error_info_by_code(info.code), Some(*info));
-            assert!(info.code.starts_with("E2"));
+            assert!(info.code.starts_with("E2") || info.code.starts_with("W3"));
             assert!(!info.description.is_empty());
             assert!(!info.hint.is_empty());
         }

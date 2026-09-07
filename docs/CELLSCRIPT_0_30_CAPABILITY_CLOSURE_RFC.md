@@ -33,8 +33,10 @@ The first #24 runtime-view tranche is specified by the
 The additive typed HeaderDep and six-domain `Since` subset is specified in the
 [0.30 temporal-domain contract](CELLSCRIPT_0_30_TEMPORAL_DOMAINS.md); it does
 not by itself close issue #12.
-Metadata schema 68 binds `cellscript-ckb-runtime-view-v1`. Typed Cell views now
-expose occupied/unoccupied capacity, consensus data hashes and input `since`;
+Metadata schema 69 binds `cellscript-ckb-runtime-view-v1` together with the
+structured `cellscript-ckb-runtime-access-provenance-v1` source/index/range
+contract. Typed Cell views now expose occupied/unoccupied capacity, consensus
+data hashes and input `since`;
 typed HeaderDep views expose all three fields admitted by CKB's
 `LOAD_HEADER_BY_FIELD`; and complete Script hashes are separated from code and
 args hashes. CKB-VM tests cover a nonzero epoch, the derived epoch-start block,
@@ -43,8 +45,11 @@ also records exact CKB-VM `Since` vectors and checked decoder failures for all
 mode/metric combinations. Checked `EpochDuration` construction and EpochNumber
 add/sub now enforce the 24-bit domain with executable overflow and underflow
 evidence. Exact 208-byte full-header decoding now supplies typed block number
-and millisecond timestamp reads. Remaining work includes witness, dynamic-index,
-checker, builder, measurement, and release evidence.
+and millisecond timestamp reads. Dynamic source indexes retain their parameter
+binding and 32-bit runtime bound through metadata, generated TypeScript
+builders, CKB-VM execution, and the standalone checker. Remaining work includes
+bounded variable witness values, HeaderDep machine mutations, complete builder
+parity, measurement, and release evidence.
 
 The goal is business-scenario coverage comparable to hand-written Rust CKB
 Scripts for a defined, bounded portfolio. It is not unrestricted Rust language

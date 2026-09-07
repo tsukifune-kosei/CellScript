@@ -2460,7 +2460,15 @@ fn diagnostic_access_list(accesses: &[crate::CkbRuntimeAccessMetadata]) -> Strin
     }
     accesses
         .iter()
-        .map(|access| format!("{}:{}#{} ({})", access.operation, access.source, access.index, access.binding))
+        .map(|access| {
+            let index = match access.provenance.index.kind.as_str() {
+                "dynamic" => format!("${}", access.provenance.index.binding.as_deref().unwrap_or("?")),
+                "bounded-scan" => format!("0..={}", access.provenance.index.max_inclusive.unwrap_or_default()),
+                "not-applicable" => "n/a".to_string(),
+                _ => access.provenance.index.value.unwrap_or(access.index as u64).to_string(),
+            };
+            format!("{}:{}#{} ({})", access.operation, access.source, index, access.binding)
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }

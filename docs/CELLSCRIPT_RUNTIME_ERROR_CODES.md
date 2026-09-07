@@ -14,7 +14,7 @@ Use the error name first when debugging. Numeric codes are retained for VM,
 wallet, explorer, and acceptance-script compatibility.
 
 The table was introduced in compile metadata schema 30 and is emitted by the
-current metadata schema 68 on the `0.30` development branch under
+current metadata schema 69 on the `0.30` development branch under
 `constraints.runtime_errors`, so `cellc constraints`, `cellc check --json`, and
 sidecar metadata all expose the same machine-readable registry.
 The experimental `0.26b` baseline emitted the same registry in schema 67.

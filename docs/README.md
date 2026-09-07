@@ -3,7 +3,7 @@
 This directory is organized by document role. Keep new docs in the smallest
 stable category that matches how readers should use them.
 
-The active `0.30` implementation uses metadata schema 68; its first runtime
+The active `0.30` implementation uses metadata schema 69; its runtime
 matrix is [`cellscript-ckb-runtime-view-v1`](CELLSCRIPT_0_30_CKB_RUNTIME_VIEW_MATRIX.md).
 The additive six-domain `Since`, typed HeaderDep, and checked `EpochDuration`
 subset of issue #12 is recorded in the

@@ -283,8 +283,10 @@ CKB-VM execution, deployment, and chain evidence.
 
 ### 0.30 typed CKB runtime-view evidence
 
-The `0.30` development branch advances compile metadata to schema 68 and binds
-`runtime.ckb_runtime_view_contract = cellscript-ckb-runtime-view-v1`. The first
+The `0.30` development branch advances compile metadata to schema 69 and binds
+`runtime.ckb_runtime_view_contract = cellscript-ckb-runtime-view-v1` plus
+`runtime.ckb_runtime_access_provenance_contract =
+cellscript-ckb-runtime-access-provenance-v1`. The first
 runtime-view tranche adds fixed-width Input, Output, CellDep, HeaderDep,
 OutPoint, and Script field reads. The CKB-VM regression uses a nonzero header
 epoch and block number, checks occupied/unoccupied capacity arithmetic and
@@ -313,7 +315,7 @@ temporal constructors, checked decoders, domains, fixed representation, and
 migration identity, and the Registry API retains a v2 reader. This evidence
 is mirrored by formatter, VS Code, generated-builder, locked package, WASM,
 Playground, and six-family business-fixture checks. The canonical browser
-summary build is 543,507 bytes gzip. Full candidate gates and independent
+summary build is 544,037 bytes gzip. Full candidate gates and independent
 review are still required to close the temporal issue or the release gate.
 
 ### 0.26b semantic-foundation evidence

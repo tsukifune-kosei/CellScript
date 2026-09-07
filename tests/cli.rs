@@ -9905,6 +9905,95 @@ action schedule(
 }
 
 #[test]
+fn cellc_gen_builder_preserves_dynamic_runtime_index_bounds() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+edition = "2027"
+name = "dynamic-index-builder"
+version = "0.1.0"
+
+[build]
+target_profile = "ckb"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src").join("main.cell"),
+        r#"
+module dynamic_index_builder::main
+
+resource Token has store { amount: u64 }
+
+action inspect(source_index: u64) -> u64 {
+    let input = ckb::input<Token>(source_index)
+    return input.capacity
+}
+"#,
+    )
+    .unwrap();
+
+    let metadata_path = root.join("inspect.meta.json");
+    let metadata_output = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("metadata")
+        .arg("--output")
+        .arg(&metadata_path)
+        .output()
+        .unwrap();
+    assert!(metadata_output.status.success(), "stderr: {}", String::from_utf8_lossy(&metadata_output.stderr));
+
+    let metadata: serde_json::Value = serde_json::from_slice(&std::fs::read(&metadata_path).unwrap()).unwrap();
+    assert_eq!(metadata["metadata_schema_version"], 69);
+    assert_eq!(metadata["runtime"]["ckb_runtime_access_provenance_contract"], "cellscript-ckb-runtime-access-provenance-v1");
+    let dynamic_access = metadata["actions"][0]["ckb_runtime_accesses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|access| access["operation"] == "source-input")
+        .expect("source-input access");
+    assert_eq!(dynamic_access["index"], 0);
+    assert_eq!(dynamic_access["provenance"]["source"]["resolved_source"], "Input");
+    assert_eq!(dynamic_access["provenance"]["index"]["kind"], "dynamic");
+    assert_eq!(dynamic_access["provenance"]["index"]["binding"], "source_index");
+    assert_eq!(dynamic_access["provenance"]["index"]["max_inclusive"], u64::from(u32::MAX));
+
+    let output_dir = root.join("generated-builder");
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("gen-builder")
+        .arg("--target")
+        .arg("typescript")
+        .arg("--metadata")
+        .arg(&metadata_path)
+        .arg("--output")
+        .arg(&output_dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output_dir.join("cellscript-builder-manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["runtime_contract"]["runtime_access_provenance"], "cellscript-ckb-runtime-access-provenance-v1");
+    assert_eq!(manifest["actions"][0]["runtime_accesses"][0]["provenance"]["contract"], "cellscript-ckb-runtime-access-provenance-v1");
+
+    let index_ts = std::fs::read_to_string(output_dir.join("src").join("index.ts")).unwrap();
+    assert!(index_ts.contains("export const runtimeAccessProvenanceContract"), "{index_ts}");
+    assert!(index_ts.contains("assertRuntimeAccessParams"), "{index_ts}");
+    assert!(index_ts.contains("exceeds max_inclusive"), "{index_ts}");
+    assert!(index_ts.contains("4294967295"), "{index_ts}");
+    let builder_test = std::fs::read_to_string(output_dir.join("test").join("builder.test.mjs")).unwrap();
+    assert!(builder_test.contains("dynamicIndexCases"), "{builder_test}");
+    assert!(builder_test.contains("rejects dynamic source indexes above their declared bound"), "{builder_test}");
+}
+
+#[test]
 fn cellc_gen_builder_typescript_declares_raw_cell_data_codec_manifest() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

@@ -6,11 +6,18 @@
 `cellscript-ckb-runtime-view-v1`. This is a development contract, not a claim
 that issue #24 or the 0.30 release gate is complete.**
 
-Compile metadata schema 68 records the contract name in
-`runtime.ckb_runtime_view_contract`. Metadata validation rejects an absent,
-older, or changed value. The contract covers typed, read-only views and the
-bounded CKB runtime operations listed below. It does not grant Cell lifecycle
-authority and does not turn a value read from a transaction into authorization.
+Compile metadata schema 69 records the view contract name in
+`runtime.ckb_runtime_view_contract` and binds
+`cellscript-ckb-runtime-access-provenance-v1` in
+`runtime.ckb_runtime_access_provenance_contract`. Metadata validation and the
+standalone artifact checker reject an absent, older, changed, or internally
+inconsistent provenance record. Every runtime access identifies the resolved
+source, source origin, static/dynamic/bounded index and admitted byte range.
+The legacy numeric `index` remains a compatibility projection; it is zero for
+dynamic accesses and the structured index is authoritative. The contract
+covers typed, read-only views and the bounded CKB runtime operations listed
+below. It does not grant Cell lifecycle authority and does not turn a value
+read from a transaction into authorization.
 
 The syscall behavior is based on CKB's
 [VM Syscalls RFC](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0009-vm-syscalls/0009-vm-syscalls.md)
@@ -37,11 +44,13 @@ CKB RFC0017 wire semantics.
 
 ## Typed read-only handles
 
-Every constructor takes a `u64` index. `InputView<T>` and `OutputView<T>` also
-require a declared cell-backed resource, shared type, or receipt type argument.
-The runtime representation is a closed source-kind/index pair. A malformed pair
-fails with `ckb-source-view-invalid`; a missing indexed item fails through the
-field-specific terminal error.
+Every constructor takes a `u64` index. Static literals and dynamic parameter
+bindings remain distinct in provenance, and every source-view index carries
+`max_inclusive = 4294967295`. `InputView<T>` and `OutputView<T>` also require a
+declared cell-backed resource, shared type, or receipt type argument. The
+runtime representation is a closed source-kind/index pair. An out-of-domain
+dynamic index or malformed pair fails with `ckb-source-view-invalid`; a missing
+indexed item fails through the field-specific terminal error.
 
 | Handle and constructor | Source | Executable fields | Source type | Runtime width and failure |
 |---|---|---|---|---|
@@ -108,7 +117,11 @@ relative wire vectors for all six Since domains, checked decoding and
 narrowing, canonical epoch-fraction comparisons, malformed flags/fractions and
 scalar bounds, checked epoch-duration arithmetic and its overflow/underflow
 boundaries, exact full-header block/timestamp reads, an exact CellDep data hash,
-and a substituted hash.
+a substituted hash, successful dynamic Input/CellDep/Witness index zero, and a
+dynamic index above the 32-bit view domain. `tests/artifact_checker.rs` changes
+source, index bound, range, contract, handle, and module/entry copies after
+outer hash rebinding and requires independent `V2410` rejection. Generated
+TypeScript builder tests retain the same dynamic parameter bound.
 `tests/authoring_replace.rs` exercises the
 `ScriptHash` domain against real output Lock Script hashes. Existing
 `tests/ickb_diff.rs`, `tests/crypto_primitives.rs`, and artifact-checker mutation
@@ -116,14 +129,9 @@ suites retain the older bounded helper families.
 
 The following work remains before issue #24 can close:
 
-- version source/index/range provenance beyond the existing handle and runtime
-  access records, including dynamic-index representation;
 - bounded variable-length witness and WitnessArgs field values with explicit
   ownership shared across #8, #13, and #22;
-- full-header decoding for timestamp, block number, and header hash when the
-  frozen business corpus requires them;
-- temporal migration, interface versioning, and business-fixture work owned by
-  #12;
+- full-header hash decoding if the frozen business corpus requires it;
 - persistent-policy and generated-builder parity for every admitted row;
 - standalone-checker machine mutations for the new HeaderDep source/index,
   field selector, exact width, syscall status, and terminal error;

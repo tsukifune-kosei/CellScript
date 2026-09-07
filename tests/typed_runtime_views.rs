@@ -92,6 +92,22 @@ action inspect(witness expected_data_hash: Hash) -> u64 {
 }
 "#;
 
+const DYNAMIC_INDEX_SOURCE: &str = r#"
+module runtime_views::dynamic_index
+
+resource Token has store { amount: u64 }
+
+action inspect(witness source_index: u64, witness expected_data_hash: Hash) -> u64 {
+    let input = ckb::input<Token>(source_index)
+    let dep = ckb::cell_dep(source_index)
+    let witness_args = witness::args(source_index)
+    require input.capacity > 0
+    require dep.data_hash == expected_data_hash
+    require witness_args.size > 0
+    return 0
+}
+"#;
+
 fn compile(source: &str) -> cellscript::CompileResult {
     compile_with_executable_surface_policy(
         source,
@@ -110,6 +126,13 @@ fn witness(result: &cellscript::CompileResult, expected_data_hash: [u8; 32]) -> 
     let payload = result.metadata.actions[0]
         .entry_witness_args(&[EntryWitnessArg::Hash(expected_data_hash)])
         .expect("encode expected CellDep data hash");
+    packed::WitnessArgs::new_builder().input_type(Some(Bytes::from(payload)).pack()).build().as_bytes()
+}
+
+fn dynamic_index_witness(result: &cellscript::CompileResult, source_index: u64, expected_data_hash: [u8; 32]) -> Bytes {
+    let payload = result.metadata.actions[0]
+        .entry_witness_args(&[EntryWitnessArg::U64(source_index), EntryWitnessArg::Hash(expected_data_hash)])
+        .expect("encode dynamic source index and expected CellDep data hash");
     packed::WitnessArgs::new_builder().input_type(Some(Bytes::from(payload)).pack()).build().as_bytes()
 }
 
@@ -193,4 +216,58 @@ fn typed_cell_input_and_header_views_execute_and_fail_closed() {
         let execution = execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &invalid);
         assert_eq!(execution.exit_code, 20, "invalid EpochDuration arithmetic must use numeric-or-discriminant-invalid");
     }
+}
+
+#[test]
+fn dynamic_source_indexes_execute_and_emit_checked_provenance() {
+    let result = compile(DYNAMIC_INDEX_SOURCE);
+    let dep_data = Bytes::from_static(b"cellscript-0.30-dynamic-index");
+    let expected_hash = blake2b_256(&dep_data);
+
+    let valid = fixture(dep_data.clone(), dynamic_index_witness(&result, 0, expected_hash));
+    let execution = execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &valid);
+    assert_eq!(execution.exit_code, 0, "dynamic index zero must select the first Input, CellDep, and Witness");
+
+    let dynamic_accesses = result
+        .metadata
+        .runtime
+        .ckb_runtime_accesses
+        .iter()
+        .filter(|access| access.provenance.index.kind == "dynamic")
+        .collect::<Vec<_>>();
+    assert!(!dynamic_accesses.is_empty(), "runtime metadata must preserve dynamic source-index provenance");
+    assert!(dynamic_accesses.iter().all(|access| {
+        access.provenance.contract == cellscript::CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT
+            && access.provenance.index.binding.as_deref() == Some("source_index")
+            && access.provenance.index.max_inclusive == Some(u64::from(u32::MAX))
+            && access.index == 0
+    }));
+    assert!(dynamic_accesses.iter().any(|access| {
+        access.operation == "cell-data-hash-field"
+            && access.provenance.source.resolved_source == "CellDep"
+            && access.provenance.source.origin == "inherited-source-view"
+            && access.provenance.range.kind == "fixed-width"
+            && access.provenance.range.length.value == Some(32)
+    }));
+    assert!(result.metadata.runtime.transaction_view_handles.iter().any(|handle| {
+        handle.handle_type == "InputView<Token>"
+            && handle.provenance.index.kind == "dynamic"
+            && handle.provenance.index.binding.as_deref() == Some("source_index")
+    }));
+
+    let invalid = fixture(dep_data, dynamic_index_witness(&result, u64::from(u32::MAX) + 1, expected_hash));
+    let execution = execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &invalid);
+    assert_eq!(execution.exit_code, 44, "a dynamic source index outside the packed 32-bit view domain must fail closed");
+
+    let mut tampered = result.metadata.clone();
+    let access = tampered
+        .runtime
+        .ckb_runtime_accesses
+        .iter_mut()
+        .find(|access| access.provenance.index.kind == "dynamic")
+        .expect("dynamic runtime access");
+    access.provenance.index.max_inclusive = Some(u64::from(u32::MAX) - 1);
+    let error = cellscript::validate_compile_metadata(&tampered, result.artifact_format)
+        .expect_err("a narrowed source-view index contract must not validate");
+    assert!(error.message.contains("32-bit source-view index"), "unexpected validation error: {error}");
 }
