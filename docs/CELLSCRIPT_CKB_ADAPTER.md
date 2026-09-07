@@ -152,6 +152,15 @@ capacity, or fee. The resulting
 `capacity_source = live-node`. It is still uncommitted state and must be
 refreshed before signing/submission when freshness matters.
 
+`verify_protocol_bundle_live_dependencies()` consumes that exact live-input
+record and resolves every artifact code CellDep. Direct code deps must expose
+the admitted ELF bytes; dep-group roots must contain a canonical Molecule
+`OutPointVec`, and every member is queried before matching the code. Data,
+data1, and data2 identities require the code-data hash; type identities require
+the live code Cell's Type Script hash, while all four modes independently
+require the admitted ELF data hash. The result remains uncommitted and bound to
+the same bundle, network, raw transaction, and complete serialization hash.
+
 `CkbSdkAcceptance::dry_run_protocol_bundle()` and the equivalent
 `CellScriptAdapter` method call CKB `estimate_cycles` with that exact
 transaction. A successful result produces

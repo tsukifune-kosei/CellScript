@@ -14,12 +14,12 @@ use ckb_sdk::core::TransactionBuilder;
 use ckb_types::{
     bytes::Bytes,
     core::{Capacity, DepType, ScriptHashType, TransactionView},
-    packed::{CellDep, CellInput, CellOutput, OutPoint, Script, WitnessArgs},
+    packed::{CellDep, CellInput, CellOutput, OutPoint, OutPointVec, Script, WitnessArgs},
     prelude::*,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const PROTOCOL_BUNDLE_REPORT_SCHEMA: &str = "cellscript-protocol-bundle-report-v1";
 const PROTOCOL_BUNDLE_SCHEMA: &str = "cellscript-protocol-bundle-v1";
@@ -59,6 +59,18 @@ pub struct ProtocolBundleLiveInputExpectation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleCodeCellDepExpectation {
+    pub artifact: String,
+    pub transaction_cell_dep_index: u32,
+    pub out_point_tx_hash: String,
+    pub out_point_index: u32,
+    pub dep_type: String,
+    pub artifact_hash: String,
+    pub script_code_hash: String,
+    pub script_hash_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProtocolBundleMaterializationEvidence {
     pub schema: &'static str,
     pub state: &'static str,
@@ -74,6 +86,7 @@ pub struct ProtocolBundleMaterializationEvidence {
     pub fee_shannons: u64,
     pub capacity_source: &'static str,
     pub live_input_expectations: Vec<ProtocolBundleLiveInputExpectation>,
+    pub code_cell_dep_expectations: Vec<ProtocolBundleCodeCellDepExpectation>,
     pub transaction_serialization: &'static str,
     pub script_groups: Vec<ProtocolBundleScriptGroupEvidence>,
     pub ckb_vm_execution: &'static str,
@@ -124,6 +137,8 @@ pub struct ProtocolBundleLiveResolutionEvidence {
     pub state: &'static str,
     pub bundle_hash: String,
     pub raw_transaction_hash: String,
+    pub serialized_transaction_hash: String,
+    pub serialized_transaction_size_bytes: usize,
     pub network_chain_id: String,
     pub network_genesis_hash: String,
     pub inputs: Vec<ProtocolBundleLiveInputEvidence>,
@@ -131,6 +146,53 @@ pub struct ProtocolBundleLiveResolutionEvidence {
     pub output_capacity_shannons: u64,
     pub fee_shannons: u64,
     pub capacity_source: &'static str,
+    pub chain_evidence: &'static str,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProtocolBundleLiveCellObservation {
+    pub out_point: OutPoint,
+    pub output: CellOutput,
+    pub data: Bytes,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProtocolBundleCellDepObservation {
+    pub transaction_cell_dep_index: u32,
+    pub root: ProtocolBundleLiveCellObservation,
+    pub dep_group_members: Vec<ProtocolBundleLiveCellObservation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleCodeCellEvidence {
+    pub artifact: String,
+    pub transaction_cell_dep_index: u32,
+    pub dep_type: String,
+    pub root_out_point_tx_hash: String,
+    pub root_out_point_index: u32,
+    pub root_data_hash: String,
+    pub resolved_code_out_point_tx_hash: String,
+    pub resolved_code_out_point_index: u32,
+    pub artifact_hash: String,
+    pub code_data_hash: String,
+    pub script_code_hash: String,
+    pub script_hash_type: String,
+    pub status: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleDependencyResolutionEvidence {
+    pub schema: &'static str,
+    pub state: &'static str,
+    pub bundle_hash: String,
+    pub raw_transaction_hash: String,
+    pub serialized_transaction_hash: String,
+    pub serialized_transaction_size_bytes: usize,
+    pub network_chain_id: String,
+    pub network_genesis_hash: String,
+    pub cell_deps: Vec<ProtocolBundleCodeCellEvidence>,
+    pub artifact_count: usize,
+    pub unique_cell_dep_count: usize,
     pub chain_evidence: &'static str,
 }
 
@@ -168,6 +230,7 @@ struct ArtifactWire {
     entry: EntryWire,
     script_role: ScriptRoleWire,
     deployment: DeploymentWire,
+    artifact_hash: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -186,6 +249,7 @@ enum ScriptRoleWire {
 
 #[derive(Debug, Deserialize)]
 struct DeploymentWire {
+    artifact_hash: String,
     script: ScriptWire,
     code_cell_dep: CellDepWire,
 }
@@ -316,6 +380,7 @@ pub fn materialize_protocol_bundle_report(bytes: &[u8]) -> Result<(TransactionVi
     let serialized_transaction_hash = hash_hex(serialized);
     let raw_transaction_hash = format!("0x{}", hex::encode(tx.hash().as_slice()));
     let script_groups = resolve_script_groups(&bundle, &serialized_transaction_hash)?;
+    let code_cell_dep_expectations = resolve_code_cell_dep_expectations(&bundle)?;
 
     Ok((
         tx,
@@ -334,6 +399,7 @@ pub fn materialize_protocol_bundle_report(bytes: &[u8]) -> Result<(TransactionVi
             fee_shannons: capacities.fee,
             capacity_source: "bundle-skeleton-not-live-resolved",
             live_input_expectations: capacities.live_input_expectations,
+            code_cell_dep_expectations,
             transaction_serialization: "verified",
             script_groups,
             ckb_vm_execution: "not-executed",
@@ -413,6 +479,8 @@ pub fn protocol_bundle_live_resolution_evidence(
         state: "LiveResolvedProtocolBundleTx",
         bundle_hash: materialization.bundle_hash.clone(),
         raw_transaction_hash: materialization.raw_transaction_hash.clone(),
+        serialized_transaction_hash: materialization.serialized_transaction_hash.clone(),
+        serialized_transaction_size_bytes: materialization.serialized_transaction_size_bytes,
         network_chain_id: observed_chain_id.to_string(),
         network_genesis_hash: observed_genesis_hash.to_string(),
         inputs,
@@ -421,6 +489,130 @@ pub fn protocol_bundle_live_resolution_evidence(
         fee_shannons,
         capacity_source: "live-node",
         chain_evidence: "live-cell-resolution-uncommitted",
+    })
+}
+
+/// Verify every artifact's deployed code CellDep against live node Cells.
+///
+/// Direct code deps must resolve to an exact admitted ELF data hash. Dep-group
+/// deps must resolve their canonical Molecule OutPointVec and provide every
+/// referenced live member before the selected code identity is accepted. The
+/// result is bound to both the materialized transaction and its live-input
+/// resolution evidence.
+pub fn protocol_bundle_dependency_resolution_evidence(
+    tx: &TransactionView,
+    materialization: &ProtocolBundleMaterializationEvidence,
+    live_resolution: &ProtocolBundleLiveResolutionEvidence,
+    observations: &[ProtocolBundleCellDepObservation],
+) -> Result<ProtocolBundleDependencyResolutionEvidence> {
+    validate_materialized_transaction(tx, materialization, "dependency resolution")?;
+    validate_live_resolution_binding(materialization, live_resolution)?;
+
+    let expected_indexes =
+        materialization.code_cell_dep_expectations.iter().map(|expected| expected.transaction_cell_dep_index).collect::<HashSet<_>>();
+    let mut observed_by_index = HashMap::with_capacity(observations.len());
+    for observation in observations {
+        if observed_by_index.insert(observation.transaction_cell_dep_index, observation).is_some() {
+            bail!("duplicate live CellDep observation for transaction index {}", observation.transaction_cell_dep_index);
+        }
+    }
+    if expected_indexes.len() != observed_by_index.len() || expected_indexes.iter().any(|index| !observed_by_index.contains_key(index))
+    {
+        bail!("live CellDep observations do not cover every artifact code CellDep exactly once");
+    }
+
+    let transaction_cell_deps = tx.cell_deps();
+    let mut cell_deps = Vec::with_capacity(materialization.code_cell_dep_expectations.len());
+    for expected in &materialization.code_cell_dep_expectations {
+        let observation = observed_by_index
+            .get(&expected.transaction_cell_dep_index)
+            .ok_or_else(|| anyhow::anyhow!("missing live CellDep observation for artifact '{}'", expected.artifact))?;
+        let transaction_dep = transaction_cell_deps.get(expected.transaction_cell_dep_index as usize).ok_or_else(|| {
+            anyhow::anyhow!("artifact '{}' CellDep index is outside the materialized transaction", expected.artifact)
+        })?;
+        let transaction_dep_type = dep_type_name(transaction_dep.dep_type())?;
+        let (transaction_tx_hash, transaction_index) = out_point_identity(&transaction_dep.out_point());
+        if transaction_dep_type != expected.dep_type
+            || transaction_tx_hash != expected.out_point_tx_hash
+            || transaction_index != expected.out_point_index
+        {
+            bail!("artifact '{}' CellDep expectation differs from the materialized transaction", expected.artifact);
+        }
+        let (root_tx_hash, root_index) = out_point_identity(&observation.root.out_point);
+        if root_tx_hash != expected.out_point_tx_hash || root_index != expected.out_point_index {
+            bail!("artifact '{}' live CellDep root is bound to another OutPoint", expected.artifact);
+        }
+
+        let resolved_code = match expected.dep_type.as_str() {
+            "code" => {
+                if !observation.dep_group_members.is_empty() {
+                    bail!(
+                        "direct code CellDep {} must not contain dep-group member observations",
+                        expected.transaction_cell_dep_index
+                    );
+                }
+                &observation.root
+            }
+            "dep_group" => {
+                let declared_members = OutPointVec::from_slice(observation.root.data.as_ref()).map_err(|error| {
+                    anyhow::anyhow!("CellDep {} has malformed dep-group data: {error}", expected.transaction_cell_dep_index)
+                })?;
+                if declared_members.len() != observation.dep_group_members.len() {
+                    bail!(
+                        "CellDep {} dep-group observation does not cover every declared member",
+                        expected.transaction_cell_dep_index
+                    );
+                }
+                for (member_index, (declared, observed)) in
+                    declared_members.into_iter().zip(&observation.dep_group_members).enumerate()
+                {
+                    if declared.as_slice() != observed.out_point.as_slice() {
+                        bail!(
+                            "CellDep {} dep-group member {member_index} is bound to another OutPoint",
+                            expected.transaction_cell_dep_index
+                        );
+                    }
+                }
+                observation.dep_group_members.iter().find(|member| code_cell_matches_expectation(member, expected)).ok_or_else(
+                    || anyhow::anyhow!("artifact '{}' admitted ELF is absent from its live dep group", expected.artifact),
+                )?
+            }
+            other => bail!("unsupported ProtocolBundle CellDep type '{other}'"),
+        };
+        if !code_cell_matches_expectation(resolved_code, expected) {
+            bail!("artifact '{}' live code Cell does not match its admitted ELF and Script identity", expected.artifact);
+        }
+        let (resolved_tx_hash, resolved_index) = out_point_identity(&resolved_code.out_point);
+        cell_deps.push(ProtocolBundleCodeCellEvidence {
+            artifact: expected.artifact.clone(),
+            transaction_cell_dep_index: expected.transaction_cell_dep_index,
+            dep_type: expected.dep_type.clone(),
+            root_out_point_tx_hash: root_tx_hash,
+            root_out_point_index: root_index,
+            root_data_hash: hash_hex(&observation.root.data),
+            resolved_code_out_point_tx_hash: resolved_tx_hash,
+            resolved_code_out_point_index: resolved_index,
+            artifact_hash: expected.artifact_hash.clone(),
+            code_data_hash: hash_hex(&resolved_code.data),
+            script_code_hash: expected.script_code_hash.clone(),
+            script_hash_type: expected.script_hash_type.clone(),
+            status: "live-code-verified",
+        });
+    }
+    cell_deps.sort_by(|left, right| left.artifact.cmp(&right.artifact));
+    Ok(ProtocolBundleDependencyResolutionEvidence {
+        schema: "cellscript-protocol-bundle-dependency-resolution-v1",
+        state: "LiveDependenciesResolvedProtocolBundleTx",
+        bundle_hash: materialization.bundle_hash.clone(),
+        raw_transaction_hash: materialization.raw_transaction_hash.clone(),
+        serialized_transaction_hash: materialization.serialized_transaction_hash.clone(),
+        serialized_transaction_size_bytes: materialization.serialized_transaction_size_bytes,
+        network_chain_id: live_resolution.network_chain_id.clone(),
+        network_genesis_hash: live_resolution.network_genesis_hash.clone(),
+        artifact_count: cell_deps.len(),
+        unique_cell_dep_count: expected_indexes.len(),
+        cell_deps,
+        chain_evidence: "live-input-and-code-cell-resolution-uncommitted",
     })
 }
 
@@ -503,6 +695,70 @@ fn validate_materialized_transaction(
         bail!("ProtocolBundle {operation} transaction does not match materialization evidence");
     }
     Ok(())
+}
+
+fn validate_live_resolution_binding(
+    materialization: &ProtocolBundleMaterializationEvidence,
+    live_resolution: &ProtocolBundleLiveResolutionEvidence,
+) -> Result<()> {
+    if live_resolution.schema != "cellscript-protocol-bundle-live-resolution-v1"
+        || live_resolution.state != "LiveResolvedProtocolBundleTx"
+        || live_resolution.bundle_hash != materialization.bundle_hash
+        || live_resolution.raw_transaction_hash != materialization.raw_transaction_hash
+        || live_resolution.serialized_transaction_hash != materialization.serialized_transaction_hash
+        || live_resolution.serialized_transaction_size_bytes != materialization.serialized_transaction_size_bytes
+        || live_resolution.network_chain_id != materialization.network_chain_id
+        || live_resolution.network_genesis_hash != materialization.network_genesis_hash
+        || live_resolution.input_capacity_shannons != materialization.input_capacity_shannons
+        || live_resolution.output_capacity_shannons != materialization.output_capacity_shannons
+        || live_resolution.fee_shannons != materialization.fee_shannons
+        || live_resolution.capacity_source != "live-node"
+        || live_resolution.inputs.iter().any(|input| input.status != "live-verified")
+    {
+        bail!("ProtocolBundle live-input evidence is not bound to the materialized transaction");
+    }
+    if live_resolution.inputs.len() != materialization.live_input_expectations.len()
+        || live_resolution.inputs.iter().zip(&materialization.live_input_expectations).any(|(observed, expected)| {
+            observed.index != expected.index
+                || observed.out_point_tx_hash != expected.out_point_tx_hash
+                || observed.out_point_index != expected.out_point_index
+                || observed.capacity_shannons != expected.capacity_shannons
+                || observed.cell_output_hash != expected.cell_output_hash
+                || observed.data_hash != expected.data_hash
+        })
+    {
+        bail!("ProtocolBundle live-input evidence does not preserve every exact input observation");
+    }
+    Ok(())
+}
+
+fn code_cell_matches_expectation(
+    observation: &ProtocolBundleLiveCellObservation,
+    expected: &ProtocolBundleCodeCellDepExpectation,
+) -> bool {
+    let data_hash = hash_hex(&observation.data);
+    if data_hash != expected.artifact_hash {
+        return false;
+    }
+    match expected.script_hash_type.as_str() {
+        "data" | "data1" | "data2" => data_hash == expected.script_code_hash,
+        "type" => observation.output.type_().to_opt().is_some_and(|type_script| {
+            format!("0x{}", hex::encode(type_script.calc_script_hash().as_slice())) == expected.script_code_hash
+        }),
+        _ => false,
+    }
+}
+
+fn out_point_identity(out_point: &OutPoint) -> (String, u32) {
+    (format!("0x{}", hex::encode(out_point.tx_hash().as_slice())), out_point.index().unpack())
+}
+
+fn dep_type_name(dep_type: ckb_types::packed::Byte) -> Result<&'static str> {
+    match dep_type.as_slice().first().copied() {
+        Some(0) => Ok("code"),
+        Some(1) => Ok("dep_group"),
+        _ => bail!("materialized transaction contains an unsupported CellDep type"),
+    }
 }
 
 fn validate_report_boundary(report: &ReportWire) -> Result<()> {
@@ -675,6 +931,41 @@ fn materialize_transaction(transaction: &TransactionWire) -> Result<(Transaction
             live_input_expectations,
         },
     ))
+}
+
+fn resolve_code_cell_dep_expectations(bundle: &BundleWire) -> Result<Vec<ProtocolBundleCodeCellDepExpectation>> {
+    let mut expectations = Vec::with_capacity(bundle.artifacts.len());
+    for artifact in &bundle.artifacts {
+        let artifact_hash = parse_raw_hash32(&format!("artifact '{}'.artifact_hash", artifact.id), &artifact.artifact_hash)?;
+        let deployment_hash =
+            parse_raw_hash32(&format!("artifact '{}'.deployment.artifact_hash", artifact.id), &artifact.deployment.artifact_hash)?;
+        if artifact_hash != deployment_hash {
+            bail!("artifact '{}' deployment hash differs from its admitted artifact hash", artifact.id);
+        }
+        let script = parse_script(&format!("artifact '{}'.deployment.script", artifact.id), &artifact.deployment.script)?;
+        let script_code_hash = format!("0x{}", hex::encode(script.code_hash().as_slice()));
+        let artifact_hash = format!("0x{}", hex::encode(artifact_hash));
+        if artifact.deployment.script.hash_type != "type" && script_code_hash != artifact_hash {
+            bail!("artifact '{}' data-hash Script identity differs from its admitted ELF hash", artifact.id);
+        }
+        let transaction_cell_dep_index =
+            bundle.transaction.cell_deps.iter().position(|dep| dep == &artifact.deployment.code_cell_dep).ok_or_else(|| {
+                anyhow::anyhow!("artifact '{}' deployment code CellDep is absent from the concrete transaction", artifact.id)
+            })?;
+        expectations.push(ProtocolBundleCodeCellDepExpectation {
+            artifact: artifact.id.clone(),
+            transaction_cell_dep_index: u32::try_from(transaction_cell_dep_index)
+                .map_err(|_| anyhow::anyhow!("artifact '{}' code CellDep index does not fit in u32", artifact.id))?,
+            out_point_tx_hash: artifact.deployment.code_cell_dep.out_point.tx_hash.clone(),
+            out_point_index: artifact.deployment.code_cell_dep.out_point.index,
+            dep_type: artifact.deployment.code_cell_dep.dep_type.clone(),
+            artifact_hash,
+            script_code_hash,
+            script_hash_type: artifact.deployment.script.hash_type.clone(),
+        });
+    }
+    expectations.sort_by(|left, right| left.artifact.cmp(&right.artifact));
+    Ok(expectations)
 }
 
 fn resolve_script_groups(bundle: &BundleWire, transaction_bytes_hash: &str) -> Result<Vec<ProtocolBundleScriptGroupEvidence>> {
@@ -869,6 +1160,16 @@ fn parse_byte32(label: &str, value: &str) -> Result<[u8; 32]> {
     Ok(result)
 }
 
+fn parse_raw_hash32(label: &str, value: &str) -> Result<[u8; 32]> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
+        bail!("{label} must use canonical 32-byte lowercase hex without a prefix");
+    }
+    let bytes = hex::decode(value).with_context(|| format!("failed to decode {label}"))?;
+    let mut result = [0u8; 32];
+    result.copy_from_slice(&bytes);
+    Ok(result)
+}
+
 fn parse_hex(label: &str, value: &str) -> Result<Vec<u8>> {
     let Some(raw) = value.strip_prefix("0x") else {
         bail!("{label} must use canonical 0x-prefixed lowercase hex");
@@ -957,14 +1258,14 @@ mod tests {
                     "script_role": "type",
                     "deployment": {
                         "network": { "chain_id": "ckb-testnet", "genesis_hash": format!("0x{}", "0".repeat(64)) },
-                        "artifact_hash": "9".repeat(64),
+                        "artifact_hash": "2".repeat(64),
                         "script": type_script.clone(),
                         "code_cell_dep": type_dep.clone(),
                     },
                     "compiler_version": "0.26.0",
                     "edition": "2026",
                     "metadata_schema_version": 71,
-                    "artifact_hash": "9".repeat(64),
+                    "artifact_hash": "2".repeat(64),
                     "metadata_hash": "a".repeat(64),
                     "typed_semantics_hash": "b".repeat(64),
                     "lowering_record_hash": "c".repeat(64),
@@ -1050,6 +1351,25 @@ mod tests {
         report["bundle_hash"] = Value::String(canonical_hash(PROTOCOL_BUNDLE_HASH_DOMAIN, &report["bundle"]).unwrap());
     }
 
+    fn bind_artifact_to_code_data(report: &mut Value, artifact_index: usize, data: &[u8]) {
+        let code_hash = hash_hex(data);
+        let raw_hash = code_hash.trim_start_matches("0x").to_string();
+        report["bundle"]["artifacts"][artifact_index]["artifact_hash"] = Value::String(raw_hash.clone());
+        report["bundle"]["artifacts"][artifact_index]["deployment"]["artifact_hash"] = Value::String(raw_hash);
+        report["bundle"]["artifacts"][artifact_index]["deployment"]["script"]["code_hash"] = Value::String(code_hash.clone());
+        match artifact_index {
+            0 => {
+                report["bundle"]["transaction"]["inputs"][0]["lock"]["code_hash"] = Value::String(code_hash.clone());
+                report["bundle"]["transaction"]["outputs"][0]["lock"]["code_hash"] = Value::String(code_hash);
+            }
+            1 => {
+                report["bundle"]["transaction"]["inputs"][0]["type"]["code_hash"] = Value::String(code_hash.clone());
+                report["bundle"]["transaction"]["outputs"][0]["type"]["code_hash"] = Value::String(code_hash);
+            }
+            _ => panic!("test helper only supports the two-artifact fixture"),
+        }
+    }
+
     #[test]
     fn materializes_exact_bytes_and_group_relative_indexes() {
         let report = report();
@@ -1132,5 +1452,96 @@ mod tests {
                 .unwrap_err()
                 .to_string();
         assert!(error.contains("differs from the ProtocolBundle expectation"), "{error}");
+    }
+
+    #[test]
+    fn live_dependency_resolution_checks_direct_and_dep_group_code_cells() {
+        let auth_code = Bytes::from_static(b"auth-elf");
+        let token_code = Bytes::from_static(b"token-elf");
+        let mut report = report();
+        bind_artifact_to_code_data(&mut report, 0, &auth_code);
+        bind_artifact_to_code_data(&mut report, 1, &token_code);
+        let code_type_script = Script::new_builder()
+            .code_hash([0x77u8; 32].pack())
+            .hash_type(ScriptHashType::Data1)
+            .args(Bytes::from_static(b"code-type").pack())
+            .build();
+        let type_code_hash = format!("0x{}", hex::encode(code_type_script.calc_script_hash().as_slice()));
+        report["bundle"]["artifacts"][1]["deployment"]["script"]["code_hash"] = Value::String(type_code_hash.clone());
+        report["bundle"]["artifacts"][1]["deployment"]["script"]["hash_type"] = Value::String("type".to_string());
+        report["bundle"]["transaction"]["inputs"][0]["type"]["code_hash"] = Value::String(type_code_hash.clone());
+        report["bundle"]["transaction"]["inputs"][0]["type"]["hash_type"] = Value::String("type".to_string());
+        report["bundle"]["transaction"]["outputs"][0]["type"]["code_hash"] = Value::String(type_code_hash);
+        report["bundle"]["transaction"]["outputs"][0]["type"]["hash_type"] = Value::String("type".to_string());
+        report["bundle"]["artifacts"][1]["deployment"]["code_cell_dep"]["dep_type"] = Value::String("dep_group".to_string());
+        report["bundle"]["transaction"]["cell_deps"][1]["dep_type"] = Value::String("dep_group".to_string());
+        rebind_bundle_hash(&mut report);
+
+        let (transaction, materialization) = materialize_protocol_bundle_report(&serde_json::to_vec(&report).unwrap()).unwrap();
+        let lock: ScriptWire = serde_json::from_value(report["bundle"]["transaction"]["inputs"][0]["lock"].clone()).unwrap();
+        let type_script: ScriptWire = serde_json::from_value(report["bundle"]["transaction"]["inputs"][0]["type"].clone()).unwrap();
+        let live_input = CellOutput::new_builder()
+            .capacity(120_000_000_000u64)
+            .lock(parse_script("live.lock", &lock).unwrap())
+            .type_(Some(parse_script("live.type", &type_script).unwrap()).pack())
+            .build();
+        let live_resolution = protocol_bundle_live_resolution_evidence(
+            &transaction,
+            &materialization,
+            "ckb-testnet",
+            &format!("0x{}", "0".repeat(64)),
+            &[(live_input, Bytes::new())],
+        )
+        .unwrap();
+
+        let code_cell_output =
+            CellOutput::new_builder().capacity(10_000_000_000u64).lock(parse_script("code.lock", &lock).unwrap()).build();
+        let deps = transaction.cell_deps();
+        let dep_group_member_out_point = OutPoint::new_builder().tx_hash([0x55u8; 32].pack()).index(1u32).build();
+        let dep_group_data = vec![dep_group_member_out_point.clone()].pack().as_bytes();
+        let observations = vec![
+            ProtocolBundleCellDepObservation {
+                transaction_cell_dep_index: 0,
+                root: ProtocolBundleLiveCellObservation {
+                    out_point: deps.get(0).unwrap().out_point(),
+                    output: code_cell_output.clone(),
+                    data: auth_code,
+                },
+                dep_group_members: Vec::new(),
+            },
+            ProtocolBundleCellDepObservation {
+                transaction_cell_dep_index: 1,
+                root: ProtocolBundleLiveCellObservation {
+                    out_point: deps.get(1).unwrap().out_point(),
+                    output: code_cell_output.clone(),
+                    data: dep_group_data,
+                },
+                dep_group_members: vec![ProtocolBundleLiveCellObservation {
+                    out_point: dep_group_member_out_point,
+                    output: code_cell_output.as_builder().type_(Some(code_type_script).pack()).build(),
+                    data: token_code,
+                }],
+            },
+        ];
+        let evidence =
+            protocol_bundle_dependency_resolution_evidence(&transaction, &materialization, &live_resolution, &observations).unwrap();
+        assert_eq!(evidence.artifact_count, 2);
+        assert_eq!(evidence.unique_cell_dep_count, 2);
+        assert!(evidence.cell_deps.iter().all(|dep| dep.status == "live-code-verified"));
+
+        let mut changed_live_resolution = live_resolution.clone();
+        changed_live_resolution.inputs[0].data_hash = format!("0x{}", "f".repeat(64));
+        let error =
+            protocol_bundle_dependency_resolution_evidence(&transaction, &materialization, &changed_live_resolution, &observations)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("does not preserve every exact input observation"), "{error}");
+
+        let mut changed = observations;
+        changed[1].dep_group_members[0].data = Bytes::from_static(b"changed-token-elf");
+        let error = protocol_bundle_dependency_resolution_evidence(&transaction, &materialization, &live_resolution, &changed)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("admitted ELF is absent"), "{error}");
     }
 }

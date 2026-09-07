@@ -251,6 +251,15 @@
   `capacity_source` from the bundle skeleton to `live-node` while remaining
   explicit that this is uncommitted state.
 
+- Add live ProtocolBundle deployment-dependency resolution. Materialization
+  now binds each admitted artifact hash and Script code identity to its exact
+  transaction CellDep index. The adapter rechecks the connected chain, requires
+  every code Cell to remain live, verifies the admitted ELF data hash for
+  `data`/`data1`/`data2` and `type` deployments, and expands Molecule dep-group
+  member OutPoints before accepting a match. The resulting dependency record
+  is bound to the exact transaction and prior live-input evidence and remains
+  explicitly uncommitted.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

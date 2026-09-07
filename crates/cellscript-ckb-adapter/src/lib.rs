@@ -23,8 +23,10 @@ pub mod policy_witness;
 mod protocol_bundle;
 
 pub use protocol_bundle::{
-    materialize_protocol_bundle_report, protocol_bundle_dry_run_evidence, protocol_bundle_live_resolution_evidence,
-    ProtocolBundleDryRunEvidence, ProtocolBundleGroupDryRunEvidence, ProtocolBundleIndexBinding, ProtocolBundleLiveInputEvidence,
+    materialize_protocol_bundle_report, protocol_bundle_dependency_resolution_evidence, protocol_bundle_dry_run_evidence,
+    protocol_bundle_live_resolution_evidence, ProtocolBundleCellDepObservation, ProtocolBundleCodeCellDepExpectation,
+    ProtocolBundleCodeCellEvidence, ProtocolBundleDependencyResolutionEvidence, ProtocolBundleDryRunEvidence,
+    ProtocolBundleGroupDryRunEvidence, ProtocolBundleIndexBinding, ProtocolBundleLiveCellObservation, ProtocolBundleLiveInputEvidence,
     ProtocolBundleLiveInputExpectation, ProtocolBundleLiveResolutionEvidence, ProtocolBundleMaterializationEvidence,
     ProtocolBundleScriptGroupEvidence,
 };
@@ -1533,6 +1535,15 @@ impl<'a> CkbSdkAcceptance<'a> {
         verify_protocol_bundle_live_inputs_with_client(self.client, tx, materialization)
     }
 
+    pub fn verify_protocol_bundle_live_dependencies(
+        &self,
+        tx: &TransactionView,
+        materialization: &ProtocolBundleMaterializationEvidence,
+        live_resolution: &ProtocolBundleLiveResolutionEvidence,
+    ) -> Result<ProtocolBundleDependencyResolutionEvidence> {
+        verify_protocol_bundle_live_dependencies_with_client(self.client, tx, materialization, live_resolution)
+    }
+
     pub fn test_tx_pool_accept(&self, tx: &TransactionView) -> std::result::Result<EntryCompleted, ckb_sdk::RpcError> {
         self.client.test_tx_pool_accept(to_rpc_transaction(tx), Some(OutputsValidator::Passthrough))
     }
@@ -1880,6 +1891,18 @@ impl CellScriptAdapter {
         verify_protocol_bundle_live_inputs_with_client(&self.client, tx, materialization)
     }
 
+    /// Resolve every artifact code CellDep against live node Cells. Dep-group
+    /// roots are decoded and every member is fetched before the admitted ELF
+    /// data hash and Script code identity are accepted.
+    pub fn verify_protocol_bundle_live_dependencies(
+        &self,
+        tx: &TransactionView,
+        materialization: &ProtocolBundleMaterializationEvidence,
+        live_resolution: &ProtocolBundleLiveResolutionEvidence,
+    ) -> Result<ProtocolBundleDependencyResolutionEvidence> {
+        verify_protocol_bundle_live_dependencies_with_client(&self.client, tx, materialization, live_resolution)
+    }
+
     /// Test tx-pool acceptance for a transaction.
     pub fn test_tx_pool_accept(&self, tx: &TransactionView) -> std::result::Result<EntryCompleted, ckb_sdk::RpcError> {
         self.client.test_tx_pool_accept(to_rpc_transaction(tx), Some(OutputsValidator::Passthrough))
@@ -1975,6 +1998,65 @@ fn verify_protocol_bundle_live_inputs_with_client(
         live_inputs.push((output, data));
     }
     protocol_bundle_live_resolution_evidence(tx, materialization, &observed_chain_id, &observed_genesis_hash, &live_inputs)
+}
+
+fn verify_protocol_bundle_live_dependencies_with_client(
+    client: &CkbRpcClient,
+    tx: &TransactionView,
+    materialization: &ProtocolBundleMaterializationEvidence,
+    live_resolution: &ProtocolBundleLiveResolutionEvidence,
+) -> Result<ProtocolBundleDependencyResolutionEvidence> {
+    let consensus = client.get_consensus()?;
+    let observed_genesis_hash = format!("0x{}", hex::encode(consensus.genesis_hash.as_bytes()));
+    if consensus.id != live_resolution.network_chain_id || observed_genesis_hash != live_resolution.network_genesis_hash {
+        bail!("connected CKB network identity changed after ProtocolBundle live-input resolution");
+    }
+    let mut indexes =
+        materialization.code_cell_dep_expectations.iter().map(|expected| expected.transaction_cell_dep_index).collect::<Vec<_>>();
+    indexes.sort_unstable();
+    indexes.dedup();
+    let transaction_cell_deps = tx.cell_deps();
+    let mut observations = Vec::with_capacity(indexes.len());
+    for index in indexes {
+        let cell_dep = transaction_cell_deps
+            .get(index as usize)
+            .ok_or_else(|| anyhow::anyhow!("ProtocolBundle code CellDep index {index} is outside the transaction"))?;
+        let root = fetch_live_protocol_bundle_cell(client, &cell_dep.out_point(), &format!("CellDep {index} root"))?;
+        let dep_group_members = match cell_dep.dep_type().as_slice().first().copied() {
+            Some(0) => Vec::new(),
+            Some(1) => {
+                let member_out_points = packed::OutPointVec::from_slice(root.data.as_ref())
+                    .map_err(|error| anyhow::anyhow!("CellDep {index} has malformed dep-group data: {error}"))?;
+                let mut members = Vec::with_capacity(member_out_points.len());
+                for (member_index, out_point) in member_out_points.into_iter().enumerate() {
+                    members.push(fetch_live_protocol_bundle_cell(
+                        client,
+                        &out_point,
+                        &format!("CellDep {index} dep-group member {member_index}"),
+                    )?);
+                }
+                members
+            }
+            _ => bail!("ProtocolBundle CellDep {index} has an unsupported dep type"),
+        };
+        observations.push(ProtocolBundleCellDepObservation { transaction_cell_dep_index: index, root, dep_group_members });
+    }
+    protocol_bundle_dependency_resolution_evidence(tx, materialization, live_resolution, &observations)
+}
+
+fn fetch_live_protocol_bundle_cell(
+    client: &CkbRpcClient,
+    out_point: &OutPoint,
+    label: &str,
+) -> Result<ProtocolBundleLiveCellObservation> {
+    let response = client.get_live_cell(out_point.clone().into(), true)?;
+    if response.status != "live" {
+        bail!("ProtocolBundle {label} is not live (status: {})", response.status);
+    }
+    let cell = response.cell.ok_or_else(|| anyhow::anyhow!("ProtocolBundle {label} response omitted the cell"))?;
+    let output: CellOutput = cell.output.into();
+    let data = cell.data.ok_or_else(|| anyhow::anyhow!("ProtocolBundle {label} response omitted cell data"))?.content.into_bytes();
+    Ok(ProtocolBundleLiveCellObservation { out_point: out_point.clone(), output, data })
 }
 
 pub fn sample_resolved_action_tx() -> ResolvedActionTx {

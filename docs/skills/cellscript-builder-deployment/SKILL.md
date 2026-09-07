@@ -56,3 +56,6 @@ Validation defaults:
 - call `verify_protocol_bundle_live_inputs` before relying on input capacities
   or fee evidence; require exact chain identity and `live-node` capacity source,
   and remember that a successful query is still uncommitted state.
+- call `verify_protocol_bundle_live_dependencies` with that live-input record;
+  require every artifact code CellDep or expanded dep-group member to match its
+  admitted ELF data hash and Script hash type before signing.

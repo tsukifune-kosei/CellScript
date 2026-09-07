@@ -174,6 +174,16 @@ hash-bound materialization expectation. The resulting
 inputs. This is uncommitted live-state evidence; the Cell can still be spent
 before submission.
 
+`CkbSdkAcceptance::verify_protocol_bundle_live_dependencies` then resolves
+every artifact code CellDep on the same connected chain. A direct code dep must
+contain bytes whose CKB data hash equals the admitted ELF hash. A dep-group root
+must decode as a canonical Molecule `OutPointVec`; every listed member must be
+live and one must satisfy the artifact identity. Data, data1, and data2 Scripts
+bind that data hash directly, while type Scripts bind the live code Cell's Type
+Script hash. The dependency evidence is rejected unless the earlier live-input
+record preserves every input observation and the exact materialized transaction
+identity.
+
 `CkbSdkAcceptance::dry_run_protocol_bundle` sends that exact packed transaction
 to CKB `estimate_cycles`. A successful response emits
 `cellscript-protocol-bundle-dry-run-v1`: every direct Lock/Type group is marked
@@ -197,16 +207,18 @@ byte-exact transaction while preserving the offline report unchanged.
 
 The next bundle phases must add, without weakening this hash boundary:
 
-- derivation of transaction claims from admitted builder manifests and live
-  deployment resolution;
+- derivation of transaction claims and live Cell selection from admitted
+  builder manifests;
 - revalidation of the packed transaction view against every artifact's builder
   assumptions;
 - per-Script-Group CKB-VM execution over byte-identical transaction bytes;
 - live-backed capacity, fee, and change evidence plus independently attributed
   per-group cycles;
-- runtime-adapter live Cell and deployment resolution; and
+- freshness-safe signing, tx-pool acceptance, submission, and confirmation;
 - generated TypeScript/Rust-facing APIs with resumable signing.
 
-Until those phases land, this report is offline structural evidence. It is not
-a submission-ready transaction or a statement that all participating Scripts
-accepted one concrete transaction.
+The original compiler report remains offline structural evidence. Adapter
+materialization, live-resolution, and dry-run records advance the same hash-bound
+transaction without rewriting that report. Until signing, tx-pool acceptance,
+submission, and confirmation land, these records do not describe a
+submission-ready or committed transaction.
