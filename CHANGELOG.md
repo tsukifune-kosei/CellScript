@@ -278,6 +278,15 @@
   explicitly contain no private keys. Generated packages compile with `tsc`
   and exercise both the positive state order and wrong-state rejection.
 
+- Make ProtocolBundle eligibility discoverable through Registry verification
+  evidence. Both independent Registry verifiers emit the exact bundle schema,
+  artifact-binding schema, and runtime-adapter identity only for CKB ELF
+  bundles that carry complete sidecars and pass the standalone checker. The
+  Registry worker requires the versioned triple to appear together, refuses it
+  outside structurally verified CKB ELF evidence, and preserves it in accepted
+  build evidence. Generic CKB executables and source-only snapshots remain
+  unmarked.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

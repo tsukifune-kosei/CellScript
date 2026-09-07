@@ -13,6 +13,9 @@ use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
 const MAX_SNAPSHOT_BYTES: u64 = 5 * 1024 * 1024;
+const PROTOCOL_BUNDLE_SCHEMA: &str = "cellscript-protocol-bundle-v1";
+const PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA: &str = "cellscript-protocol-bundle-artifact-binding-v1";
+const PROTOCOL_BUNDLE_RUNTIME_ADAPTER: &str = "cellscript-ckb-adapter";
 
 #[derive(Debug)]
 struct Args {
@@ -46,6 +49,9 @@ struct VerificationOutput {
     checker_version: Option<String>,
     checker_policy_schema: Option<String>,
     checker_report_hash: Option<String>,
+    protocol_bundle_schema: Option<&'static str>,
+    protocol_bundle_artifact_binding_schema: Option<&'static str>,
+    protocol_bundle_runtime_adapter: Option<&'static str>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,6 +218,9 @@ fn verify_cellscript_source(args: Args, snapshot: &[u8]) -> Result<VerificationO
         checker_version: None,
         checker_policy_schema: None,
         checker_report_hash: None,
+        protocol_bundle_schema: None,
+        protocol_bundle_artifact_binding_schema: None,
+        protocol_bundle_runtime_adapter: None,
     })
 }
 
@@ -348,6 +357,7 @@ fn verify_artifact_bundle(args: Args, snapshot: &[u8]) -> Result<VerificationOut
     .map_err(anyhow::Error::msg)
     .context("artifact profile contract validation failed")?;
     let metadata_hash = hex::encode(cellscript::ckb_blake2b256(snapshot));
+    let supports_protocol_bundle = verification_level == "structurally_verified" && artifact_format == "ckb-vm-executable";
     Ok(VerificationOutput {
         status: "passed",
         verification_level,
@@ -362,6 +372,9 @@ fn verify_artifact_bundle(args: Args, snapshot: &[u8]) -> Result<VerificationOut
         checker_version,
         checker_policy_schema,
         checker_report_hash,
+        protocol_bundle_schema: supports_protocol_bundle.then_some(PROTOCOL_BUNDLE_SCHEMA),
+        protocol_bundle_artifact_binding_schema: supports_protocol_bundle.then_some(PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA),
+        protocol_bundle_runtime_adapter: supports_protocol_bundle.then_some(PROTOCOL_BUNDLE_RUNTIME_ADAPTER),
     })
 }
 
@@ -625,6 +638,9 @@ action identity(value: u64) -> u64 {
         assert_eq!(output.interface_hash.as_deref(), Some(result.metadata.interface_hash.as_str()));
         assert_eq!(output.artifact_hash.as_deref().unwrap().len(), 64);
         assert_eq!(output.metadata_hash.len(), 64);
+        assert!(output.protocol_bundle_schema.is_none());
+        assert!(output.protocol_bundle_artifact_binding_schema.is_none());
+        assert!(output.protocol_bundle_runtime_adapter.is_none());
     }
 
     #[test]
@@ -644,6 +660,9 @@ action identity(value: u64) -> u64 {
         assert_eq!(output.checker_version.as_deref(), Some(cellscript_artifact_checker::CHECKER_VERSION));
         assert_eq!(output.checker_policy_schema.as_deref(), Some(cellscript_artifact_checker::CHECKER_POLICY_SCHEMA));
         assert_eq!(output.checker_report_hash.as_deref().unwrap().len(), 64);
+        assert_eq!(output.protocol_bundle_schema, Some(PROTOCOL_BUNDLE_SCHEMA));
+        assert_eq!(output.protocol_bundle_artifact_binding_schema, Some(PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA));
+        assert_eq!(output.protocol_bundle_runtime_adapter, Some(PROTOCOL_BUNDLE_RUNTIME_ADAPTER));
     }
 
     #[test]
@@ -677,11 +696,13 @@ action identity(value: u64) -> u64 {
         .unwrap();
         assert_eq!(reproducible.verification_level, "evidence_required");
         assert_eq!(reproducible.artifact_format, "reproducible-binary");
+        assert!(reproducible.protocol_bundle_schema.is_none());
 
         let copy = verify_bundle("copy_material", &[("source", b"starter")], None, None, None).unwrap();
         assert_eq!(copy.verification_level, "hash_bound");
         assert_eq!(copy.artifact_format, "copy-material");
         assert!(copy.artifact_hash.is_none());
+        assert!(copy.protocol_bundle_schema.is_none());
     }
 
     #[test]

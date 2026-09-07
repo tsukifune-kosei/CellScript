@@ -237,7 +237,7 @@ The adapter now gates signing on both live receipts, delegates key operations to
 caller-supplied SDK unlockers, preserves compiler-owned witness fields, verifies
 the signed bytes through node execution and tx-pool acceptance, and gates
 submission on that evidence. Builder-derived live selection, independently
-measured per-group cycles, generated SDK/ecosystem alignment, and the remaining
+measured per-group cycles, confirmation/reorg evidence, and the remaining
 runtime-adapter work remain required before issue #9 is complete. See
 [CellScript ProtocolBundle v1](CELLSCRIPT_PROTOCOL_BUNDLE.md).
 
@@ -245,8 +245,11 @@ Generated TypeScript action builders now expose the same ProtocolBundle v1
 state names and artifact-binding schema as the Rust adapter. Their client
 orders offline checking, live resolution, external signing resumption, signed
 node execution, tx-pool acceptance, and submission. It accepts opaque signer
-results and never accepts a private key field. Registry discovery and website
-documentation remain the ecosystem-alignment work for this phase.
+results and never accepts a private key field. Registry verified-build evidence
+publishes the same bundle schema, artifact-binding schema, and runtime-adapter
+identity only for complete independently checked CKB ELF bundles; source-only
+and generic hash-bound artifacts remain unmarked. The numbered website tutorial
+is the remaining documentation-alignment work for this phase.
 
 Extend trusted external verification through exact artifact, interface,
 deployment, argument-adapter, and result contracts. General process or pipe

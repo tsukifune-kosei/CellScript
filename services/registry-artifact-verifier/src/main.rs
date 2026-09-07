@@ -13,6 +13,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 const MAX_SNAPSHOT_BYTES: u64 = 5 * 1024 * 1024;
+const PROTOCOL_BUNDLE_SCHEMA: &str = "cellscript-protocol-bundle-v1";
+const PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA: &str = "cellscript-protocol-bundle-artifact-binding-v1";
+const PROTOCOL_BUNDLE_RUNTIME_ADAPTER: &str = "cellscript-ckb-adapter";
 
 #[derive(Debug)]
 struct Args {
@@ -54,6 +57,12 @@ struct VerificationOutput {
     interface_digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     interface_commitment_status: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protocol_bundle_schema: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protocol_bundle_artifact_binding_schema: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protocol_bundle_runtime_adapter: Option<&'static str>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,6 +186,7 @@ fn verify(args: Args) -> Result<VerificationOutput> {
         None
     };
 
+    let supports_protocol_bundle = checker.is_some();
     Ok(VerificationOutput {
         status: "passed",
         verification_level: if checker.is_some() { "structurally_verified" } else { "hash_bound" },
@@ -193,6 +203,9 @@ fn verify(args: Args) -> Result<VerificationOutput> {
         interface_format: interface_digest.as_ref().map(|_| "ls-idl"),
         interface_digest,
         interface_commitment_status: manifest.get("interface").map(|_| "schema-and-suffix-bound"),
+        protocol_bundle_schema: supports_protocol_bundle.then_some(PROTOCOL_BUNDLE_SCHEMA),
+        protocol_bundle_artifact_binding_schema: supports_protocol_bundle.then_some(PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA),
+        protocol_bundle_runtime_adapter: supports_protocol_bundle.then_some(PROTOCOL_BUNDLE_RUNTIME_ADAPTER),
     })
 }
 
@@ -598,6 +611,9 @@ action main(value: u64) -> u64 {
         assert_eq!(output.verification_level, "structurally_verified");
         assert_eq!(output.checker_version.as_deref(), Some(cellscript_artifact_checker::CHECKER_VERSION));
         assert_eq!(output.checker_policy_schema.as_deref(), Some(cellscript_artifact_checker::CHECKER_POLICY_SCHEMA));
+        assert_eq!(output.protocol_bundle_schema, Some(PROTOCOL_BUNDLE_SCHEMA));
+        assert_eq!(output.protocol_bundle_artifact_binding_schema, Some(PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA));
+        assert_eq!(output.protocol_bundle_runtime_adapter, Some(PROTOCOL_BUNDLE_RUNTIME_ADAPTER));
     }
 
     #[test]
@@ -665,5 +681,8 @@ action main(value: u64) -> u64 {
         assert_eq!(output.verification_level, "hash_bound");
         assert!(output.checker_version.is_none());
         assert!(output.checker_report_hash.is_none());
+        assert!(output.protocol_bundle_schema.is_none());
+        assert!(output.protocol_bundle_artifact_binding_schema.is_none());
+        assert!(output.protocol_bundle_runtime_adapter.is_none());
     }
 }

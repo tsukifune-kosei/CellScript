@@ -1017,6 +1017,9 @@ dry-run the signed bytes, require tx-pool acceptance, and submit with a hash-bou
 uncommitted receipt. Generated TypeScript packages expose the same ordered
 states and an artifact binding tied to their metadata, ELF, interface, and
 builder-manifest identities; signing requests carry no private keys.
+Registry verified-build evidence exposes the same bundle schema, binding
+schema, and `cellscript-ckb-adapter` identity only after a CKB ELF's metadata,
+lowering record, and source map pass the independent artifact checker.
 | `cellc publish` / `cellc publish --offline` / `cellc registry add` / `cellc registry edit --yank` | Public publish plus explicit local/offline registry metadata flow; public registry policy makes bare `cellc publish` an authenticated registry write, with Git/static metadata retained for audit and fallback |
 | `cellc auth capability create/submit/revoke` / public registry write API / non-CellScript artifact install | Typed wallet-rooted publication policy and future-facing artifact profiles; fail-closed where unsupported |
 

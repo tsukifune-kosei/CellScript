@@ -4344,6 +4344,31 @@ export function validatePromotionEvidence(
       requireEvidenceString(evidence, "checker_policy_schema", 1, 120);
       requireEvidenceHash(evidence, "checker_report_hash");
     }
+    const protocolBundleFields = [
+      evidence["protocol_bundle_schema"],
+      evidence["protocol_bundle_artifact_binding_schema"],
+      evidence["protocol_bundle_runtime_adapter"],
+    ];
+    if (protocolBundleFields.some((field) => field !== undefined)) {
+      if (level !== "structurally_verified"
+        || version.artifact.profile !== "ckb_executable"
+        || evidence["artifact_format"] !== "ckb-vm-executable") {
+        throw new ApiError(
+          400,
+          "protocol_bundle_evidence_insufficient",
+          "ProtocolBundle discovery requires a structurally verified CKB ELF bundle with complete sidecars",
+        );
+      }
+      if (protocolBundleFields[0] !== "cellscript-protocol-bundle-v1"
+        || protocolBundleFields[1] !== "cellscript-protocol-bundle-artifact-binding-v1"
+        || protocolBundleFields[2] !== "cellscript-ckb-adapter") {
+        throw new ApiError(
+          400,
+          "protocol_bundle_contract_invalid",
+          "ProtocolBundle discovery contract is incomplete or unrecognised",
+        );
+      }
+    }
   } else if (kind === "reproduced_build") {
     const verified = latestEvidence(previous, "verified_build");
     requireEvidenceReference(evidence, "verified_build_evidence_hash", verified);

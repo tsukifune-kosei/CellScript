@@ -207,6 +207,18 @@ and any bundle or raw-transaction identity change between stages. Each package
 also exports `bindProtocolBundleArtifact`, which refuses a deployment ELF hash
 different from the generated builder's admitted artifact hash.
 
+Registry verified-build evidence makes that capability discoverable without
+weakening admission. A release carries `protocol_bundle_schema`,
+`protocol_bundle_artifact_binding_schema`, and
+`protocol_bundle_runtime_adapter` only when its CKB ELF, compile metadata,
+lowering record, and source map pass the standalone checker. The values are
+exactly `cellscript-protocol-bundle-v1`,
+`cellscript-protocol-bundle-artifact-binding-v1`, and
+`cellscript-ckb-adapter`. The Registry rejects partial or unknown triples and
+does not attach them to generic hash-bound executables or source-only
+snapshots. Composition still re-admits the exact local files and, for action
+entries, the generated builder manifest.
+
 `CkbSdkAcceptance::dry_run_protocol_bundle` sends that exact packed transaction
 to CKB `estimate_cycles`. A successful response emits
 `cellscript-protocol-bundle-dry-run-v1`: every direct Lock/Type group is marked
@@ -230,18 +242,13 @@ byte-exact transaction while preserving the offline report unchanged.
 
 The next bundle phases must add, without weakening this hash boundary:
 
-- derivation of transaction claims and live Cell selection from admitted
-  builder manifests;
-- revalidation of the packed transaction view against every artifact's builder
-  assumptions;
-- per-Script-Group CKB-VM execution over byte-identical transaction bytes;
-- live-backed capacity, fee, and change evidence plus independently attributed
-  per-group cycles;
-- freshness-safe confirmation and reorg handling;
-- generated TypeScript/Rust-facing APIs with resumable signing.
+- builder-derived transaction claims and live Cell selection;
+- independently attributed per-group cycles when an execution backend can
+  report them;
+- freshness-safe confirmation and reorg handling.
 
 The original compiler report remains offline structural evidence. Adapter
-materialization, live-resolution, and dry-run records advance the same hash-bound
-transaction without rewriting that report. Until signing, tx-pool acceptance,
-submission, and confirmation land, these records do not describe a
-submission-ready or committed transaction.
+materialization, live resolution, dependency resolution, signed dry-run,
+tx-pool, and submission records advance the same hash-bound transaction without
+rewriting that report. Submission is still uncommitted; only future
+confirmation and reorg-aware evidence may describe a committed transaction.

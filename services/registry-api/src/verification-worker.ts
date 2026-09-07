@@ -130,6 +130,11 @@ async function processJob(job: VerificationJobRecord): Promise<void> {
           ...(result.checker_version ? { checker_version: result.checker_version } : {}),
           ...(result.checker_policy_schema ? { checker_policy_schema: result.checker_policy_schema } : {}),
           ...(result.checker_report_hash ? { checker_report_hash: result.checker_report_hash } : {}),
+          ...(result.protocol_bundle_schema ? {
+            protocol_bundle_schema: result.protocol_bundle_schema,
+            protocol_bundle_artifact_binding_schema: result.protocol_bundle_artifact_binding_schema,
+            protocol_bundle_runtime_adapter: result.protocol_bundle_runtime_adapter,
+          } : {}),
           artifact_format: result.artifact_format,
           snapshot_hash: job.snapshot_hash,
           verification_job_id: job.id,
@@ -206,6 +211,9 @@ interface BuildVerificationResult {
   checker_version?: string;
   checker_policy_schema?: string;
   checker_report_hash?: string;
+  protocol_bundle_schema?: "cellscript-protocol-bundle-v1";
+  protocol_bundle_artifact_binding_schema?: "cellscript-protocol-bundle-artifact-binding-v1";
+  protocol_bundle_runtime_adapter?: "cellscript-ckb-adapter";
 }
 
 async function runBuildVerification(job: VerificationJobRecord, version: PackageVersionRecord): Promise<BuildVerificationResult> {
@@ -297,6 +305,7 @@ async function runBuildVerification(job: VerificationJobRecord, version: Package
   if (!output || output["status"] !== "passed") {
     throw new Error("CellScript verifier success output is malformed");
   }
+  const protocolBundleCapability = optionalProtocolBundleCapability(output);
   const parsed: BuildVerificationResult = {
     status: "passed",
     verification_level: requiredVerificationLevel(output),
@@ -314,6 +323,7 @@ async function runBuildVerification(job: VerificationJobRecord, version: Package
       ? { checker_policy_schema: requiredOutputString(output, "checker_policy_schema", 120) }
       : {}),
     ...(optionalHash(output, "checker_report_hash") ? { checker_report_hash: optionalHash(output, "checker_report_hash")! } : {}),
+    ...protocolBundleCapability,
   };
   requireSameHash(parsed.source_hash, job.source_hash, "source_hash");
   requireSameHash(parsed.manifest_hash, job.manifest_hash, "manifest_hash");
@@ -325,7 +335,39 @@ async function runBuildVerification(job: VerificationJobRecord, version: Package
     && (!parsed.checker_version || !parsed.checker_policy_schema || !parsed.checker_report_hash)) {
     throw new VerificationRejected("checker_identity_missing", "artifact verifier omitted checker version, policy, or report hash");
   }
+  if (parsed.protocol_bundle_schema) {
+    if (parsed.verification_level !== "structurally_verified"
+      || job.artifact.profile !== "ckb_executable"
+      || parsed.artifact_format !== "ckb-vm-executable") {
+      throw new VerificationRejected(
+        "protocol_bundle_evidence_insufficient",
+        "ProtocolBundle discovery requires a structurally verified CKB ELF bundle with complete sidecars",
+      );
+    }
+  }
   return parsed;
+}
+
+function optionalProtocolBundleCapability(value: Record<string, unknown>): Partial<BuildVerificationResult> {
+  const fields = [
+    value["protocol_bundle_schema"],
+    value["protocol_bundle_artifact_binding_schema"],
+    value["protocol_bundle_runtime_adapter"],
+  ];
+  if (fields.every((field) => field == null)) return {};
+  if (fields[0] !== "cellscript-protocol-bundle-v1"
+    || fields[1] !== "cellscript-protocol-bundle-artifact-binding-v1"
+    || fields[2] !== "cellscript-ckb-adapter") {
+    throw new VerificationRejected(
+      "protocol_bundle_contract_invalid",
+      "verifier ProtocolBundle discovery contract is incomplete or unrecognised",
+    );
+  }
+  return {
+    protocol_bundle_schema: "cellscript-protocol-bundle-v1",
+    protocol_bundle_artifact_binding_schema: "cellscript-protocol-bundle-artifact-binding-v1",
+    protocol_bundle_runtime_adapter: "cellscript-ckb-adapter",
+  };
 }
 
 class VerificationRejected extends Error {

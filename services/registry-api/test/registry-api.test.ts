@@ -54,6 +54,7 @@ import {
   parseDepGroupOutPoints,
   registryCommitmentHash,
   registryRuntimeConfig,
+  validatePromotionEvidence,
   verifyDeployment,
   verifyMainnetDeployment,
   type AppDeps,
@@ -69,6 +70,58 @@ const reproducerPublicKeys = {
   "builder-a": "p256-spki:MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2GpMwoWK1SO7Vrd_Rn3kxf_VllpSMGMu1Mo40vH2IotxFkJwZwO7acw8A-lZB7z4l5QAYDKTP4ua7YilwZQfBw",
   "builder-b": "p256-spki:MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEcZljLFjOhAdes8hm88phoxoMmsya3kKGRbmwjtH1eW4tWV_sn81NRL5EwkrqhjPuYxXfEbYBfuSVPMVD3at7hQ",
 } as const;
+
+describe("ProtocolBundle Registry discovery evidence", () => {
+  const sourceHash = `0x${"11".repeat(32)}`;
+  const manifestHash = `0x${"12".repeat(32)}`;
+  const artifactHash = `0x${"13".repeat(32)}`;
+  const version = {
+    version: "1.2.3",
+    source_hash: sourceHash,
+    manifest_hash: manifestHash,
+    artifact: { profile: "ckb_executable" },
+    registry_entry: { versions: [{ version: "1.2.3", artifact_hash: artifactHash }] },
+  } as PackageVersionRecord;
+  const evidence = {
+    schema: "cellscript-registry-evidence",
+    kind: "verified_build",
+    producer: "cellscript-registry-artifact-verifier/test",
+    generated_at: new Date(Date.now() - 1_000).toISOString(),
+    verification_status: "passed",
+    verification_level: "structurally_verified",
+    source_hash: sourceHash,
+    manifest_hash: manifestHash,
+    artifact_hash: artifactHash,
+    metadata_hash: `0x${"14".repeat(32)}`,
+    checker_version: "0.1.0",
+    checker_policy_schema: "cellscript-artifact-checker-policy-v1",
+    checker_report_hash: `0x${"15".repeat(32)}`,
+    artifact_format: "ckb-vm-executable",
+    protocol_bundle_schema: "cellscript-protocol-bundle-v1",
+    protocol_bundle_artifact_binding_schema: "cellscript-protocol-bundle-artifact-binding-v1",
+    protocol_bundle_runtime_adapter: "cellscript-ckb-adapter",
+  };
+
+  it("accepts only the complete versioned ProtocolBundle capability triple", () => {
+    expect(validatePromotionEvidence(evidence, "verified_build", version, [])).toMatchObject({
+      protocol_bundle_schema: "cellscript-protocol-bundle-v1",
+      protocol_bundle_artifact_binding_schema: "cellscript-protocol-bundle-artifact-binding-v1",
+      protocol_bundle_runtime_adapter: "cellscript-ckb-adapter",
+    });
+    expect(() => validatePromotionEvidence(
+      { ...evidence, protocol_bundle_runtime_adapter: undefined },
+      "verified_build",
+      version,
+      [],
+    )).toThrow("ProtocolBundle discovery contract is incomplete or unrecognised");
+    expect(() => validatePromotionEvidence(
+      { ...evidence, verification_level: "hash_bound" },
+      "verified_build",
+      version,
+      [],
+    )).toThrow("ProtocolBundle discovery requires a structurally verified CKB ELF bundle with complete sidecars");
+  });
+});
 
 describe("Node CKB RPC environment", () => {
   it("forwards every bounded RPC control used by the shared API", () => {
