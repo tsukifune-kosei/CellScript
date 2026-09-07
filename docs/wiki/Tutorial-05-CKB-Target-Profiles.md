@@ -104,6 +104,34 @@ from the beginning:
 - use `with_capacity_floor(shannons)` when a typed output has a known minimum
   capacity requirement;
 - record CKB `hash_type`, CellDeps, and DepGroups in `Cell.toml`;
+
+### The VM2 deployment contract (0.26 artifacts)
+
+Starting with the 0.26 economic backend closure, generated artifacts use Zbb
+rotate instructions (`rori`/`roriw`) in their hash cores. Those instructions
+are only guaranteed to decode on CKB VM version 2, and on chain the Script
+`hash_type` selects that version for data-hash deployments: `data2` selects
+VM2 (Zbb guaranteed), while `data1` does not. The compiler therefore emits and
+pins one explicit contract:
+
+```text
+minimum_vm_version = 2
+riscv_isa = "rv64imac_zbb"
+deployment_hash_types = ["data2"]
+```
+
+Consequences for deployment review:
+
+- The compiler default is now `data2`; a package declaring
+  `deploy.ckb.hash_type = "data"` or `"data1"` is rejected instead of
+  silently producing an artifact that some verifiers cannot execute.
+- Existing Data1 code Cells are not upgraded in place. Rebuild the ELF and
+  its sidecars, deploy the new bytes under `data2`, and update every code
+  hash, dependency, and acceptance fixture that references the old identity.
+- External CellDeps keep their own declared hash types: their bytes, not the
+  generated CellScript ELF, determine their VM requirement.
+- The independent artifact checker rejects any bundle whose metadata weakens
+  the VM2/Zbb/`data2` contract after production.
 - inspect `cellc constraints --target-profile ckb --json` before deployment;
 - inspect witness layout with `cellc abi` or `cellc entry-witness`;
 - place the reported `CSARGv1` entry payload in
