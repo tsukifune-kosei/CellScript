@@ -331,11 +331,14 @@ and prefix-preserving multisig construction remain outside this contract.
 The exact-handle tranche adds `ExactScriptHandle` as a 202-byte fixed ABI
 value and three role-specific runtime requirements. `dev` and `ci` must retain
 type/IR/metadata/LSP/syntax coverage, standalone-checker rebound mutations,
-and the real CKB-VM cases in `tests/exact_script_handles.rs`. The positive case
-binds the complete handle hash and verifier CellDep data hash. Negative cases
-mutate each fixed identity region and the selected artifact and must exit with
-stable code 70. A runtime-selected expected handle hash, legacy numeric source
-index, or unknown helper target must reject. See
+the pre-signing transaction validator cases, and the real CKB-VM cases in
+`tests/exact_script_handles.rs`. The positive cases bind the complete handle
+hash, compiled witness parameter position, full Lock/Type Script identity, and
+verifier CellDep data hash. Negative cases mutate each fixed identity region,
+Script args, parameter order, transaction indexes, and the selected artifact;
+runtime substitutions must exit with stable code 70 and metadata-evidence
+substitutions must make `cellc tx validate` fail. A runtime-selected expected
+handle hash, legacy numeric source index, or unknown helper target must reject. See
 [the exact Script handle contract](CELLSCRIPT_EXACT_SCRIPT_HANDLES.md).
 
 ### 0.26b semantic-foundation evidence

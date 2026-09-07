@@ -348,6 +348,18 @@
   deployment-line upgrades remain later phases. Advance the artifact cache
   identity to `project-source-set-v43-0.30-dev1-exact-script-handle`.
 
+- Close the exact-handle pre-signing validation slice of issue #11. Exact
+  helper ProofPlans now retain their typed source kind and handle parameter and
+  emit mandatory `exact_script_handle` builder assumptions. `cellc tx validate`
+  checks the canonical 202-byte value and compile-time full-handle hash,
+  recomputes the selected Lock/Type Script or verifier CellDep data identity,
+  decodes raw or projected `WitnessArgs.input_type`, and verifies the handle at
+  its compiled `CSARGv1` parameter position. The regression matrix covers
+  profile/ABI and every other handle region, wrong source and witness indexes,
+  CellDep substitution, complete Script args changes, and swapped handle
+  parameter positions. Advance the artifact cache identity to
+  `project-source-set-v44-0.30-dev2-exact-handle-tx-validation`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

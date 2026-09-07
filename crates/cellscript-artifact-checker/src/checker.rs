@@ -2704,7 +2704,7 @@ fn validate_typed_operation(
                 if call.contract != "versioned-runtime-helper"
                     || call.effect != "runtime-contract"
                     || call.return_type != "unit"
-                    || operation.destinations.len() != 0
+                    || !operation.destinations.is_empty()
                     || operation.operands.len() != 3
                     || !source_type_valid
                     || call.params.get(1).map(String::as_str) != Some("ExactScriptHandle")

@@ -228,7 +228,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v43-0.30-dev1-exact-script-handle";
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v44-0.30-dev2-exact-handle-tx-validation";
 pub const METADATA_SCHEMA_VERSION: u32 = 71;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;

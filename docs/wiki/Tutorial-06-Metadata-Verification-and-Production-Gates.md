@@ -357,6 +357,12 @@ rejects bare evidence tokens, and requires indexed evidence objects for
 non-structural assumptions before signing. Evidence indexes are range-checked
 against the transaction, and concrete fields such as outpoints, hashes,
 capacity, dep metadata, witness bytes, and TYPE_ID args must match when present.
+For `exact_script_handle`, the validator additionally checks the complete
+202-byte handle against its compile-time hash, class and role; recomputes the
+selected Lock/Type Script or verifier CellDep data identity; decodes
+`WitnessArgs.input_type`; and binds the handle to its compiled `CSARGv1`
+parameter position. Exact-handle source items therefore need resolved Script,
+Script-hash, data, or data-hash fields in addition to their transaction index.
 This is still pre-chain evidence: dry-run, capacity, cycles, and commit checks
 remain required for production claims.
 

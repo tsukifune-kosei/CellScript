@@ -426,7 +426,7 @@ mod tests {
             let packed = packed::Script::new_builder()
                 .code_hash(packed::Byte32::from_slice(&hex::decode(&script.code_hash[2..]).unwrap()).unwrap())
                 .hash_type(packed_hash_type)
-                .args(vec![1u8, 2, 3].pack())
+                .args([1u8, 2, 3].pack())
                 .build();
             assert_eq!(ckb_script_identity_hash(&script).unwrap(), format!("0x{}", hex::encode(packed.calc_script_hash().as_slice())));
         }

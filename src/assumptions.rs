@@ -1,6 +1,6 @@
 //! Builder assumption schema and transaction-shape validation for v0.16.
 
-use crate::{ckb_blake2b256, hex_encode, CompileMetadata, EvidenceTier, ProofPlanMetadata};
+use crate::{ckb_blake2b256, hex_encode, CompileMetadata, EvidenceTier, ParamMetadata, ProofPlanMetadata};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -127,7 +127,10 @@ pub fn validate_transaction_against_metadata(metadata: &CompileMetadata, tx: &Va
     } else {
         metadata.runtime.builder_assumptions.clone()
     };
-    validate_transaction_against_assumptions(&assumptions, tx)
+    let mut report = validate_transaction_against_assumptions(&assumptions, tx);
+    validate_exact_handle_parameter_bindings(metadata, tx, &assumptions, &mut report.violations);
+    report.status = if report.violations.is_empty() { "ok".to_string() } else { "failed".to_string() };
+    report
 }
 
 pub fn validate_transaction_against_assumptions(assumptions: &[BuilderAssumptionMetadata], tx: &Value) -> TxValidationReport {
@@ -220,7 +223,9 @@ fn push_assumption(
 
 fn classify_plan_assumption(plan: &ProofPlanMetadata, assumption: &str) -> &'static str {
     let text = format!("{} {} {}", plan.feature, plan.detail, assumption).to_ascii_lowercase();
-    if text.contains("lock transaction scan") || text.contains("only protects the lock group") {
+    if plan.category == "exact-script-handle" {
+        "exact_script_handle"
+    } else if text.contains("lock transaction scan") || text.contains("only protects the lock group") {
         "lock_group_transaction_scope"
     } else if text.contains("runtime-required") {
         "runtime_required_proof_plan"
@@ -358,6 +363,11 @@ fn validate_evidence_payload_shape(mismatches: &mut Vec<String>, payload: &Value
         return;
     };
 
+    if assumption.kind == "exact_script_handle" {
+        validate_exact_handle_evidence(mismatches, object, assumption, tx);
+        return;
+    }
+
     if !assumption.required_inputs.is_empty() {
         require_payload_array(
             mismatches,
@@ -490,6 +500,525 @@ fn validate_evidence_payload_shape(mismatches: &mut Vec<String>, payload: &Value
             mismatches.push("metadata/runtime ProofPlan gap evidence must include manual_review payload or checked=true".to_string());
         }
     }
+}
+
+fn validate_exact_handle_evidence(
+    mismatches: &mut Vec<String>,
+    object: &serde_json::Map<String, Value>,
+    assumption: &BuilderAssumptionMetadata,
+    tx: &Value,
+) {
+    let Some((role, expected_hash)) = exact_handle_feature(&assumption.feature) else {
+        mismatches.push("exact_script_handle feature must be <lock|type|spawned-verifier>:<64 lowercase hex handle hash>".to_string());
+        return;
+    };
+    let handle = match object.get("handle").and_then(Value::as_str) {
+        Some(value) => match canonical_lower_hex_bytes(value, crate::script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES) {
+            Ok(bytes) => Some(bytes),
+            Err(message) => {
+                mismatches.push(format!("exact handle evidence {message}"));
+                None
+            }
+        },
+        None => {
+            mismatches.push("exact_script_handle evidence must include canonical handle bytes".to_string());
+            None
+        }
+    };
+
+    if let Some(handle) = handle.as_deref() {
+        validate_exact_handle_value(mismatches, handle, role, expected_hash);
+    }
+
+    let expected_source = exact_handle_expected_source(assumption);
+    let source = object.get("source").and_then(Value::as_object);
+    match source {
+        Some(source) => validate_exact_handle_source(mismatches, source, expected_source, role, handle.as_deref(), tx),
+        None => mismatches.push(
+            "exact_script_handle evidence must include source { location: input|output|cell_dep, index: <transaction index> }"
+                .to_string(),
+        ),
+    }
+
+    let witness = object.get("witness").and_then(Value::as_object);
+    match witness {
+        Some(witness) => validate_exact_handle_witness(mismatches, witness, handle.as_deref(), tx),
+        None => mismatches
+            .push("exact_script_handle evidence must include witness { index: <transaction index>, field: input_type }".to_string()),
+    }
+}
+
+fn exact_handle_feature(feature: &str) -> Option<(&str, &str)> {
+    let (role, handle_hash) = feature.split_once(':')?;
+    if !matches!(role, "lock" | "type" | "spawned-verifier") || !canonical_lower_hash(handle_hash) {
+        return None;
+    }
+    Some((role, handle_hash))
+}
+
+fn exact_handle_expected_source(assumption: &BuilderAssumptionMetadata) -> Option<&'static str> {
+    match (assumption.required_inputs.is_empty(), assumption.required_outputs.is_empty(), assumption.required_cell_deps.is_empty()) {
+        (false, true, true) => Some("input"),
+        (true, false, true) => Some("output"),
+        (true, true, false) => Some("cell_dep"),
+        _ => None,
+    }
+}
+
+fn validate_exact_handle_value(mismatches: &mut Vec<String>, handle: &[u8], role: &str, expected_hash: &str) {
+    use crate::script_handle_contract::{
+        EXACT_SCRIPT_HANDLE_CLASS_OFFSET, EXACT_SCRIPT_HANDLE_CLASS_SCRIPT, EXACT_SCRIPT_HANDLE_CLASS_VERIFIER,
+        EXACT_SCRIPT_HANDLE_MAGIC, EXACT_SCRIPT_HANDLE_ROLE_LOCK, EXACT_SCRIPT_HANDLE_ROLE_OFFSET,
+        EXACT_SCRIPT_HANDLE_ROLE_SPAWNED_VERIFIER, EXACT_SCRIPT_HANDLE_ROLE_TYPE,
+    };
+
+    if handle.get(..EXACT_SCRIPT_HANDLE_MAGIC.len()) != Some(EXACT_SCRIPT_HANDLE_MAGIC.as_slice()) {
+        mismatches.push("exact handle has invalid CSHDLv1 encoding magic".to_string());
+    }
+    let (expected_class, expected_role) = match role {
+        "lock" => (EXACT_SCRIPT_HANDLE_CLASS_SCRIPT, EXACT_SCRIPT_HANDLE_ROLE_LOCK),
+        "type" => (EXACT_SCRIPT_HANDLE_CLASS_SCRIPT, EXACT_SCRIPT_HANDLE_ROLE_TYPE),
+        "spawned-verifier" => (EXACT_SCRIPT_HANDLE_CLASS_VERIFIER, EXACT_SCRIPT_HANDLE_ROLE_SPAWNED_VERIFIER),
+        _ => return,
+    };
+    if handle.get(EXACT_SCRIPT_HANDLE_CLASS_OFFSET).copied() != Some(expected_class) {
+        mismatches.push(format!("exact handle class does not match {role} role"));
+    }
+    if handle.get(EXACT_SCRIPT_HANDLE_ROLE_OFFSET).copied() != Some(expected_role) {
+        mismatches.push(format!("exact handle role tag does not match {role} role"));
+    }
+    let actual_hash = hex_encode(&ckb_blake2b256(handle));
+    if actual_hash != expected_hash {
+        mismatches.push("exact handle bytes do not match the compile-time full-handle commitment".to_string());
+    }
+}
+
+fn validate_exact_handle_source(
+    mismatches: &mut Vec<String>,
+    source: &serde_json::Map<String, Value>,
+    expected_source: Option<&str>,
+    role: &str,
+    handle: Option<&[u8]>,
+    tx: &Value,
+) {
+    let location = source.get("location").and_then(Value::as_str).unwrap_or("");
+    if !matches!(location, "input" | "output" | "cell_dep") {
+        mismatches.push("exact handle source.location must be input, output, or cell_dep".to_string());
+        return;
+    }
+    if let Some(expected) = expected_source {
+        if location != expected {
+            mismatches.push(format!("exact handle source.location must be {expected} for this compiled source view"));
+        }
+    } else {
+        mismatches.push("exact handle metadata does not identify one concrete transaction source kind".to_string());
+    }
+    if role == "spawned-verifier" && location != "cell_dep" {
+        mismatches.push("spawned-verifier exact handles must bind a cell_dep transaction source".to_string());
+    }
+
+    let Some(index) = source.get("index").and_then(Value::as_u64) else {
+        mismatches.push("exact handle source must include numeric transaction index".to_string());
+        return;
+    };
+    let tx_field = match location {
+        "input" => "inputs",
+        "output" => "outputs",
+        "cell_dep" => "cell_deps",
+        _ => return,
+    };
+    let Some(tx_item) = tx.get(tx_field).and_then(Value::as_array).and_then(|items| items.get(index as usize)) else {
+        mismatches.push(format!("exact handle source index {index} is out of range for transaction {tx_field}"));
+        return;
+    };
+    let Some(handle) = handle else {
+        return;
+    };
+    let expected_identity = match exact_handle_identity(handle, role) {
+        Ok(identity) => identity,
+        Err(message) => {
+            mismatches.push(message);
+            return;
+        }
+    };
+    match transaction_source_identity(tx_item, role) {
+        Ok(actual) if actual == expected_identity => {}
+        Ok(_) => mismatches.push(format!("exact handle {role} identity does not match transaction {tx_field}[{index}]")),
+        Err(message) => mismatches.push(format!("transaction {tx_field}[{index}] {message}")),
+    }
+}
+
+fn exact_handle_identity(handle: &[u8], role: &str) -> Result<[u8; 32], String> {
+    let offset = match role {
+        "lock" | "type" => crate::script_handle_contract::EXACT_SCRIPT_HANDLE_SCRIPT_HASH_OFFSET,
+        "spawned-verifier" => crate::script_handle_contract::EXACT_SCRIPT_HANDLE_ARTIFACT_HASH_OFFSET,
+        _ => return Err(format!("unsupported exact handle role {role}")),
+    };
+    handle
+        .get(offset..offset + crate::script_handle_contract::EXACT_SCRIPT_HANDLE_HASH_BYTES)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| "exact handle is too short to contain its selected identity".to_string())
+}
+
+fn transaction_source_identity(item: &Value, role: &str) -> Result<[u8; 32], String> {
+    let cell = resolved_transaction_cell(item);
+    match role {
+        "lock" | "type" => transaction_script_identity(cell, role),
+        "spawned-verifier" => transaction_data_identity(cell),
+        _ => Err(format!("has unsupported exact handle role {role}")),
+    }
+}
+
+fn resolved_transaction_cell(item: &Value) -> &Value {
+    for key in ["resolved_cell", "resolved_output", "cell", "output"] {
+        if let Some(value) = item.get(key) {
+            return value;
+        }
+    }
+    item
+}
+
+fn transaction_script_identity(cell: &Value, role: &str) -> Result<[u8; 32], String> {
+    let direct_field = if role == "lock" { "lock_hash" } else { "type_hash" };
+    let direct = match cell.get(direct_field).and_then(Value::as_str) {
+        Some(value) => Some(canonical_lower_hash32(value).map_err(|message| format!("has invalid {direct_field}: {message}"))?),
+        None => None,
+    };
+    let script = if role == "lock" {
+        cell.get("lock").or_else(|| cell.get("lock_script"))
+    } else {
+        cell.get("type").or_else(|| cell.get("type_script"))
+    };
+    let computed = match script {
+        Some(Value::Null) | None => None,
+        Some(script) => Some(ckb_script_hash_json(script)?),
+    };
+    match (direct, computed) {
+        (Some(direct), Some(computed)) if direct != computed => {
+            Err(format!("has inconsistent {direct_field} and concrete {role} Script"))
+        }
+        (Some(direct), _) => Ok(direct),
+        (_, Some(computed)) => Ok(computed),
+        _ => Err(format!("must expose concrete {direct_field} or {role} Script identity")),
+    }
+}
+
+fn transaction_data_identity(cell: &Value) -> Result<[u8; 32], String> {
+    let direct = match cell.get("data_hash").and_then(Value::as_str) {
+        Some(value) => Some(canonical_lower_hash32(value).map_err(|message| format!("has invalid data_hash: {message}"))?),
+        None => None,
+    };
+    let computed = match cell.get("data").and_then(Value::as_str) {
+        Some(value) => {
+            Some(ckb_blake2b256(&canonical_lower_variable_hex(value).map_err(|message| format!("has invalid data: {message}"))?))
+        }
+        None => None,
+    };
+    match (direct, computed) {
+        (Some(direct), Some(computed)) if direct != computed => Err("has inconsistent data_hash and concrete data bytes".to_string()),
+        (Some(direct), _) => Ok(direct),
+        (_, Some(computed)) => Ok(computed),
+        _ => Err("must expose concrete data_hash or resolved data bytes".to_string()),
+    }
+}
+
+fn ckb_script_hash_json(script: &Value) -> Result<[u8; 32], String> {
+    let Some(script) = script.as_object() else {
+        return Err("Script identity must be an object".to_string());
+    };
+    let code_hash = script
+        .get("code_hash")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Script identity must include code_hash".to_string())
+        .and_then(canonical_lower_hash32)?;
+    let hash_type = match script.get("hash_type").and_then(Value::as_str) {
+        Some("data") => 0u8,
+        Some("type") => 1u8,
+        Some("data1") => 2u8,
+        Some("data2") => 4u8,
+        Some(other) => return Err(format!("Script identity has unsupported hash_type {other}")),
+        None => return Err("Script identity must include hash_type".to_string()),
+    };
+    let args = script
+        .get("args")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Script identity must include args".to_string())
+        .and_then(canonical_lower_variable_hex)?;
+    let args_field_size = 4usize.checked_add(args.len()).ok_or_else(|| "Script args size overflow".to_string())?;
+    let total_size = 49usize.checked_add(args_field_size).ok_or_else(|| "Script serialization size overflow".to_string())?;
+    let total_size = u32::try_from(total_size).map_err(|_| "Script serialization exceeds Molecule u32 size".to_string())?;
+    let args_count = u32::try_from(args.len()).map_err(|_| "Script args exceed Molecule u32 size".to_string())?;
+    let mut bytes = Vec::with_capacity(total_size as usize);
+    bytes.extend_from_slice(&total_size.to_le_bytes());
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&48u32.to_le_bytes());
+    bytes.extend_from_slice(&49u32.to_le_bytes());
+    bytes.extend_from_slice(&code_hash);
+    bytes.push(hash_type);
+    bytes.extend_from_slice(&args_count.to_le_bytes());
+    bytes.extend_from_slice(&args);
+    Ok(ckb_blake2b256(&bytes))
+}
+
+fn validate_exact_handle_witness(
+    mismatches: &mut Vec<String>,
+    witness: &serde_json::Map<String, Value>,
+    handle: Option<&[u8]>,
+    tx: &Value,
+) {
+    if witness.get("field").and_then(Value::as_str) != Some("input_type") {
+        mismatches.push("exact handle witness.field must be input_type".to_string());
+    }
+    let Some(index) = witness.get("index").and_then(Value::as_u64) else {
+        mismatches.push("exact handle witness must include numeric transaction index".to_string());
+        return;
+    };
+    let input_type = match transaction_witness_input_type(tx, index as usize) {
+        Ok(bytes) => bytes,
+        Err(message) => {
+            mismatches.push(format!("transaction witnesses[{index}] {message}"));
+            return;
+        }
+    };
+    if let Some(handle) = handle
+        && !input_type.windows(handle.len()).any(|window| window == handle)
+    {
+        mismatches.push(format!("transaction witnesses[{index}].input_type does not contain the committed exact handle bytes"));
+    }
+}
+
+fn transaction_witness_input_type(tx: &Value, index: usize) -> Result<Vec<u8>, String> {
+    let witness = tx
+        .get("witnesses")
+        .and_then(Value::as_array)
+        .and_then(|items| items.get(index))
+        .ok_or_else(|| format!("is out of range for transaction witnesses at index {index}"))?;
+    match witness {
+        Value::String(raw) => parse_witness_args_input_type(&canonical_lower_variable_hex(raw)?),
+        Value::Object(object) => {
+            let value = object
+                .get("input_type")
+                .or_else(|| object.get("input_type_bytes"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| "must expose canonical input_type bytes".to_string())?;
+            canonical_lower_variable_hex(value)
+        }
+        _ => Err("must be a raw WitnessArgs hex string or an object with input_type bytes".to_string()),
+    }
+}
+
+fn parse_witness_args_input_type(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    if bytes.len() < 16 {
+        return Err("raw WitnessArgs is shorter than its 16-byte table header".to_string());
+    }
+    let word = |offset: usize| -> u32 { u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("bounded u32 slice")) };
+    let total = word(0) as usize;
+    let lock_offset = word(4) as usize;
+    let input_type_offset = word(8) as usize;
+    let output_type_offset = word(12) as usize;
+    if total != bytes.len()
+        || lock_offset != 16
+        || !(lock_offset <= input_type_offset && input_type_offset <= output_type_offset && output_type_offset <= total)
+    {
+        return Err("raw WitnessArgs has invalid Molecule table offsets".to_string());
+    }
+    if input_type_offset == output_type_offset {
+        return Err("raw WitnessArgs has no input_type field".to_string());
+    }
+    if output_type_offset - input_type_offset < 4 {
+        return Err("raw WitnessArgs input_type Bytes is truncated".to_string());
+    }
+    let length = word(input_type_offset) as usize;
+    if length != output_type_offset - input_type_offset - 4 {
+        return Err("raw WitnessArgs input_type Bytes length does not match its field span".to_string());
+    }
+    Ok(bytes[input_type_offset + 4..output_type_offset].to_vec())
+}
+
+fn canonical_lower_hash(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn canonical_lower_hash32(value: &str) -> Result<[u8; 32], String> {
+    let bytes = canonical_lower_hex_bytes(value, 32)?;
+    bytes.try_into().map_err(|_| "must contain exactly 32 bytes".to_string())
+}
+
+fn canonical_lower_hex_bytes(value: &str, expected_bytes: usize) -> Result<Vec<u8>, String> {
+    let bytes = canonical_lower_variable_hex(value)?;
+    if bytes.len() != expected_bytes {
+        return Err(format!("must contain exactly {expected_bytes} bytes"));
+    }
+    Ok(bytes)
+}
+
+fn canonical_lower_variable_hex(value: &str) -> Result<Vec<u8>, String> {
+    let Some(raw) = value.strip_prefix("0x") else {
+        return Err("must be 0x-prefixed lowercase hexadecimal".to_string());
+    };
+    if !raw.len().is_multiple_of(2) || !raw.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
+        return Err("must be canonical lowercase hexadecimal".to_string());
+    }
+    hex::decode(raw).map_err(|error| format!("contains invalid hexadecimal: {error}"))
+}
+
+fn validate_exact_handle_parameter_bindings(
+    metadata: &CompileMetadata,
+    tx: &Value,
+    assumptions: &[BuilderAssumptionMetadata],
+    violations: &mut Vec<TxValidationViolation>,
+) {
+    for assumption in assumptions.iter().filter(|assumption| assumption.kind == "exact_script_handle") {
+        let Some(payload) = matching_evidence_payload(tx, assumption) else {
+            continue;
+        };
+        let Some(handle_text) = payload.get("handle").and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(handle) = canonical_lower_hex_bytes(handle_text, crate::script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES) else {
+            continue;
+        };
+        let Some(witness_index) =
+            payload.get("witness").and_then(Value::as_object).and_then(|witness| witness.get("index")).and_then(Value::as_u64)
+        else {
+            continue;
+        };
+        let Ok(input_type) = transaction_witness_input_type(tx, witness_index as usize) else {
+            continue;
+        };
+        let Some((plan, params)) = exact_handle_plan_and_params(metadata, assumption) else {
+            push_violation(violations, assumption, "exact handle ProofPlan cannot be resolved to its compiled action or lock entry");
+            continue;
+        };
+        let Some(parameter) = plan.coverage.iter().find_map(|item| item.strip_prefix("parameter:")) else {
+            push_violation(violations, assumption, "exact handle ProofPlan is missing its entry parameter binding");
+            continue;
+        };
+        match entry_payload_parameter(&input_type, params, parameter) {
+            Ok(actual) if actual == handle => {}
+            Ok(_) => push_violation(
+                violations,
+                assumption,
+                "exact handle evidence does not match the declared parameter position in WitnessArgs.input_type",
+            ),
+            Err(message) => push_violation(violations, assumption, &message),
+        }
+    }
+}
+
+fn matching_evidence_payload<'a>(tx: &'a Value, assumption: &BuilderAssumptionMetadata) -> Option<&'a serde_json::Map<String, Value>> {
+    for key in ["builder_assumption_evidence", "builder_assumptions"] {
+        let Some(value) = tx.get(key) else {
+            continue;
+        };
+        match value {
+            Value::Object(object) => {
+                if let Some(payload) = object
+                    .get(&assumption.assumption_id)
+                    .and_then(Value::as_object)
+                    .and_then(|item| item.get("evidence").or_else(|| item.get("payload")))
+                    .and_then(Value::as_object)
+                {
+                    return Some(payload);
+                }
+                if object.get("assumption_id").and_then(Value::as_str) == Some(assumption.assumption_id.as_str())
+                    && let Some(payload) = object.get("evidence").or_else(|| object.get("payload")).and_then(Value::as_object)
+                {
+                    return Some(payload);
+                }
+            }
+            Value::Array(items) => {
+                if let Some(payload) = items.iter().find_map(|item| {
+                    let item = item.as_object()?;
+                    (item.get("assumption_id").and_then(Value::as_str) == Some(assumption.assumption_id.as_str()))
+                        .then(|| item.get("evidence").or_else(|| item.get("payload")))
+                        .flatten()
+                        .and_then(Value::as_object)
+                }) {
+                    return Some(payload);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn exact_handle_plan_and_params<'a>(
+    metadata: &'a CompileMetadata,
+    assumption: &BuilderAssumptionMetadata,
+) -> Option<(&'a ProofPlanMetadata, &'a [ParamMetadata])> {
+    if let Some(origin) = assumption.origin.strip_prefix("action:") {
+        let name = origin.split('#').next()?;
+        let action = metadata.actions.iter().find(|action| action.name == name)?;
+        let plan = action.proof_plan.iter().find(|plan| plan.origin == assumption.origin && plan.feature == assumption.feature)?;
+        return Some((plan, &action.params));
+    }
+    if let Some(origin) = assumption.origin.strip_prefix("lock:") {
+        let name = origin.split('#').next()?;
+        let lock = metadata.locks.iter().find(|lock| lock.name == name)?;
+        let plan = lock.proof_plan.iter().find(|plan| plan.origin == assumption.origin && plan.feature == assumption.feature)?;
+        return Some((plan, &lock.params));
+    }
+    None
+}
+
+fn entry_payload_parameter<'a>(payload: &'a [u8], params: &[ParamMetadata], target: &str) -> Result<&'a [u8], String> {
+    if !payload.starts_with(crate::ENTRY_WITNESS_ABI_MAGIC) {
+        return Err("WitnessArgs.input_type must start with the compiled CSARGv1 entry ABI magic".to_string());
+    }
+    let mut cursor = crate::ENTRY_WITNESS_ABI_MAGIC.len();
+    let mut selected = None;
+    for param in params {
+        if !param_consumes_entry_payload(param) {
+            continue;
+        }
+        let start = cursor;
+        if param.schema_pointer_abi || param.schema_length_abi {
+            let length_bytes = payload
+                .get(cursor..)
+                .and_then(|remaining| remaining.get(..4))
+                .ok_or_else(|| format!("WitnessArgs.input_type truncates schema parameter '{}' length", param.name))?;
+            let length = u32::from_le_bytes(length_bytes.try_into().expect("bounded u32 slice")) as usize;
+            cursor = cursor
+                .checked_add(4)
+                .and_then(|cursor| cursor.checked_add(length))
+                .ok_or_else(|| format!("WitnessArgs.input_type schema parameter '{}' length overflows", param.name))?;
+        } else if let Some(width) = param.fixed_byte_len {
+            cursor = cursor
+                .checked_add(width)
+                .ok_or_else(|| format!("WitnessArgs.input_type parameter '{}' length overflows", param.name))?;
+        } else if let Some(width) = crate::entry_witness_scalar_param_width(&param.ty) {
+            cursor = cursor
+                .checked_add(width)
+                .ok_or_else(|| format!("WitnessArgs.input_type parameter '{}' length overflows", param.name))?;
+        } else {
+            return Err(format!("compiled entry parameter '{}' has no deterministic witness width", param.name));
+        }
+        let bytes = payload
+            .get(start..cursor)
+            .ok_or_else(|| format!("WitnessArgs.input_type truncates compiled parameter '{}'", param.name))?;
+        if param.name == target {
+            if param.ty != crate::script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE
+                || param.fixed_byte_len != Some(crate::script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES)
+            {
+                return Err(format!("compiled parameter '{target}' is not a fixed exact Script handle"));
+            }
+            selected = Some(bytes);
+        }
+    }
+    if cursor != payload.len() {
+        return Err("WitnessArgs.input_type has trailing bytes outside the compiled entry ABI".to_string());
+    }
+    selected.ok_or_else(|| format!("exact handle ProofPlan parameter '{target}' is not present in the compiled entry ABI"))
+}
+
+fn param_consumes_entry_payload(param: &ParamMetadata) -> bool {
+    !param.lock_args_data_source
+        && !param.cell_bound_abi
+        && !param.is_ref
+        && !param.ty.starts_with('&')
+        && param.bounded_runtime_contract.as_deref() != Some(crate::ir::BOUNDED_TYPE_GROUP_INPUTS_V1)
 }
 
 fn require_payload_array(mismatches: &mut Vec<String>, object: &serde_json::Map<String, Value>, fields: &[&str], label: &str) {
@@ -733,6 +1262,7 @@ fn requires_explicit_evidence(kind: &str) -> bool {
             | "runtime_required_proof_plan"
             | "lock_group_transaction_scope"
             | "capacity_policy"
+            | "exact_script_handle"
     )
 }
 

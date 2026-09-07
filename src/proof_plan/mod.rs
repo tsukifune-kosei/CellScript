@@ -194,11 +194,31 @@ fn exact_script_handle_plans(scope_kind: &str, scope_name: &str, body: &ir::IrBo
                 "__ckb_require_cell_dep_exact_verifier_handle" => ("spawned-verifier", "cell-dep-data-hash"),
                 _ => continue,
             };
+            let source = match args.first() {
+                Some(ir::IrOperand::Var(var)) => match &var.ty {
+                    ir::IrType::Named(name) if name.starts_with("InputView<") => "input",
+                    ir::IrType::Named(name) if name.starts_with("OutputView<") => "output",
+                    ir::IrType::Named(name) if name == "CellDepView" || name.starts_with("CellDepView<") => "cell_dep",
+                    _ => "invalid-source-view",
+                },
+                _ => "invalid-source-view",
+            };
+            let handle_parameter = match args.get(1) {
+                Some(ir::IrOperand::Var(var)) => var.name.as_str(),
+                _ => "invalid-handle-parameter",
+            };
             let handle_hash = match args.get(2) {
                 Some(ir::IrOperand::Const(ir::IrConst::Hash(hash))) => hex::encode(hash),
                 _ => "invalid-non-constant-handle-hash".to_string(),
             };
             let feature = format!("{role}:{handle_hash}");
+            let mut reads = vec![
+                "source-view".to_string(),
+                "witness".to_string(),
+                "ExactScriptHandle".to_string(),
+                "handle-hash-literal".to_string(),
+            ];
+            reads.push(source.to_string());
             plans.push(ProofPlanMetadata {
                 name: format!("{}#exact-script-handle-{}-{}", scope_name, block_index, operation_index),
                 origin: format!("{}:{}#exact-script-handle:{}:{}", scope_kind, scope_name, block_index, operation_index),
@@ -208,16 +228,13 @@ fn exact_script_handle_plans(scope_kind: &str, scope_name: &str, body: &ir::IrBo
                 source_span: None,
                 trigger: trigger_for_scope_kind(scope_kind).to_string(),
                 scope: "selected-ckb-source-view".to_string(),
-                reads: vec![
-                    "source-view".to_string(),
-                    "witness".to_string(),
-                    "ExactScriptHandle".to_string(),
-                    "handle-hash-literal".to_string(),
-                ],
+                reads,
                 coverage: vec![
                     "encoding:CSHDLv1-fixed-202".to_string(),
                     "magic:CSHDLv1\\0".to_string(),
                     format!("class-and-role:{role}"),
+                    format!("source:{source}"),
+                    format!("parameter:{handle_parameter}"),
                     format!("handle-hash:{handle_hash}"),
                     "receipt-commitment:bound-by-full-handle-hash".to_string(),
                     format!("identity:{identity}"),
@@ -234,11 +251,14 @@ fn exact_script_handle_plans(scope_kind: &str, scope_name: &str, body: &ir::IrBo
                     "the complete fixed-width handle, class, role, receipt commitment, and selected CKB identity are checked"
                         .to_string(),
                 ],
-                builder_assumptions: Vec::new(),
+                builder_assumptions: vec![
+                    "builder must bind the exact handle bytes to the declared entry-witness parameter and selected transaction source before signing"
+                        .to_string(),
+                ],
                 codegen_coverage_status: "covered".to_string(),
                 status: "checked-runtime".to_string(),
                 detail: format!(
-                    "{func} binds the selected CKB value to an exact {role} handle committed by full handle hash 0x{handle_hash}"
+                    "{func} binds {source} to exact {role} handle parameter {handle_parameter} committed by full handle hash 0x{handle_hash}"
                 ),
                 diagnostics: vec![ProofPlanDiagnosticMetadata {
                     severity: "info".to_string(),

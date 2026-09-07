@@ -69,6 +69,48 @@ rejects helper relabeling, effect/type changes, and literal changes even when
 outer sidecar hashes are recomputed. CKB-VM tests mutate every identity region
 and the selected verifier artifact.
 
+## Pre-signing transaction validation
+
+Every exact-handle ProofPlan record emits an `exact_script_handle` builder
+assumption. `cellc tx validate` requires a keyed evidence record before
+signing:
+
+```json
+{
+  "builder_assumption_evidence": {
+    "<assumption-id>": {
+      "assumption_id": "ba-<assumption-id>",
+      "kind": "exact_script_handle",
+      "origin": "action:verify#exact-script-handle:0:1",
+      "feature": "spawned-verifier:<64-lowercase-hex-handle-hash>",
+      "proof_plan_status": "checked-runtime",
+      "evidence": {
+        "handle": "0x<202-byte-CSHDLv1-value>",
+        "source": { "location": "cell_dep", "index": 0 },
+        "witness": { "index": 0, "field": "input_type" }
+      }
+    }
+  }
+}
+```
+
+The source location is `input`, `output`, or `cell_dep` and must match the
+typed source view compiled into the helper call. The indexed transaction item
+must expose enough resolved data to recompute the selected identity: a concrete
+Lock/Type Script or its full hash for Script handles, and concrete data or its
+consensus data hash for a verifier CellDep. A CellDep outpoint alone is not
+sufficient evidence.
+
+The indexed witness may be a canonical raw Molecule `WitnessArgs` hex value or
+an object whose `input_type` contains the `CSARGv1` entry payload. Validation
+decodes the compiled parameter layout and requires the complete 202-byte value
+at the declared exact-handle parameter position. It rejects a correct value in
+the wrong parameter slot, a copied evidence value absent from the transaction,
+wrong source or witness indexes, Script args/hash-type changes, substituted
+CellDep data, and changes to any receipt/interface/artifact/profile/ABI byte.
+This is deterministic metadata evidence; CKB-VM execution and tx-pool
+acceptance remain separate release checks.
+
 ## Deferred boundary
 
 This phase expresses exact artifact identity. `ScriptHandle<I>`,
