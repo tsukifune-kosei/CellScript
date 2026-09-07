@@ -222,9 +222,12 @@ matrix. Action entries now bind their generated builder manifest and exact
 selected-action projection, and the same skeleton is validated against every
 artifact's metadata builder assumptions with `PB212` for missing or invalid
 evidence. The emitted evidence truthfully leaves transaction serialization,
-CKB-VM execution, and chain evidence unexecuted. Builder-derived claims, one
-concrete Molecule transaction, per-group execution, and runtime-adapter work
-remain required before issue #9 is complete. See
+CKB-VM execution, and chain evidence unexecuted. The first runtime-adapter
+slice now independently rechecks that report and materializes one concrete
+Molecule transaction with exact raw/full hashes, size, capacity/fee evidence,
+and global/group-relative indexes sharing one transaction-byte identity.
+Builder-derived claims, live Cell resolution, per-group execution, and the
+remaining runtime-adapter work remain required before issue #9 is complete. See
 [CellScript ProtocolBundle v1](CELLSCRIPT_PROTOCOL_BUNDLE.md).
 
 Extend trusted external verification through exact artifact, interface,

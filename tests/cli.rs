@@ -2502,6 +2502,7 @@ lock authorize(witness approved: bool) -> bool {
             "capacity": capacity,
             "lock": lock,
             "type": ty,
+            "data": "0x",
         })
     };
     let mut builder_assumption_evidence = serde_json::Map::new();
@@ -2523,8 +2524,8 @@ lock authorize(witness approved: bool) -> bool {
                     "feature": assumption["feature"].clone(),
                     "proof_plan_status": assumption["proof_plan_status"].clone(),
                     "evidence": {
-                        "outputs": [{ "index": 0, "capacity": 900 }],
-                        "occupied_capacity_shannons": 900,
+                        "outputs": [{ "index": 0, "capacity": 80_000_000_000u64 }],
+                        "occupied_capacity_shannons": 80_000_000_000u64,
                         "tx_size_bytes": 1,
                         "under_capacity_output_indexes": [],
                     },
@@ -2533,14 +2534,17 @@ lock authorize(witness approved: bool) -> bool {
         }
     }
     assert!(!builder_assumption_evidence.is_empty(), "the creating action must expose a capacity-policy assumption");
+    let mut input_cell = cell("4", 100_000_000_000, auth_script.clone(), order_script.clone());
+    input_cell["out_point"] = serde_json::json!({ "tx_hash": format!("0x{}", "4".repeat(64)), "index": 0 });
+    input_cell["since"] = serde_json::json!(0);
     let mut manifest = serde_json::json!({
         "schema": "cellscript-protocol-bundle-input-v1",
         "network": network,
         "artifacts": [order, token, auth],
         "transaction": {
             "version": 0,
-            "inputs": [cell("4", 1_000, auth_script.clone(), order_script.clone())],
-            "outputs": [cell("5", 900, auth_script.clone(), token_script.clone())],
+            "inputs": [input_cell],
+            "outputs": [cell("5", 80_000_000_000u64, auth_script.clone(), token_script.clone())],
             "witnesses": [{}],
             "cell_deps": cell_deps.clone(),
             "header_deps": [],
@@ -2552,7 +2556,7 @@ lock authorize(witness approved: bool) -> bool {
             {
                 "artifact": "order", "name": "order-input", "location": "input", "index": 0,
                 "ownership": "exclusive", "expected_type": order_script,
-                "cell_commitment": format!("0x{}", "4".repeat(64)), "minimum_capacity": 1_000,
+                "cell_commitment": format!("0x{}", "4".repeat(64)), "minimum_capacity": 100_000_000_000u64,
             },
             {
                 "artifact": "auth", "name": "authorization", "location": "input", "index": 0,
@@ -2561,7 +2565,7 @@ lock authorize(witness approved: bool) -> bool {
             {
                 "artifact": "token", "name": "token-output", "location": "output", "index": 0,
                 "ownership": "exclusive", "expected_type": token_script,
-                "cell_commitment": format!("0x{}", "5".repeat(64)), "exact_capacity": 900,
+                "cell_commitment": format!("0x{}", "5".repeat(64)), "exact_capacity": 80_000_000_000u64,
             },
         ],
         "cell_deps": [
@@ -2580,6 +2584,19 @@ lock authorize(witness approved: bool) -> bool {
         .output()
         .unwrap();
     assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
+    let (materialized, materialization) = cellscript_ckb_adapter::materialize_protocol_bundle_report(&first.stdout).unwrap();
+    assert_eq!(materialized.inputs().len(), 1);
+    assert_eq!(materialized.outputs().len(), 1);
+    assert_eq!(materialization.state, "MaterializedProtocolBundleTx");
+    assert_eq!(materialization.transaction_serialization, "verified");
+    assert_eq!(materialization.script_groups.len(), 3);
+    assert!(materialization
+        .script_groups
+        .iter()
+        .all(|group| group.transaction_bytes_hash == materialization.serialized_transaction_hash));
+    assert!(materialization.script_groups.iter().all(|group| group.execution == "not-executed"));
+    assert_eq!(materialization.fee_shannons, 20_000_000_000);
+    assert_eq!(materialization.ckb_vm_execution, "not-executed");
     let first: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
     assert_eq!(first["status"], "ok");
     assert_eq!(first["bundle"]["artifacts"].as_array().unwrap().len(), 3);

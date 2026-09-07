@@ -221,6 +221,18 @@
   CKB-VM execution, RPC/signing/submission, and chain evidence remain
   explicitly unexecuted until the later #9 phases.
 
+- Add the first #9 runtime-adapter materialization boundary. ProtocolBundle
+  cell slots may now bind concrete input OutPoints, `since`, and exact cell
+  data, while witness commitments may carry separately verified exact field
+  bytes. `cellscript-ckb-adapter` independently rechecks the canonical bundle
+  hash and complete per-artifact admission/metadata evidence, preserves the
+  ordered transaction arrays in a packed CKB `TransactionView`, checks
+  occupied output capacity, computes the fee remainder, and emits raw and
+  full-serialization hashes and sizes. Each selected Lock or Type artifact is
+  attributed to exact global and group-relative indexes and the same complete
+  transaction byte hash. CKB-VM group execution, signing, RPC, and chain
+  evidence remain explicitly unexecuted.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

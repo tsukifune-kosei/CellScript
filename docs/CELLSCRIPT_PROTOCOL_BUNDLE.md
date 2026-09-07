@@ -24,6 +24,9 @@ more independently compiled CKB Script artifacts. The offline checker:
 
 This layer does not link ELF files, merge their trust boundaries, call one CKB
 Script from another, query RPC, sign, submit, or claim CKB-VM/chain evidence.
+The separate `cellscript-ckb-adapter` materialization boundary can turn a
+successful report with concrete fields into one packed CKB transaction without
+changing those limits.
 
 ## Schemas and hash
 
@@ -54,7 +57,7 @@ The top-level input contains:
 |---|---|
 | `network` | Non-empty chain ID plus canonical `0x`-prefixed 32-byte lowercase genesis hash |
 | `artifacts` | 2 to 64 independent checked ELF references |
-| `transaction` | Version-0 transaction skeleton with exact ordered cell, witness, CellDep, HeaderDep, fee-policy, and change-policy commitments |
+| `transaction` | Version-0 transaction skeleton with exact ordered cell, witness, CellDep, HeaderDep, fee-policy, and change-policy commitments; optional concrete adapter fields are hash-bound when present |
 | `roles` | Named input/output indexes with exclusive or shared-read ownership and optional exact Script/resource/cell/capacity requirements |
 | `witnesses` | Exact `WitnessArgs` index/field, ABI, commitment, signing domain, and write/read ownership |
 | `cell_deps` / `header_deps` | Named logical dependencies mapped to exact global positions |
@@ -89,7 +92,10 @@ the transaction skeleton.
 
 Witness fields use `exclusive-write` or `shared-read`. Multiple writers
 conflict. A writer and readers may share a field only when their ABI, value
-commitment, and signing domain agree. This records ownership; it does not
+commitment, and signing domain agree. Optional `lock_bytes`,
+`input_type_bytes`, and `output_type_bytes` values are exact lowercase hex. If
+the corresponding commitment is present, it must equal CKB Blake2b-256 of
+those bytes. This records ownership and materialization; it does not
 manufacture a signature or canonical signing message.
 
 ## Conflict codes
@@ -131,6 +137,33 @@ On success, `status` is `ok`, `conflicts` is empty,
 command exits unsuccessfully after writing the requested report so tooling can
 inspect the complete conflict set. No signing or network operation occurs.
 
+## Runtime adapter materialization
+
+`cellscript_ckb_adapter::materialize_protocol_bundle_report` consumes the exact
+JSON report emitted by `cellc protocol bundle check`. It independently:
+
+- checks the report state, per-artifact standalone admission, and metadata
+  transaction-validation coverage;
+- recomputes the canonical resolved-bundle hash;
+- requires an `out_point` for every input and exact `data` bytes for every
+  output;
+- verifies committed witness bytes and preserves ordered inputs, outputs,
+  witnesses, CellDeps, and HeaderDeps in a Molecule `TransactionView`;
+- checks occupied output capacity and computes the capacity remainder as the
+  candidate fee; and
+- resolves each selected Lock or Type artifact to global and group-relative
+  indexes, with the same complete serialized transaction hash attached to
+  every group record.
+
+Its `cellscript-protocol-bundle-materialization-v1` evidence records the raw
+transaction hash, complete serialized transaction hash and byte size, input,
+output, occupied-capacity and fee totals, and per-artifact Script Group
+identity. Transaction serialization is `verified`; every group execution,
+CKB-VM evidence, and chain evidence remains `not-executed`. Spawned verifiers
+bind their exact code CellDep but are not misreported as direct CKB Script
+Groups. Input capacity and the resulting fee are sourced from the bundle
+skeleton until live Cell resolution verifies them.
+
 ## Evidence tiers and remaining phases
 
 The v1 offline report retains the standalone checker report and metadata
@@ -139,12 +172,13 @@ manifests are admitted and exact selected-action projections are checked.
 `transaction_serialization`, `ckb_vm_execution`, and `chain_evidence` remain
 `not-executed`, with no exact transaction hash. This is the Phase 0
 format/threat-model contract plus the builder-contract portion of Phase 1
-offline composition.
+offline composition. The adapter evidence advances a concrete report to a
+byte-exact transaction while preserving the offline report unchanged.
 
 The next bundle phases must add, without weakening this hash boundary:
 
-- derivation of transaction claims from admitted builder manifests and a fully
-  materialized Molecule transaction;
+- derivation of transaction claims from admitted builder manifests and live
+  Cell/deployment resolution;
 - revalidation of the packed transaction view against every artifact's builder
   assumptions;
 - per-Script-Group CKB-VM execution over byte-identical transaction bytes;

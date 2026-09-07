@@ -45,3 +45,8 @@ Validation defaults:
 - reject offline role/index/witness/dependency/policy conflicts and `PB212`
   metadata-assumption failures before signing; treat transaction
   serialization, CKB-VM, and chain evidence as unexecuted.
+- pass a successful report with concrete input OutPoints, output data, and
+  witness bytes to
+  `cellscript_ckb_adapter::materialize_protocol_bundle_report`; require all
+  per-group records to carry its exact serialized transaction hash and keep
+  execution/chain evidence `not-executed` until a later adapter step runs them.

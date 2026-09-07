@@ -4,7 +4,9 @@
 headless Rust adapter crate landed in the 0.19 line; 0.21 extends the builder
 resolution surface with materialised action plans, action-aware scan selector
 evidence, variable-length `args_parts`, manifest-backed CellDep completion, and
-fail-closed live-cell evidence validation.
+fail-closed live-cell evidence validation. The 0.30 development line adds
+byte-exact ProtocolBundle transaction materialization while keeping group
+execution and chain evidence explicit.
 
 This document defines which CKB-facing responsibilities belong to CellScript,
 `ckb-std`, `ckb-sdk-rust`, and the adapter.
@@ -59,6 +61,7 @@ cellc entry-witness bytes
 cellc deploy plan JSON
 cellc deploy lock-deps JSON
 constraints.ckb
+successful cellc protocol bundle check JSON
 ```
 
 It should emit chain-side records:
@@ -70,6 +73,7 @@ ResolvedActionTx
 AcceptedActionTx
 AcceptanceReport
 LiveOutputLineage
+MaterializedProtocolBundleTx
 ```
 
 Every adapter-owned JSON/TOML record must include an explicit `schema` and
@@ -120,6 +124,25 @@ It should not grow an independent implementation.
 
 Current tests cover the offline adapter shape. Focused node evidence is covered
 by `scripts/cellscript_ckb_adapter_acceptance.sh`.
+
+## ProtocolBundle transaction materialization
+
+`materialize_protocol_bundle_report()` is the first runtime-adapter step for a
+checked multi-Script bundle. It rejects failed or hash-mismatched reports,
+requires exact standalone and metadata-validation evidence for every selected
+artifact, then builds one CKB packed transaction from concrete input OutPoints,
+output data, witnesses, CellDeps, and HeaderDeps.
+
+The returned `cellscript-protocol-bundle-materialization-v1` evidence binds the
+bundle hash, raw transaction hash, complete serialized transaction hash and
+size, capacity totals, fee remainder, exact code CellDep positions, and global
+to group-relative indexes. Every selected Lock and Type artifact must occur in
+a real transaction Script Group and have a matching bundle role. All group
+records carry the same serialized transaction hash. The function checks
+occupied capacity and witness commitments, but performs no RPC, signing, or
+execution. Its CKB-VM and chain evidence fields therefore remain
+`not-executed`; input capacity and fee remain skeleton-sourced until live Cell
+resolution.
 
 Do not start with a framework. Start with cookbook-grade examples that complete
 real deployment and transaction acceptance loops.

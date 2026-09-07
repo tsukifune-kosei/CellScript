@@ -20,6 +20,12 @@ use std::{
 };
 
 pub mod policy_witness;
+mod protocol_bundle;
+
+pub use protocol_bundle::{
+    materialize_protocol_bundle_report, ProtocolBundleIndexBinding, ProtocolBundleMaterializationEvidence,
+    ProtocolBundleScriptGroupEvidence,
+};
 
 pub const ACTION_PLAN_POLICY: &str = "cellscript-action-builder-plan-v1";
 pub const ADAPTER_CONTRACT_SCHEMA: &str = "cellscript-ckb-adapter-contract-v0.19";

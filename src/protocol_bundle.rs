@@ -238,17 +238,41 @@ pub struct ProtocolCellSlot {
     pub lock: ProtocolScriptIdentity,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub r#type: Option<ProtocolScriptIdentity>,
+    /// Concrete input identity for adapter materialization. Offline-only
+    /// skeletons may omit it; the runtime adapter fails closed when it is
+    /// absent from an input slot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out_point: Option<ProtocolOutPoint>,
+    /// Concrete input `since` value. This is ignored for output slots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<u64>,
+    /// Exact live-input or output data bytes. Output data is required by the
+    /// runtime adapter before a packed transaction can be emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProtocolWitnessSlot {
+    /// CKB Blake2b-256 commitment to the exact field bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lock: Option<String>,
+    /// CKB Blake2b-256 commitment to the exact field bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_type: Option<String>,
+    /// CKB Blake2b-256 commitment to the exact field bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_type: Option<String>,
+    /// Exact field bytes used by runtime transaction materialization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock_bytes: Option<String>,
+    /// Exact field bytes used by runtime transaction materialization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_type_bytes: Option<String>,
+    /// Exact field bytes used by runtime transaction materialization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_type_bytes: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -415,7 +439,9 @@ pub fn check_protocol_bundle(input: &ProtocolBundleInput, base: &Path) -> Result
     }
     conflicts.sort();
     conflicts.dedup();
-    let bundle_hash = canonical_hash(PROTOCOL_BUNDLE_HASH_DOMAIN, &bundle)
+    let bundle_hash_value = serde_json::to_value(&bundle)
+        .map_err(|error| CompileError::without_span(format!("failed to canonicalize ProtocolBundle for hashing: {error}")))?;
+    let bundle_hash = canonical_hash(PROTOCOL_BUNDLE_HASH_DOMAIN, &bundle_hash_value)
         .map_err(|error| CompileError::without_span(format!("failed to hash ProtocolBundle: {error}")))?;
     let status = if conflicts.is_empty() { "ok" } else { "failed" };
     Ok(ProtocolBundleReport {
@@ -533,19 +559,20 @@ fn validate_transaction(transaction: &ProtocolTransactionSkeleton) -> Result<()>
     bounded_count("transaction HeaderDeps", transaction.header_deps.len(), MAX_DEP_CLAIMS)?;
     for (index, cell) in transaction.inputs.iter().enumerate() {
         validate_cell_slot(cell, &format!("input[{index}]"))?;
+        if let Some(out_point) = &cell.out_point {
+            canonical_hash32(&out_point.tx_hash, &format!("input[{index}].out_point.tx_hash"))?;
+        }
     }
     for (index, cell) in transaction.outputs.iter().enumerate() {
         validate_cell_slot(cell, &format!("output[{index}]"))?;
     }
     for (index, witness) in transaction.witnesses.iter().enumerate() {
-        for (field, value) in [
-            ("lock", witness.lock.as_deref()),
-            ("input_type", witness.input_type.as_deref()),
-            ("output_type", witness.output_type.as_deref()),
+        for (field, commitment, bytes) in [
+            ("lock", witness.lock.as_deref(), witness.lock_bytes.as_deref()),
+            ("input_type", witness.input_type.as_deref(), witness.input_type_bytes.as_deref()),
+            ("output_type", witness.output_type.as_deref(), witness.output_type_bytes.as_deref()),
         ] {
-            if let Some(value) = value {
-                canonical_hash32(value, &format!("witness[{index}].{field}"))?;
-            }
+            validate_witness_materialization(index, field, commitment, bytes)?;
         }
     }
     for (index, cell_dep) in transaction.cell_deps.iter().enumerate() {
@@ -564,6 +591,31 @@ fn validate_cell_slot(cell: &ProtocolCellSlot, label: &str) -> Result<()> {
     validate_script(&cell.lock, &format!("{label} lock"))?;
     if let Some(script) = &cell.r#type {
         validate_script(script, &format!("{label} type"))?;
+    }
+    if let Some(data) = &cell.data {
+        canonical_hex_bytes(data, &format!("{label} data"))?;
+    }
+    Ok(())
+}
+
+fn validate_witness_materialization(index: usize, field: &str, commitment: Option<&str>, bytes: Option<&str>) -> Result<()> {
+    if let Some(commitment) = commitment {
+        canonical_hash32(commitment, &format!("witness[{index}].{field}"))?;
+    }
+    let Some(bytes) = bytes else {
+        return Ok(());
+    };
+    canonical_hex_bytes(bytes, &format!("witness[{index}].{field}_bytes"))?;
+    if let Some(commitment) = commitment {
+        let raw = hex::decode(&bytes[2..]).map_err(|error| {
+            CompileError::without_span(format!("failed to decode witness[{index}].{field}_bytes after validation: {error}"))
+        })?;
+        let actual = format!("0x{}", hex_encode(&ckb_blake2b256(&raw)));
+        if actual != commitment {
+            return Err(CompileError::without_span(format!(
+                "witness[{index}].{field}_bytes does not match its CKB Blake2b-256 commitment"
+            )));
+        }
     }
     Ok(())
 }
@@ -1437,14 +1489,27 @@ mod tests {
                     capacity: 1_000,
                     lock: script("4"),
                     r#type: Some(script("5")),
+                    out_point: None,
+                    since: None,
+                    data: None,
                 }],
                 outputs: vec![ProtocolCellSlot {
                     cell_commitment: hash("6"),
                     capacity: 900,
                     lock: script("4"),
                     r#type: Some(script("5")),
+                    out_point: None,
+                    since: None,
+                    data: None,
                 }],
-                witnesses: vec![ProtocolWitnessSlot { lock: Some(hash("7")), input_type: None, output_type: None }],
+                witnesses: vec![ProtocolWitnessSlot {
+                    lock: Some(hash("7")),
+                    input_type: None,
+                    output_type: None,
+                    lock_bytes: None,
+                    input_type_bytes: None,
+                    output_type_bytes: None,
+                }],
                 cell_deps: vec![cell_dep("8", 0)],
                 header_deps: vec![hash("9")],
                 fee_policy_hash: hash("a"),
@@ -1574,5 +1639,17 @@ mod tests {
         assert_eq!(protocol_json_commitment(&value).unwrap(), protocol_json_commitment(&value).unwrap());
         assert!(protocol_json_commitment(&value).unwrap().starts_with("0x"));
         assert_eq!(protocol_json_commitment(&value).unwrap().len(), 66);
+    }
+
+    #[test]
+    fn concrete_witness_bytes_must_match_their_ckb_commitment() {
+        let mut transaction = bundle().transaction;
+        transaction.witnesses[0].lock = Some(format!("0x{}", hex_encode(&ckb_blake2b256(&[1, 2]))));
+        transaction.witnesses[0].lock_bytes = Some("0x0102".to_string());
+        validate_transaction(&transaction).unwrap();
+
+        transaction.witnesses[0].lock_bytes = Some("0x03".to_string());
+        let error = validate_transaction(&transaction).unwrap_err();
+        assert!(error.to_string().contains("does not match its CKB Blake2b-256 commitment"), "{error}");
     }
 }

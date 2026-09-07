@@ -368,6 +368,7 @@ name = "cellscript-ckb-adapter"
 version = "0.26.0"
 dependencies = [
  "anyhow",
+ "cellscript-artifact-checker",
  "ckb-hash",
  "ckb-jsonrpc-types",
  "ckb-sdk",
