@@ -29,8 +29,14 @@ malformed flags, metrics, fractions, scalar bounds, timestamp overflow, and
 mode/metric narrowing. `EpochDuration` construction and EpochNumber add/sub are
 checked against the 24-bit CKB epoch domain with overflow and underflow
 rejection. Fixed-size full-header decoding now supplies typed block number and
-millisecond timestamp reads. Migration, public-interface version records, and
-the required business corpus remain open under issue #12.
+millisecond timestamp reads. Targeted `W3012` migration warnings and an LSP
+workspace edit preserve raw-result compatibility, while package-interface v3
+binds the temporal constructors, decoders, domains, wire format, and migration
+identity. The v2 reader and cross-edition interface comparison preserve the
+old-edition boundary. Formatter, VS Code, generated-builder, package, WASM, and
+Playground parity are implemented, and the six-family temporal business corpus
+uses typed HeaderDep and Since operations. Full candidate gates and independent
+review remain before issue #12 and the release gate can close.
 
 Until this branch passes those criteria, treat it as development work, use
 `0.26b` only as its experimental implementation baseline, and retain 0.25 as

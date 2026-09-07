@@ -8395,6 +8395,7 @@ fn typescript_builder_manifest(
             "must_not_infer_protocol_semantics_from_action_name": true,
             "action_scan_selectors_schema": "cellscript-action-scan-selectors-v0.21",
             "action_scan_selector_source": "transaction_runtime_input_requirements",
+            "temporal_interface": metadata.public_interface.runtime_contract.temporal,
         }
     });
     if let Some(policy) = &metadata.runtime.policy_artifact {
@@ -8488,11 +8489,33 @@ fn typescript_builder_index(
     ts.push_str(&format!("export const builderManifest = {manifest_json} as const;\n"));
     ts.push_str(&format!("export const metadata = {metadata_json} as const;\n"));
     ts.push_str("export const cellDataCodecManifest = metadata.cell_data_codec_manifest;\n");
+    ts.push_str("export const temporalContract = metadata.public_interface.runtime_contract.temporal;\n");
     ts.push_str(&format!("export const actionSpecs = {action_specs_json} as const;\n\n"));
     ts.push_str(&format!("export const actionErrorContexts = {action_error_contexts_json} as const;\n"));
     ts.push_str(&format!("export const runtimeErrorCatalog = {runtime_error_catalog_json} as const;\n\n"));
     ts.push_str(
         "export type HexString = `0x${string}`;\n\
+         export type CellScriptScalarInput = bigint | number | string;\n\
+         export type CellScriptTemporalDomain = \"EpochNumber\" | \"EpochDuration\" | \"BlockNumber\" | \"EpochLength\" | \"TimestampMillis\" | \"EncodedSince\" | \"DecodedSince\" | \"AbsoluteBlockSince\" | \"AbsoluteEpochSince\" | \"AbsoluteTimestampSince\" | \"RelativeBlockSince\" | \"RelativeEpochSince\" | \"RelativeTimestampSince\";\n\
+         declare const cellScriptTemporalDomain: unique symbol;\n\
+         export type CellScriptTemporalInput<D extends CellScriptTemporalDomain> = CellScriptScalarInput & { readonly [cellScriptTemporalDomain]: D };\n\
+         export type EpochNumber = CellScriptTemporalInput<\"EpochNumber\">;\n\
+         export type EpochDuration = CellScriptTemporalInput<\"EpochDuration\">;\n\
+         export type BlockNumber = CellScriptTemporalInput<\"BlockNumber\">;\n\
+         export type EpochLength = CellScriptTemporalInput<\"EpochLength\">;\n\
+         export type TimestampMillis = CellScriptTemporalInput<\"TimestampMillis\">;\n\
+         export type EncodedSince = CellScriptTemporalInput<\"EncodedSince\">;\n\
+         export type DecodedSince = CellScriptTemporalInput<\"DecodedSince\">;\n\
+         export type AbsoluteBlockSince = CellScriptTemporalInput<\"AbsoluteBlockSince\">;\n\
+         export type AbsoluteEpochSince = CellScriptTemporalInput<\"AbsoluteEpochSince\">;\n\
+         export type AbsoluteTimestampSince = CellScriptTemporalInput<\"AbsoluteTimestampSince\">;\n\
+         export type RelativeBlockSince = CellScriptTemporalInput<\"RelativeBlockSince\">;\n\
+         export type RelativeEpochSince = CellScriptTemporalInput<\"RelativeEpochSince\">;\n\
+         export type RelativeTimestampSince = CellScriptTemporalInput<\"RelativeTimestampSince\">;\n\n\
+         export function temporalValue<D extends CellScriptTemporalDomain>(domain: D, value: CellScriptScalarInput): CellScriptTemporalInput<D> {\n\
+           void domain;\n\
+           return value as CellScriptTemporalInput<D>;\n\
+         }\n\n\
          export type CellScriptValue = string | number | bigint | boolean | Uint8Array | Record<string, unknown> | null;\n\
          export type CellScriptParams = object;\n\n\
          export type ActionScanSelectors = Record<string, unknown> & {\n\
@@ -8609,6 +8632,7 @@ fn typescript_builder_index(
          requiresLiveCellResolution: true;\n\
          requiresDeploymentResolution: true;\n\
          cellDataCodecManifest: typeof cellDataCodecManifest;\n\
+         temporalContract: typeof temporalContract;\n\
          runtimeInputRequirements: readonly unknown[];\n\
          actionScanSelectors: ActionScanSelectors;\n\
          verifierObligations: readonly unknown[];\n\
@@ -9088,7 +9112,7 @@ fn typescript_builder_index(
          assertCellScriptDeployment(options.lockfile, options.deployment, options.liveDeploymentEvidence, options.trustPolicy);\n  }\n",
     );
     ts.push_str(&format!(
-        "  return {{\n    schema: CELLSCRIPT_BUILDER_SCHEMA,\n    state: \"GeneratedActionPlan\",\n    status: \"requires-runtime-resolution\",\n    action,\n    params,\n    options,\n    metadataHash: {},\n    artifactHash: {},\n    targetProfile: {},\n    canSubmit: false,\n    requiresLiveCellResolution: true,\n    requiresDeploymentResolution: true,\n    cellDataCodecManifest,\n    runtimeInputRequirements: [...actionSpec.runtimeInputRequirements],\n    actionScanSelectors: actionSpec.actionScanSelectors as ActionScanSelectors,\n    verifierObligations: [...actionSpec.verifierObligations],\n    failClosedRuntimeFeatures: [...actionSpec.failClosedRuntimeFeatures],\n    notProvenByGeneratedBuilder: [\n      \"live_cell_availability\",\n      \"deployment_live_chain_match\",\n      \"capacity_fee_balance\",\n      \"signature_authority\",\n      \"ckb_vm_execution\",\n      \"cell_data_codec_materialization\",\n      \"tx_pool_acceptance\",\n      \"submission\"\n    ] as const,\n  }};\n}}\n\n",
+        "  return {{\n    schema: CELLSCRIPT_BUILDER_SCHEMA,\n    state: \"GeneratedActionPlan\",\n    status: \"requires-runtime-resolution\",\n    action,\n    params,\n    options,\n    metadataHash: {},\n    artifactHash: {},\n    targetProfile: {},\n    canSubmit: false,\n    requiresLiveCellResolution: true,\n    requiresDeploymentResolution: true,\n    cellDataCodecManifest,\n    temporalContract,\n    runtimeInputRequirements: [...actionSpec.runtimeInputRequirements],\n    actionScanSelectors: actionSpec.actionScanSelectors as ActionScanSelectors,\n    verifierObligations: [...actionSpec.verifierObligations],\n    failClosedRuntimeFeatures: [...actionSpec.failClosedRuntimeFeatures],\n    notProvenByGeneratedBuilder: [\n      \"live_cell_availability\",\n      \"deployment_live_chain_match\",\n      \"capacity_fee_balance\",\n      \"signature_authority\",\n      \"ckb_vm_execution\",\n      \"cell_data_codec_materialization\",\n      \"tx_pool_acceptance\",\n      \"submission\"\n    ] as const,\n  }};\n}}\n\n",
         typescript_string_literal(metadata_hash),
         metadata.artifact_hash.as_deref().map(typescript_string_literal).unwrap_or_else(|| "null".to_string()),
         typescript_string_literal(&metadata.target_profile.name)
@@ -9602,6 +9626,7 @@ fn javascript_sample_param_value(param: &ParamMetadata) -> serde_json::Value {
     match param.ty.as_str() {
         "bool" => serde_json::Value::Bool(false),
         "u8" | "u16" | "u32" | "u64" | "u128" | "i8" | "i16" | "i32" | "i64" | "i128" => serde_json::json!(0),
+        temporal if crate::ir::is_ckb_temporal_scalar_name(temporal) => serde_json::json!(0),
         "()" => serde_json::Value::Null,
         _ => serde_json::Value::String("0x".to_string()),
     }
@@ -9670,7 +9695,7 @@ fn typescript_object_key(name: &str) -> String {
     }
 }
 
-fn typescript_param_type(param: &ParamMetadata) -> &'static str {
+fn typescript_param_type(param: &ParamMetadata) -> &str {
     if param.schema_pointer_abi
         || param.schema_length_abi
         || param.fixed_byte_len.is_some()
@@ -9683,6 +9708,7 @@ fn typescript_param_type(param: &ParamMetadata) -> &'static str {
     match param.ty.as_str() {
         "bool" => "boolean",
         "u8" | "u16" | "u32" | "u64" | "u128" | "i8" | "i16" | "i32" | "i64" | "i128" => "bigint | number | string",
+        temporal if crate::ir::is_ckb_temporal_scalar_name(temporal) => temporal,
         "()" => "null | undefined",
         _ => "CellScriptValue",
     }
@@ -14142,6 +14168,9 @@ fn parse_entry_witness_arg(param: &ParamMetadata, value: &str) -> Result<EntryWi
         "u16" => parse_integer_arg(&param.name, value, u16::MAX as u128).map(|value| EntryWitnessArg::U16(value as u16)),
         "u32" => parse_integer_arg(&param.name, value, u32::MAX as u128).map(|value| EntryWitnessArg::U32(value as u32)),
         "u64" => parse_integer_arg(&param.name, value, u64::MAX as u128).map(|value| EntryWitnessArg::U64(value as u64)),
+        temporal if crate::ir::is_ckb_temporal_scalar_name(temporal) => {
+            parse_integer_arg(&param.name, value, u64::MAX as u128).map(|value| EntryWitnessArg::U64(value as u64))
+        }
         "()" => Ok(EntryWitnessArg::Unit),
         other => {
             let Some(width) = crate::entry_witness_static_type_len(other).filter(|width| (1..=8).contains(width)) else {

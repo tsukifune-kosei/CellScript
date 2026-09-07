@@ -93,7 +93,7 @@ action transfer(nft_before: NFT, to: Address) -> nft_after: NFT {
 }
 action create_listing(read nft: NFT, price: u64) -> listing: Listing {
     verification
-        let now = env::current_timepoint()
+        let now = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require price > 0, "Price must be positive"
         create listing = Listing { collection_id: nft.collection_id, token_id: nft.token_id, seller: nft.owner, price, created_at: now, state: 0 } with_lock(nft.owner)
 
@@ -136,9 +136,12 @@ action buy_from_listing(nft_before: NFT, listing: Listing, buyer: Address, royal
 }
 action create_offer(collection_id: Hash, token_id: u64, buyer: Address, price: u64, payment_symbol: [u8; 8], expires_at: u64) -> offer: Offer {
     verification
-        let now = env::current_timepoint()
+        let current_epoch = ckb::header_dep(0).epoch_number
+        let now = ckb::epoch_number_to_u64(current_epoch)
+        let current_since = ckb::since_absolute_epoch(now, 0, 1)
+        let expiry_since = ckb::since_absolute_epoch(expires_at, 0, 1)
         require price > 0, "Price must be positive"
-        require expires_at > now, "Expiration must be in the future"
+        require expiry_since > current_since, "Expiration must be in the future"
         create offer = Offer { collection_id, token_id, buyer, price, expires_at, payment_symbol, state: 0 } with_lock(buyer)
 
 }
@@ -146,7 +149,7 @@ action accept_offer(nft_before: NFT, offer: Offer, royalty_payment: Token, selle
     transition nft_before -> nft_after
 
     verification
-        let now = env::current_timepoint()
+        let now = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require now < offer.expires_at, "Offer expired"
         require offer.collection_id == nft_before.collection_id, "Collection mismatch"
         require offer.token_id == nft_before.token_id, "Token mismatch"

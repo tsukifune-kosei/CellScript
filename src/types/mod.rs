@@ -6660,6 +6660,7 @@ impl<'a> TypeChecker<'a> {
                             | "header_epoch_start_block_number"
                             | "header_epoch_length"
                             | "input_since"
+                            | "input_since_raw"
                             | "current_role",
                         ) => {
                             self.validate_builtin_arity(name, 0, arg_types, call.span)?;

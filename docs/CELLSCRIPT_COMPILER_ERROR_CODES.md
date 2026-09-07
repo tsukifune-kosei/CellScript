@@ -27,6 +27,7 @@ non-overlapping `E2xxx` range.
 | `E2501` | `public-interface-breaking` | `cellc interface-diff` found a breaking source API, serialized layout, runtime ABI, effect/capability, builder, or deployment change. | Inspect every reported compatibility dimension and intentionally version or reverse the incompatible change before Registry publication. |
 | `E2900` | `backend-invariant` | An internal backend invariant failed after semantic checking. | Retain the source and compiler version and report a compiler defect. |
 | `W2500` | `implicit-legacy-public` | A module mixes explicit visibility with Edition 2026 declarations that still default to public. | Add `public`, `public(package)`, or `private` to every declaration listed by the warning. |
+| `W3012` | `legacy-raw-temporal-api` | Source uses an Edition 2026 raw-`u64` CKB temporal API for which the typed domain contract has a total replacement. | Apply the language-server migration action or use the explicit replacement in the warning; the outer raw-`u64` result remains compatible. |
 
 The CLI exposes these codes in human diagnostics and in the `diagnostics[].code`
 field of `--json` failures. The language server publishes them through the LSP

@@ -1395,6 +1395,52 @@ action add(x: u64, y: u64) -> u64 {
     }
 
     #[test]
+    fn format_round_trips_typed_ckb_temporal_domains() {
+        let source = r#"
+module temporal_format
+
+fn inspect(
+    encoded: EncodedSince,
+    epoch: EpochNumber,
+    duration: EpochDuration,
+    block: BlockNumber,
+    length: EpochLength,
+    timestamp: TimestampMillis,
+) -> bool {
+    let decoded = ckb::since_decode(encoded)
+    let absolute = ckb::since_absolute_epoch(42, 3, 10)
+    let relative = ckb::since_relative_timestamp(3600)
+    let next = ckb::epoch_add(epoch, duration)
+    return ckb::since_to_raw(absolute) > 0
+        && ckb::since_to_raw(relative) > 0
+        && ckb::since_metric(decoded) <= 2
+        && ckb::epoch_number_to_u64(next) >= 42
+        && ckb::block_number_to_u64(block) >= 0
+        && ckb::epoch_length_to_u64(length) >= 0
+        && ckb::timestamp_millis_to_u64(timestamp) >= 0
+}
+"#;
+        let module = crate::frontend::parse(source, crate::NEXT_EDITION).unwrap();
+        let formatted = format_default(&module).unwrap();
+        crate::frontend::parse(&formatted, crate::NEXT_EDITION).unwrap();
+        verify_idempotent(&formatted, FormatConfig::default()).unwrap();
+        for token in [
+            "EncodedSince",
+            "EpochNumber",
+            "EpochDuration",
+            "BlockNumber",
+            "EpochLength",
+            "TimestampMillis",
+            "ckb::since_decode(encoded)",
+            "ckb::since_absolute_epoch(42, 3, 10)",
+            "ckb::since_relative_timestamp(3600)",
+            "ckb::epoch_add(epoch, duration)",
+        ] {
+            assert!(formatted.contains(token), "missing `{token}` in:\n{formatted}");
+        }
+    }
+
+    #[test]
     fn format_preserves_full_width_u128_decimal_literals() {
         let source = r#"
 module demo

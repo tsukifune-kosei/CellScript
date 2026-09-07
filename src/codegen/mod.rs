@@ -566,26 +566,6 @@ fn fixed_scalar_width(ty: &IrType, fixed_size: Option<usize>) -> Option<usize> {
     }
 }
 
-fn is_ckb_temporal_scalar_name(name: &str) -> bool {
-    matches!(
-        name,
-        "EpochNumber"
-            | "EpochDuration"
-            | "BlockNumber"
-            | "EpochLength"
-            | "TimestampMillis"
-            | "EncodedSince"
-            | "DecodedSince"
-            | "AbsoluteBlockSince"
-            | "AbsoluteEpochSince"
-            | "AbsoluteTimestampSince"
-            | "RelativeBlockSince"
-            | "RelativeEpochSince"
-            | "RelativeTimestampSince"
-    ) || name.starts_with("Since<Absolute, ")
-        || name.starts_with("Since<Relative, ")
-}
-
 fn is_ckb_temporal_scalar_ir_type(ty: &IrType) -> bool {
     matches!(ty, IrType::Named(name) if is_ckb_temporal_scalar_name(name))
 }

@@ -613,6 +613,7 @@ impl SimulateInterpreter {
                 | "ckb::cell_lock_u8"
                 | "ckb::cell_type_u8"
                 | "ckb::input_since_at"
+                | "ckb::input_since_raw"
                 | "ckb::exec_cell_dep_u8_args"
                 | "ckb::exec_cell_dep_hex4"
                 | "ckb::spawn_wait_cell_dep_hex4"

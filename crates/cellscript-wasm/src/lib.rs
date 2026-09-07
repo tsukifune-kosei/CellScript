@@ -573,6 +573,23 @@ action inspect() -> bool {
         assert!(result.get("error").is_none(), "unexpected wasm compile error: {result}");
         assert_eq!(result["edition"], "2027");
         assert_eq!(result["target_profile"]["since_abi"], "ckb-since-rfc0017-typed-v1");
+        let features = result["actions"][0]["ckb_runtime_features"].as_array().expect("runtime features");
+        for expected in ["ckb-header-epoch-number", "ckb-header-block-number", "ckb-header-timestamp-millis"] {
+            assert!(features.iter().any(|feature| feature == expected), "missing {expected}: {result}");
+        }
+    }
+
+    #[test]
+    fn wasm_diagnostics_expose_legacy_temporal_migration_warnings() {
+        let source = "module legacy_time\naction inspect() -> u64 { verification return env::current_timepoint() }\n";
+        let result: serde_json::Value = serde_json::from_str(&compile_metadata_json_diagnostics(source, "2026", None)).unwrap();
+        assert_eq!(result["error_count"], 0);
+        assert_eq!(result["warning_count"], 1);
+        assert_eq!(result["diagnostics"][0]["severity"], "warning");
+        assert_eq!(result["diagnostics"][0]["code"], "W3012");
+        assert!(result["diagnostics"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)")));
     }
 
     #[test]

@@ -5,7 +5,7 @@ schema = "cellscript-lock-v0.24-graph-v1"
 edition = "2026"
 name = "vesting"
 version = "0.1.0"
-source_hash = "8e15e7c0a6d9a50e5f5489b576354e7bbe1465e8ed89c7c78e1001d56915a243"
+source_hash = "86efdc0af80aed1ceaf1b5d436482f24436f26c61c4f47e3a85c0b2b61757b7c"
 
 [root]
 manifest_digest = "sha256:82df84e167c51a173115714ddba2cb43114d1f3e19092dc035941d6638839d11"

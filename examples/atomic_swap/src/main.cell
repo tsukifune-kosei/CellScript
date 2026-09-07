@@ -59,9 +59,12 @@ action initiate_swap(
     token: Token,
 ) -> swap_lock: SwapLock {
     verification
-        let now = env::current_timepoint()
+        let current_epoch = ckb::header_dep(0).epoch_number
+        let now = ckb::epoch_number_to_u64(current_epoch)
+        let current_since = ckb::since_absolute_epoch(now, 0, 1)
+        let timeout_since = ckb::since_absolute_epoch(timeout_timepoint, 0, 1)
         require token.amount > 0, "zero amount"
-        require timeout_timepoint > now, "timeout is not in the future"
+        require timeout_since > current_since, "timeout is not in the future"
         require timeout_timepoint <= U64_MAX - REFUND_LOCK_PERIOD, "refund timeout overflow"
         consume token
         create swap_lock = SwapLock { swap_id, initiator, participant, hashlock, timeout_timepoint, token_symbol: token.symbol, amount: token.amount, state: SwapState::Pending } with_lock(initiator)
@@ -75,7 +78,7 @@ action claim_with_preimage(
 ) -> (released_token: Token, claim: PreimageClaim, updated_lock: SwapLock) {
     transition lock.state: Pending -> updated_lock.state: Claimed
     verification
-        let now = env::current_timepoint()
+        let now = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require claimed_by == lock.participant, "not the participant"
         require now < lock.timeout_timepoint, "claim window expired"
         require hash_blake2b(preimage) == lock.hashlock, "wrong preimage"
@@ -102,7 +105,9 @@ action refund_after_timeout(
 ) -> (released_token: Token, refund: RefundClaim, updated_lock: SwapLock) {
     transition lock.state: Pending -> updated_lock.state: Refunded
     verification
-        let now = env::current_timepoint()
+        let now = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
+        let refund_delay = ckb::since_relative_epoch(REFUND_LOCK_PERIOD, 0, 1)
+        require ckb::since_to_raw(refund_delay) > 0
         require refunded_by == lock.initiator, "not the initiator"
         require now >= lock.timeout_timepoint + REFUND_LOCK_PERIOD, "timeout not reached"
         require lock.state == SwapState::Pending, "not pending"

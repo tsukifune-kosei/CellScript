@@ -5,7 +5,7 @@ schema = "cellscript-lock-v0.24-graph-v1"
 edition = "2026"
 name = "multi_phase_dao"
 version = "0.1.0"
-source_hash = "f7ddc4c23c8bb9de7f6981df3ab2da9d98a964cf1c1388e8238966d5d4bb8dd9"
+source_hash = "0c4d4ba86c5683c01065fe148ff000c8e58812187a986e64fb94ccc3879db1aa"
 
 [root]
 manifest_digest = "sha256:5eb057483ad083caedc98337cea0ffcbd66a540869ea3d78b487acce98fb2847"

@@ -53,7 +53,7 @@ receipt EmergencyRelease has create, consume, replace, burn {
 
 action create_absolute_lock(lock_id: Hash, owner: Address, unlock_height: u64) -> created_lock: TimeLock {
     verification
-        let current_height = env::current_timepoint()
+        let current_height = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require current_height <= U64_MAX - MAX_LOCK_PERIOD, "Lock range overflow"
         require unlock_height > current_height + MIN_LOCK_PERIOD, "Unlock height too close"
         require unlock_height <= current_height + MAX_LOCK_PERIOD, "Unlock height too far"
@@ -62,7 +62,7 @@ action create_absolute_lock(lock_id: Hash, owner: Address, unlock_height: u64) -
 }
 action create_relative_lock(lock_id: Hash, owner: Address, lock_period: u64) -> created_lock: TimeLock {
     verification
-        let current_height = env::current_timepoint()
+        let current_height = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require lock_period >= MIN_LOCK_PERIOD, "Lock period too short"
         require lock_period <= MAX_LOCK_PERIOD, "Lock period too long"
         require lock_period <= U64_MAX - current_height, "Unlock height overflow"
@@ -78,17 +78,19 @@ action lock_asset(read time_lock: TimeLock, asset: Token) -> locked: LockedAsset
 }
 action request_release(read time_lock: TimeLock, requester: Address) -> request: ReleaseRequest {
     verification
-        let current_height = env::current_timepoint()
+        let current_height = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require requester == time_lock.owner, "Not the owner"
         require can_unlock(time_lock, current_height), "Cannot unlock yet"
+        require input_since_satisfies(time_lock), "Input since does not satisfy lock"
         create request = ReleaseRequest { lock_id: time_lock.lock_id, requester, requested_at: current_height, state: 0 } with_lock(requester)
 
 }
 action execute_release(time_lock: TimeLock, locked_asset: LockedAsset, request: ReleaseRequest, executor: Address) -> (released_asset: Token, record: ReleaseRecord) {
     verification
-        let current_height = env::current_timepoint()
+        let current_height = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require time_lock.owner == executor, "Not the owner"
         require can_unlock(&time_lock, current_height), "Cannot unlock yet"
+        require input_since_satisfies(&time_lock), "Input since does not satisfy lock"
         require locked_asset.lock_id == time_lock.lock_id, "Asset does not match lock"
         require request.lock_id == time_lock.lock_id, "Request does not match lock"
         require request.requester == time_lock.owner, "Request owner mismatch"
@@ -101,7 +103,7 @@ action execute_release(time_lock: TimeLock, locked_asset: LockedAsset, request: 
 }
 action request_emergency_release(read time_lock: TimeLock, requester: Address, reason: String) -> emergency: EmergencyRelease {
     verification
-        let current_height = env::current_timepoint()
+        let current_height = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require time_lock.owner == requester, "Not the owner"
         require !can_unlock(time_lock, current_height), "Already unlockable"
         create emergency = EmergencyRelease { lock_id: time_lock.lock_id, requester, reason, requested_at: current_height, approvers: [], state: 0 } with_lock(requester)
@@ -129,7 +131,7 @@ action approve_emergency_release(emergency_before: EmergencyRelease, claimed_app
 }
 action execute_emergency_release(time_lock: TimeLock, locked_asset: LockedAsset, emergency: EmergencyRelease, executor: Address) -> (released_asset: Token, record: ReleaseRecord) {
     verification
-        let current_height = env::current_timepoint()
+        let current_height = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require time_lock.owner == executor, "Not the owner"
         require emergency.requester == time_lock.owner, "Emergency requester mismatch"
         require emergency.approvers.len() >= EMERGENCY_APPROVALS as usize, "Not enough approvals"
@@ -144,7 +146,7 @@ action execute_emergency_release(time_lock: TimeLock, locked_asset: LockedAsset,
 }
 action extend_lock(time_lock_before: TimeLock, additional_period: u64, owner: Address) -> time_lock_after: TimeLock {
     verification
-        let current_height = env::current_timepoint()
+        let current_height = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require time_lock_before.owner == owner, "Not the owner"
         require !can_unlock(&time_lock_before, current_height), "Already unlocked"
         require additional_period <= U64_MAX - time_lock_before.unlock_height, "Unlock height overflow"
@@ -162,7 +164,7 @@ action extend_lock(time_lock_before: TimeLock, additional_period: u64, owner: Ad
 }
 action batch_create_locks(lock_ids: [Hash; 4], owners: [Address; 4], unlock_heights: [u64; 4]) -> (lock0: TimeLock, lock1: TimeLock, lock2: TimeLock, lock3: TimeLock) {
     verification
-        let current_height = env::current_timepoint()
+        let current_height = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require current_height <= U64_MAX - MAX_LOCK_PERIOD, "Lock range overflow"
         require unlock_heights[0] > current_height + MIN_LOCK_PERIOD, "Unlock height too close"
         require unlock_heights[1] > current_height + MIN_LOCK_PERIOD, "Unlock height too close"
@@ -180,6 +182,17 @@ action batch_create_locks(lock_ids: [Hash; 4], owners: [Address; 4], unlock_heig
 }
 fn can_unlock(time_lock: &TimeLock, current_height: u64) -> bool {
     current_height >= time_lock.unlock_height
+}
+
+fn input_since_satisfies(time_lock: &TimeLock) -> bool {
+    let observed = ckb::since_decode(ckb::input<TimeLock>(0).since)
+    let absolute_minimum = ckb::since_absolute_epoch(time_lock.unlock_height, 0, 1)
+    let lock_period = time_lock.unlock_height - time_lock.created_at
+    let relative_minimum = ckb::since_relative_epoch(lock_period, 0, 1)
+    if (time_lock.lock_type == LockType::Absolute) {
+        return ckb::since_as_absolute_epoch(observed) >= absolute_minimum
+    }
+    return ckb::since_as_relative_epoch(observed) >= relative_minimum
 }
 
 fn remaining_blocks(time_lock: &TimeLock, current_height: u64) -> u64 {
@@ -213,8 +226,9 @@ fn lock_progress(time_lock: &TimeLock, current_height: u64) -> u8 {
 
 lock can_unlock_lock(protected time_lock: TimeLock) -> bool {
     verification
-        let current_height = env::current_timepoint()
+        let current_height = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require can_unlock(time_lock, current_height)
+        require input_since_satisfies(time_lock)
 
 }
 lock is_owner(protected time_lock: TimeLock, witness addr: Address) -> bool {
@@ -240,6 +254,6 @@ lock emergency_approved(protected emergency: EmergencyRelease) -> bool {
 }
 lock not_expired(protected time_lock: TimeLock) -> bool {
     verification
-        let current_height = env::current_timepoint()
+        let current_height = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require current_height < time_lock.unlock_height
 }

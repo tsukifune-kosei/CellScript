@@ -1,0 +1,32 @@
+module language::ckb::typed_temporal
+
+resource TimedCell has store {
+    value: u64,
+}
+
+action validate_temporal_contract() -> bool {
+    verification
+        let input = ckb::input<TimedCell>(0)
+        let decoded = ckb::since_decode(input.since)
+        let header = ckb::header_dep(0)
+        let five_epochs = ckb::epoch_duration(5)
+        let next_epoch = ckb::epoch_add(header.epoch_number, five_epochs)
+        let absolute_block = ckb::since_absolute_block(123)
+        let relative_block = ckb::since_relative_block(7)
+        let absolute_epoch = ckb::since_absolute_epoch(42, 3, 10)
+        let relative_epoch = ckb::since_relative_epoch(2, 1, 4)
+        let absolute_timestamp = ckb::since_absolute_timestamp(1700000000)
+        let relative_timestamp = ckb::since_relative_timestamp(3600)
+        require ckb::since_metric(decoded) <= 2
+        require ckb::since_to_raw(absolute_block) == 123
+        require ckb::since_to_raw(relative_block) > ckb::since_to_raw(absolute_block)
+        require ckb::since_to_raw(absolute_epoch) > 0
+        require ckb::since_to_raw(relative_epoch) > 0
+        require ckb::since_to_raw(absolute_timestamp) > 0
+        require ckb::since_to_raw(relative_timestamp) > 0
+        require ckb::epoch_number_to_u64(next_epoch) >= 5
+        require ckb::block_number_to_u64(header.block_number) >= 0
+        require ckb::epoch_length_to_u64(header.epoch_length) > 0
+        require ckb::timestamp_millis_to_u64(header.timestamp) >= 0
+        return true
+}

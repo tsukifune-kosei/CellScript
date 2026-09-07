@@ -690,6 +690,7 @@ impl LspServer {
                     ("header_epoch_start_block_number", "ckb::header_epoch_start_block_number()"),
                     ("header_epoch_length", "ckb::header_epoch_length()"),
                     ("input_since", "ckb::input_since()"),
+                    ("input_since_raw", "ckb::input_since_raw()"),
                     ("since_epoch_absolute", "ckb::since_epoch_absolute(${1:number}, ${2:index}, ${3:length})"),
                     ("since_epoch_relative", "ckb::since_epoch_relative(${1:number}, ${2:index}, ${3:length})"),
                     ("since_absolute_epoch", "ckb::since_absolute_epoch(${1:number}, ${2:index}, ${3:length})"),
@@ -1778,6 +1779,35 @@ impl LspServer {
 
     pub fn code_action(&self, uri: &str, range: Range) -> Vec<CodeAction> {
         let mut actions = Vec::new();
+        let has_temporal_migration_diagnostic = self
+            .diagnostics
+            .get(uri)
+            .into_iter()
+            .flatten()
+            .any(|diagnostic| diagnostic.code.as_deref() == Some("W3012") && ranges_overlap(diagnostic.range, range));
+        if has_temporal_migration_diagnostic
+            && let Some(content) = self.documents.get(uri)
+            && let Ok(candidate) = crate::frontend::migrate_legacy_temporal_source(content, self.document_edition(uri))
+            && candidate.replacements > 0
+        {
+            actions.push(CodeAction {
+                title: format!(
+                    "Migrate {} legacy CKB temporal call{} to explicit typed domains",
+                    candidate.replacements,
+                    if candidate.replacements == 1 { "" } else { "s" }
+                ),
+                kind: "quickfix".to_string(),
+                edit: Some(WorkspaceEdit {
+                    changes: HashMap::from([(
+                        uri.to_string(),
+                        vec![TextEdit {
+                            range: Range { start: Position { line: 0, character: 0 }, end: end_position(content) },
+                            new_text: candidate.source,
+                        }],
+                    )]),
+                }),
+            });
+        }
         let has_lowering_diagnostic = self
             .diagnostics
             .get(uri)
@@ -3654,6 +3684,29 @@ action update(amount: u64) -> u64 {
         assert!(actions.iter().any(|action| action.title.contains("cellc metadata")));
         assert!(actions.iter().any(|action| action.title.contains("riscv64-asm")));
         assert!(actions.iter().all(|action| action.edit.is_none()));
+    }
+
+    #[test]
+    fn temporal_warning_offers_a_complete_mechanical_workspace_edit() {
+        let mut server = LspServer::new();
+        let uri = "file:///temporal_migration.cell".to_string();
+        let source = "module temporal_migration\nfn epoch() -> u64 { return env::current_timepoint() }\n";
+        server.open_document(uri.clone(), source.to_string());
+        let warning = server
+            .get_diagnostics(&uri)
+            .into_iter()
+            .find(|diagnostic| diagnostic.code.as_deref() == Some("W3012"))
+            .expect("legacy temporal API must have a targeted warning");
+        let actions = server.code_action(&uri, warning.range);
+        let action = actions
+            .iter()
+            .find(|action| action.title.contains("legacy CKB temporal call"))
+            .expect("warning must offer a mechanical migration action");
+        let edit = action.edit.as_ref().expect("migration action must contain a workspace edit");
+        let edits = edit.changes.get(&uri).expect("migration edit must target the source document");
+        assert_eq!(edits.len(), 1);
+        assert!(edits[0].new_text.contains("ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)"));
+        assert!(crate::frontend::legacy_temporal_migration_diagnostics(&edits[0].new_text).is_empty());
     }
 
     #[test]

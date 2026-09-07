@@ -11,6 +11,29 @@ pub use bindings::{IrCellBinding, IrCellBindingRole, IrCellMembership, IrCellSou
 pub(crate) use optimize::{optimize_exact_cell_data_equality, optimize_source_byte_equality};
 pub(crate) use policy::bind_artifact_policy;
 
+/// CKB temporal domains use exact `u64` wire bits and occupy one machine word.
+/// Keep this inventory in shared IR so codegen, entry-witness metadata, and
+/// generated builders cannot classify the same source type differently.
+pub(crate) const CKB_TEMPORAL_SCALAR_TYPE_NAMES: &[&str] = &[
+    "EpochNumber",
+    "EpochDuration",
+    "BlockNumber",
+    "EpochLength",
+    "TimestampMillis",
+    "EncodedSince",
+    "DecodedSince",
+    "AbsoluteBlockSince",
+    "AbsoluteEpochSince",
+    "AbsoluteTimestampSince",
+    "RelativeBlockSince",
+    "RelativeEpochSince",
+    "RelativeTimestampSince",
+];
+
+pub(crate) fn is_ckb_temporal_scalar_name(name: &str) -> bool {
+    CKB_TEMPORAL_SCALAR_TYPE_NAMES.contains(&name) || name.starts_with("Since<Absolute, ") || name.starts_with("Since<Relative, ")
+}
+
 #[derive(Debug, Clone)]
 pub struct IrModule {
     pub name: String,
@@ -6631,7 +6654,7 @@ impl IrGenerator {
                     });
                     Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(current) })
                 }
-                "ckb::input_since" if call.args.is_empty() => {
+                "ckb::input_since" | "ckb::input_since_raw" if call.args.is_empty() => {
                     let dest = self.new_var("ckb_input_since", IrType::U64);
                     self.block_mut(blocks, current).instructions.push(IrInstruction::Call {
                         dest: Some(dest.clone()),

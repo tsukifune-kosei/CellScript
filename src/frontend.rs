@@ -17,7 +17,10 @@ mod authoring;
 mod migrate;
 mod next;
 
-pub use migrate::{migrate_source_to_2027, MigrationCandidate, MigrationKind};
+pub use migrate::{
+    legacy_temporal_migration_diagnostics, migrate_legacy_temporal_source, migrate_source_to_2027, MigrationCandidate, MigrationKind,
+    TemporalMigrationCandidate,
+};
 
 /// Tooling uses the same contextual surface selection as the parser. This
 /// remains usable while a native container body is incomplete during editing.

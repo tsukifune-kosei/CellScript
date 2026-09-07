@@ -9805,6 +9805,106 @@ action mint(amount: u64, owner: Address) -> Token {
 }
 
 #[test]
+fn cellc_gen_builder_preserves_typed_temporal_scalar_domains() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+edition = "2027"
+name = "temporal-builder"
+version = "0.1.0"
+
+[build]
+target_profile = "ckb"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src").join("main.cell"),
+        r#"
+module temporal_builder::main
+
+action schedule(
+    epoch: EpochNumber,
+    duration: EpochDuration,
+    block: BlockNumber,
+    length: EpochLength,
+    timestamp: TimestampMillis,
+    encoded: EncodedSince,
+    decoded: DecodedSince,
+    absolute_block: AbsoluteBlockSince,
+    absolute_epoch: AbsoluteEpochSince,
+    absolute_timestamp: AbsoluteTimestampSince,
+    relative_block: RelativeBlockSince,
+    relative_epoch: RelativeEpochSince,
+    relative_timestamp: RelativeTimestampSince,
+) -> bool {
+    verification
+        return epoch == epoch
+            && duration == duration
+            && block == block
+            && length == length
+            && timestamp == timestamp
+            && ckb::since_to_raw(encoded) == ckb::since_to_raw(decoded)
+            && ckb::since_to_raw(absolute_block) == ckb::since_to_raw(relative_block)
+            && ckb::since_to_raw(absolute_epoch) == ckb::since_to_raw(relative_epoch)
+            && ckb::since_to_raw(absolute_timestamp) == ckb::since_to_raw(relative_timestamp)
+}
+"#,
+    )
+    .unwrap();
+
+    let metadata_path = root.join("temporal.meta.json");
+    let metadata_output = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("metadata")
+        .arg("--output")
+        .arg(&metadata_path)
+        .output()
+        .unwrap();
+    assert!(metadata_output.status.success(), "stderr: {}", String::from_utf8_lossy(&metadata_output.stderr));
+
+    let metadata: serde_json::Value = serde_json::from_slice(&std::fs::read(&metadata_path).unwrap()).unwrap();
+    let params = metadata["actions"][0]["params"].as_array().unwrap();
+    assert_eq!(params.len(), 13);
+    assert!(params.iter().all(|param| param["schema_pointer_abi"] == false && param["schema_length_abi"] == false));
+
+    let output_dir = root.join("generated-builder");
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("gen-builder")
+        .arg("--target")
+        .arg("typescript")
+        .arg("--metadata")
+        .arg(&metadata_path)
+        .arg("--output")
+        .arg(&output_dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output_dir.join("cellscript-builder-manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["runtime_contract"]["temporal_interface"]["schema"], "cellscript-ckb-temporal-interface-v1");
+    assert_eq!(manifest["runtime_contract"]["temporal_interface"]["since_abi"], "ckb-since-rfc0017-typed-v1");
+
+    let index_ts = std::fs::read_to_string(output_dir.join("src").join("index.ts")).unwrap();
+    assert!(index_ts.contains("export type CellScriptTemporalDomain ="), "{index_ts}");
+    assert!(index_ts.contains("export function temporalValue"), "{index_ts}");
+    assert!(index_ts.contains("temporalContract: typeof temporalContract;"), "{index_ts}");
+    assert!(index_ts.contains("epoch: EpochNumber;"), "{index_ts}");
+    assert!(index_ts.contains("duration: EpochDuration;"), "{index_ts}");
+    assert!(index_ts.contains("encoded: EncodedSince;"), "{index_ts}");
+    assert!(index_ts.contains("absolute_epoch: AbsoluteEpochSince;"), "{index_ts}");
+    assert!(index_ts.contains("relative_timestamp: RelativeTimestampSince;"), "{index_ts}");
+}
+
+#[test]
 fn cellc_gen_builder_typescript_declares_raw_cell_data_codec_manifest() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

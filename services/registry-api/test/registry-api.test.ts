@@ -957,6 +957,59 @@ describe("registry api", () => {
       .not.toBe(firstValidated.registry_entry.versions[0].compatibility_profile_hash);
   });
 
+  it("accepts the versioned typed temporal interface and rejects contract drift", async () => {
+    const payload = await publishPayload("temporal-interface-test");
+    const published = payload.registry_entry.versions[0];
+    const temporal = {
+      schema: "cellscript-ckb-temporal-interface-v1",
+      wire_representation: "fixed-u64-register-and-little-endian-wire",
+      since_abi: "ckb-since-rfc0017-typed-v1",
+      constructors: [
+        "ckb::since_absolute_block(u64)->AbsoluteBlockSince",
+        "ckb::since_absolute_epoch(u64,u64,u64)->AbsoluteEpochSince",
+        "ckb::since_absolute_timestamp(u64-seconds)->AbsoluteTimestampSince",
+        "ckb::since_relative_block(u64)->RelativeBlockSince",
+        "ckb::since_relative_epoch(u64,u64,u64)->RelativeEpochSince",
+        "ckb::since_relative_timestamp(u64-seconds)->RelativeTimestampSince",
+      ],
+      decoder: "ckb::since_decode(EncodedSince)->DecodedSince;ckb::since_from_raw_checked(u64)->DecodedSince",
+      domains: [
+        "EpochNumber",
+        "EpochDuration",
+        "BlockNumber",
+        "EpochLength",
+        "TimestampMillis",
+        "EncodedSince",
+        "DecodedSince",
+        "AbsoluteBlockSince",
+        "AbsoluteEpochSince",
+        "AbsoluteTimestampSince",
+        "RelativeBlockSince",
+        "RelativeEpochSince",
+        "RelativeTimestampSince",
+      ],
+      migration: "legacy-raw-ckb-temporal-to-explicit-typed-v1",
+    };
+    const interfaceV3 = {
+      ...published.interface,
+      schema: "cellscript-package-interface-v3",
+      version: 3,
+      runtime_contract: { temporal },
+    };
+    published.interface = interfaceV3;
+    published.interface_hash = ckbBlake2bHex(canonicalJson(interfaceV3));
+    expect(validatePublishPayload(payload, DEFAULT_REGISTRY_ORIGIN, now).registry_entry.versions[0].interface)
+      .toEqual(interfaceV3);
+
+    const drifted = structuredClone(payload);
+    const driftedInterface = drifted.registry_entry.versions[0].interface as Record<string, unknown>;
+    const runtime = driftedInterface.runtime_contract as Record<string, unknown>;
+    const driftedTemporal = runtime.temporal as Record<string, unknown>;
+    driftedTemporal.since_abi = "unchecked";
+    drifted.registry_entry.versions[0].interface_hash = ckbBlake2bHex(canonicalJson(driftedInterface));
+    expect(() => validatePublishPayload(drifted, DEFAULT_REGISTRY_ORIGIN, now)).toThrow(/temporal.since_abi/);
+  });
+
   it("reports readiness only when production bindings are configured", async () => {
     const app = createApp();
     const live = await get(app, "/health");

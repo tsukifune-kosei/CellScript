@@ -191,6 +191,12 @@ pub const COMPILER_ERROR_INFOS: &[CompilerErrorInfo] = &[
         description: "A backend invariant was violated after semantic checking.",
         hint: "Retain the source and compiler version and report this as a compiler defect.",
     },
+    CompilerErrorInfo {
+        code: "W3012",
+        name: "legacy-raw-temporal-api",
+        description: "An Edition 2026 raw-u64 CKB temporal API has an explicit typed-domain replacement.",
+        hint: "Apply the language-server migration action or use the replacement named by the diagnostic; the outer raw-u64 result is preserved.",
+    },
 ];
 
 pub fn compiler_error_info_by_code(code: &str) -> Option<CompilerErrorInfo> {

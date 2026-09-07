@@ -71,6 +71,7 @@ receipt ExecutionRecord has create {
 
 action create_wallet(wallet_id: Hash, signers: Vec<Address>, threshold: u8, reported_time: u64) -> wallet: MultisigWallet {
     verification
+        require reported_time == current_epoch_raw(), "Reported time does not match HeaderDep epoch"
         require signers.len() >= MIN_SIGNERS as usize, "Not enough signers"
         require signers.len() <= MAX_SIGNERS as usize, "Too many signers"
         require threshold >= MIN_SIGNERS && threshold <= signers.len() as u8, "Invalid threshold"
@@ -84,6 +85,7 @@ action create_wallet(wallet_id: Hash, signers: Vec<Address>, threshold: u8, repo
 }
 action propose_transfer(wallet_before: MultisigWallet, proposer: Address, target: Address, amount: u64, reported_time: u64) -> (wallet_after: MultisigWallet, proposal: Proposal) {
     verification
+        require reported_time == current_epoch_raw(), "Reported time does not match HeaderDep epoch"
         require is_signer(&wallet_before, proposer), "Not a signer"
         require amount > 0, "Amount must be positive"
         require target != Address::zero(), "Invalid target address"
@@ -98,6 +100,7 @@ action propose_transfer(wallet_before: MultisigWallet, proposer: Address, target
 }
 action record_approval(proposal_before: Proposal, read wallet: MultisigWallet, approver: Address, reported_time: u64) -> (proposal_after: Proposal, confirmation: ApprovalConfirmation) {
     verification
+        require reported_time == current_epoch_raw(), "Reported time does not match HeaderDep epoch"
         require reported_time < proposal_before.expires_at, "Reported approval time is outside the proposal window"
         require is_signer(wallet, approver), "Approver is not a configured member"
         require !has_approved(&proposal_before, approver), "Already approved"
@@ -122,6 +125,7 @@ action record_approval(proposal_before: Proposal, read wallet: MultisigWallet, a
 }
 action execute_proposal(read wallet: MultisigWallet, proposal: Proposal, executor: Address, reported_time: u64) -> record: ExecutionRecord {
     verification
+        require reported_time == current_epoch_raw(), "Reported time does not match HeaderDep epoch"
         require is_signer(wallet, executor), "Not a signer"
         require reported_time < proposal.expires_at, "Reported execution time is outside the proposal window"
         require proposal.approvals.len() >= proposal.required_approvals as usize, "Not enough recorded approvals"
@@ -139,6 +143,7 @@ action cancel_proposal(read wallet: MultisigWallet, proposal: Proposal, cancelle
 }
 action propose_add_signer(wallet_before: MultisigWallet, proposer: Address, new_signer: Address, reported_time: u64) -> (wallet_after: MultisigWallet, proposal: Proposal) {
     verification
+        require reported_time == current_epoch_raw(), "Reported time does not match HeaderDep epoch"
         require is_signer(&wallet_before, proposer), "Not a signer"
         require !is_signer(&wallet_before, new_signer), "Already a signer"
         require wallet_before.signers.len() < MAX_SIGNERS as usize, "Max signers reached"
@@ -155,6 +160,7 @@ action propose_add_signer(wallet_before: MultisigWallet, proposer: Address, new_
 }
 action propose_remove_signer(wallet_before: MultisigWallet, proposer: Address, signer_to_remove: Address, reported_time: u64) -> (wallet_after: MultisigWallet, proposal: Proposal) {
     verification
+        require reported_time == current_epoch_raw(), "Reported time does not match HeaderDep epoch"
         require is_signer(&wallet_before, proposer), "Not a signer"
         require is_signer(&wallet_before, signer_to_remove), "Not a signer"
         require wallet_before.signers.len() - 1 >= wallet_before.threshold as usize, "Would fall below threshold"
@@ -169,6 +175,7 @@ action propose_remove_signer(wallet_before: MultisigWallet, proposer: Address, s
 }
 action propose_change_threshold(wallet_before: MultisigWallet, proposer: Address, new_threshold: u8, reported_time: u64) -> (wallet_after: MultisigWallet, proposal: Proposal) {
     verification
+        require reported_time == current_epoch_raw(), "Reported time does not match HeaderDep epoch"
         require is_signer(&wallet_before, proposer), "Not a signer"
         require new_threshold >= MIN_SIGNERS && new_threshold <= wallet_before.signers.len() as u8, "Invalid threshold"
         let proposal_id = wallet_before.nonce + 1
@@ -182,6 +189,14 @@ action propose_change_threshold(wallet_before: MultisigWallet, proposer: Address
         create proposal = Proposal { wallet_id: wallet_before.wallet_id, proposal_id, proposer, operation: OperationType::ChangeThreshold, target: Address::zero(), amount: new_threshold as u64, data, required_approvals: wallet_before.threshold, approvals: [], created_at: reported_time, expires_at: reported_time + DEFAULT_TIMEOUT, state: ProposalStatus::Pending }
 
 }
+fn current_epoch() -> EpochNumber {
+    return ckb::header_dep(0).epoch_number
+}
+
+fn current_epoch_raw() -> u64 {
+    return ckb::epoch_number_to_u64(current_epoch())
+}
+
 fn is_signer(wallet: &MultisigWallet, addr: Address) -> bool {
     for signer in &wallet.signers {
         if *signer == addr {
@@ -207,6 +222,7 @@ lock is_signer_lock(protected wallet: MultisigWallet, witness addr: Address) -> 
 }
 lock can_execute(protected proposal: Proposal, witness reported_time: u64) -> bool {
     verification
+        require reported_time == current_epoch_raw(), "Reported time does not match HeaderDep epoch"
         require proposal.approvals.len() >= proposal.required_approvals as usize && reported_time < proposal.expires_at
 
 }
@@ -222,5 +238,6 @@ lock has_enough_approvals(protected proposal: Proposal) -> bool {
 }
 lock not_expired(protected proposal: Proposal, witness reported_time: u64) -> bool {
     verification
+        require reported_time == current_epoch_raw(), "Reported time does not match HeaderDep epoch"
         require reported_time < proposal.expires_at
 }

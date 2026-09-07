@@ -307,8 +307,14 @@ addition/subtraction, including 24-bit overflow and underflow rejection. The
 same regression checks exact 208-byte full-header decoding of block number and
 millisecond timestamp, including their typed-domain separation. See the
 [typed CKB temporal-domain contract](CELLSCRIPT_0_30_TEMPORAL_DOMAINS.md) for
-the implemented and deferred rows. This evidence does not close the complete
-temporal issue or the release gate.
+the implemented and deferred rows. `W3012` and its LSP workspace edit cover
+raw-compatible source migration; canonical package-interface v3 binds the
+temporal constructors, checked decoders, domains, fixed representation, and
+migration identity, and the Registry API retains a v2 reader. This evidence
+is mirrored by formatter, VS Code, generated-builder, locked package, WASM,
+Playground, and six-family business-fixture checks. The canonical browser
+summary build is 543,507 bytes gzip. Full candidate gates and independent
+review are still required to close the temporal issue or the release gate.
 
 ### 0.26b semantic-foundation evidence
 

@@ -827,6 +827,62 @@ export function validateInterfaceUpgrade(previous: unknown, candidate: unknown):
   }
 }
 
+function validatePublicInterfaceVersion(publicInterface: Record<string, unknown>): void {
+  const schema = publicInterface["schema"];
+  const version = publicInterface["version"];
+  if (schema === "cellscript-package-interface-v2" && version === 2) return;
+  if (schema !== "cellscript-package-interface-v3" || version !== 3) {
+    throw new ApiError(
+      400,
+      "unsupported_public_interface",
+      "public interface must use cellscript-package-interface-v2 or cellscript-package-interface-v3",
+    );
+  }
+  const runtime = assertPlainObject(publicInterface["runtime_contract"], "invalid_public_interface");
+  const temporal = assertPlainObject(runtime["temporal"], "invalid_public_interface");
+  const expectedConstructors = [
+    "ckb::since_absolute_block(u64)->AbsoluteBlockSince",
+    "ckb::since_absolute_epoch(u64,u64,u64)->AbsoluteEpochSince",
+    "ckb::since_absolute_timestamp(u64-seconds)->AbsoluteTimestampSince",
+    "ckb::since_relative_block(u64)->RelativeBlockSince",
+    "ckb::since_relative_epoch(u64,u64,u64)->RelativeEpochSince",
+    "ckb::since_relative_timestamp(u64-seconds)->RelativeTimestampSince",
+  ];
+  const expectedDomains = [
+    "EpochNumber",
+    "EpochDuration",
+    "BlockNumber",
+    "EpochLength",
+    "TimestampMillis",
+    "EncodedSince",
+    "DecodedSince",
+    "AbsoluteBlockSince",
+    "AbsoluteEpochSince",
+    "AbsoluteTimestampSince",
+    "RelativeBlockSince",
+    "RelativeEpochSince",
+    "RelativeTimestampSince",
+  ];
+  const exactStrings = {
+    schema: "cellscript-ckb-temporal-interface-v1",
+    wire_representation: "fixed-u64-register-and-little-endian-wire",
+    since_abi: "ckb-since-rfc0017-typed-v1",
+    decoder: "ckb::since_decode(EncodedSince)->DecodedSince;ckb::since_from_raw_checked(u64)->DecodedSince",
+    migration: "legacy-raw-ckb-temporal-to-explicit-typed-v1",
+  } as const;
+  for (const [key, expected] of Object.entries(exactStrings)) {
+    if (temporal[key] !== expected) {
+      throw new ApiError(400, "invalid_public_interface", `runtime_contract.temporal.${key} must be '${expected}'`);
+    }
+  }
+  if (canonicalJson(temporal["constructors"]) !== canonicalJson(expectedConstructors)) {
+    throw new ApiError(400, "invalid_public_interface", "runtime_contract.temporal.constructors is not canonical");
+  }
+  if (canonicalJson(temporal["domains"]) !== canonicalJson(expectedDomains)) {
+    throw new ApiError(400, "invalid_public_interface", "runtime_contract.temporal.domains is not canonical");
+  }
+}
+
 function interfaceItems(value: unknown, label: string): Map<string, Record<string, unknown>> {
   if (!Array.isArray(value)) {
     throw new ApiError(400, "invalid_public_interface", `public interface ${label} must be an array`);
@@ -932,9 +988,7 @@ function validateRegistryEntry(
       const interfaceHash = requireString(published, "interface_hash");
       validateHash(interfaceHash, "interface_hash", "invalid_interface_hash");
       const publicInterface = assertPlainObject(published["interface"], "invalid_public_interface");
-      if (publicInterface["schema"] !== "cellscript-package-interface-v2" || publicInterface["version"] !== 2) {
-        throw new ApiError(400, "unsupported_public_interface", "public interface must use cellscript-package-interface-v2");
-      }
+      validatePublicInterfaceVersion(publicInterface);
       const computedInterfaceHash = ckbBlake2bHex(canonicalJson(publicInterface));
       if (computedInterfaceHash.replace(/^0x/, "") !== interfaceHash.replace(/^0x/, "")) {
         throw new ApiError(400, "interface_hash_mismatch", "interface_hash must bind the canonical public interface");

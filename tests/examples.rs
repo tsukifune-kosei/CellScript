@@ -20,6 +20,14 @@ const BUNDLED_EXAMPLES: [&str; 9] = [
 ];
 const PACKAGE_EXAMPLES: [&str; 10] =
     ["amm_pool", "atomic_swap", "launch", "multi_phase_dao", "multisig", "nft", "registry", "timelock", "token", "vesting"];
+const TEMPORAL_BUSINESS_EXAMPLES: [(&str, &str); 6] = [
+    ("timelock.cell", "timelock"),
+    ("multi_phase_dao.cell", "DAO"),
+    ("vesting.cell", "vesting"),
+    ("nft.cell", "NFT expiry"),
+    ("multisig.cell", "governance"),
+    ("atomic_swap.cell", "atomic swap"),
+];
 const BACKEND_SHAPE_BASELINE_JSON: &str = include_str!("backend_shape_baseline.json");
 
 const BUNDLED_EXAMPLE_ELF_SIZE_BUDGETS: [(&str, usize); 9] = [
@@ -56,8 +64,10 @@ const FULL_METADATA_SIZE_BUDGETS: [(&str, FullMetadataSizeBudget); 4] = [
         "nft.cell",
         FullMetadataSizeBudget {
             max_compact_metadata_bytes: 704 * 1024,
-            max_proof_plan_records: 90,
-            max_compact_proof_plan_bytes: 80 * 1024,
+            // Typed HeaderDep epoch observation and checked Since construction
+            // add two explicit CKB-runtime proof records to the listing path.
+            max_proof_plan_records: 92,
+            max_compact_proof_plan_bytes: 84 * 1024,
             max_source_units: 2,
             max_compact_source_units_bytes: 512,
         },
@@ -75,9 +85,11 @@ const FULL_METADATA_SIZE_BUDGETS: [(&str, FullMetadataSizeBudget); 4] = [
     (
         "vesting.cell",
         FullMetadataSizeBudget {
-            max_compact_metadata_bytes: 368 * 1024,
-            max_proof_plan_records: 50,
-            max_compact_proof_plan_bytes: 48 * 1024,
+            max_compact_metadata_bytes: 416 * 1024,
+            // Five epoch-aware entry paths now retain their HeaderDep reads;
+            // grant_vesting also records checked EpochDuration arithmetic.
+            max_proof_plan_records: 64,
+            max_compact_proof_plan_bytes: 58 * 1024,
             max_source_units: 2,
             max_compact_source_units_bytes: 512,
         },
@@ -110,7 +122,7 @@ const ENTRY_ARTIFACT_SIZE_BUDGETS: [(&str, EntryArtifactSizeBudget); 4] = [
         "nft.cell",
         EntryArtifactSizeBudget {
             max_elf_bytes: 48 * 1024,
-            max_compact_metadata_bytes: 192 * 1024,
+            max_compact_metadata_bytes: 204 * 1024,
             max_proof_plan_records: 30,
             max_compact_proof_plan_bytes: 32 * 1024,
             max_actions: 1,
@@ -132,7 +144,7 @@ const ENTRY_ARTIFACT_SIZE_BUDGETS: [(&str, EntryArtifactSizeBudget); 4] = [
         "vesting.cell",
         EntryArtifactSizeBudget {
             max_elf_bytes: 28 * 1024,
-            max_compact_metadata_bytes: 136 * 1024,
+            max_compact_metadata_bytes: 148 * 1024,
             max_proof_plan_records: 20,
             max_compact_proof_plan_bytes: 20 * 1024,
             max_actions: 1,
@@ -468,7 +480,7 @@ fn all_checked_in_cell_examples_compile() {
     let files = checked_in_example_cell_files();
     assert_eq!(
         files.len(),
-        BUNDLED_EXAMPLES.len() + 1 + 20,
+        BUNDLED_EXAMPLES.len() + 1 + 21,
         "expected bundled examples, top-level registry.cell, and language examples"
     );
 
@@ -1383,6 +1395,30 @@ fn bundled_examples_compile_to_non_empty_assembly() {
         assert!(!result.metadata.constraints.entry_abi.is_empty(), "missing entry ABI constraints for {}", example);
         assert!(result.metadata.constraints.ckb.is_some(), "missing CKB constraints for {}", example);
         assert!(!result.metadata.actions.is_empty(), "missing action metadata for {}", example);
+    }
+}
+
+#[test]
+fn temporal_business_examples_use_the_typed_header_epoch_api() {
+    for (example, business_family) in TEMPORAL_BUSINESS_EXAMPLES {
+        let source = std::fs::read_to_string(example_path(example)).expect("read temporal business example");
+        let diagnostics = cellscript::frontend::legacy_temporal_migration_diagnostics(&source);
+        assert!(
+            diagnostics.iter().all(|diagnostic| diagnostic.code.as_deref() != Some("W3012")),
+            "{business_family} still uses a legacy raw temporal API: {:?}",
+            diagnostics
+        );
+        let metadata = compile_file(example_path(example), CompileOptions::default())
+            .unwrap_or_else(|error| panic!("{business_family} typed temporal example must compile: {error}"))
+            .metadata;
+        assert!(
+            metadata.runtime.ckb_runtime_features.contains(&"ckb-header-epoch-number".to_string()),
+            "{business_family} must retain the typed HeaderDep epoch read"
+        );
+        assert!(
+            !metadata.runtime.ckb_runtime_features.contains(&"load-header-timepoint".to_string()),
+            "{business_family} must not fall back to env::current_timepoint"
+        );
     }
 }
 

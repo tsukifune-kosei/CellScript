@@ -10,9 +10,10 @@ use crate::{ckb_blake2b256, CompileMetadata};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const INTERFACE_SCHEMA: &str = "cellscript-package-interface-v2";
-pub const INTERFACE_SCHEMA_VERSION: u32 = 2;
+pub const INTERFACE_SCHEMA: &str = "cellscript-package-interface-v3";
+pub const INTERFACE_SCHEMA_VERSION: u32 = 3;
 pub const COMPATIBILITY_SCHEMA: &str = "cellscript-interface-compatibility-v1";
+pub const TEMPORAL_INTERFACE_SCHEMA: &str = "cellscript-ckb-temporal-interface-v1";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PackageInterface {
@@ -107,6 +108,19 @@ pub struct InterfaceRuntimeContract {
     pub source_encoding: String,
     pub spawn_ipc_abi: String,
     pub compatibility_profile_id: String,
+    #[serde(default)]
+    pub temporal: InterfaceTemporalContract,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InterfaceTemporalContract {
+    pub schema: String,
+    pub wire_representation: String,
+    pub since_abi: String,
+    pub constructors: Vec<String>,
+    pub decoder: String,
+    pub domains: Vec<String>,
+    pub migration: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -328,6 +342,7 @@ pub fn build(ast: &ast::Module, metadata: &CompileMetadata) -> PackageInterface 
         source_encoding: metadata.target_profile.source_encoding.clone(),
         spawn_ipc_abi: metadata.target_profile.spawn_ipc_abi.clone(),
         compatibility_profile_id: metadata.compatibility_profile.id.clone(),
+        temporal: temporal_contract(&metadata.target_profile.since_abi),
     };
     let builder_contract_hash =
         hash_serializable(&callables.iter().map(|item| (&item.identity, &item.builder_contract_hash)).collect::<Vec<_>>());
@@ -345,6 +360,39 @@ pub fn build(ast: &ast::Module, metadata: &CompileMetadata) -> PackageInterface 
         runtime_contract,
         builder_contract_hash,
         deployment_contract_hash,
+    }
+}
+
+pub fn temporal_contract(since_abi: &str) -> InterfaceTemporalContract {
+    InterfaceTemporalContract {
+        schema: TEMPORAL_INTERFACE_SCHEMA.to_string(),
+        wire_representation: "fixed-u64-register-and-little-endian-wire".to_string(),
+        since_abi: since_abi.to_string(),
+        constructors: vec![
+            "ckb::since_absolute_block(u64)->AbsoluteBlockSince".to_string(),
+            "ckb::since_absolute_epoch(u64,u64,u64)->AbsoluteEpochSince".to_string(),
+            "ckb::since_absolute_timestamp(u64-seconds)->AbsoluteTimestampSince".to_string(),
+            "ckb::since_relative_block(u64)->RelativeBlockSince".to_string(),
+            "ckb::since_relative_epoch(u64,u64,u64)->RelativeEpochSince".to_string(),
+            "ckb::since_relative_timestamp(u64-seconds)->RelativeTimestampSince".to_string(),
+        ],
+        decoder: "ckb::since_decode(EncodedSince)->DecodedSince;ckb::since_from_raw_checked(u64)->DecodedSince".to_string(),
+        domains: vec![
+            "EpochNumber".to_string(),
+            "EpochDuration".to_string(),
+            "BlockNumber".to_string(),
+            "EpochLength".to_string(),
+            "TimestampMillis".to_string(),
+            "EncodedSince".to_string(),
+            "DecodedSince".to_string(),
+            "AbsoluteBlockSince".to_string(),
+            "AbsoluteEpochSince".to_string(),
+            "AbsoluteTimestampSince".to_string(),
+            "RelativeBlockSince".to_string(),
+            "RelativeEpochSince".to_string(),
+            "RelativeTimestampSince".to_string(),
+        ],
+        migration: "legacy-raw-ckb-temporal-to-explicit-typed-v1".to_string(),
     }
 }
 
@@ -604,12 +652,20 @@ mod tests {
     use super::*;
     use crate::{compile_metadata, lexer, parser, CellScriptEdition};
 
-    fn interface(source: &str) -> PackageInterface {
-        let tokens = lexer::lex(source).unwrap();
-        let ast = parser::parse(&tokens).unwrap();
+    fn interface_for_edition(source: &str, edition: CellScriptEdition) -> PackageInterface {
+        let ast = if edition == CellScriptEdition::Edition2026 {
+            let tokens = lexer::lex(source).unwrap();
+            parser::parse(&tokens).unwrap()
+        } else {
+            crate::frontend::parse(source, edition).unwrap()
+        };
         let monomorphized = crate::generics::monomorphize(&ast).unwrap();
-        let metadata = compile_metadata(source, CellScriptEdition::Edition2026, None).unwrap();
+        let metadata = compile_metadata(source, edition, None).unwrap();
         build(&monomorphized, &metadata)
+    }
+
+    fn interface(source: &str) -> PackageInterface {
+        interface_for_edition(source, CellScriptEdition::Edition2026)
     }
 
     #[test]
@@ -666,5 +722,35 @@ private fn implementation() -> u64 { return 42 }
         );
         assert_eq!(with_private_use, without_private_use);
         assert!(compare(&with_private_use, &without_private_use).compatible);
+    }
+
+    #[test]
+    fn temporal_contract_and_typed_signature_changes_are_explicitly_breaking() {
+        let raw = interface("module api\npublic fn deadline() -> u64 { return ckb::since_epoch_absolute(1, 0, 1) }\n");
+        let typed = interface_for_edition(
+            "module api\npublic fn deadline() -> AbsoluteEpochSince { return ckb::since_absolute_epoch(1, 0, 1) }\n",
+            CellScriptEdition::Edition2027,
+        );
+        assert_eq!(typed.schema, INTERFACE_SCHEMA);
+        assert_eq!(typed.version, INTERFACE_SCHEMA_VERSION);
+        assert_eq!(typed.runtime_contract.temporal.schema, TEMPORAL_INTERFACE_SCHEMA);
+        assert_eq!(typed.runtime_contract.temporal.since_abi, "ckb-since-rfc0017-typed-v1");
+        assert!(typed.runtime_contract.temporal.constructors.iter().any(|constructor| constructor.contains("AbsoluteEpochSince")));
+        assert!(typed.runtime_contract.temporal.decoder.contains("since_decode"));
+        assert!(typed.runtime_contract.temporal.domains.contains(&"TimestampMillis".to_string()));
+
+        let report = compare(&raw, &typed);
+        assert!(!report.compatible);
+        assert!(report.changes.iter().any(|change| change.code == "ICOMP1004" && change.dimension == "source_api"));
+
+        let mut legacy_value = serde_json::to_value(&typed).unwrap();
+        legacy_value["schema"] = serde_json::json!("cellscript-package-interface-v2");
+        legacy_value["version"] = serde_json::json!(2);
+        legacy_value["runtime_contract"].as_object_mut().unwrap().remove("temporal");
+        let legacy: PackageInterface = serde_json::from_value(legacy_value).expect("v2 interface remains readable");
+        assert_eq!(legacy.runtime_contract.temporal, InterfaceTemporalContract::default());
+        let report = compare(&legacy, &typed);
+        assert!(!report.compatible);
+        assert!(report.changes.iter().any(|change| change.code == "ICOMP3001" && change.dimension == "runtime_abi"));
     }
 }

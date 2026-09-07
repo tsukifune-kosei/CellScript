@@ -16,6 +16,7 @@ mod vm_tests;
 #[cfg(not(feature = "wasm"))]
 pub use compile::{compile_artifact, compile_sources_artifact};
 pub use compile::{compile_artifact_metadata, compile_path_artifact_metadata, compile_sources_artifact_metadata};
+#[cfg(not(feature = "wasm"))]
 pub(crate) use metadata::bind_policy_metadata;
 pub use metadata::{
     encode_policy_action_record, PolicyArtifactMetadata, POLICY_ARTIFACT_METADATA_SCHEMA, POLICY_WITNESS_PLACEMENT_ABI,

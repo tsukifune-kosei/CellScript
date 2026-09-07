@@ -2,10 +2,11 @@
 
 ## Status
 
-**Status: implemented additive Phase 1 contract for typed HeaderDep epoch
-fields, fixed-size full-header block/timestamp reads, all six RFC0017 `Since`
-mode/metric domains, checked decoding, and checked whole-epoch duration
-arithmetic. This document does not close issue #12 or the 0.30 release gate.**
+**Status: implementation-complete additive issue #12 contract for typed
+HeaderDep fields, all six RFC0017 `Since` mode/metric domains, checked decoding,
+checked whole-epoch duration arithmetic, migration, interfaces, builders, and
+product parity. Full candidate gates and independent review remain before issue
+#12 or the 0.30 release gate can close.**
 
 The normative chain behavior comes from
 [CKB RFC 0017](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0017-tx-valid-since/0017-tx-valid-since.md).
@@ -138,8 +139,19 @@ The existing Edition 2026 functions retain their raw `u64` return types:
 
 New code obtains an opaque input value from `InputView.since`, validates it with
 `since_decode`, and narrows it to the required domain. No existing raw function
-silently changes meaning. A later migration phase will add targeted diagnostics
-and mechanical replacements once the complete typed surface is available.
+silently changes meaning. Compiler and LSP diagnostic `W3012` identifies each
+legacy call with a total raw-compatible replacement. The language-server
+quick-fix rewrites every such call in the document while preserving comments
+and the surrounding `u64` result. The legacy untyped GroupInput#0 reader becomes
+the explicitly named `ckb::input_since_raw()` alias because no Cell type can be
+inferred from that no-argument call.
+
+Canonical `cellscript-package-interface-v3` records the fixed scalar/wire
+representation, all six constructors, both checked decoder entry points, the
+complete domain inventory, `since_abi`, and the migration identity. The v2
+reader remains available for compatibility comparison; adding or changing the
+temporal contract is classified as a runtime/deployment break, while changing
+an exported raw signature to a typed domain is also a source/call-ABI break.
 
 ## Executable evidence
 
@@ -156,17 +168,18 @@ absolute/relative mixing, block/epoch/timestamp mixing, and implicit comparison
 with raw integers. The standalone checker rejects typed-semantics mutations
 that change either mode or metric on a comparison operand.
 
-## Remaining issue #12 work
+Formatter round-trip, LSP `W3012` migration, VS Code grammar, generated-builder,
+package-interface v2/v3 interoperation, Registry validation, metadata-only WASM,
+and Playground checks cover the same public contract. The canonical browser
+bundle uses a bounded summary construction path while native builds retain the
+complete interface, typed-semantics, ProofPlan, scheduler, Molecule, and
+artifact records. Its reproducible build is 543,507 bytes gzip, below the
+600 KB budget. Timelock, DAO, vesting, NFT-expiry, governance, and atomic-swap
+fixtures now compile through typed HeaderDep and Since operations without a
+legacy raw temporal diagnostic.
 
-The following work remains before the temporal issue can close:
+## Remaining issue #12 acceptance evidence
 
-- migration warnings, a mechanical migration action, and old-edition package
-  interoperation tests;
-- explicit constructor/decoder requirements in exported package-interface
-  compatibility checks beyond the target-level `since_abi` binding;
-- standalone-checker mutations for changed temporal types and comparisons;
-- formatter, VS Code, Playground, generated-builder, and package-fixture parity;
-- migrated timelock, DAO, vesting, NFT-expiry, governance, and atomic-swap
-  business fixtures; and
-- full `ci`, `backend`, release, and independent-review evidence on one clean
-  candidate revision.
+The implementation surface is complete. Full `ci`, `backend`, release, and
+independent-review evidence must still pass on one clean candidate revision
+before the issue is closed or used in a release claim.

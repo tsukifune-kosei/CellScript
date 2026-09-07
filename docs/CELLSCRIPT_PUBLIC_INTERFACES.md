@@ -1,8 +1,10 @@
 # CellScript Public Interfaces And Compatibility
 
-**Status**: implemented on `nightly-0.26`
+**Status**: v2 implemented on `nightly-0.26`; v3 implemented on the `0.30`
+development branch
 
-**Schemas**: `cellscript-package-interface-v2` and
+**Schemas**: `cellscript-package-interface-v3` (current),
+`cellscript-package-interface-v2` (read compatibility), and
 `cellscript-interface-compatibility-v1`
 
 ## What The Interface Represents
@@ -24,7 +26,10 @@ consumer or Registry upgrade must preserve:
 - source generic templates and applied types in exported signatures, without
   implementation-only monomorphizations;
 - target, VM, witness, lock-args, source-encoding, Spawn/IPC, and compatibility
-  profile identities; and
+  profile identities;
+- the `cellscript-ckb-temporal-interface-v1` fixed representation, RFC0017
+  constructor/decoder inventory, distinct domain names, `since_abi`, and
+  mechanical migration identity; and
 - generated-builder and deployment-contract hashes.
 
 Edition 2026 keeps the historical public-by-default behavior for an item with
@@ -112,6 +117,13 @@ The report classifies changes across six independent dimensions:
 A breaking report exits with stable compiler code `E2501`. Additive exports are
 reported as compatible changes; they still change `interface_hash`, so a
 consumer can choose whether it accepts a new exact identity.
+
+The v3 reader accepts a v2 JSON interface with an empty default temporal
+contract so `interface-diff` can compare an older release. Moving from that
+empty contract to the v3 typed contract is a `runtime_abi` and deployment
+break. Changing an exported callable from raw `u64` to a temporal domain is
+also a `source_api` and call-ABI break. Registry publication validates the
+canonical v3 temporal fields instead of trusting an arbitrary interface hash.
 
 ## Registry Admission
 

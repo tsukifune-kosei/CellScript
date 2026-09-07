@@ -76,9 +76,11 @@ action propose(
 ) -> proposal: Proposal {
     verification
         require voting_duration > 0, "zero voting duration"
-        let now = env::current_timepoint()
+        let current_epoch = ckb::header_dep(0).epoch_number
+        let now = ckb::epoch_number_to_u64(current_epoch)
         require voting_duration <= U64_MAX - now, "voting end overflow"
-        create proposal = Proposal { proposal_id, state: ProposalState::Draft, proposer, for_votes: 0, against_votes: 0, start_timepoint: now, end_timepoint: now + voting_duration, execution_payload_hash } with_lock(proposer)
+        let voting_end = ckb::epoch_add(current_epoch, ckb::epoch_duration(voting_duration))
+        create proposal = Proposal { proposal_id, state: ProposalState::Draft, proposer, for_votes: 0, against_votes: 0, start_timepoint: now, end_timepoint: ckb::epoch_number_to_u64(voting_end), execution_payload_hash } with_lock(proposer)
 
 }
 
@@ -87,7 +89,7 @@ action activate_proposal(
 ) -> proposal_after: Proposal {
     transition proposal_before.state: Draft -> proposal_after.state: Active
     verification
-        let now = env::current_timepoint()
+        let now = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require proposal_before.state == ProposalState::Draft, "not draft"
         require now >= proposal_before.start_timepoint, "not started"
         preserve proposal_after from proposal_before {
@@ -113,7 +115,7 @@ action cast_vote(
     support: bool,
 ) -> (proposal_after: Proposal, vote: VoteReceipt) {
     verification
-        let now = env::current_timepoint()
+        let now = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require proposal_before.state == ProposalState::Active, "proposal not active"
         require now < proposal_before.end_timepoint, "voting closed"
         require voting_token.amount > 0, "zero weight"
@@ -141,7 +143,7 @@ action cast_vote(
 
 action redeem_vote(read proposal: Proposal, vote: VoteReceipt) -> token: Token {
     verification
-        let now = env::current_timepoint()
+        let now = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require now >= proposal.end_timepoint, "voting not closed"
         require vote.proposal_id == proposal.proposal_id, "proposal mismatch"
         require vote.weight > 0, "zero vote weight"
@@ -155,7 +157,7 @@ action execute_proposal(
 ) -> (proposal_after: Proposal, record: ExecutionRecord) {
     transition proposal_before.state: Active -> proposal_after.state: Executed
     verification
-        let now = env::current_timepoint()
+        let now = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require proposal_before.state == ProposalState::Active, "not active"
         require now >= proposal_before.end_timepoint, "voting not closed"
         require proposal_before.against_votes <= U64_MAX - proposal_before.for_votes, "vote total overflow"
@@ -183,7 +185,7 @@ action defeat_proposal(
 ) -> proposal_after: Proposal {
     transition proposal_before.state: Active -> proposal_after.state: Defeated
     verification
-        let now = env::current_timepoint()
+        let now = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require proposal_before.state == ProposalState::Active, "not active"
         require now >= proposal_before.end_timepoint, "voting not closed"
         require proposal_before.for_votes <= proposal_before.against_votes, "still passing"

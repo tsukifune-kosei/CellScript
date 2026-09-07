@@ -1,5 +1,6 @@
 //! CellScript - Domain-specific language compiler for CKB blockchain
 //! Currently the backend can output RISC-V assembly or ELF artifacts.
+#![cfg_attr(feature = "wasm", allow(dead_code))]
 
 pub(crate) mod aggregate_lowering;
 pub mod artifact;
@@ -222,7 +223,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v36-0.30-dev1-full-header-time";
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v38-0.30-dev1-temporal-product";
 pub const METADATA_SCHEMA_VERSION: u32 = 68;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -1214,6 +1215,9 @@ pub fn validate_compile_metadata(metadata: &CompileMetadata, artifact_format: Ar
                 "compile metadata public interface has an invalid schema, version, or module identity",
             ));
         }
+        if metadata.public_interface.runtime_contract.temporal != interface::temporal_contract(&metadata.target_profile.since_abi) {
+            return Err(CompileError::without_span("compile metadata public interface has an invalid typed CKB temporal contract"));
+        }
         let expected_interface_hash = interface::hash(&metadata.public_interface);
         if metadata.interface_hash != expected_interface_hash {
             return Err(CompileError::without_span(format!(
@@ -1297,98 +1301,117 @@ pub fn validate_compile_metadata(metadata: &CompileMetadata, artifact_format: Ar
             previous_generic_identity = Some(&instantiation.identity);
         }
     }
-    let primitive_assurance = (metadata.compatibility_profile.primitive_assurance != "default")
-        .then_some(metadata.compatibility_profile.primitive_assurance.as_str());
-    let mut expected_compatibility_profile =
-        resolve_compatibility_profile(metadata.edition, &metadata.target_profile.name, primitive_assurance);
-    if let Some(policy) = &metadata.runtime.policy_artifact {
-        policy.validate()?;
-        edition::set_entry_compatibility_profile(
-            &mut expected_compatibility_profile,
-            &policy.payload_abi,
-            &policy.placement_abi,
-            &policy.placement_field,
-            &policy.placement_source,
-        );
-    }
-    if metadata.compatibility_profile != expected_compatibility_profile {
-        return Err(CompileError::without_span(format!(
-            "metadata compatibility_profile '{}' does not match the resolved compatibility axes for edition {} and target profile '{}'",
-            metadata.compatibility_profile.id, metadata.edition, metadata.target_profile.name
-        )));
-    }
-    if !metadata.constraints.status.is_empty()
-        && (metadata.constraints.edition != metadata.edition
-            || metadata.constraints.compatibility_profile != metadata.compatibility_profile.id)
+    #[cfg(feature = "wasm")]
     {
-        return Err(CompileError::without_span(
-            "metadata constraints edition/compatibility_profile does not match the top-level compile identity",
-        ));
+        if metadata.artifact_format != artifact_format.display_name() {
+            return Err(CompileError::without_span(format!(
+                "metadata artifact_format '{}' does not match compiler artifact format '{}'",
+                metadata.artifact_format,
+                artifact_format.display_name()
+            )));
+        }
+        if metadata.target_profile.name != "ckb" || metadata.target_profile.since_abi != "ckb-since-rfc0017-typed-v1" {
+            return Err(CompileError::without_span(
+                "browser metadata target profile does not match the bounded CKB temporal contract",
+            ));
+        }
+        return Ok(());
     }
+    #[cfg(not(feature = "wasm"))]
+    {
+        let primitive_assurance = (metadata.compatibility_profile.primitive_assurance != "default")
+            .then_some(metadata.compatibility_profile.primitive_assurance.as_str());
+        let mut expected_compatibility_profile =
+            resolve_compatibility_profile(metadata.edition, &metadata.target_profile.name, primitive_assurance);
+        if let Some(policy) = &metadata.runtime.policy_artifact {
+            policy.validate()?;
+            edition::set_entry_compatibility_profile(
+                &mut expected_compatibility_profile,
+                &policy.payload_abi,
+                &policy.placement_abi,
+                &policy.placement_field,
+                &policy.placement_source,
+            );
+        }
+        if metadata.compatibility_profile != expected_compatibility_profile {
+            return Err(CompileError::without_span(format!(
+                "metadata compatibility_profile '{}' does not match the resolved compatibility axes for edition {} and target profile '{}'",
+                metadata.compatibility_profile.id, metadata.edition, metadata.target_profile.name
+            )));
+        }
+        if !metadata.constraints.status.is_empty()
+            && (metadata.constraints.edition != metadata.edition
+                || metadata.constraints.compatibility_profile != metadata.compatibility_profile.id)
+        {
+            return Err(CompileError::without_span(
+                "metadata constraints edition/compatibility_profile does not match the top-level compile identity",
+            ));
+        }
 
-    if metadata.artifact_format != artifact_format.display_name() {
-        return Err(CompileError::without_span(format!(
-            "metadata artifact_format '{}' does not match compiler artifact format '{}'",
-            metadata.artifact_format,
-            artifact_format.display_name()
-        )));
-    }
-    validate_target_profile_metadata(metadata, artifact_format)?;
+        if metadata.artifact_format != artifact_format.display_name() {
+            return Err(CompileError::without_span(format!(
+                "metadata artifact_format '{}' does not match compiler artifact format '{}'",
+                metadata.artifact_format,
+                artifact_format.display_name()
+            )));
+        }
+        validate_target_profile_metadata(metadata, artifact_format)?;
 
-    if metadata.runtime.vm_abi.format != "molecule" {
-        return Err(CompileError::without_span(format!(
-            "metadata runtime.vm_abi.format must be 'molecule', got '{}'",
-            metadata.runtime.vm_abi.format
-        )));
-    }
-    if metadata.runtime.vm_abi.version != MOLECULE_VM_ABI_VERSION {
-        return Err(CompileError::without_span(format!(
-            "metadata runtime.vm_abi.version must be 0x{:04x}, got 0x{:04x}",
-            MOLECULE_VM_ABI_VERSION, metadata.runtime.vm_abi.version
-        )));
-    }
+        if metadata.runtime.vm_abi.format != "molecule" {
+            return Err(CompileError::without_span(format!(
+                "metadata runtime.vm_abi.format must be 'molecule', got '{}'",
+                metadata.runtime.vm_abi.format
+            )));
+        }
+        if metadata.runtime.vm_abi.version != MOLECULE_VM_ABI_VERSION {
+            return Err(CompileError::without_span(format!(
+                "metadata runtime.vm_abi.version must be 0x{:04x}, got 0x{:04x}",
+                MOLECULE_VM_ABI_VERSION, metadata.runtime.vm_abi.version
+            )));
+        }
 
-    let profile = TargetProfile::from_name(&metadata.target_profile.name)?;
-    let should_embed_abi = profile.embeds_vm_abi_trailer(artifact_format);
-    if metadata.runtime.vm_abi.embedded_in_artifact != should_embed_abi {
-        return Err(CompileError::without_span(format!(
-            "metadata runtime.vm_abi.embedded_in_artifact must be {} for {} {} artifacts",
-            should_embed_abi,
-            profile.name(),
-            artifact_format.display_name()
-        )));
-    }
+        let profile = TargetProfile::from_name(&metadata.target_profile.name)?;
+        let should_embed_abi = profile.embeds_vm_abi_trailer(artifact_format);
+        if metadata.runtime.vm_abi.embedded_in_artifact != should_embed_abi {
+            return Err(CompileError::without_span(format!(
+                "metadata runtime.vm_abi.embedded_in_artifact must be {} for {} {} artifacts",
+                should_embed_abi,
+                profile.name(),
+                artifact_format.display_name()
+            )));
+        }
 
-    if metadata.runtime.standalone_runner_compatible && metadata.runtime.ckb_runtime_required {
-        return Err(CompileError::without_span(
-            "metadata marks artifact as standalone-compatible while CKB runtime features are required",
-        ));
-    }
-    validate_type_identity_metadata(metadata)?;
-    validate_capability_metadata(metadata)?;
-    validate_payload_enum_layout_metadata(metadata)?;
-    validate_protocol_role_metadata(metadata)?;
-    validate_type_validity_metadata(metadata)?;
-    validate_capacity_floor_metadata(metadata)?;
-    validate_ckb_constraints_summary_metadata(metadata)?;
-    validate_ckb_output_data_binding_metadata(metadata)?;
-    validate_ckb_type_id_output_metadata(metadata)?;
-    validate_ckb_runtime_access_metadata(metadata)?;
-    validate_fungible_type_group_entry_metadata(metadata)?;
-    validate_transaction_view_handle_metadata(metadata)?;
-    validate_borrow_region_metadata(metadata)?;
-    validate_collection_instantiation_metadata(metadata)?;
-    validate_ckb_script_group_metadata(metadata)?;
-    validate_ckb_script_reference_metadata(metadata)?;
-    validate_trusted_external_verifier_metadata(metadata)?;
-    validate_molecule_schema_metadata(metadata)?;
-    validate_molecule_schema_manifest_metadata(metadata)?;
-    validate_cell_data_codec_manifest_metadata(metadata)?;
-    validate_template_layout_metadata(metadata)?;
-    validate_source_metadata(metadata)?;
-    crate::proof_plan::soundness::validate_metadata(metadata, false)?;
+        if metadata.runtime.standalone_runner_compatible && metadata.runtime.ckb_runtime_required {
+            return Err(CompileError::without_span(
+                "metadata marks artifact as standalone-compatible while CKB runtime features are required",
+            ));
+        }
+        validate_type_identity_metadata(metadata)?;
+        validate_capability_metadata(metadata)?;
+        validate_payload_enum_layout_metadata(metadata)?;
+        validate_protocol_role_metadata(metadata)?;
+        validate_type_validity_metadata(metadata)?;
+        validate_capacity_floor_metadata(metadata)?;
+        validate_ckb_constraints_summary_metadata(metadata)?;
+        validate_ckb_output_data_binding_metadata(metadata)?;
+        validate_ckb_type_id_output_metadata(metadata)?;
+        validate_ckb_runtime_access_metadata(metadata)?;
+        validate_fungible_type_group_entry_metadata(metadata)?;
+        validate_transaction_view_handle_metadata(metadata)?;
+        validate_borrow_region_metadata(metadata)?;
+        validate_collection_instantiation_metadata(metadata)?;
+        validate_ckb_script_group_metadata(metadata)?;
+        validate_ckb_script_reference_metadata(metadata)?;
+        validate_trusted_external_verifier_metadata(metadata)?;
+        validate_molecule_schema_metadata(metadata)?;
+        validate_molecule_schema_manifest_metadata(metadata)?;
+        validate_cell_data_codec_manifest_metadata(metadata)?;
+        validate_template_layout_metadata(metadata)?;
+        validate_source_metadata(metadata)?;
+        crate::proof_plan::soundness::validate_metadata(metadata, false)?;
 
-    Ok(())
+        Ok(())
+    }
 }
 
 fn validate_trusted_external_verifier_metadata(metadata: &CompileMetadata) -> Result<()> {
@@ -5459,6 +5482,9 @@ fn entry_witness_append_scalar_arg(witness: &mut Vec<u8>, param: &ParamMetadata,
         ("u32", EntryWitnessArg::U32(value)) if width == 4 => witness.extend_from_slice(&value.to_le_bytes()),
         ("i32", EntryWitnessArg::I32(value)) if width == 4 => witness.extend_from_slice(&value.to_le_bytes()),
         ("u64", EntryWitnessArg::U64(value)) if width == 8 => witness.extend_from_slice(&value.to_le_bytes()),
+        (_, EntryWitnessArg::U64(value)) if width == 8 && ir::is_ckb_temporal_scalar_name(&param.ty) => {
+            witness.extend_from_slice(&value.to_le_bytes());
+        }
         (_, EntryWitnessArg::Bytes(bytes)) if bytes.len() == width && entry_witness_type_is_small_aggregate(&param.ty) => {
             witness.extend_from_slice(bytes);
         }
@@ -5525,6 +5551,7 @@ pub(crate) fn entry_witness_static_type_len(ty: &str) -> Option<usize> {
         "u64" => return Some(8),
         "u128" => return Some(16),
         "Address" | "Hash" => return Some(32),
+        other if ir::is_ckb_temporal_scalar_name(other) => return Some(8),
         _ => {}
     }
 
@@ -6493,6 +6520,7 @@ pub fn compile_metadata_with_diagnostics(
     let target_profile = TargetProfile::Ckb;
 
     let mut diagnostics = visibility_migration_diagnostics(&ast);
+    diagnostics.extend(frontend::legacy_temporal_migration_diagnostics(source));
     diagnostics.extend(types::diagnostics(&ast));
     if diagnostics.iter().any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error) {
         return CompileMetadataDiagnosticReport { metadata: None, diagnostics };
@@ -6727,6 +6755,11 @@ fn project_frontend_diagnostics(project: &LoadedProject, options: &CompileOption
 
         diagnostics.extend(
             visibility_migration_diagnostics(&module.ast).into_iter().map(|warning| attach_file_if_missing(warning, &module.path)),
+        );
+        diagnostics.extend(
+            frontend::legacy_temporal_migration_diagnostics(&module.source)
+                .into_iter()
+                .map(|warning| attach_file_if_missing(warning, &module.path)),
         );
 
         diagnostics.extend(attach_default_file(
@@ -8160,6 +8193,309 @@ fn bind_typed_semantics(metadata: &mut CompileMetadata, ir: &ir::IrModule) {
 #[cfg(feature = "wasm")]
 fn bind_typed_semantics(_metadata: &mut CompileMetadata, _ir: &ir::IrModule) {}
 
+#[cfg(feature = "wasm")]
+fn browser_type_metadata(type_def: &ir::IrTypeDef, type_defs: &BTreeMap<String, &ir::IrTypeDef>) -> TypeMetadata {
+    TypeMetadata {
+        name: type_def.name.clone(),
+        type_id: None,
+        default_hash_type: None,
+        hash_type_source: if type_def.default_hash_type.is_some() {
+            "dsl-with_default_hash_type".to_string()
+        } else {
+            "target-default".to_string()
+        },
+        capacity_floor_shannons: None,
+        capacity_floor_source: None,
+        type_id_hash: None,
+        ckb_type_id: None,
+        kind: format!("{:?}", type_def.kind),
+        capability_set_version: ast::Capability::REGISTRY_VERSION,
+        capabilities: ast::Capability::ALL
+            .into_iter()
+            .filter(|capability| type_def.capabilities.contains(capability))
+            .map(|capability| metadata_capability_name(&capability))
+            .collect(),
+        claim_output: None,
+        flow_states: Vec::new(),
+        flow_state_field: None,
+        flow_transitions: Vec::new(),
+        flow_initial_state: None,
+        flow_terminal_states: Vec::new(),
+        flow_terminal_discharge: None,
+        flow_terminal_evidence_tier: None,
+        flow_state_model: None,
+        flow_audit_warnings: Vec::new(),
+        validity_predicates: Vec::new(),
+        encoded_size: type_encoded_size(type_def, type_defs),
+        fields: Vec::new(),
+        molecule_schema: None,
+        identity_policy: None,
+    }
+}
+
+#[cfg(feature = "wasm")]
+fn browser_param_metadata(param: &ir::IrParam) -> ParamMetadata {
+    ParamMetadata {
+        name: param.name.clone(),
+        ty: ir_type_to_string(&param.ty),
+        is_mut: false,
+        is_ref: false,
+        source: "default".to_string(),
+        protected_spend_surface: false,
+        witness_data_source: false,
+        lock_args_data_source: false,
+        cell_bound_abi: false,
+        schema_pointer_abi: false,
+        schema_length_abi: false,
+        fixed_byte_pointer_abi: false,
+        fixed_byte_length_abi: false,
+        fixed_byte_len: None,
+        type_hash_pointer_abi: false,
+        type_hash_length_abi: false,
+        type_hash_len: None,
+        bounded_runtime_contract: None,
+    }
+}
+
+#[cfg(feature = "wasm")]
+fn browser_fail_closed_metadata(
+    ir: &ir::IrModule,
+    type_layouts: &MetadataTypeLayouts,
+    cell_type_kinds: &HashMap<String, ir::IrTypeKind>,
+    pure_const_returns: &HashMap<String, ir::IrConst>,
+) -> (Vec<String>, Vec<VerifierObligationMetadata>) {
+    let mut module_features = BTreeSet::new();
+    let mut obligations = Vec::new();
+    for item in &ir.items {
+        let (scope, body, params, return_type) = match item {
+            ir::IrItem::Action(action) => {
+                (format!("action:{}", action.name), &action.body, action.params.as_slice(), action.return_type.as_ref())
+            }
+            ir::IrItem::PureFn(function) => {
+                (format!("fn:{}", function.name), &function.body, function.params.as_slice(), function.return_type.as_ref())
+            }
+            ir::IrItem::Lock(lock) => (format!("lock:{}", lock.name), &lock.body, lock.params.as_slice(), None),
+            ir::IrItem::TypeDef(_) | ir::IrItem::Invariant(_) => continue,
+        };
+        let param_schema_vars = schema_pointer_var_ids(body, params);
+        let features = body_fail_closed_runtime_features(
+            body,
+            &param_schema_vars,
+            type_layouts,
+            params,
+            cell_type_kinds,
+            return_type,
+            pure_const_returns,
+        );
+        for feature in features {
+            module_features.insert(feature.clone());
+            obligations.push(VerifierObligationMetadata {
+                scope: scope.clone(),
+                category: "runtime".to_string(),
+                feature: feature.clone(),
+                status: "fail-closed".to_string(),
+                detail: format!("the browser compiler reports '{feature}' as an explicit fail-closed runtime path"),
+            });
+        }
+    }
+    (module_features.into_iter().collect(), obligations)
+}
+
+#[cfg(feature = "wasm")]
+fn browser_action_metadata(
+    ir: &ir::IrModule,
+    action: &ir::IrAction,
+    type_layouts: &MetadataTypeLayouts,
+    cell_type_kinds: &HashMap<String, ir::IrTypeKind>,
+    pure_const_returns: &HashMap<String, ir::IrConst>,
+) -> ActionMetadata {
+    let param_schema_vars = schema_pointer_var_ids(&action.body, &action.params);
+    let fail_closed_runtime_features = body_fail_closed_runtime_features(
+        &action.body,
+        &param_schema_vars,
+        type_layouts,
+        &action.params,
+        cell_type_kinds,
+        action.return_type.as_ref(),
+        pure_const_returns,
+    );
+    let mut ckb_runtime_features = auto_lowered_aggregate_runtime_features_for_action(ir, action);
+    ckb_runtime_features.extend(merge_ckb_runtime_features(
+        body_ckb_runtime_features(&action.name, &action.body, cell_type_kinds, type_layouts),
+        &action.params,
+    ));
+    let ckb_runtime_features = ckb_runtime_features.into_iter().collect::<Vec<_>>();
+    ActionMetadata {
+        name: action.name.clone(),
+        params: action.params.iter().map(browser_param_metadata).collect(),
+        return_type: None,
+        effect_class: format!("{:?}", action.effect_class),
+        parallelizable: false,
+        touches_shared: Vec::new(),
+        estimated_cycles: action.scheduler_hints.estimated_cycles,
+        scheduler_witness_abi: String::new(),
+        scheduler_witness_hex: String::new(),
+        scheduler_witness_molecule_hex: String::new(),
+        consume_set: action.body.consume_set.iter().map(cell_pattern_metadata).collect(),
+        read_refs: action.body.read_refs.iter().map(cell_pattern_metadata).collect(),
+        create_set: action
+            .body
+            .create_set
+            .iter()
+            .map(|pattern| CreatePatternMetadata {
+                operation: String::new(),
+                ty: pattern.ty.clone(),
+                binding: pattern.binding.clone(),
+                fields: Vec::new(),
+                has_lock: false,
+                identity_policy: None,
+                ckb_output_data: None,
+                ckb_type_id: None,
+            })
+            .collect(),
+        mutate_set: action
+            .body
+            .mutate_set
+            .iter()
+            .map(|pattern| MutatePatternMetadata {
+                operation: String::new(),
+                ty: pattern.ty.clone(),
+                binding: pattern.binding.clone(),
+                fields: Vec::new(),
+                preserved_fields: Vec::new(),
+                input_source: String::new(),
+                input_index: 0,
+                output_source: String::new(),
+                output_index: 0,
+                preserve_type_hash: false,
+                preserve_lock_hash: false,
+                type_hash_preservation_status: String::new(),
+                lock_hash_preservation_status: String::new(),
+                field_equality_status: String::new(),
+                field_transition_status: String::new(),
+            })
+            .collect(),
+        state_transition_edges: Vec::new(),
+        protocol_role_candidates: Vec::new(),
+        pool_primitives: Vec::new(),
+        ckb_runtime_accesses: Vec::new(),
+        ckb_script_group: None,
+        standalone_runner_compatible: ckb_runtime_features.is_empty() && action.params.is_empty(),
+        ckb_runtime_features,
+        fail_closed_runtime_features,
+        verifier_obligations: Vec::new(),
+        proof_plan: Vec::new(),
+        transaction_runtime_input_requirements: Vec::new(),
+        elf_compatible: true,
+        block_count: action.body.blocks.len(),
+    }
+}
+
+#[cfg(feature = "wasm")]
+fn compile_metadata_from_ir(
+    ir: &ir::IrModule,
+    artifact_format: ArtifactFormat,
+    target_profile: TargetProfile,
+    edition: CellScriptEdition,
+    primitive_assurance: Option<&str>,
+) -> CompileMetadata {
+    let type_layouts = metadata_type_layouts(ir);
+    let type_defs = metadata_type_defs_by_name(ir);
+    let cell_type_kinds = metadata_cell_type_kinds(ir);
+    let pure_const_returns = metadata_pure_const_returns(ir);
+    let (fail_closed_runtime_features, verifier_obligations) =
+        browser_fail_closed_metadata(ir, &type_layouts, &cell_type_kinds, &pure_const_returns);
+    let mut types = ir.external_type_defs.iter().map(|type_def| browser_type_metadata(type_def, &type_defs)).collect::<Vec<_>>();
+    types.extend(ir.items.iter().filter_map(|item| match item {
+        ir::IrItem::TypeDef(type_def) => Some(browser_type_metadata(type_def, &type_defs)),
+        _ => None,
+    }));
+    let actions = ir
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ir::IrItem::Action(action) => {
+                Some(browser_action_metadata(ir, action, &type_layouts, &cell_type_kinds, &pure_const_returns))
+            }
+            _ => None,
+        })
+        .collect();
+    CompileMetadata {
+        metadata_schema_version: METADATA_SCHEMA_VERSION,
+        source_metadata_schema_version: SOURCE_METADATA_SCHEMA_VERSION,
+        artifact_metadata_schema_version: ARTIFACT_METADATA_SCHEMA_VERSION,
+        constraints_metadata_schema_version: CONSTRAINTS_METADATA_SCHEMA_VERSION,
+        compiler_version: VERSION.to_string(),
+        edition,
+        compatibility_profile: resolve_compatibility_profile(edition, target_profile.name(), primitive_assurance),
+        module: ir.name.clone(),
+        public_interface: interface::PackageInterface::default(),
+        interface_hash: String::new(),
+        typed_semantics: cellscript_artifact_checker::TypedSemanticRecord::default(),
+        typed_semantics_hash: String::new(),
+        artifact_format: artifact_format.display_name().to_string(),
+        target_profile: target_profile.metadata(artifact_format),
+        artifact_hash: None,
+        artifact_size_bytes: None,
+        source_hash: None,
+        source_content_hash: None,
+        source_units: Vec::new(),
+        verified_artifact: VerifiedArtifactMetadata::default(),
+        lowering: LoweringMetadata {
+            protocol_semantics: String::new(),
+            assembly_path: String::new(),
+            elf_path: String::new(),
+            semantics_preserving_claim: String::new(),
+        },
+        capability_registry: CapabilityRegistryMetadata::default(),
+        enum_layouts: Vec::new(),
+        generic_instantiations: Vec::new(),
+        runtime: RuntimeMetadata {
+            vm_target: String::new(),
+            vm_version: String::new(),
+            syscall_abi: String::new(),
+            ckb_runtime_view_contract: CKB_RUNTIME_VIEW_CONTRACT.to_string(),
+            vm_abi: VmAbiMetadata {
+                format: String::new(),
+                version: 0,
+                default: false,
+                embedded_in_artifact: false,
+                scope: String::new(),
+                selection: String::new(),
+            },
+            pure_elf_runner: String::new(),
+            ckb_runtime_required: false,
+            ckb_runtime_features: Vec::new(),
+            standalone_runner_compatible: false,
+            fail_closed_runtime_features,
+            ckb_runtime_accesses: Vec::new(),
+            trusted_external_verifiers: Vec::new(),
+            transaction_view_handles: Vec::new(),
+            borrow_regions: Vec::new(),
+            capability_proofs: Vec::new(),
+            verifier_obligations,
+            proof_plan: Vec::new(),
+            proof_plan_soundness: ProofPlanSoundnessReport::default(),
+            builder_assumptions: Vec::new(),
+            collection_instantiations: Vec::new(),
+            transaction_runtime_input_requirements: Vec::new(),
+            pool_primitives: Vec::new(),
+            fungible_type_group_entry: None,
+            policy_artifact: None,
+        },
+        constraints: ConstraintsMetadata::default(),
+        molecule_schema_manifest: MoleculeSchemaManifestMetadata::default(),
+        cell_data_codec_manifest: CellDataCodecManifestMetadata::default(),
+        template_layouts: Vec::new(),
+        types,
+        actions,
+        functions: Vec::new(),
+        locks: Vec::new(),
+        debug_info_sections: Vec::new(),
+    }
+}
+
+#[cfg(not(feature = "wasm"))]
 fn compile_metadata_from_ir(
     ir: &ir::IrModule,
     artifact_format: ArtifactFormat,
@@ -16817,6 +17153,7 @@ fn metadata_fixed_scalar_width(ty: &ir::IrType, fixed_size: Option<usize>) -> Op
         (ir::IrType::I32, Some(4)) => Some(4),
         (ir::IrType::U64, Some(8)) => Some(8),
         (ir::IrType::U128, Some(16)) => Some(16),
+        (ir::IrType::Named(name), Some(8)) if ir::is_ckb_temporal_scalar_name(name) => Some(8),
         _ => None,
     }
 }
@@ -19701,6 +20038,7 @@ fn type_static_length(ty: &ir::IrType) -> Option<usize> {
         }
         ir::IrType::Unit => Some(0),
         ir::IrType::Ref(inner) | ir::IrType::MutRef(inner) => type_static_length(inner),
+        ir::IrType::Named(name) if ir::is_ckb_temporal_scalar_name(name) => Some(8),
         ir::IrType::Named(_) => None,
     }
 }
@@ -19753,7 +20091,7 @@ fn param_metadata(
     let named_type = named_type_name(&param.ty);
     let enum_fixed_len =
         named_type.and_then(|name| enum_layouts.get(name)).filter(|layout| layout.has_payload()).map(|layout| layout.encoded_size);
-    let schema_pointer_abi = named_type.is_some() && enum_fixed_len.is_none();
+    let schema_pointer_abi = named_type.is_some_and(|name| !ir::is_ckb_temporal_scalar_name(name)) && enum_fixed_len.is_none();
     let fixed_byte_len = enum_fixed_len.or_else(|| {
         metadata_fixed_byte_width(&param.ty, type_static_length(&param.ty))
             .filter(|width| *width > 8)
@@ -20293,11 +20631,12 @@ pub const NAME: &str = "cellc";
 mod tests {
     use super::{
         compile, compile_file, compile_file_with_entry_action, compile_file_with_entry_lock, compile_fungible_type_group_entry,
-        compile_path, compile_with_executable_surface_policy, decode_scheduler_witness_hex, default_output_path_for_input,
+        compile_path, compile_path_metadata_with_diagnostics, compile_path_metadata_with_diagnostics_for_source,
+        compile_with_executable_surface_policy, decode_scheduler_witness_hex, default_output_path_for_input,
         encode_bounded_output_plan_v1, encode_entry_witness_args_for_params, incremental_cache_key, load_modules_for_input,
         prune_incremental_cache_entries, resolve_input_path, source_unit_from_bytes, validate_primitive_strict_017_metadata,
-        ActionMetadata, ArtifactFormat, CkbRuntimeAccessMetadata, CompileOptions, EntryWitnessArg, ExecutableSurfacePolicy,
-        ENTRY_WITNESS_ABI_MAGIC, SCHEDULER_WITNESS_ABI_MOLECULE,
+        ActionMetadata, ArtifactFormat, CellScriptEdition, CkbRuntimeAccessMetadata, CompileOptions, EntryWitnessArg,
+        ExecutableSurfacePolicy, ENTRY_WITNESS_ABI_MAGIC, SCHEDULER_WITNESS_ABI_MOLECULE,
     };
     use crate::{ir, lexer, parser};
     use camino::{Utf8Path, Utf8PathBuf};
@@ -28821,7 +29160,7 @@ action now() -> u64 {
             "since helper did not document CKB input ABI:\n{}",
             asm
         );
-        assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-header-epoch-number".to_string()));
+        assert!(result.metadata.runtime.ckb_runtime_features.contains(&"load-header-timepoint".to_string()));
         assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-header-epoch-start-block-number".to_string()));
         assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-header-epoch-length".to_string()));
         assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-input-since".to_string()));
@@ -34174,6 +34513,68 @@ action pass_through(token: Token) -> Token {
         assert!(roles.contains(&"entry"), "missing entry source unit: {:?}", result.metadata.source_units);
         assert!(roles.contains(&"dependency"), "missing dependency source unit: {:?}", result.metadata.source_units);
         assert_eq!(result.metadata.source_units.len(), 2);
+    }
+
+    #[test]
+    fn edition_2027_package_interoperates_with_edition_2026_raw_temporal_dependency() {
+        let temp = tempdir().unwrap();
+        let root = Utf8Path::from_path(temp.path()).unwrap();
+        let dep_root = root.join("legacy_time");
+        let app_root = root.join("typed_app");
+        std::fs::create_dir_all(dep_root.join("src")).unwrap();
+        std::fs::create_dir_all(app_root.join("src")).unwrap();
+        std::fs::write(dep_root.join("Cell.toml"), "[package]\nedition = \"2026\"\nname = \"legacy_time\"\nversion = \"0.1.0\"\n")
+            .unwrap();
+        std::fs::write(
+            dep_root.join("src").join("time.cell"),
+            "module legacy::time\npublic fn legacy_epoch() -> u64 { return env::current_timepoint() }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            app_root.join("Cell.toml"),
+            r#"[package]
+edition = "2027"
+name = "typed_app"
+version = "0.1.0"
+
+[dependencies]
+legacy_time = { path = "../legacy_time" }
+"#,
+        )
+        .unwrap();
+        let entry = app_root.join("src").join("main.cell");
+        let source = r#"module typed::app
+use legacy::time::legacy_epoch
+action inspect() -> u64 { return legacy_epoch() }
+"#;
+        std::fs::write(&entry, source).unwrap();
+        lock_package_for_test(&app_root).unwrap();
+
+        let result = compile_file(&entry, CompileOptions::default()).unwrap();
+        assert_eq!(result.metadata.edition, CellScriptEdition::Edition2027);
+        assert!(result.metadata.runtime.ckb_runtime_features.contains(&"load-header-timepoint".to_string()));
+        assert!(result.metadata.source_units.iter().any(|unit| unit.path.ends_with("legacy_time/src/time.cell")));
+        let diagnostics = compile_path_metadata_with_diagnostics(&entry, CompileOptions::default());
+        assert!(!diagnostics.has_errors());
+        assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code.as_deref() == Some("W3012")
+                && diagnostic.file.as_ref().is_some_and(|path| path.ends_with("legacy_time/src/time.cell"))
+        }));
+
+        let report = compile_path_metadata_with_diagnostics_for_source(
+            &entry,
+            "module typed::app\nuse legacy::time::legacy_epoch\naction inspect() -> EpochNumber { return legacy_epoch() }\n",
+            CompileOptions::default(),
+        );
+        assert!(report.has_errors(), "the old-edition u64 signature must not be retyped at the import boundary");
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("EpochNumber") && diagnostic.message.contains("U64")),
+            "{:?}",
+            report.diagnostics.iter().map(|diagnostic| diagnostic.message.as_str()).collect::<Vec<_>>()
+        );
     }
 
     #[test]

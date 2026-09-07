@@ -5,7 +5,7 @@ schema = "cellscript-lock-v0.24-graph-v1"
 edition = "2026"
 name = "nft"
 version = "0.1.0"
-source_hash = "5aaef48889f5da8217a6f7d8fdbe06be694ad74fb6937aaf6928645416bb7174"
+source_hash = "704ad1bc90ab5288acaae641a6b565ff1c9a8f6fa2889dff3591f722a12789ea"
 
 [root]
 manifest_digest = "sha256:acfa416a9cd8c344337766afead9726f03093aa6000c7ae1b20c39c8b55fdbea"

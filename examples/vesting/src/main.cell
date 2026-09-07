@@ -46,16 +46,19 @@ action grant_vesting(read config: VestingConfig, tokens: Token, beneficiary: Add
     verification
         require tokens.symbol == config.token_symbol, "wrong token"
         require tokens.amount > 0, "zero grant"
-        let now = env::current_timepoint()
+        let current_epoch = ckb::header_dep(0).epoch_number
+        let now = ckb::epoch_number_to_u64(current_epoch)
         require config.cliff_period <= U64_MAX - now, "cliff timepoint overflow"
         require config.total_vesting_period <= U64_MAX - now, "end timepoint overflow"
+        let cliff_epoch = ckb::epoch_add(current_epoch, ckb::epoch_duration(config.cliff_period))
+        let end_epoch = ckb::epoch_add(current_epoch, ckb::epoch_duration(config.total_vesting_period))
         consume tokens
-        create grant = VestingGrant { state: VestingState::Active, beneficiary, total_amount: tokens.amount, claimed_amount: 0, grant_timepoint: now, cliff_timepoint: now + config.cliff_period, end_timepoint: now + config.total_vesting_period, token_symbol: config.token_symbol } with_lock(beneficiary)
+        create grant = VestingGrant { state: VestingState::Active, beneficiary, total_amount: tokens.amount, claimed_amount: 0, grant_timepoint: now, cliff_timepoint: ckb::epoch_number_to_u64(cliff_epoch), end_timepoint: ckb::epoch_number_to_u64(end_epoch), token_symbol: config.token_symbol } with_lock(beneficiary)
 
 }
 action claim_vested(grant: VestingGrant) -> (tokens: Token, updated_grant: VestingGrant) {
     verification
-        let now = env::current_timepoint()
+        let now = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require now >= grant.cliff_timepoint, "cliff not reached"
         require now < grant.end_timepoint, "use claim_fully_vested after vesting ends"
         require grant.state == VestingState::Active, "grant is not active"
@@ -76,7 +79,7 @@ action claim_vested(grant: VestingGrant) -> (tokens: Token, updated_grant: Vesti
 action claim_fully_vested(grant: VestingGrant) -> (tokens: Token, completed_grant: VestingGrant) {
     transition grant.state: Active -> completed_grant.state: FullyClaimed
     verification
-        let now = env::current_timepoint()
+        let now = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         require now >= grant.end_timepoint, "vesting not complete"
         require grant.state == VestingState::Active, "grant is not active"
         require grant.claimed_amount < grant.total_amount, "nothing to claim"
@@ -91,7 +94,7 @@ action revoke_grant(read config: VestingConfig, grant: VestingGrant, claimed_adm
         require config.revocable, "not revocable"
         require is_vesting_admin(config, claimed_admin), "not admin"
         require grant.state == VestingState::Active, "grant is not active"
-        let now = env::current_timepoint()
+        let now = ckb::epoch_number_to_u64(ckb::header_dep(0).epoch_number)
         let elapsed = if now >= grant.cliff_timepoint { now - grant.cliff_timepoint } else { 0 }
         let vesting_period = grant.end_timepoint - grant.cliff_timepoint
         require vesting_period > 0, "invalid vesting period"

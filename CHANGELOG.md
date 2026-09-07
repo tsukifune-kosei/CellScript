@@ -77,6 +77,27 @@
   milliseconds distinct from timestamp-Since seconds. Advance the artifact
   cache identity to `project-source-set-v36-0.30-dev1-full-header-time`.
 
+- Add targeted `W3012` warnings and a language-server workspace edit for every
+  legacy raw temporal call with a total typed-domain replacement. The edit
+  preserves comments and the surrounding `u64` result; the untyped GroupInput#0
+  reader migrates to the explicitly named `ckb::input_since_raw()` alias. Move
+  canonical package interfaces to `cellscript-package-interface-v3`, where the
+  fixed representation, RFC0017 constructor/decoder set, domain inventory, and
+  migration identity are hash-bound and runtime-ABI changes are classified as
+  breaking. The Registry API continues to read v2 and validates the complete
+  v3 temporal contract. Advance the artifact cache identity to
+  `project-source-set-v37-0.30-dev1-temporal-migration-interface`.
+
+- Complete the issue #12 implementation surface across formatter, VS Code,
+  generated TypeScript builders, locked package fixtures, metadata-only WASM,
+  and the website Playground. Migrate timelock, DAO, vesting, NFT-expiry,
+  governance, and atomic-swap examples to typed HeaderDep, `Since`, and checked
+  epoch-duration operations. Split browser metadata construction from the full
+  native evidence path so the canonical Rust 1.97.1 / wasm-bindgen 0.2.121 /
+  Binaryen 131 build retains its bounded summary at 543,507 bytes gzip. Advance
+  the artifact cache identity to
+  `project-source-set-v38-0.30-dev1-temporal-product`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,
