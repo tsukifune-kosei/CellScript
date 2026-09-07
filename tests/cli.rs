@@ -9949,7 +9949,7 @@ action inspect(source_index: u64) -> u64 {
     assert!(metadata_output.status.success(), "stderr: {}", String::from_utf8_lossy(&metadata_output.stderr));
 
     let metadata: serde_json::Value = serde_json::from_slice(&std::fs::read(&metadata_path).unwrap()).unwrap();
-    assert_eq!(metadata["metadata_schema_version"], 69);
+    assert_eq!(metadata["metadata_schema_version"], 70);
     assert_eq!(metadata["runtime"]["ckb_runtime_access_provenance_contract"], "cellscript-ckb-runtime-access-provenance-v1");
     let dynamic_access = metadata["actions"][0]["ckb_runtime_accesses"]
         .as_array()
@@ -9991,6 +9991,101 @@ action inspect(source_index: u64) -> u64 {
     let builder_test = std::fs::read_to_string(output_dir.join("test").join("builder.test.mjs")).unwrap();
     assert!(builder_test.contains("dynamicIndexCases"), "{builder_test}");
     assert!(builder_test.contains("rejects dynamic source indexes above their declared bound"), "{builder_test}");
+}
+
+#[test]
+fn cellc_gen_builder_preserves_bounded_witness_owner_contract() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+edition = "2027"
+name = "bounded-witness-builder"
+version = "0.1.0"
+
+[build]
+target_profile = "ckb"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src").join("main.cell"),
+        r#"
+module bounded_witness_builder::main
+
+action inspect() -> u64 {
+    verification
+        let witness_args = witness::args(0)
+        let lock = witness::bounded_lock(witness_args, 64)
+        require lock.size <= 64
+        return 0
+}
+"#,
+    )
+    .unwrap();
+
+    let metadata_path = root.join("inspect.meta.json");
+    let metadata_output = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("metadata")
+        .arg("--output")
+        .arg(&metadata_path)
+        .output()
+        .unwrap();
+    assert!(metadata_output.status.success(), "stderr: {}", String::from_utf8_lossy(&metadata_output.stderr));
+
+    let metadata: serde_json::Value = serde_json::from_slice(&std::fs::read(&metadata_path).unwrap()).unwrap();
+    assert_eq!(metadata["metadata_schema_version"], 70);
+    let handle = metadata["runtime"]["transaction_view_handles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|handle| handle["handle_type"] == "WitnessBytesView<lock,64>")
+        .expect("bounded lock handle");
+    assert_eq!(handle["witness_owner"], "lock");
+    assert_eq!(handle["max_bytes"], 64);
+    assert_eq!(handle["provenance"]["range"]["length"]["max_inclusive"], 64);
+
+    let output_dir = root.join("generated-builder");
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("gen-builder")
+        .arg("--target")
+        .arg("typescript")
+        .arg("--metadata")
+        .arg(&metadata_path)
+        .arg("--output")
+        .arg(&output_dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output_dir.join("cellscript-builder-manifest.json")).unwrap()).unwrap();
+    let generated_handle = manifest["transaction_view_handles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|handle| handle["handle_type"] == "WitnessBytesView<lock,64>")
+        .expect("generated bounded lock handle");
+    assert_eq!(generated_handle["witness_owner"], "lock");
+    assert_eq!(generated_handle["max_bytes"], 64);
+    assert!(manifest["actions"][0]["runtime_accesses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|access| access["operation"] == "witness-bounded-lock-size"));
+
+    let index_ts = std::fs::read_to_string(output_dir.join("src").join("index.ts")).unwrap();
+    assert!(index_ts.contains("export const transactionViewHandles"), "{index_ts}");
+    assert!(index_ts.contains("WitnessBytesView<lock,64>"), "{index_ts}");
+    assert!(index_ts.contains("\"witness_owner\": \"lock\""), "{index_ts}");
+    assert!(index_ts.contains("\"max_bytes\": 64"), "{index_ts}");
 }
 
 #[test]

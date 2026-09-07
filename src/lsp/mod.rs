@@ -623,6 +623,20 @@ impl LspServer {
                     documentation: Some("Named read-only WitnessArgs transaction view".to_string()),
                     insert_text: Some("witness::args(${1:0})".to_string()),
                 });
+                for (name, owner) in [
+                    ("bounded_raw", "raw witness bytes"),
+                    ("bounded_lock", "WitnessArgs.lock bytes"),
+                    ("bounded_entry", "WitnessArgs.input_type entry bytes"),
+                    ("bounded_output_type", "WitnessArgs.output_type bytes"),
+                ] {
+                    items.push(CompletionItem {
+                        label: name.to_string(),
+                        kind: CompletionItemKind::Function,
+                        detail: Some(format!("witness::{}", name)),
+                        documentation: Some(format!("Read-only bounded view over {owner}; maximum must be a literal in 0..=65536")),
+                        insert_text: Some(format!("witness::{}(${{1:witness::args(0)}}, ${{2:4096}})", name)),
+                    });
+                }
                 for name in ["raw", "lock", "input_type", "output_type", "size"] {
                     items.push(CompletionItem {
                         label: name.to_string(),
@@ -637,6 +651,7 @@ impl LspServer {
                     ("byte", "witness::byte(${1:source::input(0)}, ${2:0})"),
                     ("u32_le", "witness::u32_le(${1:source::input(0)}, ${2:0})"),
                     ("u64_le", "witness::u64_le(${1:source::input(0)}, ${2:0})"),
+                    ("blake2b", "witness::blake2b(${1:bounded_view})"),
                     ("blake2b_span", "witness::blake2b_span(${1:source::input(0)}, ${2:0}, ${3:32})"),
                     ("bytes32", "witness::bytes32(${1:source::input(0)}, ${2:0})"),
                     ("blake2b_select_chunks", "witness::blake2b_select_chunks(${1:source::input(0)}, ${2:0}, ${3:1}, ${4:selection}, ${5:prefix}, ${6:suffix})"),
@@ -3164,6 +3179,8 @@ mod tests {
 
         let witness = server.member_completions("file:///test.cell", "witness");
         assert!(witness.iter().any(|item| item.label == "lock"));
+        assert!(witness.iter().any(|item| item.label == "bounded_entry"));
+        assert!(witness.iter().any(|item| item.label == "blake2b"));
         assert!(witness.iter().any(|item| item.label == "blake2b_span"));
         assert!(witness.iter().any(|item| item.label == "bytes32"));
 

@@ -293,7 +293,7 @@ whole WitnessArgs limit is 4,096 bytes with at most eight records. Host and CKB
 adapter codecs are independently implemented; placement preserves other fields,
 rejects occupied `input_type`, and must occur before signing.
 
-Metadata schema 69, `cellscript-typed-semantics-v8` and
+Metadata schema 70, `cellscript-typed-semantics-v8` and
 `cellscript-semantic-foundation-v3` bind the declared policy, selector provenance,
 resource layout, variant payload schemas, fixed counts and ordered common
 checks. Runtime metadata also binds `cellscript-ckb-runtime-view-v1`, the

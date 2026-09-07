@@ -33,6 +33,20 @@ action inspect(witness source_index: u64, witness expected_data_hash: Hash) -> u
 }
 "#;
 
+const BOUNDED_WITNESS_SOURCE: &str = r#"
+module artifact_checker_bounded_witness
+
+action inspect() -> u64 {
+    verification
+        let witness_args = witness::args(0)
+        let bytes = witness::bounded_lock(witness_args, 64)
+        require bytes.size <= 64
+        require witness::byte(bytes, 0) >= 0
+        require witness::blake2b(bytes) != Hash::zero()
+        return 0
+}
+"#;
+
 #[derive(Clone)]
 struct Fixture {
     artifact: Vec<u8>,
@@ -124,6 +138,15 @@ impl Fixture {
     }
 }
 
+fn bounded_lock_handle(metadata: &mut Value) -> &mut Value {
+    metadata["runtime"]["transaction_view_handles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|handle| handle["handle_type"] == "WitnessBytesView<lock,64>")
+        .expect("bounded lock witness handle")
+}
+
 #[test]
 fn checker_rejects_vm2_isa_or_data2_contract_tampering() {
     let valid = Fixture::new();
@@ -156,7 +179,7 @@ fn checker_rejects_runtime_access_provenance_tampering_after_hash_rebinding() {
         )
         .unwrap(),
     );
-    assert_eq!(valid.metadata["metadata_schema_version"], Value::from(69));
+    assert_eq!(valid.metadata["metadata_schema_version"], Value::from(70));
     assert_eq!(
         valid.metadata["runtime"]["ckb_runtime_access_provenance_contract"],
         Value::String("cellscript-ckb-runtime-access-provenance-v1".to_string())
@@ -214,6 +237,70 @@ fn checker_rejects_runtime_access_provenance_tampering_after_hash_rebinding() {
     handle["provenance"]["index"]["binding"] = Value::String(String::new());
     changed.rebind_sidecars();
     assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+}
+
+#[test]
+fn checker_binds_bounded_witness_owner_limit_range_and_typed_retyping() {
+    let valid = Fixture::from_result(
+        compile(
+            BOUNDED_WITNESS_SOURCE,
+            CompileOptions {
+                edition: NEXT_EDITION,
+                target: Some("riscv64-elf".to_string()),
+                target_profile: Some("ckb".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    );
+    assert_eq!(valid.metadata["metadata_schema_version"], Value::from(70));
+
+    let mutate_bounded_accesses = |metadata: &mut Value, mutation: fn(&mut Value)| {
+        for pointer in ["/runtime/ckb_runtime_accesses", "/actions/0/ckb_runtime_accesses"] {
+            let accesses = metadata.pointer_mut(pointer).and_then(Value::as_array_mut).unwrap();
+            for access in accesses
+                .iter_mut()
+                .filter(|access| access["operation"].as_str().is_some_and(|operation| operation.starts_with("witness-bounded-lock-")))
+            {
+                mutation(access);
+            }
+        }
+    };
+
+    let mut changed = valid.clone();
+    bounded_lock_handle(&mut changed.metadata)["witness_owner"] = Value::String("entry".to_string());
+    changed.rebind_sidecars();
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let mut changed = valid.clone();
+    bounded_lock_handle(&mut changed.metadata)["max_bytes"] = Value::from(63);
+    changed.rebind_sidecars();
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let mut changed = valid.clone();
+    bounded_lock_handle(&mut changed.metadata)["provenance"]["range"]["length"]["max_inclusive"] = Value::from(63);
+    changed.rebind_sidecars();
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let mut changed = valid.clone();
+    mutate_bounded_accesses(&mut changed.metadata, |access| {
+        access["provenance"]["range"]["offset"]["max_inclusive"] = Value::from(63);
+    });
+    changed.rebind_sidecars();
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let mut changed = valid;
+    let local = changed
+        .record
+        .typed_semantics
+        .entries
+        .iter_mut()
+        .flat_map(|entry| &mut entry.locals)
+        .find(|local| local.ty == "WitnessBytesView<lock,64>")
+        .expect("typed bounded witness local");
+    local.ty = "WitnessBytesView<signer,64>".to_string();
+    changed.rebind_typed_semantics();
+    assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
 }
 
 #[test]

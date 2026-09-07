@@ -14,7 +14,7 @@ Use the error name first when debugging. Numeric codes are retained for VM,
 wallet, explorer, and acceptance-script compatibility.
 
 The table was introduced in compile metadata schema 30 and is emitted by the
-current metadata schema 69 on the `0.30` development branch under
+current metadata schema 70 on the `0.30` development branch under
 `constraints.runtime_errors`, so `cellc constraints`, `cellc check --json`, and
 sidecar metadata all expose the same machine-readable registry.
 The experimental `0.26b` baseline emitted the same registry in schema 67.
@@ -112,10 +112,12 @@ for the independent check's exact scope.
 | 64 | `merkle-root-mismatch` | A bounded SHA256d Merkle proof did not reconstruct the expected root. | Check leaf byte order, sibling order, depth, leaf index, hash algorithm, and expected root. |
 | 65 | `shift-amount-invalid` | A runtime integer shift amount was greater than or equal to the left operand width. | Keep runtime shift amounts below the bit width of the shifted integer value. |
 | 66 | `sighash-all-unsupported` | Canonical CKB transaction sighash construction is deferred and cannot produce a digest. | Use an authenticated standard Lock or an explicit verifier with an independently specified message contract. |
+| 67 | `witness-field-absent` | A bounded read selected a WitnessArgs field whose `BytesOpt` is absent. | Put the value in the declared owner field; use `Some(empty)` when an intentionally empty value is required. |
+| 68 | `witness-bound-exceeded` | A raw witness or selected WitnessArgs field exceeded the compile-time bounded-view maximum. | Increase the literal maximum within 65,536 bytes or reject the transaction shape before building it. |
 
 ## Stability
 
 - Existing numeric codes must not be reused for a different condition.
 - New generated fail-closed paths must add a registry entry before they can
   emit a new non-zero code.
-- Codes `6`, `19`, `27` through `31`, and values above `66` are currently reserved.
+- Codes `6`, `19`, `27` through `31`, and values above `68` are currently reserved.

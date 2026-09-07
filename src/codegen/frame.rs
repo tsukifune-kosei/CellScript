@@ -601,7 +601,13 @@ impl CodeGenerator {
                     IrInstruction::Call { dest: Some(dest), func, args }
                         if matches!(
                             func.as_str(),
-                            "__ckb_witness_raw" | "__ckb_witness_lock" | "__ckb_witness_input_type" | "__ckb_witness_output_type"
+                            "__ckb_witness_raw"
+                                | "__ckb_witness_lock"
+                                | "__ckb_witness_input_type"
+                                | "__ckb_witness_output_type"
+                                | "__ckb_witness_lock_exact32"
+                                | "__ckb_witness_input_type_exact32"
+                                | "__ckb_witness_output_type_exact32"
                         ) && args.len() == 1
                             && dest.ty == IrType::Hash =>
                     {
@@ -615,6 +621,7 @@ impl CodeGenerator {
                             || (func == "__ckb_raw_transaction_hash_without_cell_deps" && args.is_empty())
                             || (func == "__ckb_transaction_blake2b_gather" && args.len() == 4)
                             || (func == "__ckb_witness_bytes32" && args.len() == 2)
+                            || (func == "__ckb_witness_bounded_blake2b" && args.len() == 3)
                             || (func == "__ckb_witness_blake2b_select_chunks" && args.len() == 6))
                             && dest.ty == IrType::Hash =>
                     {

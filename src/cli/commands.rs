@@ -8383,6 +8383,7 @@ fn typescript_builder_manifest(
                 })
             })
             .collect::<Vec<_>>(),
+        "transaction_view_handles": metadata.runtime.transaction_view_handles,
         "runtime_error_catalog": runtime_error_catalog_json(),
         "runtime_contract": {
             "requires_live_cell_resolution": true,
@@ -8494,6 +8495,7 @@ fn typescript_builder_index(
     ts.push_str("export const cellDataCodecManifest = metadata.cell_data_codec_manifest;\n");
     ts.push_str("export const temporalContract = metadata.public_interface.runtime_contract.temporal;\n");
     ts.push_str("export const runtimeAccessProvenanceContract = metadata.runtime.ckb_runtime_access_provenance_contract;\n");
+    ts.push_str("export const transactionViewHandles = metadata.runtime.transaction_view_handles;\n");
     ts.push_str(&format!("export const actionSpecs = {action_specs_json} as const;\n\n"));
     ts.push_str(&format!("export const actionErrorContexts = {action_error_contexts_json} as const;\n"));
     ts.push_str(&format!("export const runtimeErrorCatalog = {runtime_error_catalog_json} as const;\n\n"));

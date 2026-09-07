@@ -223,8 +223,8 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v39-0.30-dev1-runtime-provenance";
-pub const METADATA_SCHEMA_VERSION: u32 = 69;
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v40-0.30-dev1-bounded-witness";
+pub const METADATA_SCHEMA_VERSION: u32 = 70;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
 pub const CONSTRAINTS_METADATA_SCHEMA_VERSION: u32 = 4;
@@ -1011,6 +1011,10 @@ pub struct TransactionViewHandleMetadata {
     #[serde(default)]
     pub provenance: CkbRuntimeAccessProvenanceMetadata,
     pub ownership: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witness_owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<u64>,
     pub lifecycle_authority: bool,
     pub typing_evidence_tier: EvidenceTier,
     pub read_evidence_tier: EvidenceTier,
@@ -1216,6 +1220,8 @@ pub fn validate_compile_metadata(metadata: &CompileMetadata, artifact_format: Ar
             metadata.runtime.ckb_runtime_access_provenance_contract, CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT
         )));
     }
+    validate_ckb_runtime_access_metadata(metadata)?;
+    validate_transaction_view_handle_metadata(metadata)?;
     #[cfg(not(feature = "wasm"))]
     {
         if metadata.public_interface.schema != interface::INTERFACE_SCHEMA
@@ -1406,9 +1412,7 @@ pub fn validate_compile_metadata(metadata: &CompileMetadata, artifact_format: Ar
         validate_ckb_constraints_summary_metadata(metadata)?;
         validate_ckb_output_data_binding_metadata(metadata)?;
         validate_ckb_type_id_output_metadata(metadata)?;
-        validate_ckb_runtime_access_metadata(metadata)?;
         validate_fungible_type_group_entry_metadata(metadata)?;
-        validate_transaction_view_handle_metadata(metadata)?;
         validate_borrow_region_metadata(metadata)?;
         validate_collection_instantiation_metadata(metadata)?;
         validate_ckb_script_group_metadata(metadata)?;
@@ -1789,7 +1793,14 @@ fn validate_transaction_view_handle_metadata(metadata: &CompileMetadata) -> Resu
         let base_type = handle.handle_type.split('<').next().unwrap_or(handle.handle_type.as_str());
         if !matches!(
             base_type,
-            "InputView" | "OutputView" | "CellDepView" | "HeaderDepView" | "WitnessArgsView" | "OutPoint" | "ScriptView"
+            "InputView"
+                | "OutputView"
+                | "CellDepView"
+                | "HeaderDepView"
+                | "WitnessArgsView"
+                | "WitnessBytesView"
+                | "OutPoint"
+                | "ScriptView"
         ) {
             return Err(CompileError::without_span(format!(
                 "{}.handle_type '{}' is not a supported typed transaction-view handle",
@@ -1798,6 +1809,49 @@ fn validate_transaction_view_handle_metadata(metadata: &CompileMetadata) -> Resu
         }
         if handle.ownership != "read-only-view" || handle.lifecycle_authority {
             return Err(CompileError::without_span(format!("{} must remain a read-only view with lifecycle_authority=false", prefix)));
+        }
+        let witness_view = base_type == "WitnessBytesView";
+        let declared_handle_type = ir::IrType::Named(handle.handle_type.clone());
+        let declared_witness = ir::witness_bytes_view_parts(&declared_handle_type);
+        if witness_view {
+            let Some((owner, _, maximum)) = declared_witness else {
+                return Err(CompileError::without_span(format!(
+                    "{}.handle_type '{}' has an invalid bounded witness owner or maximum",
+                    prefix, handle.handle_type
+                )));
+            };
+            if handle.witness_owner.as_deref() != Some(owner) || handle.max_bytes != Some(maximum) {
+                return Err(CompileError::without_span(format!("{} bounded witness owner/maximum do not match handle_type", prefix)));
+            }
+            let source_matches = match handle.source.as_str() {
+                "WitnessArgs/Input" => handle.provenance.source.resolved_source == "Input",
+                "Input" | "Output" | "GroupInput" | "GroupOutput" => handle.provenance.source.resolved_source == handle.source,
+                _ => false,
+            };
+            if !source_matches {
+                return Err(CompileError::without_span(format!("{} has an invalid bounded witness source", prefix)));
+            }
+            let range = &handle.provenance.range;
+            if range.kind != "bounded-range"
+                || range.offset.kind != "static"
+                || range.offset.value != Some(0)
+                || range.offset.binding.is_some()
+                || range.offset.max_inclusive != Some(maximum)
+                || range.length.kind != "dynamic"
+                || range.length.value.is_some()
+                || range.length.binding.as_deref() != Some(format!("{}.size", handle.binding).as_str())
+                || range.length.max_inclusive != Some(maximum)
+            {
+                return Err(CompileError::without_span(format!(
+                    "{} bounded witness range does not match its declared maximum",
+                    prefix
+                )));
+            }
+        } else if handle.witness_owner.is_some() || handle.max_bytes.is_some() {
+            return Err(CompileError::without_span(format!(
+                "{} non-witness handle must not carry witness_owner or max_bytes",
+                prefix
+            )));
         }
         if handle.typing_evidence_tier != EvidenceTier::CheckedStatic || handle.read_evidence_tier != EvidenceTier::CheckedRuntime {
             return Err(CompileError::without_span(format!(
@@ -3839,7 +3893,94 @@ fn validate_ckb_runtime_access_metadata(metadata: &CompileMetadata) -> Result<()
             missing, extra
         )));
     }
+    for access in &metadata.runtime.ckb_runtime_accesses {
+        let Some((owner, maximum)) = validate_bounded_witness_runtime_access(access)? else {
+            continue;
+        };
+        if !metadata.runtime.transaction_view_handles.iter().any(|handle| {
+            let declared = ir::IrType::Named(handle.handle_type.clone());
+            ir::witness_bytes_view_parts(&declared).is_some_and(|(handle_owner, _, handle_maximum)| {
+                handle_owner == owner
+                    && handle_maximum == maximum
+                    && handle.provenance.source.resolved_source == access.provenance.source.resolved_source
+                    && handle.provenance.index == access.provenance.index
+            })
+        }) {
+            return Err(CompileError::without_span(format!(
+                "bounded witness runtime access '{}' has no matching transaction-view handle",
+                access.operation
+            )));
+        }
+    }
     Ok(())
+}
+
+fn validate_bounded_witness_runtime_access(access: &CkbRuntimeAccessMetadata) -> Result<Option<(&'static str, u64)>> {
+    if !access.operation.starts_with("witness-bounded-") {
+        return Ok(None);
+    }
+    let mut contract = None;
+    for owner in ["raw", "lock", "entry", "output_type"] {
+        for (suffix, width) in [("size", None), ("u8", Some(1)), ("u32-le", Some(4)), ("u64-le", Some(8)), ("blake2b", None)] {
+            if access.operation == format!("witness-bounded-{owner}-{suffix}") {
+                contract = Some((owner, suffix, width));
+            }
+        }
+    }
+    let Some((owner, suffix, width)) = contract else {
+        return Err(CompileError::without_span(format!("bounded witness runtime operation '{}' is not canonical", access.operation)));
+    };
+    if access.syscall != "LOAD_WITNESS"
+        || access.source != "Witness"
+        || access.binding != format!("witness::bounded_{owner}")
+        || !matches!(access.provenance.source.resolved_source.as_str(), "Input" | "Output" | "GroupInput" | "GroupOutput")
+        || access.provenance.source.origin != "inherited-source-view"
+    {
+        return Err(CompileError::without_span(format!(
+            "bounded witness runtime access '{}' has an invalid source contract",
+            access.operation
+        )));
+    }
+    let range = &access.provenance.range;
+    let maximum = if matches!(suffix, "size" | "blake2b") {
+        if range.kind != "bounded-range"
+            || range.offset.kind != "static"
+            || range.offset.value != Some(0)
+            || range.offset.binding.is_some()
+            || range.length.kind != "dynamic"
+            || range.length.value.is_some()
+            || range.length.binding.as_deref() != Some(format!("bounded_{owner}.size").as_str())
+            || range.offset.max_inclusive != range.length.max_inclusive
+        {
+            return Err(CompileError::without_span(format!(
+                "bounded witness runtime access '{}' has an invalid whole-view range",
+                access.operation
+            )));
+        }
+        range.length.max_inclusive
+    } else {
+        let width = width.expect("bounded scalar width");
+        if range.kind != "bounded-range"
+            || !matches!(range.offset.kind.as_str(), "static" | "dynamic")
+            || range.length.kind != "static"
+            || range.length.value != Some(width)
+            || range.length.binding.is_some()
+            || range.length.max_inclusive != Some(width)
+        {
+            return Err(CompileError::without_span(format!(
+                "bounded witness runtime access '{}' has an invalid scalar range",
+                access.operation
+            )));
+        }
+        range.offset.max_inclusive
+    };
+    let Some(maximum) = maximum.filter(|maximum| *maximum <= 65_536) else {
+        return Err(CompileError::without_span(format!(
+            "bounded witness runtime access '{}' exceeds the maximum byte domain",
+            access.operation
+        )));
+    };
+    Ok(Some((owner, maximum)))
 }
 
 fn validate_fungible_type_group_entry_metadata(metadata: &CompileMetadata) -> Result<()> {
@@ -5185,6 +5326,14 @@ fn runtime_range_fixed(width: u64) -> CkbRuntimeRangeProvenanceMetadata {
 
 fn runtime_range_at(offset: Option<&ir::IrOperand>, length: CkbRuntimeScalarProvenanceMetadata) -> CkbRuntimeRangeProvenanceMetadata {
     CkbRuntimeRangeProvenanceMetadata { kind: "bounded-range".to_string(), offset: runtime_scalar_from_operand(offset, None), length }
+}
+
+fn runtime_range_bounded_value(binding: impl Into<String>, maximum: u64) -> CkbRuntimeRangeProvenanceMetadata {
+    CkbRuntimeRangeProvenanceMetadata {
+        kind: "bounded-range".to_string(),
+        offset: runtime_scalar_static(0, Some(maximum)),
+        length: runtime_scalar_dynamic(binding, Some(maximum)),
+    }
 }
 
 fn runtime_access_metadata(
@@ -10378,28 +10527,36 @@ fn body_transaction_view_handles(scope_kind: &str, scope_name: &str, body: &ir::
     let mut sources = HashMap::<usize, String>::new();
     for block in &body.blocks {
         for instruction in &block.instructions {
-            let (dest, explicit_source, inherited_source, source_origin, source_binding) = match instruction {
+            let (dest, explicit_source, inherited_source, runtime_source, source_origin, source_binding) = match instruction {
                 ir::IrInstruction::Call { dest: Some(dest), func, args } => {
                     let inherited = args.first().and_then(|operand| match operand {
                         ir::IrOperand::Var(var) => sources.get(&var.id).cloned(),
                         ir::IrOperand::Const(_) => None,
                     });
-                    (dest, transaction_view_source_for_constructor(func, &dest.ty), inherited, "explicit-source-view", None)
+                    (
+                        dest,
+                        transaction_view_source_for_constructor(func, &dest.ty),
+                        inherited,
+                        runtime_source_for_constructor(func).map(str::to_string),
+                        "explicit-source-view",
+                        None,
+                    )
                 }
                 ir::IrInstruction::Move { dest, src: ir::IrOperand::Var(src) } => {
-                    (dest, None, sources.get(&src.id).cloned(), "inherited-source-view", Some(src.name.clone()))
+                    (dest, None, sources.get(&src.id).cloned(), None, "inherited-source-view", Some(src.name.clone()))
                 }
                 _ => continue,
             };
+            let source = explicit_source.or(inherited_source).or(runtime_source).unwrap_or_else(|| "Derived".to_string());
+            sources.insert(dest.id, source.clone());
             let Some(handle_type) = transaction_view_handle_type(&dest.ty) else {
                 continue;
             };
-            let source = explicit_source.or(inherited_source).unwrap_or_else(|| "Derived".to_string());
-            sources.insert(dest.id, source.clone());
             let runtime_provenance = source_values.get(&dest.id);
             let resolved_source =
                 runtime_provenance.map(|provenance| provenance.resolved_source.clone()).unwrap_or_else(|| source.clone());
             let index = runtime_provenance.map(|provenance| provenance.index.clone()).unwrap_or_else(runtime_scalar_not_applicable);
+            let witness_view = ir::witness_bytes_view_parts(&dest.ty);
             handles.push(TransactionViewHandleMetadata {
                 scope_kind: scope_kind.to_string(),
                 scope_name: scope_name.to_string(),
@@ -10414,9 +10571,13 @@ fn body_transaction_view_handles(scope_kind: &str, scope_name: &str, body: &ir::
                         binding: source_binding,
                     },
                     index,
-                    range: runtime_range_not_applicable(),
+                    range: witness_view
+                        .map(|(_, _, maximum)| runtime_range_bounded_value(format!("{}.size", dest.name), maximum))
+                        .unwrap_or_else(runtime_range_not_applicable),
                 },
                 ownership: "read-only-view".to_string(),
+                witness_owner: witness_view.map(|(owner, _, _)| owner.to_string()),
+                max_bytes: witness_view.map(|(_, _, maximum)| maximum),
                 lifecycle_authority: false,
                 typing_evidence_tier: EvidenceTier::CheckedStatic,
                 read_evidence_tier: EvidenceTier::CheckedRuntime,
@@ -10432,7 +10593,7 @@ fn transaction_view_handle_type(ty: &ir::IrType) -> Option<String> {
     };
     let base = name.split('<').next().unwrap_or(name.as_str());
     match base {
-        "InputView" | "OutputView" | "CellDepView" | "HeaderDepView" | "WitnessArgsView" => Some(name.clone()),
+        "InputView" | "OutputView" | "CellDepView" | "HeaderDepView" | "WitnessArgsView" | "WitnessBytesView" => Some(name.clone()),
         "__ckb_input_out_point_ref" => Some("OutPoint".to_string()),
         "__ckb_lock_script_ref" | "__ckb_type_script_ref" => Some("ScriptView".to_string()),
         _ => None,
@@ -16665,7 +16826,11 @@ fn metadata_prelude_availability(
                         | "__ckb_witness_raw"
                         | "__ckb_witness_lock"
                         | "__ckb_witness_input_type"
-                        | "__ckb_witness_output_type" => args.len() == 1,
+                        | "__ckb_witness_output_type"
+                        | "__ckb_witness_lock_exact32"
+                        | "__ckb_witness_input_type_exact32"
+                        | "__ckb_witness_output_type_exact32" => args.len() == 1,
+                        "__ckb_witness_bounded_blake2b" => args.len() == 3,
                         "__ckb_cell_data_hash_at" => args.len() == 2,
                         "__ckb_witness_bytes32" => args.len() == 2,
                         "__ckb_cell_data_blake2b_span" | "__ckb_witness_blake2b_span" => args.len() == 3,
@@ -18194,6 +18359,14 @@ fn body_ckb_runtime_features(
                 ir::IrInstruction::Call { func, .. } if func.starts_with("__ckb_source_") => {
                     features.insert("ckb-source-view".to_string());
                 }
+                ir::IrInstruction::Call { func, .. } if func.starts_with("__ckb_witness_bounded_") => {
+                    features.insert("ckb-bounded-witness-view".to_string());
+                    features.insert("ckb-witness-args".to_string());
+                    features.insert("ckb-witness-read".to_string());
+                    if func == "__ckb_witness_bounded_blake2b" {
+                        features.insert("ckb-blake2b".to_string());
+                    }
+                }
                 ir::IrInstruction::Call { func, .. } if func.starts_with("__ckb_witness_") => {
                     features.insert("ckb-witness-args".to_string());
                 }
@@ -18411,7 +18584,10 @@ fn runtime_range_for_call(func: &str, args: &[ir::IrOperand]) -> CkbRuntimeRange
         | "__ckb_witness_raw"
         | "__ckb_witness_lock"
         | "__ckb_witness_input_type"
-        | "__ckb_witness_output_type" => Some(32),
+        | "__ckb_witness_output_type"
+        | "__ckb_witness_lock_exact32"
+        | "__ckb_witness_input_type_exact32"
+        | "__ckb_witness_output_type_exact32" => Some(32),
         // These helpers load and size-check the complete packed Header before
         // reading the typed field at its canonical RawHeader offset.
         "__ckb_header_dep_block_number" | "__ckb_header_dep_timestamp_millis" => Some(208),
@@ -18462,6 +18638,77 @@ fn runtime_access_for_call(
     args: &[ir::IrOperand],
     view_provenance: &HashMap<usize, RuntimeViewProvenance>,
 ) -> Option<CkbRuntimeAccessMetadata> {
+    if matches!(
+        func,
+        "__ckb_witness_bounded_size"
+            | "__ckb_witness_bounded_u8"
+            | "__ckb_witness_bounded_u32_le"
+            | "__ckb_witness_bounded_u64_le"
+            | "__ckb_witness_bounded_blake2b"
+    ) {
+        let owner = args.get(1).and_then(|operand| match operand {
+            ir::IrOperand::Const(value) => ir_const_u64(value),
+            ir::IrOperand::Var(_) => None,
+        })?;
+        let owner = match owner {
+            ir::CKB_WITNESS_OWNER_RAW => "raw",
+            ir::CKB_WITNESS_OWNER_LOCK => "lock",
+            ir::CKB_WITNESS_OWNER_ENTRY => "entry",
+            ir::CKB_WITNESS_OWNER_OUTPUT_TYPE => "output_type",
+            _ => return None,
+        };
+        let maximum = args.get(2).and_then(|operand| match operand {
+            ir::IrOperand::Const(value) => ir_const_u64(value),
+            ir::IrOperand::Var(_) => None,
+        })?;
+        let operation_suffix = match func {
+            "__ckb_witness_bounded_size" => "size",
+            "__ckb_witness_bounded_u8" => "u8",
+            "__ckb_witness_bounded_u32_le" => "u32-le",
+            "__ckb_witness_bounded_u64_le" => "u64-le",
+            _ => "blake2b",
+        };
+        let inherited = args.first().and_then(|operand| match operand {
+            ir::IrOperand::Var(var) => view_provenance.get(&var.id).map(|provenance| (var, provenance)),
+            ir::IrOperand::Const(_) => None,
+        });
+        let (resolved_source, source_origin, source_binding, index) = if let Some((var, provenance)) = inherited {
+            (provenance.resolved_source.clone(), "inherited-source-view", Some(var.name.clone()), provenance.index.clone())
+        } else {
+            ("Witness".to_string(), "implicit-lowering", None, runtime_scalar_not_applicable())
+        };
+        let range = match func {
+            "__ckb_witness_bounded_size" | "__ckb_witness_bounded_blake2b" => {
+                runtime_range_bounded_value(format!("bounded_{owner}.size"), maximum)
+            }
+            "__ckb_witness_bounded_u8" => CkbRuntimeRangeProvenanceMetadata {
+                kind: "bounded-range".to_string(),
+                offset: runtime_scalar_from_operand(args.get(3), Some(maximum)),
+                length: runtime_scalar_static(1, Some(1)),
+            },
+            "__ckb_witness_bounded_u32_le" => CkbRuntimeRangeProvenanceMetadata {
+                kind: "bounded-range".to_string(),
+                offset: runtime_scalar_from_operand(args.get(3), Some(maximum)),
+                length: runtime_scalar_static(4, Some(4)),
+            },
+            _ => CkbRuntimeRangeProvenanceMetadata {
+                kind: "bounded-range".to_string(),
+                offset: runtime_scalar_from_operand(args.get(3), Some(maximum)),
+                length: runtime_scalar_static(8, Some(8)),
+            },
+        };
+        return Some(runtime_access_metadata(
+            format!("witness-bounded-{owner}-{operation_suffix}"),
+            "LOAD_WITNESS",
+            "Witness",
+            format!("witness::bounded_{owner}"),
+            resolved_source,
+            source_origin,
+            source_binding,
+            index,
+            range,
+        ));
+    }
     let (operation, syscall, source, binding) = ckb_v014_runtime_access(func)?;
     if let Some(resolved_source) = runtime_source_for_constructor(func) {
         return Some(runtime_access_metadata(
@@ -19204,12 +19451,24 @@ fn ckb_v014_runtime_access(func: &str) -> Option<(&'static str, &'static str, &'
         }
         "__ckb_witness_raw" => Some(("witness-raw", "LOAD_WITNESS", "Witness", "witness::raw")),
         "__ckb_witness_lock" => Some(("witness-lock", "LOAD_WITNESS_ARGS_LOCK", "GroupInput", "witness::lock")),
+        "__ckb_witness_lock_exact32" => Some(("witness-lock", "LOAD_WITNESS_ARGS_LOCK", "GroupInput", "witness::args.lock")),
         "__ckb_witness_input_type" => {
             Some(("witness-input-type", "LOAD_WITNESS_ARGS_INPUT_TYPE", "GroupInput", "witness::input_type"))
+        }
+        "__ckb_witness_input_type_exact32" => {
+            Some(("witness-input-type", "LOAD_WITNESS_ARGS_INPUT_TYPE", "GroupInput", "witness::args.input_type"))
         }
         "__ckb_witness_output_type" => {
             Some(("witness-output-type", "LOAD_WITNESS_ARGS_OUTPUT_TYPE", "GroupOutput", "witness::output_type"))
         }
+        "__ckb_witness_output_type_exact32" => {
+            Some(("witness-output-type", "LOAD_WITNESS_ARGS_OUTPUT_TYPE", "GroupOutput", "witness::args.output_type"))
+        }
+        "__ckb_witness_bounded_size" => Some(("witness-bounded-size", "LOAD_WITNESS", "Witness", "witness::bounded.size")),
+        "__ckb_witness_bounded_u8" => Some(("witness-bounded-u8", "LOAD_WITNESS", "Witness", "witness::byte")),
+        "__ckb_witness_bounded_u32_le" => Some(("witness-bounded-u32-le", "LOAD_WITNESS", "Witness", "witness::u32_le")),
+        "__ckb_witness_bounded_u64_le" => Some(("witness-bounded-u64-le", "LOAD_WITNESS", "Witness", "witness::u64_le")),
+        "__ckb_witness_bounded_blake2b" => Some(("witness-bounded-blake2b", "LOAD_WITNESS", "Witness", "witness::blake2b")),
         "__ckb_witness_size" => Some(("witness-size", "LOAD_WITNESS", "Witness", "witness::size")),
         "__ckb_witness_count" => Some(("witness-count", "LOAD_WITNESS", "Witness", "witness::count")),
         "__ckb_witness_u8" => Some(("witness-u8-exact", "LOAD_WITNESS", "Witness", "witness::byte")),

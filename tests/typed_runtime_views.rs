@@ -271,3 +271,282 @@ fn dynamic_source_indexes_execute_and_emit_checked_provenance() {
         .expect_err("a narrowed source-view index contract must not validate");
     assert!(error.message.contains("32-bit source-view index"), "unexpected validation error: {error}");
 }
+
+fn byte_string_literal(bytes: &[u8; 32]) -> String {
+    bytes.iter().map(|byte| format!("\\x{byte:02x}")).collect()
+}
+
+fn bounded_witness_fixture(witness: Bytes) -> ckb_script_runner::CkbVmFixture {
+    let mut fixture = build_simple_fixture(Bytes::default(), 1, 1);
+    fixture.current_type_script_input_indices = vec![0];
+    fixture.witnesses = vec![witness];
+    fixture
+}
+
+fn bounded_read_source(raw: &[u8], lock: &[u8], entry: &[u8], output_type: &[u8]) -> String {
+    let entry_u32 = u32::from_le_bytes(entry[501..505].try_into().expect("entry u32 bytes"));
+    let output_u64 = u64::from_le_bytes(output_type[777..785].try_into().expect("output u64 bytes"));
+    format!(
+        r#"module runtime_views::bounded_witness
+
+action inspect() -> u64 {{
+    verification
+        let witness_args = witness::args(0)
+        let raw = witness::bounded_raw(witness_args, 4096)
+        let lock = witness::bounded_lock(witness_args, 700)
+        let entry = witness::bounded_entry(witness_args, 900)
+        let output_type = witness::bounded_output_type(witness_args, 1024)
+        require raw.size == {raw_size}
+        require lock.size == 700
+        require entry.size == 900
+        require output_type.size == 1024
+        require witness::byte(lock, 0) == {lock_first}
+        require witness::byte(lock, 699) == {lock_last}
+        require witness::u32_le(entry, 501) == {entry_u32}
+        require witness::u64_le(output_type, 777) == {output_u64}
+        require witness::blake2b(raw) == Hash::from_bytes(b"{raw_hash}")
+        require witness::blake2b(lock) == Hash::from_bytes(b"{lock_hash}")
+        require witness::blake2b(entry) == Hash::from_bytes(b"{entry_hash}")
+        require witness::blake2b(output_type) == Hash::from_bytes(b"{output_hash}")
+        return 0
+}}
+"#,
+        raw_size = raw.len(),
+        lock_first = lock[0],
+        lock_last = lock[699],
+        raw_hash = byte_string_literal(&blake2b_256(raw)),
+        lock_hash = byte_string_literal(&blake2b_256(lock)),
+        entry_hash = byte_string_literal(&blake2b_256(entry)),
+        output_hash = byte_string_literal(&blake2b_256(output_type)),
+    )
+}
+
+fn bounded_probe_source(constructor: &str, maximum: u64, expression: &str) -> String {
+    format!(
+        r#"module runtime_views::bounded_witness_probe
+
+action inspect() -> u64 {{
+    verification
+        let witness_args = witness::args(0)
+        let bytes = witness::{constructor}(witness_args, {maximum})
+        let observed = {expression}
+        return 0
+}}
+"#
+    )
+}
+
+fn compile_failure(source: &str) -> cellscript::error::CompileError {
+    match compile_with_executable_surface_policy(
+        source,
+        CompileOptions {
+            edition: CellScriptEdition::Edition2027,
+            target: Some("riscv64-elf".to_string()),
+            target_profile: Some("ckb".to_string()),
+            ..Default::default()
+        },
+        ExecutableSurfacePolicy::DenyFailClosed,
+    ) {
+        Ok(_) => panic!("source unexpectedly compiled:\n{source}"),
+        Err(error) => error,
+    }
+}
+
+#[test]
+fn bounded_witness_owners_stream_large_fields_and_preserve_provenance() {
+    let lock = (0..700).map(|index| ((index * 3 + 1) & 0xff) as u8).collect::<Vec<_>>();
+    let entry = (0..900).map(|index| ((index * 5 + 2) & 0xff) as u8).collect::<Vec<_>>();
+    let output_type = (0..1024).map(|index| ((index * 7 + 3) & 0xff) as u8).collect::<Vec<_>>();
+    let witness = packed::WitnessArgs::new_builder()
+        .lock(Some(Bytes::copy_from_slice(&lock)).pack())
+        .input_type(Some(Bytes::copy_from_slice(&entry)).pack())
+        .output_type(Some(Bytes::copy_from_slice(&output_type)).pack())
+        .build()
+        .as_bytes();
+    assert!(witness.len() > 512, "fixture must exercise the streaming path beyond the legacy fixed buffer");
+
+    let result = compile(&bounded_read_source(&witness, &lock, &entry, &output_type));
+    let execution = execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &bounded_witness_fixture(witness.clone()));
+    assert_eq!(execution.exit_code, 0, "all bounded witness owners and hashes must execute: {:?}", execution.captured_debug);
+    assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-bounded-witness-view".to_string()));
+    assert!(result.metadata.runtime.ckb_runtime_features.contains(&"ckb-blake2b".to_string()));
+
+    for (owner, maximum) in [("raw", 4096), ("lock", 700), ("entry", 900), ("output_type", 1024)] {
+        assert!(result.metadata.runtime.transaction_view_handles.iter().any(|handle| {
+            handle.handle_type == format!("WitnessBytesView<{owner},{maximum}>")
+                && handle.witness_owner.as_deref() == Some(owner)
+                && handle.max_bytes == Some(maximum)
+                && handle.provenance.source.resolved_source == "Input"
+                && handle.provenance.range.kind == "bounded-range"
+                && handle.provenance.range.length.max_inclusive == Some(maximum)
+        }));
+        assert!(result.metadata.runtime.ckb_runtime_accesses.iter().any(|access| {
+            access.operation == format!("witness-bounded-{owner}-blake2b")
+                && access.provenance.source.resolved_source == "Input"
+                && access.provenance.range.kind == "bounded-range"
+                && access.provenance.range.length.max_inclusive == Some(maximum)
+        }));
+    }
+
+    let mut tampered = result.metadata.clone();
+    for access in tampered
+        .runtime
+        .ckb_runtime_accesses
+        .iter_mut()
+        .chain(tampered.actions.iter_mut().flat_map(|action| action.ckb_runtime_accesses.iter_mut()))
+        .filter(|access| access.operation == "witness-bounded-lock-blake2b")
+    {
+        access.operation = "witness-bounded-lock-unknown".to_string();
+    }
+    let error = cellscript::validate_compile_metadata(&tampered, result.artifact_format)
+        .expect_err("a non-canonical bounded witness runtime operation must not validate");
+    assert!(error.message.contains("not canonical"), "unexpected bounded witness metadata error: {error}");
+
+    let mut tampered = result.metadata.clone();
+    let handle = tampered
+        .runtime
+        .transaction_view_handles
+        .iter_mut()
+        .find(|handle| handle.handle_type == "WitnessBytesView<lock,700>")
+        .expect("bounded lock handle");
+    handle.provenance.range.length.max_inclusive = Some(699);
+    let error = cellscript::validate_compile_metadata(&tampered, result.artifact_format)
+        .expect_err("a bounded witness handle range must remain tied to its declared maximum");
+    assert!(error.message.contains("bounded witness range"), "unexpected bounded witness handle error: {error}");
+
+    let group_output_source = format!(
+        r#"module runtime_views::bounded_group_output
+
+action inspect() -> u64 {{
+    verification
+        let output_type = witness::bounded_output_type(source::group_output(0), 1024)
+        require output_type.size == 1024
+        require witness::byte(output_type, 1023) == {last_byte}
+        return 0
+}}
+"#,
+        last_byte = output_type[1023],
+    );
+    let group_output = compile(&group_output_source);
+    let execution = execute_cellscript_script(strip_vm_abi_trailer(&group_output.artifact_bytes), &bounded_witness_fixture(witness));
+    assert_eq!(execution.exit_code, 0, "GroupOutput witness provenance must remain executable");
+    assert!(group_output.metadata.runtime.transaction_view_handles.iter().any(|handle| {
+        handle.handle_type == "WitnessBytesView<output_type,1024>"
+            && handle.source == "GroupOutput"
+            && handle.provenance.source.resolved_source == "GroupOutput"
+    }));
+}
+
+#[test]
+fn bounded_witness_empty_absent_bound_and_range_semantics_fail_closed() {
+    let empty = packed::WitnessArgs::new_builder()
+        .lock(Some(Bytes::default()).pack())
+        .input_type(Some(Bytes::default()).pack())
+        .output_type(Some(Bytes::default()).pack())
+        .build()
+        .as_bytes();
+    let empty_hash = byte_string_literal(&blake2b_256(&[]));
+    let empty_source = format!(
+        r#"module runtime_views::bounded_witness_empty
+
+action inspect() -> u64 {{
+    verification
+        let witness_args = witness::args(0)
+        let lock = witness::bounded_lock(witness_args, 0)
+        let entry = witness::bounded_entry(witness_args, 0)
+        let output_type = witness::bounded_output_type(witness_args, 0)
+        require lock.size == 0
+        require entry.size == 0
+        require output_type.size == 0
+        require witness::blake2b(lock) == Hash::from_bytes(b"{empty_hash}")
+        require witness::blake2b(entry) == Hash::from_bytes(b"{empty_hash}")
+        require witness::blake2b(output_type) == Hash::from_bytes(b"{empty_hash}")
+        return 0
+}}
+"#
+    );
+    let result = compile(&empty_source);
+    let execution = execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &bounded_witness_fixture(empty));
+    assert_eq!(execution.exit_code, 0, "Some(empty) must remain distinct from an absent WitnessArgs field");
+
+    let absent = packed::WitnessArgs::new_builder().build().as_bytes();
+    for constructor in ["bounded_lock", "bounded_entry", "bounded_output_type"] {
+        let result = compile(&bounded_probe_source(constructor, 16, "bytes.size"));
+        let execution =
+            execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &bounded_witness_fixture(absent.clone()));
+        assert_eq!(
+            execution.exit_code,
+            cellscript::runtime_errors::CellScriptRuntimeError::WitnessFieldAbsent.code() as i64,
+            "{constructor} must reject an absent field"
+        );
+    }
+
+    let long_lock = packed::WitnessArgs::new_builder().lock(Some(Bytes::from(vec![7u8; 65])).pack()).build().as_bytes();
+    let result = compile(&bounded_probe_source("bounded_lock", 64, "bytes.size"));
+    let execution = execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &bounded_witness_fixture(long_lock));
+    assert_eq!(
+        execution.exit_code,
+        cellscript::runtime_errors::CellScriptRuntimeError::WitnessBoundExceeded.code() as i64,
+        "a field one byte above its declared bound must reject"
+    );
+
+    let short_lock = packed::WitnessArgs::new_builder().lock(Some(Bytes::from(vec![1u8; 7])).pack()).build().as_bytes();
+    let result = compile(&bounded_probe_source("bounded_lock", 7, "witness::u64_le(bytes, 0)"));
+    let execution = execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &bounded_witness_fixture(short_lock));
+    assert_eq!(
+        execution.exit_code,
+        cellscript::runtime_errors::CellScriptRuntimeError::BoundsCheckFailed.code() as i64,
+        "an exact read beyond the logical field view must reject"
+    );
+}
+
+#[test]
+fn bounded_witness_rejects_malformed_tables_and_invalid_static_bounds() {
+    let result = compile(&bounded_probe_source("bounded_lock", 32, "bytes.size"));
+    let malformed_total = Bytes::from(vec![17, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0]);
+    let execution = execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &bounded_witness_fixture(malformed_total));
+    assert_eq!(
+        execution.exit_code,
+        cellscript::runtime_errors::CellScriptRuntimeError::WitnessMalformed.code() as i64,
+        "a mismatched WitnessArgs total_size must reject"
+    );
+
+    let truncated_offset = Bytes::from(vec![16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0, 17, 0, 0, 0]);
+    let execution =
+        execute_cellscript_script(strip_vm_abi_trailer(&result.artifact_bytes), &bounded_witness_fixture(truncated_offset));
+    assert_eq!(
+        execution.exit_code,
+        cellscript::runtime_errors::CellScriptRuntimeError::WitnessFieldTruncated.code() as i64,
+        "a WitnessArgs field offset beyond total_size must reject"
+    );
+
+    for source in [
+        bounded_probe_source("bounded_raw", 65537, "bytes.size"),
+        r#"module runtime_views::bounded_dynamic_limit
+
+action inspect(witness maximum: u64) -> u64 {
+    verification
+        let witness_args = witness::args(0)
+        let bytes = witness::bounded_raw(witness_args, maximum)
+        return bytes.size
+}
+"#
+        .to_string(),
+    ] {
+        let error = compile_failure(&source);
+        assert!(error.message.contains("maximum_bytes"), "unexpected bounded-witness diagnostic: {error}");
+    }
+
+    let error = compile_failure(
+        r#"module runtime_views::unbounded_witness_hash
+
+action inspect() -> u64 {
+    verification
+        let witness_args = witness::args(0)
+        let digest = witness::blake2b(witness_args)
+        return 0
+}
+"#,
+    );
+    assert!(error.message.contains("bounded witness byte view"), "unexpected unbounded hash diagnostic: {error}");
+}

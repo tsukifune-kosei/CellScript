@@ -122,6 +122,7 @@ pub struct CheckerReport {
 
 const CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT: &str = "cellscript-ckb-runtime-access-provenance-v1";
 const CKB_RUNTIME_ACCESS_PROVENANCE_METADATA_SCHEMA: u64 = 69;
+const BOUNDED_WITNESS_METADATA_SCHEMA: u64 = 70;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -166,6 +167,23 @@ struct RuntimeAccess {
     index: u64,
     binding: String,
     provenance: RuntimeAccessProvenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeTransactionViewHandle {
+    scope_kind: String,
+    scope_name: String,
+    binding: String,
+    handle_type: String,
+    source: String,
+    provenance: RuntimeAccessProvenance,
+    ownership: String,
+    witness_owner: Option<String>,
+    max_bytes: Option<u64>,
+    lifecycle_authority: bool,
+    typing_evidence_tier: String,
+    read_evidence_tier: String,
 }
 
 pub fn canonical_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, CheckerError> {
@@ -634,6 +652,7 @@ fn validate_runtime_access_provenance_metadata(metadata: &Value) -> Result<(), C
             .as_slice(),
         None => &[],
     };
+    let mut typed_handles = Vec::new();
     for (index, handle) in handles.iter().enumerate() {
         let source = handle
             .get("source")
@@ -647,8 +666,185 @@ fn validate_runtime_access_provenance_metadata(metadata: &Value) -> Result<(), C
             metadata_binding_error(format!("runtime.transaction_view_handles[{index}].provenance has an invalid shape: {error}"))
         })?;
         validate_runtime_access_provenance(&format!("runtime.transaction_view_handles[{index}]"), source, None, &provenance)?;
+        if schema >= BOUNDED_WITNESS_METADATA_SCHEMA {
+            let typed: RuntimeTransactionViewHandle = serde_json::from_value(handle.clone()).map_err(|error| {
+                metadata_binding_error(format!("runtime.transaction_view_handles[{index}] has an invalid schema-70 shape: {error}"))
+            })?;
+            validate_runtime_transaction_view_handle(&format!("runtime.transaction_view_handles[{index}]"), &typed)?;
+            typed_handles.push(typed);
+        }
+    }
+    if schema >= BOUNDED_WITNESS_METADATA_SCHEMA {
+        for access in &module_accesses {
+            let Some((owner, maximum)) = validate_bounded_witness_runtime_access(access)? else {
+                continue;
+            };
+            if !typed_handles.iter().any(|handle| {
+                bounded_witness_view_parts(&handle.handle_type) == Some((owner.as_str(), maximum))
+                    && handle.provenance.source.resolved_source == access.provenance.source.resolved_source
+                    && handle.provenance.index == access.provenance.index
+            }) {
+                return Err(metadata_binding_error(format!(
+                    "bounded witness runtime access '{}' has no matching transaction-view handle",
+                    access.operation
+                )));
+            }
+        }
     }
     Ok(())
+}
+
+fn bounded_witness_view_parts(handle_type: &str) -> Option<(&str, u64)> {
+    let payload = handle_type.strip_prefix("WitnessBytesView<")?.strip_suffix('>')?;
+    let (owner, maximum) = payload.split_once(',')?;
+    let owner = owner.trim();
+    if !matches!(owner, "raw" | "lock" | "entry" | "output_type") {
+        return None;
+    }
+    let maximum = maximum.trim().parse::<u64>().ok()?;
+    (maximum <= 65_536).then_some((owner, maximum))
+}
+
+fn validate_runtime_transaction_view_handle(prefix: &str, handle: &RuntimeTransactionViewHandle) -> Result<(), CheckerError> {
+    for (field, value) in [
+        ("scope_kind", handle.scope_kind.as_str()),
+        ("scope_name", handle.scope_name.as_str()),
+        ("binding", handle.binding.as_str()),
+        ("handle_type", handle.handle_type.as_str()),
+        ("source", handle.source.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(metadata_binding_error(format!("{prefix}.{field} must not be empty")));
+        }
+    }
+    let base_type = handle.handle_type.split('<').next().unwrap_or(handle.handle_type.as_str());
+    if !matches!(
+        base_type,
+        "InputView"
+            | "OutputView"
+            | "CellDepView"
+            | "HeaderDepView"
+            | "WitnessArgsView"
+            | "WitnessBytesView"
+            | "OutPoint"
+            | "ScriptView"
+    ) {
+        return Err(metadata_binding_error(format!(
+            "{prefix}.handle_type '{}' is not a supported transaction view",
+            handle.handle_type
+        )));
+    }
+    if handle.ownership != "read-only-view"
+        || handle.lifecycle_authority
+        || handle.typing_evidence_tier != "checked-static"
+        || handle.read_evidence_tier != "checked-runtime"
+    {
+        return Err(metadata_binding_error(format!("{prefix} has an invalid ownership or evidence contract")));
+    }
+    if base_type != "WitnessBytesView" {
+        if handle.witness_owner.is_some() || handle.max_bytes.is_some() {
+            return Err(metadata_binding_error(format!("{prefix} non-witness handle carries bounded witness fields")));
+        }
+        return Ok(());
+    }
+
+    let Some((owner, maximum)) = bounded_witness_view_parts(&handle.handle_type) else {
+        return Err(metadata_binding_error(format!("{prefix}.handle_type has an invalid bounded witness owner or maximum")));
+    };
+    if handle.witness_owner.as_deref() != Some(owner) || handle.max_bytes != Some(maximum) {
+        return Err(metadata_binding_error(format!("{prefix} owner and maximum do not match handle_type")));
+    }
+    let source_matches = match handle.source.as_str() {
+        "WitnessArgs/Input" => handle.provenance.source.resolved_source == "Input",
+        "Input" | "Output" | "GroupInput" | "GroupOutput" => handle.provenance.source.resolved_source == handle.source,
+        _ => false,
+    };
+    if !source_matches {
+        return Err(metadata_binding_error(format!("{prefix} has an invalid bounded witness source")));
+    }
+    let expected_range = RuntimeRangeProvenance {
+        kind: "bounded-range".to_string(),
+        offset: RuntimeScalarProvenance { kind: "static".to_string(), value: Some(0), binding: None, max_inclusive: Some(maximum) },
+        length: RuntimeScalarProvenance {
+            kind: "dynamic".to_string(),
+            value: None,
+            binding: Some(format!("{}.size", handle.binding)),
+            max_inclusive: Some(maximum),
+        },
+    };
+    if handle.provenance.range != expected_range {
+        return Err(metadata_binding_error(format!("{prefix} bounded witness range does not match its declared maximum")));
+    }
+    Ok(())
+}
+
+fn validate_bounded_witness_runtime_access(access: &RuntimeAccess) -> Result<Option<(String, u64)>, CheckerError> {
+    if !access.operation.starts_with("witness-bounded-") {
+        return Ok(None);
+    }
+    let mut contract = None;
+    for owner in ["raw", "lock", "entry", "output_type"] {
+        for (suffix, width) in [("size", None), ("u8", Some(1)), ("u32-le", Some(4)), ("u64-le", Some(8)), ("blake2b", None)] {
+            if access.operation == format!("witness-bounded-{owner}-{suffix}") {
+                contract = Some((owner, suffix, width));
+            }
+        }
+    }
+    let Some((owner, suffix, width)) = contract else {
+        return Err(metadata_binding_error(format!("bounded witness runtime operation '{}' is not canonical", access.operation)));
+    };
+    if access.syscall != "LOAD_WITNESS"
+        || access.source != "Witness"
+        || access.binding != format!("witness::bounded_{owner}")
+        || !matches!(access.provenance.source.resolved_source.as_str(), "Input" | "Output" | "GroupInput" | "GroupOutput")
+        || access.provenance.source.origin != "inherited-source-view"
+    {
+        return Err(metadata_binding_error(format!(
+            "bounded witness runtime access '{}' has an invalid source contract",
+            access.operation
+        )));
+    }
+    let maximum = if matches!(suffix, "size" | "blake2b") {
+        let range = &access.provenance.range;
+        if range.kind != "bounded-range"
+            || range.offset.kind != "static"
+            || range.offset.value != Some(0)
+            || range.offset.binding.is_some()
+            || range.length.kind != "dynamic"
+            || range.length.value.is_some()
+            || range.length.binding.as_deref() != Some(format!("bounded_{owner}.size").as_str())
+            || range.offset.max_inclusive != range.length.max_inclusive
+        {
+            return Err(metadata_binding_error(format!(
+                "bounded witness runtime access '{}' has an invalid whole-view range",
+                access.operation
+            )));
+        }
+        range.length.max_inclusive
+    } else {
+        let width = width.expect("bounded scalar width");
+        let range = &access.provenance.range;
+        if range.kind != "bounded-range"
+            || !matches!(range.offset.kind.as_str(), "static" | "dynamic")
+            || range.length.kind != "static"
+            || range.length.value != Some(width)
+            || range.length.binding.is_some()
+            || range.length.max_inclusive != Some(width)
+        {
+            return Err(metadata_binding_error(format!(
+                "bounded witness runtime access '{}' has an invalid scalar range",
+                access.operation
+            )));
+        }
+        range.offset.max_inclusive
+    };
+    let Some(maximum) = maximum.filter(|maximum| *maximum <= 65_536) else {
+        return Err(metadata_binding_error(format!(
+            "bounded witness runtime access '{}' exceeds the maximum byte domain",
+            access.operation
+        )));
+    };
+    Ok(Some((owner.to_string(), maximum)))
 }
 
 fn parse_runtime_accesses(value: Option<&Value>, label: &str) -> Result<Vec<RuntimeAccess>, CheckerError> {
@@ -2309,6 +2505,9 @@ fn validate_typed_operation(
             let move_types_match = operand_type(0)
                 .zip(destination_type(0))
                 .is_some_and(|(source, destination)| typed_value_assignable(source, destination))
+                || operand_type(0)
+                    .zip(destination_type(0))
+                    .is_some_and(|(source, destination)| bounded_witness_view_retyping_move(source, destination))
                 || (operand_type(0) == Some("Vec")
                     && destination_type(0).is_some_and(|destination| collection_element_type(destination).is_some()))
                 || checked_unsigned_narrowing_move(entry, block, operation, locals)
@@ -2632,6 +2831,20 @@ fn typed_value_assignable(actual: &str, expected: &str) -> bool {
     canonical_abi_type(actual) == canonical_abi_type(expected)
         || arithmetic_result_type(actual, expected).as_deref() == Some(expected)
         || unsigned_integer_width(actual).zip(unsigned_integer_width(expected)).is_some_and(|(actual, expected)| actual <= expected)
+}
+
+fn bounded_witness_view_retyping_move(actual: &str, expected: &str) -> bool {
+    if !matches!(actual, "u64" | "WitnessArgsView") {
+        return false;
+    }
+    let Some(payload) = expected.strip_prefix("WitnessBytesView<").and_then(|value| value.strip_suffix('>')) else {
+        return false;
+    };
+    let Some((owner, maximum)) = payload.split_once(',') else {
+        return false;
+    };
+    matches!(owner.trim(), "raw" | "lock" | "entry" | "output_type")
+        && maximum.trim().parse::<u64>().is_ok_and(|maximum| maximum <= 65_536)
 }
 
 fn checked_unsigned_narrowing_move(

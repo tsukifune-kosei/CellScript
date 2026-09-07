@@ -1,0 +1,17 @@
+// audit: phase=accept
+module cellscript::audit::seed_bounded_witness_view
+
+action inspect() -> u64 {
+    verification
+        let witness_args = witness::args(0)
+        let raw = witness::bounded_raw(witness_args, 4096)
+        let lock = witness::bounded_lock(witness_args, 1024)
+        let entry = witness::bounded_entry(witness_args, 4096)
+        let output_type = witness::bounded_output_type(witness_args, 1024)
+        let digest = witness::blake2b(raw)
+        require lock.size <= 1024
+        require entry.size <= 4096
+        require output_type.size <= 1024
+        require digest != Hash::zero()
+        return 0
+}

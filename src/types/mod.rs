@@ -387,6 +387,8 @@ const CKB_OUTPUT_VIEW_TYPE: &str = "OutputView";
 const CKB_CELL_DEP_VIEW_TYPE: &str = "CellDepView";
 const CKB_HEADER_DEP_VIEW_TYPE: &str = "HeaderDepView";
 const CKB_WITNESS_ARGS_VIEW_TYPE: &str = "WitnessArgsView";
+const CKB_WITNESS_BYTES_VIEW_TYPE: &str = "WitnessBytesView";
+const CKB_WITNESS_BYTES_MAX: u64 = 65_536;
 const CKB_OUT_POINT_TYPE: &str = "OutPoint";
 const CKB_SCRIPT_VIEW_TYPE: &str = "ScriptView";
 const CKB_SCRIPT_HASH_TYPE: &str = "ScriptHash";
@@ -6238,6 +6240,12 @@ impl<'a> TypeChecker<'a> {
                         )),
                     };
                 }
+                if base_name == CKB_WITNESS_BYTES_VIEW_TYPE {
+                    return match field {
+                        "size" => Ok(Type::U64),
+                        _ => Err(CompileError::new(format!("unknown WitnessBytesView field '{}'; expected size", field), span)),
+                    };
+                }
                 if base_name == CKB_OUT_POINT_TYPE {
                     return match field {
                         "index" => Ok(Type::U64),
@@ -6336,6 +6344,45 @@ impl<'a> TypeChecker<'a> {
 
     fn is_witness_args_view_type(ty: &Type) -> bool {
         matches!(ty, Type::U64) || matches!(ty, Type::Named(name) if name == CKB_WITNESS_ARGS_VIEW_TYPE)
+    }
+
+    fn witness_bytes_view_parts(ty: &Type) -> Option<(String, u64)> {
+        let Type::Named(name) = ty else {
+            return None;
+        };
+        let payload = name.strip_prefix("WitnessBytesView<")?.strip_suffix('>')?;
+        let (owner, maximum) = payload.split_once(',')?;
+        if !matches!(owner, "raw" | "lock" | "entry" | "output_type") {
+            return None;
+        }
+        let maximum = maximum.parse::<u64>().ok()?;
+        (maximum <= CKB_WITNESS_BYTES_MAX).then(|| (owner.to_string(), maximum))
+    }
+
+    fn witness_bytes_view_type(name: &str, call: &CallExpr, arg_types: &[Type]) -> Result<Option<Type>> {
+        let owner = match name {
+            "witness::bounded_raw" => "raw",
+            "witness::bounded_lock" => "lock",
+            "witness::bounded_entry" => "entry",
+            "witness::bounded_output_type" => "output_type",
+            _ => return Ok(None),
+        };
+        if arg_types.len() != 2 {
+            return Err(CompileError::new(format!("{} expects (witness_view, maximum_bytes)", name), call.span));
+        }
+        if !Self::is_witness_args_view_type(&arg_types[0]) || arg_types[1] != Type::U64 {
+            return Err(CompileError::new(format!("{} expects (witness_view, maximum_bytes: u64)", name), call.span));
+        }
+        let maximum = match call.args.get(1) {
+            Some(Expr::Integer(value)) if *value <= u128::from(CKB_WITNESS_BYTES_MAX) => *value as u64,
+            Some(Expr::Integer(_)) => {
+                return Err(CompileError::new(format!("{} maximum_bytes must be in 0..={}", name, CKB_WITNESS_BYTES_MAX), call.span));
+            }
+            _ => {
+                return Err(CompileError::new(format!("{} maximum_bytes must be an integer literal", name), call.span));
+            }
+        };
+        Ok(Some(Type::Named(format!("{CKB_WITNESS_BYTES_VIEW_TYPE}<{owner},{maximum}>"))))
     }
 
     fn is_input_view_type(ty: &Type) -> bool {
@@ -6560,6 +6607,9 @@ impl<'a> TypeChecker<'a> {
         match call.func.as_ref() {
             Expr::Identifier(name) => {
                 if let Some(view_type) = self.infer_transaction_view_constructor(name, call, arg_types)? {
+                    return Ok(view_type);
+                }
+                if let Some(view_type) = Self::witness_bytes_view_type(name, call, arg_types)? {
                     return Ok(view_type);
                 }
                 if !call.type_args.is_empty() {
@@ -7415,7 +7465,11 @@ impl<'a> TypeChecker<'a> {
                         }
                         ("witness", "byte" | "u32_le" | "u64_le" | "bytes32") => {
                             self.validate_builtin_arity(name, 2, arg_types, call.span)?;
-                            if !Self::is_witness_args_view_type(&arg_types[0]) || arg_types[1] != Type::U64 {
+                            let bounded = Self::witness_bytes_view_parts(&arg_types[0]).is_some();
+                            if (!Self::is_witness_args_view_type(&arg_types[0]) && !bounded)
+                                || (suffix == "bytes32" && bounded)
+                                || arg_types[1] != Type::U64
+                            {
                                 return Err(CompileError::new(format!("{} expects (witness_view, offset: u64)", name), call.span));
                             }
                             if suffix == "bytes32" {
@@ -7423,6 +7477,13 @@ impl<'a> TypeChecker<'a> {
                             } else {
                                 Type::U64
                             }
+                        }
+                        ("witness", "blake2b") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if Self::witness_bytes_view_parts(&arg_types[0]).is_none() {
+                                return Err(CompileError::new("witness::blake2b expects a bounded witness byte view", call.span));
+                            }
+                            Type::Hash
                         }
                         ("witness", "raw" | "lock" | "input_type" | "output_type" | "size") => {
                             self.validate_builtin_arity(name, 1, arg_types, call.span)?;
@@ -8167,6 +8228,20 @@ impl<'a> TypeChecker<'a> {
             return Ok(());
         }
 
+        if base_name == CKB_WITNESS_BYTES_VIEW_TYPE {
+            let ty = Type::Named(name.to_string());
+            if Self::witness_bytes_view_parts(&ty).is_none() {
+                return Err(CompileError::new(
+                    format!(
+                        "type '{}' requires an owner raw, lock, entry, or output_type and a maximum byte count in 0..={}",
+                        name, CKB_WITNESS_BYTES_MAX
+                    ),
+                    Span::default(),
+                ));
+            }
+            return Ok(());
+        }
+
         if name.contains('<') && base_name != "Vec" {
             return Err(CompileError::new(
                 format!(
@@ -8208,6 +8283,7 @@ impl<'a> TypeChecker<'a> {
             | CKB_CELL_DEP_VIEW_TYPE
             | CKB_HEADER_DEP_VIEW_TYPE
             | CKB_WITNESS_ARGS_VIEW_TYPE
+            | CKB_WITNESS_BYTES_VIEW_TYPE
             | CKB_OUT_POINT_TYPE
             | CKB_SCRIPT_VIEW_TYPE
             | CKB_SCRIPT_HASH_TYPE

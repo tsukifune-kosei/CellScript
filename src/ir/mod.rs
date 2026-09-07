@@ -34,6 +34,27 @@ pub(crate) fn is_ckb_temporal_scalar_name(name: &str) -> bool {
     CKB_TEMPORAL_SCALAR_TYPE_NAMES.contains(&name) || name.starts_with("Since<Absolute, ") || name.starts_with("Since<Relative, ")
 }
 
+pub(crate) const CKB_WITNESS_OWNER_RAW: u64 = 0;
+pub(crate) const CKB_WITNESS_OWNER_LOCK: u64 = 1;
+pub(crate) const CKB_WITNESS_OWNER_ENTRY: u64 = 2;
+pub(crate) const CKB_WITNESS_OWNER_OUTPUT_TYPE: u64 = 3;
+
+pub(crate) fn witness_bytes_view_parts(ty: &IrType) -> Option<(&str, u64, u64)> {
+    let IrType::Named(name) = ty else {
+        return None;
+    };
+    let payload = name.strip_prefix("WitnessBytesView<")?.strip_suffix('>')?;
+    let (owner, maximum) = payload.split_once(',')?;
+    let owner_tag = match owner {
+        "raw" => CKB_WITNESS_OWNER_RAW,
+        "lock" => CKB_WITNESS_OWNER_LOCK,
+        "entry" => CKB_WITNESS_OWNER_ENTRY,
+        "output_type" => CKB_WITNESS_OWNER_OUTPUT_TYPE,
+        _ => return None,
+    };
+    Some((owner, owner_tag, maximum.parse().ok()?))
+}
+
 #[derive(Debug, Clone)]
 pub struct IrModule {
     pub name: String,
@@ -5891,6 +5912,18 @@ impl IrGenerator {
                 return LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) };
             }
 
+            if field.field == "size"
+                && let Some((_, owner, maximum)) = witness_bytes_view_parts(&base_var.ty)
+            {
+                let dest = self.new_var("bounded_witness_size", IrType::U64);
+                self.block_mut(blocks, active).instructions.push(IrInstruction::Call {
+                    dest: Some(dest.clone()),
+                    func: "__ckb_witness_bounded_size".to_string(),
+                    args: vec![lowered_base.operand, IrOperand::Const(IrConst::U64(owner)), IrOperand::Const(IrConst::U64(maximum))],
+                });
+                return LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) };
+            }
+
             if let Some((func, dest_name, return_ty)) = typed_view_property_runtime_helper(&base_var.ty, &field.field) {
                 let dest = self.new_var(dest_name, return_ty);
                 self.block_mut(blocks, active).instructions.push(IrInstruction::Call {
@@ -7468,6 +7501,11 @@ impl IrGenerator {
                     blocks,
                     vars,
                 ),
+                "witness::bounded_raw" | "witness::bounded_lock" | "witness::bounded_entry" | "witness::bounded_output_type"
+                    if call.args.len() == 2 =>
+                {
+                    self.lower_bounded_witness_view(name.as_str(), call, current, blocks, vars)
+                }
                 "ckb::input_out_point" if call.args.len() == 1 => {
                     self.lower_transparent_view_wrapper(call, CKB_INPUT_OUT_POINT_REF_TYPE, current, blocks, vars)
                 }
@@ -7541,13 +7579,9 @@ impl IrGenerator {
                     vars,
                 ),
                 "witness::byte" | "witness::u32_le" | "witness::u64_le" if call.args.len() == 2 => {
-                    let (helper, result_name) = match name.as_str() {
-                        "witness::byte" => ("__ckb_witness_u8", "witness_u8"),
-                        "witness::u32_le" => ("__ckb_witness_u32_le", "witness_u32_le"),
-                        _ => ("__ckb_witness_u64_le", "witness_u64_le"),
-                    };
-                    self.lower_simple_runtime_call(helper, result_name, IrType::U64, &call.args, current, blocks, vars)
+                    self.lower_witness_scalar_read(name.as_str(), call, current, blocks, vars)
                 }
+                "witness::blake2b" if call.args.len() == 1 => self.lower_bounded_witness_blake2b(call, current, blocks, vars),
                 "witness::raw" if call.args.len() == 1 => {
                     self.lower_simple_runtime_call("__ckb_witness_raw", "witness_raw", IrType::Hash, &call.args, current, blocks, vars)
                 }
@@ -8627,6 +8661,95 @@ impl IrGenerator {
         Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
     }
 
+    fn lower_bounded_witness_view(
+        &mut self,
+        name: &str,
+        call: &CallExpr,
+        current: BlockId,
+        blocks: &mut Vec<IrBlock>,
+        vars: &mut HashMap<String, IrVar>,
+    ) -> Option<LoweredExpr> {
+        let owner = match name {
+            "witness::bounded_raw" => "raw",
+            "witness::bounded_lock" => "lock",
+            "witness::bounded_entry" => "entry",
+            "witness::bounded_output_type" => "output_type",
+            _ => return None,
+        };
+        let Expr::Integer(maximum) = call.args.get(1)? else {
+            return None;
+        };
+        let lowered = self.lower_expr(&call.args[0], current, blocks, vars);
+        let active = lowered.current?;
+        let dest = self.new_var(format!("bounded_witness_{owner}"), IrType::Named(format!("WitnessBytesView<{owner},{maximum}>")));
+        self.block_mut(blocks, active).instructions.push(IrInstruction::Move { dest: dest.clone(), src: lowered.operand });
+        Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
+    }
+
+    fn lower_witness_scalar_read(
+        &mut self,
+        name: &str,
+        call: &CallExpr,
+        current: BlockId,
+        blocks: &mut Vec<IrBlock>,
+        vars: &mut HashMap<String, IrVar>,
+    ) -> Option<LoweredExpr> {
+        let lowered_view = self.lower_expr(&call.args[0], current, blocks, vars);
+        let active = lowered_view.current?;
+        let view_type = self.operand_type(&lowered_view.operand);
+        let lowered_offset = self.lower_expr(&call.args[1], active, blocks, vars);
+        let active = lowered_offset.current?;
+        let (legacy_func, dest_name) = match name {
+            "witness::byte" => ("__ckb_witness_u8", "witness_u8"),
+            "witness::u32_le" => ("__ckb_witness_u32_le", "witness_u32_le"),
+            _ => ("__ckb_witness_u64_le", "witness_u64_le"),
+        };
+        let (func, args) = if let Some((_, owner, maximum)) = witness_bytes_view_parts(&view_type) {
+            let func = match name {
+                "witness::byte" => "__ckb_witness_bounded_u8",
+                "witness::u32_le" => "__ckb_witness_bounded_u32_le",
+                _ => "__ckb_witness_bounded_u64_le",
+            };
+            (
+                func,
+                vec![
+                    lowered_view.operand,
+                    IrOperand::Const(IrConst::U64(owner)),
+                    IrOperand::Const(IrConst::U64(maximum)),
+                    lowered_offset.operand,
+                ],
+            )
+        } else {
+            (legacy_func, vec![lowered_view.operand, lowered_offset.operand])
+        };
+        let dest = self.new_var(dest_name, IrType::U64);
+        self.block_mut(blocks, active).instructions.push(IrInstruction::Call {
+            dest: Some(dest.clone()),
+            func: func.to_string(),
+            args,
+        });
+        Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
+    }
+
+    fn lower_bounded_witness_blake2b(
+        &mut self,
+        call: &CallExpr,
+        current: BlockId,
+        blocks: &mut Vec<IrBlock>,
+        vars: &mut HashMap<String, IrVar>,
+    ) -> Option<LoweredExpr> {
+        let lowered = self.lower_expr(&call.args[0], current, blocks, vars);
+        let active = lowered.current?;
+        let (_, owner, maximum) = witness_bytes_view_parts(&self.operand_type(&lowered.operand))?;
+        let dest = self.new_var("bounded_witness_blake2b", IrType::Hash);
+        self.block_mut(blocks, active).instructions.push(IrInstruction::Call {
+            dest: Some(dest.clone()),
+            func: "__ckb_witness_bounded_blake2b".to_string(),
+            args: vec![lowered.operand, IrOperand::Const(IrConst::U64(owner)), IrOperand::Const(IrConst::U64(maximum))],
+        });
+        Some(LoweredExpr { operand: IrOperand::Var(dest), current: Some(active) })
+    }
+
     fn lower_transparent_view_wrapper(
         &mut self,
         call: &CallExpr,
@@ -9088,9 +9211,9 @@ fn typed_view_property_runtime_helper(ty: &IrType, field: &str) -> Option<(&'sta
             Some(("__ckb_cell_type_hash", "typed_view_type_hash", IrType::Hash))
         }
         ("WitnessArgsView", "size") => Some(("__ckb_witness_size", "typed_witness_size", IrType::U64)),
-        ("WitnessArgsView", "lock") => Some(("__ckb_witness_lock", "typed_witness_lock", IrType::Hash)),
-        ("WitnessArgsView", "input_type") => Some(("__ckb_witness_input_type", "typed_witness_input_type", IrType::Hash)),
-        ("WitnessArgsView", "output_type") => Some(("__ckb_witness_output_type", "typed_witness_output_type", IrType::Hash)),
+        ("WitnessArgsView", "lock") => Some(("__ckb_witness_lock_exact32", "typed_witness_lock", IrType::Hash)),
+        ("WitnessArgsView", "input_type") => Some(("__ckb_witness_input_type_exact32", "typed_witness_input_type", IrType::Hash)),
+        ("WitnessArgsView", "output_type") => Some(("__ckb_witness_output_type_exact32", "typed_witness_output_type", IrType::Hash)),
         ("HeaderDepView", "epoch_number") => {
             Some(("__ckb_header_dep_epoch_number", "typed_header_epoch_number", IrType::Named("EpochNumber".to_string())))
         }

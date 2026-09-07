@@ -25,7 +25,7 @@ stream, not consensus truth. ProofPlan rows, TemplateLayout records, receipts,
 constraints, ABI, and builder assumptions explain what the compiler emitted and
 what remains to be checked by builders or CKB nodes.
 
-For the `0.30` development branch, inspect current metadata schema 69 under
+For the `0.30` development branch, inspect current metadata schema 70 under
 Edition 2026 or the separately routed Edition 2027 preview and the resolved
 compatibility profile, together with typed-semantics v8, semantic-foundation
 v3, lowering-record v6, source-map v2, and the

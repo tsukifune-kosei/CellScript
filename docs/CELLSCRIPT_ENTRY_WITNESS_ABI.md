@@ -55,6 +55,31 @@ compatibility path. The selected group-relative witness must be a canonical
 or payload placed in `lock`/`output_type` fails closed with runtime error
 `25 entry-witness-abi-invalid`.
 
+## Bounded read-only field views
+
+Metadata schema 70 adds explicit read-only views over the outer witness and
+its three owner fields. `witness::bounded_raw(view, max)` selects the complete
+serialized witness; `bounded_lock`, `bounded_entry`, and
+`bounded_output_type` select the payload bytes of `lock`, `input_type`, and
+`output_type` respectively. `bounded_entry` therefore reads the same
+`WitnessArgs.input_type` value used by the `CSARGv1` entry ABI. It does not
+define another envelope or another writable field.
+
+The maximum is a compile-time integer literal in `0..=65536`. A
+`WitnessBytesView<owner,max>` exposes `.size`, exact byte/u32/u64 reads, and
+full-view streaming CKB Blake2b. All offsets are relative to the selected
+logical payload. The runtime reads fixed-size headers and requested words, or
+streams hash chunks directly from `LOAD_WITNESS`; it does not allocate or copy
+the complete logical value.
+
+These views do not transfer field authority. Wallets and Lock Scripts still
+own signature construction in `lock`; CellScript entry, bounded-plan, and
+authorization consumers share the one `entry`/`input_type` value; protocols
+may assign `output_type` separately. An absent `BytesOpt` fails with error 67,
+while `Some(empty)` is a present zero-length value. A value above its declared
+maximum fails with error 68. The 65,536-byte read-view ceiling does not widen
+the 4,096-byte `CSARGv1` entry trampoline limit described below.
+
 ## Payload Envelope v1
 
 Every parameterized entry payload that has witness-backed arguments starts with:

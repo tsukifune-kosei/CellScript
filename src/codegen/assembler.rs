@@ -2036,6 +2036,10 @@ pub(super) fn is_runtime_scalar_failclosed_call(func: &str) -> bool {
             | "__ckb_witness_u32_le"
             | "__ckb_transaction_u32_le"
             | "__ckb_witness_u64_le"
+            | "__ckb_witness_bounded_size"
+            | "__ckb_witness_bounded_u8"
+            | "__ckb_witness_bounded_u32_le"
+            | "__ckb_witness_bounded_u64_le"
     )
 }
 

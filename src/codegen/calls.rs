@@ -742,7 +742,10 @@ impl CodeGenerator {
         }
         let raw_transaction = func == "__ckb_raw_transaction_hash_without_cell_deps";
         let bytes32 = func == "__ckb_witness_bytes32";
-        if !raw_transaction && !bytes32 && !matches!(func, "__ckb_cell_data_blake2b_span" | "__ckb_witness_blake2b_span") {
+        if !raw_transaction
+            && !bytes32
+            && !matches!(func, "__ckb_cell_data_blake2b_span" | "__ckb_witness_blake2b_span" | "__ckb_witness_bounded_blake2b")
+        {
             return Ok(false);
         }
         let Some(dest) = dest else {
@@ -791,7 +794,16 @@ impl CodeGenerator {
     }
 
     fn emit_runtime_witness_hash_call(&mut self, dest: Option<&IrVar>, func: &str, args: &[IrOperand]) -> Result<bool> {
-        if !matches!(func, "__ckb_witness_raw" | "__ckb_witness_lock" | "__ckb_witness_input_type" | "__ckb_witness_output_type") {
+        if !matches!(
+            func,
+            "__ckb_witness_raw"
+                | "__ckb_witness_lock"
+                | "__ckb_witness_input_type"
+                | "__ckb_witness_output_type"
+                | "__ckb_witness_lock_exact32"
+                | "__ckb_witness_input_type_exact32"
+                | "__ckb_witness_output_type_exact32"
+        ) {
             return Ok(false);
         }
         let Some(dest) = dest else {

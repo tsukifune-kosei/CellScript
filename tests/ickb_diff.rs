@@ -109,10 +109,10 @@ module vm_harness_witness_typed_fields
 
 action test_witness_typed_fields() -> u64 {
     verification
-        let view = source::input(0)
-        let lock_field = witness::lock(view)
-        let input_type = witness::input_type(view)
-        let output_type = witness::output_type(view)
+        let witness_args = witness::args(0)
+        let lock_field = witness_args.lock
+        let input_type = witness_args.input_type
+        let output_type = witness_args.output_type
         if lock_field == Hash::zero() {
             return 1
         }
@@ -136,6 +136,37 @@ action test_witness_typed_fields() -> u64 {
 "#;
 
 const VM_HARNESS_WITNESS_TYPED_FIELDS_ACTION: &str = "test_witness_typed_fields";
+
+const VM_HARNESS_WITNESS_TYPED_LOCK_LARGE_SIBLING_PROGRAM: &str = r#"
+module vm_harness_witness_typed_lock_large_sibling
+
+action test_witness_typed_lock_large_sibling() -> u64 {
+    verification
+        let witness_args = witness::args(0)
+        if witness_args.lock == Hash::zero() {
+            return 1
+        }
+        return 0
+}
+"#;
+
+const VM_HARNESS_WITNESS_TYPED_LOCK_LARGE_SIBLING_ACTION: &str = "test_witness_typed_lock_large_sibling";
+
+const VM_HARNESS_WITNESS_TYPED_SHORT_LOCK_PROGRAM: &str = r#"
+module vm_harness_witness_typed_short_lock
+
+action test_witness_typed_short_lock() -> u64 {
+    verification
+        let witness_args = witness::args(0)
+        let lock_field = witness_args.lock
+        if lock_field == Hash::zero() {
+            return 1
+        }
+        return 0
+}
+"#;
+
+const VM_HARNESS_WITNESS_TYPED_SHORT_LOCK_ACTION: &str = "test_witness_typed_short_lock";
 
 const VM_HARNESS_WITNESS_MALFORMED_PROGRAM: &str = r#"
 module vm_harness_witness_malformed
@@ -3418,6 +3449,59 @@ fn cellscript_witness_args_short_lock_is_zero_padded_in_ckb_vm() {
         result.exit_code, result.captured_debug
     );
     assert!(result.cycles > 0, "should consume some cycles");
+}
+
+#[test]
+fn cellscript_typed_witness_args_short_lock_rejects_in_ckb_vm() {
+    let elf = compile_cellscript_source_to_elf(
+        VM_HARNESS_WITNESS_TYPED_SHORT_LOCK_PROGRAM,
+        VM_HARNESS_WITNESS_TYPED_SHORT_LOCK_ACTION,
+        None,
+    );
+
+    let mut fixture = build_simple_fixture(Bytes::default(), 1, 1);
+    fixture.witnesses = vec![molecule_witness_args(Some(&[0u8][..]), None, None)];
+
+    let result = execute_cellscript_script(&elf, &fixture);
+    assert_eq!(
+        result.exit_code,
+        cellscript::runtime_errors::CellScriptRuntimeError::ExactSizeMismatch.code() as i64,
+        "typed WitnessArgsView.lock must reject a non-32-byte field, got exit_code={}, debug={:?}",
+        result.exit_code,
+        result.captured_debug
+    );
+
+    fixture.witnesses = vec![molecule_witness_args(Some(&[0u8; 33][..]), None, None)];
+    let result = execute_cellscript_script(&elf, &fixture);
+    assert_eq!(
+        result.exit_code,
+        cellscript::runtime_errors::CellScriptRuntimeError::ExactSizeMismatch.code() as i64,
+        "typed WitnessArgsView.lock must reject a field wider than 32 bytes with the same exact-size error, got exit_code={}, debug={:?}",
+        result.exit_code,
+        result.captured_debug
+    );
+}
+
+#[test]
+fn cellscript_typed_witness_args_exact_field_streams_past_large_sibling_in_ckb_vm() {
+    let elf = compile_cellscript_source_to_elf(
+        VM_HARNESS_WITNESS_TYPED_LOCK_LARGE_SIBLING_PROGRAM,
+        VM_HARNESS_WITNESS_TYPED_LOCK_LARGE_SIBLING_ACTION,
+        None,
+    );
+
+    let lock = [0x11u8; 32];
+    let input_type = [0x22u8; 700];
+    let mut fixture = build_simple_fixture(Bytes::default(), 1, 1);
+    fixture.witnesses = vec![ckb_packed_witness_args(Some(&lock), Some(&input_type), None)];
+    assert!(fixture.witnesses[0].len() > 512, "fixture must exceed the retired exact-field staging buffer");
+
+    let result = execute_cellscript_script(&elf, &fixture);
+    assert_eq!(
+        result.exit_code, 0,
+        "a fixed 32-byte projection must not depend on the total WitnessArgs size, got exit_code={}, debug={:?}",
+        result.exit_code, result.captured_debug
+    );
 }
 
 #[test]

@@ -65,6 +65,8 @@ pub enum CellScriptRuntimeError {
     MerkleRootMismatch = 64,
     ShiftAmountInvalid = 65,
     SighashAllUnsupported = 66,
+    WitnessFieldAbsent = 67,
+    WitnessBoundExceeded = 68,
 }
 
 impl CellScriptRuntimeError {
@@ -133,6 +135,8 @@ impl CellScriptRuntimeError {
             Self::MerkleRootMismatch => "merkle-root-mismatch",
             Self::ShiftAmountInvalid => "shift-amount-invalid",
             Self::SighashAllUnsupported => "sighash-all-unsupported",
+            Self::WitnessFieldAbsent => "witness-field-absent",
+            Self::WitnessBoundExceeded => "witness-bound-exceeded",
         }
     }
 
@@ -215,6 +219,8 @@ impl CellScriptRuntimeError {
             Self::MerkleRootMismatch => "A bounded Merkle proof did not reconstruct the expected root.",
             Self::ShiftAmountInvalid => "A runtime integer shift amount was greater than or equal to the left operand width.",
             Self::SighashAllUnsupported => "Canonical CKB transaction sighash construction is deferred and cannot produce a digest.",
+            Self::WitnessFieldAbsent => "A requested bounded WitnessArgs field was None instead of a present Bytes value.",
+            Self::WitnessBoundExceeded => "A raw witness or WitnessArgs field exceeded its compile-time maximum byte count.",
         }
     }
 
@@ -315,6 +321,12 @@ impl CellScriptRuntimeError {
             Self::SighashAllUnsupported => {
                 "Use an authenticated standard Lock or an explicit verifier with an independently specified message contract."
             }
+            Self::WitnessFieldAbsent => {
+                "Provide the requested WitnessArgs field as Some(Bytes), including a length prefix for an empty value."
+            }
+            Self::WitnessBoundExceeded => {
+                "Reduce the witness value or raise the source-declared maximum within the supported 64 KiB bound."
+            }
         }
     }
 
@@ -379,6 +391,8 @@ impl CellScriptRuntimeError {
             64 => Some(Self::MerkleRootMismatch),
             65 => Some(Self::ShiftAmountInvalid),
             66 => Some(Self::SighashAllUnsupported),
+            67 => Some(Self::WitnessFieldAbsent),
+            68 => Some(Self::WitnessBoundExceeded),
             _ => None,
         }
     }
@@ -452,6 +466,8 @@ pub const ALL_RUNTIME_ERRORS: &[CellScriptRuntimeError] = &[
     CellScriptRuntimeError::MerkleRootMismatch,
     CellScriptRuntimeError::ShiftAmountInvalid,
     CellScriptRuntimeError::SighashAllUnsupported,
+    CellScriptRuntimeError::WitnessFieldAbsent,
+    CellScriptRuntimeError::WitnessBoundExceeded,
 ];
 
 pub const RESERVED_RUNTIME_ERROR_CODES: &[u64] = &[6, 19, 27, 28, 29, 30, 31];

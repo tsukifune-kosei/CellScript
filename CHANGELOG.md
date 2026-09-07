@@ -114,6 +114,29 @@
   Advance the artifact cache identity to
   `project-source-set-v39-0.30-dev1-runtime-provenance`.
 
+- Add bounded, read-only variable-length witness views with explicit field
+  ownership. `witness::bounded_raw`, `bounded_lock`, `bounded_entry`, and
+  `bounded_output_type` produce `WitnessBytesView<owner,max>` values whose
+  maximum is a compile-time literal in `0..=65536`. The views expose exact
+  `.size`, byte/u32/u64 reads, and full-view streaming CKB Blake2b without a
+  witness-sized allocation. `bounded_entry` names the one
+  `WitnessArgs.input_type` field shared by the `CSARGv1` entry ABI and bounded
+  plan/authorization consumers; it does not create a second payload. Missing
+  fields and values above their declared bound use stable errors 67 and 68.
+  Typed `WitnessArgsView.lock/input_type/output_type` now require and stream an
+  exact 32-byte field regardless of total WitnessArgs or sibling-field size,
+  while the legacy direct helpers retain their historical zero-pad/truncate
+  behavior. CKB-VM tests cover all four owners, fields larger
+  than the old 512-byte helper buffer, `Some(empty)` versus absent fields,
+  malformed Molecule tables, range failures, GroupOutput provenance, and
+  streaming hashes. Metadata schema 70 binds owner, maximum, source, and byte
+  range; compiler metadata validation, including the metadata-only WASM path,
+  and the standalone checker reject their mutation after outer hashes are
+  rebound. The rebuilt browser bundle is 554,564 bytes gzip with SHA-256
+  `e57adc617c36a7946c706d4b4e420d3463d4e97249f343ace84a56fe0df79a39`,
+  within the 600 KiB budget. Advance the artifact cache identity to
+  `project-source-set-v40-0.30-dev1-bounded-witness`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

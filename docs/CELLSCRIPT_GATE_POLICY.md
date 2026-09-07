@@ -283,7 +283,7 @@ CKB-VM execution, deployment, and chain evidence.
 
 ### 0.30 typed CKB runtime-view evidence
 
-The `0.30` development branch advances compile metadata to schema 69 and binds
+The `0.30` development branch advances compile metadata to schema 70 and binds
 `runtime.ckb_runtime_view_contract = cellscript-ckb-runtime-view-v1` plus
 `runtime.ckb_runtime_access_provenance_contract =
 cellscript-ckb-runtime-access-provenance-v1`. The first
