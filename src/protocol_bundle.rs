@@ -390,6 +390,7 @@ pub struct ProtocolArtifactIdentity {
     pub interface_hash: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub schema_contracts: Vec<ProtocolRoleSchemaIdentity>,
+    pub target_profile: String,
     pub target_profile_hash: String,
     pub runtime_abi_hash: String,
     pub exact_handle_receipt: ExactScriptHandleReceipt,
@@ -934,6 +935,7 @@ fn admit_artifact(input: &ProtocolArtifactInput, base: &Path) -> Result<(Protoco
             source_map_hash: report.source_map_hash.clone(),
             interface_hash: metadata.interface_hash.clone(),
             schema_contracts,
+            target_profile: metadata.target_profile.name.clone(),
             target_profile_hash,
             runtime_abi_hash,
             exact_handle_receipt,
@@ -1963,6 +1965,7 @@ mod tests {
             source_map_hash: raw_hash("e"),
             interface_hash,
             schema_contracts: vec![ProtocolRoleSchemaIdentity { type_name: "SharedRecord".to_string(), schema_hash: raw_hash("7") }],
+            target_profile: "ckb".to_string(),
             target_profile_hash,
             runtime_abi_hash,
             exact_handle_receipt,

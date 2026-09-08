@@ -34,8 +34,9 @@ pub use protocol_bundle::{
     protocol_bundle_dry_run_evidence, protocol_bundle_live_resolution_evidence, protocol_bundle_ready_to_sign_evidence,
     protocol_bundle_signed_dry_run_evidence, protocol_bundle_submission_evidence, protocol_bundle_tx_pool_evidence,
     ProtocolBundleCellDepObservation, ProtocolBundleCodeCellDepExpectation, ProtocolBundleCodeCellEvidence,
-    ProtocolBundleConfirmationEvidence, ProtocolBundleDependencyResolutionEvidence, ProtocolBundleDryRunEvidence,
-    ProtocolBundleGroupDryRunEvidence, ProtocolBundleIndexBinding, ProtocolBundleLiveCellObservation, ProtocolBundleLiveInputEvidence,
+    ProtocolBundleConfirmationEvidence, ProtocolBundleDependencyResolutionEvidence, ProtocolBundleDeploymentLineCellEvidence,
+    ProtocolBundleDeploymentLineCellExpectation, ProtocolBundleDryRunEvidence, ProtocolBundleGroupDryRunEvidence,
+    ProtocolBundleIndexBinding, ProtocolBundleLiveCellObservation, ProtocolBundleLiveInputEvidence,
     ProtocolBundleLiveInputExpectation, ProtocolBundleLiveResolutionEvidence, ProtocolBundleMaterializationEvidence,
     ProtocolBundleReadyToSignEvidence, ProtocolBundleScriptGroupEvidence, ProtocolBundleSignedDryRunEvidence,
     ProtocolBundleSignedTransactionEvidence, ProtocolBundleSubmissionEvidence, ProtocolBundleTxPoolEvidence,
@@ -2288,8 +2289,12 @@ fn verify_protocol_bundle_live_dependencies_with_client(
     if consensus.id != live_resolution.network_chain_id || observed_genesis_hash != live_resolution.network_genesis_hash {
         bail!("connected CKB network identity changed after ProtocolBundle live-input resolution");
     }
-    let mut indexes =
-        materialization.code_cell_dep_expectations.iter().map(|expected| expected.transaction_cell_dep_index).collect::<Vec<_>>();
+    let mut indexes = materialization
+        .code_cell_dep_expectations
+        .iter()
+        .map(|expected| expected.transaction_cell_dep_index)
+        .chain(materialization.deployment_line_cell_expectations.iter().map(|expected| expected.transaction_cell_dep_index))
+        .collect::<Vec<_>>();
     indexes.sort_unstable();
     indexes.dedup();
     let transaction_cell_deps = tx.cell_deps();

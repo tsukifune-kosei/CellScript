@@ -113,7 +113,12 @@ positions. The checker binds the current exact receipt to the independently
 admitted artifact and rejects yanked state or any Script, data, out-point, or
 position substitution. The runtime adapter remains responsible for obtaining
 these Cell records from the selected chain and proving both out points are live
-immediately before signing.
+immediately before signing. It now does so in the dependency-resolution stage:
+the node query set is the union of artifact code CellDeps and deployment-line
+admission/code CellDeps, and the ready-to-sign evidence records the number of
+verified deployment-line Cells. The adapter also retains the resolved target
+profile name and independently rejects a missing line or a `data2`/`type`
+profile substitution.
 
 Paths must be relative, must resolve to regular files inside the input
 document's directory, and are read only after byte budgets are checked. The
@@ -331,7 +336,9 @@ The v1 offline report retains the standalone checker report and metadata
 transaction-validation report for every artifact. Generated action-builder
 manifests are admitted and exact selected-action projections are checked.
 For Type-hash lines it also records structurally verified deployment-line
-admission bindings; this state does not replace node liveness evidence.
+admission bindings. Adapter dependency evidence advances those bindings to
+live-node observations without treating the uncommitted node response as final
+chain evidence.
 `transaction_serialization`, `ckb_vm_execution`, and `chain_evidence` remain
 `not-executed`, with no exact transaction hash. This is the Phase 0
 format/threat-model contract plus the builder-contract portion of Phase 1

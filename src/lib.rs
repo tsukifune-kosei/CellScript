@@ -230,7 +230,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v47-0.30-dev5-deployment-line-admission";
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v48-0.30-dev6-live-deployment-line";
 pub const METADATA_SCHEMA_VERSION: u32 = 71;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;

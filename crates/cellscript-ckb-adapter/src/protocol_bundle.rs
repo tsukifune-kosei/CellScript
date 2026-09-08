@@ -26,6 +26,18 @@ const PROTOCOL_BUNDLE_REPORT_SCHEMA: &str = "cellscript-protocol-bundle-report-v
 const PROTOCOL_BUNDLE_SCHEMA: &str = "cellscript-protocol-bundle-v1";
 const PROTOCOL_BUNDLE_HASH_DOMAIN: &str = "cellscript-protocol-bundle-v1";
 const PROTOCOL_BUNDLE_MATERIALIZATION_SCHEMA: &str = "cellscript-protocol-bundle-materialization-v1";
+const DEPLOYMENT_LINE_ADMISSION_EVIDENCE_SCHEMA: &str = "cellscript-deployment-line-admission-evidence-v1";
+const DEPLOYMENT_LINE_RECEIPT_SCHEMA: &str = "cellscript-deployment-line-receipt-v1";
+const DEPLOYMENT_LINE_VALUE_SCHEMA: &str = "cellscript-deployment-line-handle-value-v1";
+const DEPLOYMENT_LINE_HANDLE_ENCODING: &str = "CSLINv1-fixed-386";
+const DEPLOYMENT_LINE_HANDLE_BYTES: usize = 386;
+const DEPLOYMENT_LINE_HANDLE_MAGIC: &[u8; 8] = b"CSLINv1\0";
+const DEPLOYMENT_LINE_HANDLE_STATUS_OFFSET: usize = 10;
+const DEPLOYMENT_LINE_HANDLE_STATUS_ACTIVE: u8 = 0;
+const DEPLOYMENT_LINE_HANDLE_ADMISSION_TYPE_HASH_OFFSET: usize = 152;
+const DEPLOYMENT_LINE_COMMITMENT_MAGIC: &[u8; 7] = b"CSREGv1";
+const CKB_TYPE_ID_CODE_HASH: [u8; 32] =
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b'T', b'Y', b'P', b'E', b'_', b'I', b'D'];
 const MAX_PROTOCOL_BUNDLE_REPORT_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -72,6 +84,18 @@ pub struct ProtocolBundleCodeCellDepExpectation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleDeploymentLineCellExpectation {
+    pub artifact: String,
+    pub cell_role: String,
+    pub transaction_cell_dep_index: u32,
+    pub out_point_tx_hash: String,
+    pub out_point_index: u32,
+    pub lock_script_hash: String,
+    pub type_script_hash: String,
+    pub data_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProtocolBundleMaterializationEvidence {
     pub schema: &'static str,
     pub state: &'static str,
@@ -88,6 +112,7 @@ pub struct ProtocolBundleMaterializationEvidence {
     pub capacity_source: &'static str,
     pub live_input_expectations: Vec<ProtocolBundleLiveInputExpectation>,
     pub code_cell_dep_expectations: Vec<ProtocolBundleCodeCellDepExpectation>,
+    pub deployment_line_cell_expectations: Vec<ProtocolBundleDeploymentLineCellExpectation>,
     pub transaction_serialization: &'static str,
     pub script_groups: Vec<ProtocolBundleScriptGroupEvidence>,
     pub ckb_vm_execution: &'static str,
@@ -182,6 +207,19 @@ pub struct ProtocolBundleCodeCellEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtocolBundleDeploymentLineCellEvidence {
+    pub artifact: String,
+    pub cell_role: String,
+    pub transaction_cell_dep_index: u32,
+    pub out_point_tx_hash: String,
+    pub out_point_index: u32,
+    pub lock_script_hash: String,
+    pub type_script_hash: String,
+    pub data_hash: String,
+    pub status: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProtocolBundleDependencyResolutionEvidence {
     pub schema: &'static str,
     pub state: &'static str,
@@ -192,7 +230,9 @@ pub struct ProtocolBundleDependencyResolutionEvidence {
     pub network_chain_id: String,
     pub network_genesis_hash: String,
     pub cell_deps: Vec<ProtocolBundleCodeCellEvidence>,
+    pub deployment_line_cells: Vec<ProtocolBundleDeploymentLineCellEvidence>,
     pub artifact_count: usize,
+    pub deployment_line_count: usize,
     pub unique_cell_dep_count: usize,
     pub chain_evidence: &'static str,
 }
@@ -209,6 +249,7 @@ pub struct ProtocolBundleReadyToSignEvidence {
     pub network_genesis_hash: String,
     pub live_input_count: usize,
     pub verified_artifact_dependency_count: usize,
+    pub verified_deployment_line_cell_count: usize,
     pub signing_authority: &'static str,
     pub chain_evidence: &'static str,
 }
@@ -316,9 +357,50 @@ struct BundleWire {
     schema: String,
     network: NetworkWire,
     artifacts: Vec<ArtifactWire>,
+    #[serde(default)]
+    deployment_lines: Vec<DeploymentLineAdmissionWire>,
     transaction: TransactionWire,
     #[serde(default)]
     roles: Vec<RoleWire>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeploymentLineAdmissionWire {
+    schema: String,
+    version: u32,
+    artifact: String,
+    receipt: DeploymentLineReceiptWire,
+    handle: DeploymentLineHandleWire,
+    admission_cell: DeploymentLineCellWire,
+    admission_cell_data: String,
+    admission_cell_dep_index: u32,
+    code_cell: DeploymentLineCellWire,
+    code_cell_dep_index: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeploymentLineReceiptWire {
+    schema: String,
+    version: u32,
+    status: String,
+    admission_cell_type_hash: String,
+    stable_script: ScriptWire,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeploymentLineHandleWire {
+    schema: String,
+    version: u32,
+    encoding: String,
+    encoded: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeploymentLineCellWire {
+    out_point: OutPointWire,
+    lock: ScriptWire,
+    type_script: ScriptWire,
+    data_hash: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -335,6 +417,7 @@ struct ArtifactWire {
     script_role: ScriptRoleWire,
     deployment: DeploymentWire,
     artifact_hash: String,
+    target_profile: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -469,7 +552,7 @@ pub fn materialize_protocol_bundle_report(bytes: &[u8]) -> Result<(TransactionVi
     if bundle.artifacts.len() < 2 {
         bail!("ProtocolBundle materialization requires at least two artifacts");
     }
-    validate_evidence_coverage(&report.evidence, &bundle.artifacts)?;
+    validate_evidence_coverage(&report.evidence, &bundle)?;
     if bundle.transaction.version != 0 {
         bail!("ProtocolBundle materialization supports only transaction version 0");
     }
@@ -485,6 +568,7 @@ pub fn materialize_protocol_bundle_report(bytes: &[u8]) -> Result<(TransactionVi
     let raw_transaction_hash = format!("0x{}", hex::encode(tx.hash().as_slice()));
     let script_groups = resolve_script_groups(&bundle, &serialized_transaction_hash)?;
     let code_cell_dep_expectations = resolve_code_cell_dep_expectations(&bundle)?;
+    let deployment_line_cell_expectations = resolve_deployment_line_admission_expectations(&bundle, &code_cell_dep_expectations)?;
 
     Ok((
         tx,
@@ -504,6 +588,7 @@ pub fn materialize_protocol_bundle_report(bytes: &[u8]) -> Result<(TransactionVi
             capacity_source: "bundle-skeleton-not-live-resolved",
             live_input_expectations: capacities.live_input_expectations,
             code_cell_dep_expectations,
+            deployment_line_cell_expectations,
             transaction_serialization: "verified",
             script_groups,
             ckb_vm_execution: "not-executed",
@@ -612,8 +697,12 @@ pub fn protocol_bundle_dependency_resolution_evidence(
     validate_materialized_transaction(tx, materialization, "dependency resolution")?;
     validate_live_resolution_binding(materialization, live_resolution)?;
 
-    let expected_indexes =
-        materialization.code_cell_dep_expectations.iter().map(|expected| expected.transaction_cell_dep_index).collect::<HashSet<_>>();
+    let expected_indexes = materialization
+        .code_cell_dep_expectations
+        .iter()
+        .map(|expected| expected.transaction_cell_dep_index)
+        .chain(materialization.deployment_line_cell_expectations.iter().map(|expected| expected.transaction_cell_dep_index))
+        .collect::<HashSet<_>>();
     let mut observed_by_index = HashMap::with_capacity(observations.len());
     for observation in observations {
         if observed_by_index.insert(observation.transaction_cell_dep_index, observation).is_some() {
@@ -704,6 +793,69 @@ pub fn protocol_bundle_dependency_resolution_evidence(
         });
     }
     cell_deps.sort_by(|left, right| left.artifact.cmp(&right.artifact));
+    let mut deployment_line_cells = Vec::with_capacity(materialization.deployment_line_cell_expectations.len());
+    for expected in &materialization.deployment_line_cell_expectations {
+        let observation = observed_by_index.get(&expected.transaction_cell_dep_index).ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing live CellDep observation for deployment-line artifact '{}' {} Cell",
+                expected.artifact,
+                expected.cell_role
+            )
+        })?;
+        if !observation.dep_group_members.is_empty() {
+            bail!("deployment-line artifact '{}' {} Cell must be a direct CellDep", expected.artifact, expected.cell_role);
+        }
+        let transaction_dep = transaction_cell_deps.get(expected.transaction_cell_dep_index as usize).ok_or_else(|| {
+            anyhow::anyhow!(
+                "deployment-line artifact '{}' {} CellDep index is outside the materialized transaction",
+                expected.artifact,
+                expected.cell_role
+            )
+        })?;
+        let (transaction_tx_hash, transaction_index) = out_point_identity(&transaction_dep.out_point());
+        if dep_type_name(transaction_dep.dep_type())? != "code"
+            || transaction_tx_hash != expected.out_point_tx_hash
+            || transaction_index != expected.out_point_index
+        {
+            bail!(
+                "deployment-line artifact '{}' {} CellDep expectation differs from the materialized transaction",
+                expected.artifact,
+                expected.cell_role
+            );
+        }
+        let (observed_tx_hash, observed_index) = out_point_identity(&observation.root.out_point);
+        let observed_lock_hash = format!("0x{}", hex::encode(observation.root.output.lock().calc_script_hash().as_slice()));
+        let observed_type_hash =
+            observation.root.output.type_().to_opt().map(|script| format!("0x{}", hex::encode(script.calc_script_hash().as_slice())));
+        let observed_data_hash = hash_hex(&observation.root.data);
+        if observed_tx_hash != expected.out_point_tx_hash
+            || observed_index != expected.out_point_index
+            || observed_lock_hash != expected.lock_script_hash
+            || observed_type_hash.as_deref() != Some(expected.type_script_hash.as_str())
+            || observed_data_hash != expected.data_hash
+        {
+            bail!(
+                "deployment-line artifact '{}' live {} Cell differs from the bound admission evidence",
+                expected.artifact,
+                expected.cell_role
+            );
+        }
+        deployment_line_cells.push(ProtocolBundleDeploymentLineCellEvidence {
+            artifact: expected.artifact.clone(),
+            cell_role: expected.cell_role.clone(),
+            transaction_cell_dep_index: expected.transaction_cell_dep_index,
+            out_point_tx_hash: observed_tx_hash,
+            out_point_index: observed_index,
+            lock_script_hash: observed_lock_hash,
+            type_script_hash: observed_type_hash.expect("checked deployment-line Type Script"),
+            data_hash: observed_data_hash,
+            status: "live-deployment-line-cell-verified",
+        });
+    }
+    deployment_line_cells.sort_by(|left, right| {
+        (left.artifact.as_str(), left.cell_role.as_str()).cmp(&(right.artifact.as_str(), right.cell_role.as_str()))
+    });
+    let deployment_line_count = deployment_line_cells.iter().map(|cell| cell.artifact.as_str()).collect::<HashSet<_>>().len();
     Ok(ProtocolBundleDependencyResolutionEvidence {
         schema: "cellscript-protocol-bundle-dependency-resolution-v1",
         state: "LiveDependenciesResolvedProtocolBundleTx",
@@ -714,9 +866,11 @@ pub fn protocol_bundle_dependency_resolution_evidence(
         network_chain_id: live_resolution.network_chain_id.clone(),
         network_genesis_hash: live_resolution.network_genesis_hash.clone(),
         artifact_count: cell_deps.len(),
+        deployment_line_count,
         unique_cell_dep_count: expected_indexes.len(),
         cell_deps,
-        chain_evidence: "live-input-and-code-cell-resolution-uncommitted",
+        deployment_line_cells,
+        chain_evidence: "live-input-code-and-deployment-line-cell-resolution-uncommitted",
     })
 }
 
@@ -742,8 +896,9 @@ pub fn protocol_bundle_ready_to_sign_evidence(
         network_genesis_hash: materialization.network_genesis_hash.clone(),
         live_input_count: live_resolution.inputs.len(),
         verified_artifact_dependency_count: dependency_resolution.cell_deps.len(),
+        verified_deployment_line_cell_count: dependency_resolution.deployment_line_cells.len(),
         signing_authority: "adapter-supplied-sdk-unlockers",
-        chain_evidence: "live-input-and-code-cell-resolution-uncommitted",
+        chain_evidence: "live-input-code-and-deployment-line-cell-resolution-uncommitted",
     })
 }
 
@@ -1119,6 +1274,13 @@ fn validate_dependency_resolution_binding(
         .code_cell_dep_expectations
         .iter()
         .map(|expected| expected.transaction_cell_dep_index)
+        .chain(materialization.deployment_line_cell_expectations.iter().map(|expected| expected.transaction_cell_dep_index))
+        .collect::<HashSet<_>>()
+        .len();
+    let expected_line_count = materialization
+        .deployment_line_cell_expectations
+        .iter()
+        .map(|expected| expected.artifact.as_str())
         .collect::<HashSet<_>>()
         .len();
     if dependency_resolution.schema != "cellscript-protocol-bundle-dependency-resolution-v1"
@@ -1130,8 +1292,10 @@ fn validate_dependency_resolution_binding(
         || dependency_resolution.network_chain_id != materialization.network_chain_id
         || dependency_resolution.network_genesis_hash != materialization.network_genesis_hash
         || dependency_resolution.artifact_count != materialization.code_cell_dep_expectations.len()
+        || dependency_resolution.deployment_line_count != expected_line_count
         || dependency_resolution.unique_cell_dep_count != expected_unique_count
         || dependency_resolution.cell_deps.len() != materialization.code_cell_dep_expectations.len()
+        || dependency_resolution.deployment_line_cells.len() != materialization.deployment_line_cell_expectations.len()
     {
         bail!("ProtocolBundle dependency evidence is not bound to the materialized transaction");
     }
@@ -1153,6 +1317,33 @@ fn validate_dependency_resolution_binding(
                     || observed.resolved_code_out_point_index != observed.root_out_point_index))
         {
             bail!("ProtocolBundle dependency evidence for artifact '{}' is inconsistent", expected.artifact);
+        }
+    }
+    for expected in &materialization.deployment_line_cell_expectations {
+        let Some(observed) = dependency_resolution
+            .deployment_line_cells
+            .iter()
+            .find(|observed| observed.artifact == expected.artifact && observed.cell_role == expected.cell_role)
+        else {
+            bail!(
+                "ProtocolBundle dependency evidence is missing deployment-line artifact '{}' {} Cell",
+                expected.artifact,
+                expected.cell_role
+            );
+        };
+        if observed.transaction_cell_dep_index != expected.transaction_cell_dep_index
+            || observed.out_point_tx_hash != expected.out_point_tx_hash
+            || observed.out_point_index != expected.out_point_index
+            || observed.lock_script_hash != expected.lock_script_hash
+            || observed.type_script_hash != expected.type_script_hash
+            || observed.data_hash != expected.data_hash
+            || observed.status != "live-deployment-line-cell-verified"
+        {
+            bail!(
+                "ProtocolBundle dependency evidence for deployment-line artifact '{}' {} Cell is inconsistent",
+                expected.artifact,
+                expected.cell_role
+            );
         }
     }
     Ok(())
@@ -1250,9 +1441,9 @@ fn validate_report_boundary(report: &ReportWire) -> Result<()> {
     Ok(())
 }
 
-fn validate_evidence_coverage(evidence: &Value, artifacts: &[ArtifactWire]) -> Result<()> {
-    let artifact_ids = artifacts.iter().map(|artifact| artifact.id.as_str()).collect::<HashSet<_>>();
-    if artifact_ids.len() != artifacts.len() {
+fn validate_evidence_coverage(evidence: &Value, bundle: &BundleWire) -> Result<()> {
+    let artifact_ids = bundle.artifacts.iter().map(|artifact| artifact.id.as_str()).collect::<HashSet<_>>();
+    if artifact_ids.len() != bundle.artifacts.len() {
         bail!("resolved ProtocolBundle contains duplicate artifact identities");
     }
     let admissions = evidence
@@ -1263,10 +1454,10 @@ fn validate_evidence_coverage(evidence: &Value, artifacts: &[ArtifactWire]) -> R
         .get("metadata_transaction_validation")
         .and_then(Value::as_object)
         .ok_or_else(|| anyhow::anyhow!("ProtocolBundle report is missing metadata transaction validation evidence"))?;
-    if admissions.len() != artifacts.len() || validations.len() != artifacts.len() {
+    if admissions.len() != bundle.artifacts.len() || validations.len() != bundle.artifacts.len() {
         bail!("ProtocolBundle evidence does not cover every selected artifact exactly once");
     }
-    for artifact in artifacts {
+    for artifact in &bundle.artifacts {
         let admission = admissions
             .get(&artifact.id)
             .ok_or_else(|| anyhow::anyhow!("artifact '{}' is missing standalone admission evidence", artifact.id))?;
@@ -1285,6 +1476,22 @@ fn validate_evidence_coverage(evidence: &Value, artifacts: &[ArtifactWire]) -> R
         || validations.keys().any(|id| !artifact_ids.contains(id.as_str()))
     {
         bail!("ProtocolBundle evidence contains an unknown artifact identity");
+    }
+    let expected_lines = bundle.deployment_lines.iter().map(|line| line.artifact.as_str()).collect::<HashSet<_>>();
+    let line_admissions = evidence.get("deployment_line_admission").and_then(Value::as_object);
+    if expected_lines.is_empty() {
+        if line_admissions.is_some_and(|admissions| !admissions.is_empty()) {
+            bail!("ProtocolBundle evidence contains deployment-line admission without a bound line");
+        }
+    } else {
+        let line_admissions = line_admissions
+            .ok_or_else(|| anyhow::anyhow!("ProtocolBundle report is missing deployment-line admission verification"))?;
+        if line_admissions.len() != expected_lines.len()
+            || expected_lines.iter().any(|artifact| line_admissions.get(*artifact).and_then(Value::as_str) != Some("verified"))
+            || line_admissions.keys().any(|artifact| !expected_lines.contains(artifact.as_str()))
+        {
+            bail!("ProtocolBundle deployment-line evidence does not cover every selected line exactly once");
+        }
     }
     Ok(())
 }
@@ -1407,6 +1614,19 @@ fn resolve_code_cell_dep_expectations(bundle: &BundleWire) -> Result<Vec<Protoco
             bail!("artifact '{}' deployment hash differs from its admitted artifact hash", artifact.id);
         }
         let script = parse_script(&format!("artifact '{}'.deployment.script", artifact.id), &artifact.deployment.script)?;
+        let expected_hash_type = match artifact.target_profile.as_str() {
+            "ckb" => "data2",
+            "ckb-type-hash" => "type",
+            other => bail!("artifact '{}' has unsupported CKB target profile '{other}'", artifact.id),
+        };
+        if artifact.deployment.script.hash_type != expected_hash_type {
+            bail!(
+                "artifact '{}' target profile '{}' requires deployment hash_type '{}'",
+                artifact.id,
+                artifact.target_profile,
+                expected_hash_type
+            );
+        }
         let script_code_hash = format!("0x{}", hex::encode(script.code_hash().as_slice()));
         let artifact_hash = format!("0x{}", hex::encode(artifact_hash));
         if artifact.deployment.script.hash_type != "type" && script_code_hash != artifact_hash {
@@ -1430,6 +1650,147 @@ fn resolve_code_cell_dep_expectations(bundle: &BundleWire) -> Result<Vec<Protoco
     }
     expectations.sort_by(|left, right| left.artifact.cmp(&right.artifact));
     Ok(expectations)
+}
+
+fn resolve_deployment_line_admission_expectations(
+    bundle: &BundleWire,
+    code_expectations: &[ProtocolBundleCodeCellDepExpectation],
+) -> Result<Vec<ProtocolBundleDeploymentLineCellExpectation>> {
+    let required_artifacts = bundle
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.target_profile == "ckb-type-hash")
+        .map(|artifact| artifact.id.as_str())
+        .collect::<HashSet<_>>();
+    let supplied_artifacts = bundle.deployment_lines.iter().map(|line| line.artifact.as_str()).collect::<HashSet<_>>();
+    if required_artifacts != supplied_artifacts || supplied_artifacts.len() != bundle.deployment_lines.len() {
+        bail!("resolved ProtocolBundle must carry exactly one deployment-line admission for every ckb-type-hash artifact");
+    }
+    let mut expectations = Vec::with_capacity(bundle.deployment_lines.len() * 2);
+    let mut artifacts = HashSet::new();
+    for line in &bundle.deployment_lines {
+        if line.schema != DEPLOYMENT_LINE_ADMISSION_EVIDENCE_SCHEMA || line.version != 1 {
+            bail!("deployment-line artifact '{}' has an unsupported admission evidence schema/version", line.artifact);
+        }
+        if !artifacts.insert(line.artifact.as_str()) {
+            bail!("deployment-line artifact '{}' has duplicate admission evidence", line.artifact);
+        }
+        if line.receipt.schema != DEPLOYMENT_LINE_RECEIPT_SCHEMA || line.receipt.version != 1 || line.receipt.status != "active" {
+            bail!("deployment-line artifact '{}' does not carry an active supported receipt", line.artifact);
+        }
+        if line.handle.schema != DEPLOYMENT_LINE_VALUE_SCHEMA
+            || line.handle.version != 1
+            || line.handle.encoding != DEPLOYMENT_LINE_HANDLE_ENCODING
+        {
+            bail!("deployment-line artifact '{}' has an unsupported handle schema/version/encoding", line.artifact);
+        }
+        let handle = parse_hex(&format!("deployment-line artifact '{}'.handle", line.artifact), &line.handle.encoded)?;
+        if handle.len() != DEPLOYMENT_LINE_HANDLE_BYTES {
+            bail!("deployment-line artifact '{}' handle must contain exactly {DEPLOYMENT_LINE_HANDLE_BYTES} bytes", line.artifact);
+        }
+        let admission_type_hash = require_hash32(
+            &format!("deployment-line artifact '{}'.receipt.admission_cell_type_hash", line.artifact),
+            &line.receipt.admission_cell_type_hash,
+        )?;
+        if &handle[..DEPLOYMENT_LINE_HANDLE_MAGIC.len()] != DEPLOYMENT_LINE_HANDLE_MAGIC
+            || handle[DEPLOYMENT_LINE_HANDLE_STATUS_OFFSET] != DEPLOYMENT_LINE_HANDLE_STATUS_ACTIVE
+            || handle[DEPLOYMENT_LINE_HANDLE_ADMISSION_TYPE_HASH_OFFSET..DEPLOYMENT_LINE_HANDLE_ADMISSION_TYPE_HASH_OFFSET + 32]
+                != admission_type_hash
+        {
+            bail!("deployment-line artifact '{}' fixed handle header disagrees with its active admission receipt", line.artifact);
+        }
+        let admission_data =
+            parse_hex(&format!("deployment-line artifact '{}'.admission_cell_data", line.artifact), &line.admission_cell_data)?;
+        let mut expected_admission_data = Vec::with_capacity(DEPLOYMENT_LINE_COMMITMENT_MAGIC.len() + 32);
+        expected_admission_data.extend_from_slice(DEPLOYMENT_LINE_COMMITMENT_MAGIC);
+        expected_admission_data.extend_from_slice(&blake2b_256(&handle));
+        if admission_data != expected_admission_data {
+            bail!("deployment-line artifact '{}' admission data does not commit the full line handle", line.artifact);
+        }
+
+        let artifact = bundle
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.id == line.artifact)
+            .ok_or_else(|| anyhow::anyhow!("deployment-line admission references unknown artifact '{}'", line.artifact))?;
+        if artifact.deployment.script != line.receipt.stable_script {
+            bail!("deployment-line artifact '{}' stable Script differs from the admitted deployment", line.artifact);
+        }
+        let code_expectation = code_expectations
+            .iter()
+            .find(|expected| expected.artifact == line.artifact)
+            .ok_or_else(|| anyhow::anyhow!("deployment-line artifact '{}' has no code CellDep expectation", line.artifact))?;
+        if code_expectation.dep_type != "code"
+            || code_expectation.transaction_cell_dep_index != line.code_cell_dep_index
+            || line.code_cell.out_point != artifact.deployment.code_cell_dep.out_point
+            || line.code_cell.data_hash != artifact.artifact_hash
+        {
+            bail!("deployment-line artifact '{}' code Cell evidence differs from the admitted direct code CellDep", line.artifact);
+        }
+
+        let admission = deployment_line_cell_expectation(
+            bundle,
+            &line.artifact,
+            "admission",
+            line.admission_cell_dep_index,
+            &line.admission_cell,
+        )?;
+        if admission.type_script_hash != line.receipt.admission_cell_type_hash || admission.data_hash != hash_hex(&admission_data) {
+            bail!("deployment-line artifact '{}' admission Cell identity or data differs from its receipt", line.artifact);
+        }
+        let code = deployment_line_cell_expectation(bundle, &line.artifact, "code", line.code_cell_dep_index, &line.code_cell)?;
+        if code.type_script_hash != code_expectation.script_code_hash || code.data_hash != code_expectation.artifact_hash {
+            bail!("deployment-line artifact '{}' code Cell identity or data differs from its checked ELF", line.artifact);
+        }
+        if admission.transaction_cell_dep_index == code.transaction_cell_dep_index
+            || admission.type_script_hash == code.type_script_hash
+            || line.admission_cell.out_point == line.code_cell.out_point
+        {
+            bail!("deployment-line artifact '{}' admission and code Cells are not distinct", line.artifact);
+        }
+        expectations.push(admission);
+        expectations.push(code);
+    }
+    expectations.sort_by(|left, right| {
+        (left.artifact.as_str(), left.cell_role.as_str()).cmp(&(right.artifact.as_str(), right.cell_role.as_str()))
+    });
+    Ok(expectations)
+}
+
+fn deployment_line_cell_expectation(
+    bundle: &BundleWire,
+    artifact: &str,
+    cell_role: &str,
+    transaction_cell_dep_index: u32,
+    cell: &DeploymentLineCellWire,
+) -> Result<ProtocolBundleDeploymentLineCellExpectation> {
+    let cell_dep = bundle.transaction.cell_deps.get(transaction_cell_dep_index as usize).ok_or_else(|| {
+        anyhow::anyhow!("deployment-line artifact '{artifact}' {cell_role} CellDep index is outside the transaction")
+    })?;
+    if cell_dep.dep_type != "code" || cell_dep.out_point != cell.out_point {
+        bail!("deployment-line artifact '{artifact}' {cell_role} Cell evidence differs from its direct transaction CellDep");
+    }
+    let lock = parse_script(&format!("deployment-line artifact '{artifact}'.{cell_role}_cell.lock"), &cell.lock)?;
+    let type_script = parse_script(&format!("deployment-line artifact '{artifact}'.{cell_role}_cell.type_script"), &cell.type_script)?;
+    let type_args =
+        parse_hex(&format!("deployment-line artifact '{artifact}'.{cell_role}_cell.type_script.args"), &cell.type_script.args)?;
+    if cell.type_script.code_hash != format!("0x{}", hex::encode(CKB_TYPE_ID_CODE_HASH))
+        || cell.type_script.hash_type != "type"
+        || type_args.len() != 32
+    {
+        bail!("deployment-line artifact '{artifact}' {cell_role} Cell must use the built-in CKB TYPE_ID Script");
+    }
+    let data_hash = parse_raw_hash32(&format!("deployment-line artifact '{artifact}'.{cell_role}_cell.data_hash"), &cell.data_hash)?;
+    Ok(ProtocolBundleDeploymentLineCellExpectation {
+        artifact: artifact.to_string(),
+        cell_role: cell_role.to_string(),
+        transaction_cell_dep_index,
+        out_point_tx_hash: cell.out_point.tx_hash.clone(),
+        out_point_index: cell.out_point.index,
+        lock_script_hash: format!("0x{}", hex::encode(lock.calc_script_hash().as_slice())),
+        type_script_hash: format!("0x{}", hex::encode(type_script.calc_script_hash().as_slice())),
+        data_hash: format!("0x{}", hex::encode(data_hash)),
+    })
 }
 
 fn resolve_script_groups(bundle: &BundleWire, transaction_bytes_hash: &str) -> Result<Vec<ProtocolBundleScriptGroupEvidence>> {
@@ -1711,6 +2072,7 @@ mod tests {
                     "lowering_record_hash": "4".repeat(64),
                     "source_map_hash": "5".repeat(64),
                     "interface_hash": "6".repeat(64),
+                    "target_profile": "ckb",
                     "target_profile_hash": "7".repeat(64),
                     "verified_bundle_id": "8".repeat(64),
                 },
@@ -1735,6 +2097,7 @@ mod tests {
                     "lowering_record_hash": "c".repeat(64),
                     "source_map_hash": "d".repeat(64),
                     "interface_hash": "e".repeat(64),
+                    "target_profile": "ckb",
                     "target_profile_hash": "7".repeat(64),
                     "builder_manifest_hash": "f".repeat(64),
                     "verified_bundle_id": "0".repeat(64),
@@ -1834,6 +2197,14 @@ mod tests {
         }
     }
 
+    fn packed_script_value(script: &Script, hash_type: &str) -> Value {
+        serde_json::json!({
+            "code_hash": format!("0x{}", hex::encode(script.code_hash().as_slice())),
+            "hash_type": hash_type,
+            "args": format!("0x{}", hex::encode(script.args().raw_data())),
+        })
+    }
+
     #[test]
     fn materializes_exact_bytes_and_group_relative_indexes() {
         let report = report();
@@ -1925,18 +2296,6 @@ mod tests {
         let mut report = report();
         bind_artifact_to_code_data(&mut report, 0, &auth_code);
         bind_artifact_to_code_data(&mut report, 1, &token_code);
-        let code_type_script = Script::new_builder()
-            .code_hash([0x77u8; 32].pack())
-            .hash_type(ScriptHashType::Data1)
-            .args(Bytes::from_static(b"code-type").pack())
-            .build();
-        let type_code_hash = format!("0x{}", hex::encode(code_type_script.calc_script_hash().as_slice()));
-        report["bundle"]["artifacts"][1]["deployment"]["script"]["code_hash"] = Value::String(type_code_hash.clone());
-        report["bundle"]["artifacts"][1]["deployment"]["script"]["hash_type"] = Value::String("type".to_string());
-        report["bundle"]["transaction"]["inputs"][0]["type"]["code_hash"] = Value::String(type_code_hash.clone());
-        report["bundle"]["transaction"]["inputs"][0]["type"]["hash_type"] = Value::String("type".to_string());
-        report["bundle"]["transaction"]["outputs"][0]["type"]["code_hash"] = Value::String(type_code_hash);
-        report["bundle"]["transaction"]["outputs"][0]["type"]["hash_type"] = Value::String("type".to_string());
         report["bundle"]["artifacts"][1]["deployment"]["code_cell_dep"]["dep_type"] = Value::String("dep_group".to_string());
         report["bundle"]["transaction"]["cell_deps"][1]["dep_type"] = Value::String("dep_group".to_string());
         rebind_bundle_hash(&mut report);
@@ -1982,7 +2341,7 @@ mod tests {
                 },
                 dep_group_members: vec![ProtocolBundleLiveCellObservation {
                     out_point: dep_group_member_out_point,
-                    output: code_cell_output.as_builder().type_(Some(code_type_script).pack()).build(),
+                    output: code_cell_output,
                     data: token_code,
                 }],
             },
@@ -2108,5 +2467,166 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("admitted ELF is absent"), "{error}");
+    }
+
+    #[test]
+    fn live_dependency_resolution_binds_type_id_admission_and_code_cells_before_signing() {
+        let auth_code = Bytes::from_static(b"auth-elf");
+        let token_code = Bytes::from_static(b"token-type-hash-elf");
+        let mut report = report();
+        bind_artifact_to_code_data(&mut report, 0, &auth_code);
+        bind_artifact_to_code_data(&mut report, 1, &token_code);
+
+        let code_type_script = Script::new_builder()
+            .code_hash(CKB_TYPE_ID_CODE_HASH.pack())
+            .hash_type(ScriptHashType::Type)
+            .args(Bytes::from(vec![0x41u8; 32]).pack())
+            .build();
+        let admission_type_script = Script::new_builder()
+            .code_hash(CKB_TYPE_ID_CODE_HASH.pack())
+            .hash_type(ScriptHashType::Type)
+            .args(Bytes::from(vec![0x42u8; 32]).pack())
+            .build();
+        let code_type_hash = format!("0x{}", hex::encode(code_type_script.calc_script_hash().as_slice()));
+        let admission_type_hash = format!("0x{}", hex::encode(admission_type_script.calc_script_hash().as_slice()));
+        report["bundle"]["artifacts"][1]["deployment"]["script"]["code_hash"] = Value::String(code_type_hash.clone());
+        report["bundle"]["artifacts"][1]["deployment"]["script"]["hash_type"] = Value::String("type".to_string());
+        report["bundle"]["artifacts"][1]["target_profile"] = Value::String("ckb-type-hash".to_string());
+        for location in ["inputs", "outputs"] {
+            report["bundle"]["transaction"][location][0]["type"]["code_hash"] = Value::String(code_type_hash.clone());
+            report["bundle"]["transaction"][location][0]["type"]["hash_type"] = Value::String("type".to_string());
+        }
+
+        let admission_dep = serde_json::json!({
+            "out_point": { "tx_hash": format!("0x{}", "5a".repeat(32)), "index": 1 },
+            "dep_type": "code",
+        });
+        report["bundle"]["transaction"]["cell_deps"].as_array_mut().unwrap().push(admission_dep.clone());
+        let mut handle = vec![0u8; DEPLOYMENT_LINE_HANDLE_BYTES];
+        handle[..DEPLOYMENT_LINE_HANDLE_MAGIC.len()].copy_from_slice(DEPLOYMENT_LINE_HANDLE_MAGIC);
+        handle[DEPLOYMENT_LINE_HANDLE_STATUS_OFFSET] = DEPLOYMENT_LINE_HANDLE_STATUS_ACTIVE;
+        handle[DEPLOYMENT_LINE_HANDLE_ADMISSION_TYPE_HASH_OFFSET..DEPLOYMENT_LINE_HANDLE_ADMISSION_TYPE_HASH_OFFSET + 32]
+            .copy_from_slice(admission_type_script.calc_script_hash().as_slice());
+        let mut admission_data = Vec::from(DEPLOYMENT_LINE_COMMITMENT_MAGIC);
+        admission_data.extend_from_slice(&blake2b_256(&handle));
+        let code_lock = script("a");
+        let admission_lock = script("b");
+        let token_dep = report["bundle"]["artifacts"][1]["deployment"]["code_cell_dep"].clone();
+        report["bundle"]["deployment_lines"] = serde_json::json!([{
+            "schema": DEPLOYMENT_LINE_ADMISSION_EVIDENCE_SCHEMA,
+            "version": 1,
+            "artifact": "token",
+            "receipt": {
+                "schema": DEPLOYMENT_LINE_RECEIPT_SCHEMA,
+                "version": 1,
+                "status": "active",
+                "admission_cell_type_hash": admission_type_hash,
+                "stable_script": report["bundle"]["artifacts"][1]["deployment"]["script"].clone(),
+            },
+            "handle": {
+                "schema": DEPLOYMENT_LINE_VALUE_SCHEMA,
+                "version": 1,
+                "encoding": DEPLOYMENT_LINE_HANDLE_ENCODING,
+                "encoded": format!("0x{}", hex::encode(&handle)),
+            },
+            "admission_cell": {
+                "out_point": admission_dep["out_point"].clone(),
+                "lock": admission_lock.clone(),
+                "type_script": packed_script_value(&admission_type_script, "type"),
+                "data_hash": hex::encode(blake2b_256(&admission_data)),
+            },
+            "admission_cell_data": format!("0x{}", hex::encode(&admission_data)),
+            "admission_cell_dep_index": 2,
+            "code_cell": {
+                "out_point": token_dep["out_point"].clone(),
+                "lock": code_lock.clone(),
+                "type_script": packed_script_value(&code_type_script, "type"),
+                "data_hash": hex::encode(blake2b_256(&token_code)),
+            },
+            "code_cell_dep_index": 1,
+        }]);
+        report["evidence"]["deployment_line_admission"] = serde_json::json!({ "token": "verified" });
+        rebind_bundle_hash(&mut report);
+
+        let (transaction, materialization) = materialize_protocol_bundle_report(&serde_json::to_vec(&report).unwrap()).unwrap();
+        assert_eq!(materialization.deployment_line_cell_expectations.len(), 2);
+        let input_lock: ScriptWire = serde_json::from_value(report["bundle"]["transaction"]["inputs"][0]["lock"].clone()).unwrap();
+        let input_type: ScriptWire = serde_json::from_value(report["bundle"]["transaction"]["inputs"][0]["type"].clone()).unwrap();
+        let live_input = CellOutput::new_builder()
+            .capacity(120_000_000_000u64)
+            .lock(parse_script("live.lock", &input_lock).unwrap())
+            .type_(Some(parse_script("live.type", &input_type).unwrap()).pack())
+            .build();
+        let live_resolution = protocol_bundle_live_resolution_evidence(
+            &transaction,
+            &materialization,
+            "ckb-testnet",
+            &format!("0x{}", "0".repeat(64)),
+            &[(live_input, Bytes::new())],
+        )
+        .unwrap();
+        let auth_lock: ScriptWire = serde_json::from_value(report["bundle"]["transaction"]["inputs"][0]["lock"].clone()).unwrap();
+        let code_lock: ScriptWire = serde_json::from_value(code_lock).unwrap();
+        let admission_lock: ScriptWire = serde_json::from_value(admission_lock).unwrap();
+        let deps = transaction.cell_deps();
+        let observations = vec![
+            ProtocolBundleCellDepObservation {
+                transaction_cell_dep_index: 0,
+                root: ProtocolBundleLiveCellObservation {
+                    out_point: deps.get(0).unwrap().out_point(),
+                    output: CellOutput::new_builder().capacity(1_000u64).lock(parse_script("auth.lock", &auth_lock).unwrap()).build(),
+                    data: auth_code,
+                },
+                dep_group_members: Vec::new(),
+            },
+            ProtocolBundleCellDepObservation {
+                transaction_cell_dep_index: 1,
+                root: ProtocolBundleLiveCellObservation {
+                    out_point: deps.get(1).unwrap().out_point(),
+                    output: CellOutput::new_builder()
+                        .capacity(1_000u64)
+                        .lock(parse_script("code.lock", &code_lock).unwrap())
+                        .type_(Some(code_type_script).pack())
+                        .build(),
+                    data: token_code,
+                },
+                dep_group_members: Vec::new(),
+            },
+            ProtocolBundleCellDepObservation {
+                transaction_cell_dep_index: 2,
+                root: ProtocolBundleLiveCellObservation {
+                    out_point: deps.get(2).unwrap().out_point(),
+                    output: CellOutput::new_builder()
+                        .capacity(1_000u64)
+                        .lock(parse_script("admission.lock", &admission_lock).unwrap())
+                        .type_(Some(admission_type_script).pack())
+                        .build(),
+                    data: Bytes::from(admission_data),
+                },
+                dep_group_members: Vec::new(),
+            },
+        ];
+        let evidence =
+            protocol_bundle_dependency_resolution_evidence(&transaction, &materialization, &live_resolution, &observations).unwrap();
+        assert_eq!(evidence.deployment_line_count, 1);
+        assert_eq!(evidence.deployment_line_cells.len(), 2);
+        assert!(evidence.deployment_line_cells.iter().all(|cell| cell.status == "live-deployment-line-cell-verified"));
+        let ready = protocol_bundle_ready_to_sign_evidence(&transaction, &materialization, &live_resolution, &evidence).unwrap();
+        assert_eq!(ready.verified_deployment_line_cell_count, 2);
+
+        let mut changed = observations.clone();
+        changed[2].root.data = Bytes::from_static(b"stale-admission");
+        let error = protocol_bundle_dependency_resolution_evidence(&transaction, &materialization, &live_resolution, &changed)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("live admission Cell differs"), "{error}");
+
+        changed = observations;
+        changed[1].root.output =
+            changed[1].root.output.clone().as_builder().lock(parse_script("changed.lock", &auth_lock).unwrap()).build();
+        let error = protocol_bundle_dependency_resolution_evidence(&transaction, &materialization, &live_resolution, &changed)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("live code Cell differs"), "{error}");
     }
 }

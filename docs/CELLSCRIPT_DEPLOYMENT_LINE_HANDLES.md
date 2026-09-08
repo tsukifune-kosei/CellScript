@@ -3,9 +3,9 @@
 Status: off-chain receipt/fixed-value foundation and the distinct
 `ckb-type-hash` generated-artifact profile are implemented on the `0.30`
 development branch. Standard Type ID admission evidence, admission-state
-transitions, and ProtocolBundle binding are also implemented. Node-backed
-liveness, source/runtime helpers, and compatible open roles remain release
-blockers.
+transitions, ProtocolBundle binding, and CKB-adapter live dependency resolution
+are also implemented. Source/runtime helpers, consensus execution cases, and
+compatible open roles remain release blockers.
 
 ## Security boundary
 
@@ -119,10 +119,15 @@ version may enter the line. The transition validator enforces the unique
 one-input/one-output admission group shape without making Lock authorization a
 compatibility claim.
 
-The Rust validator checks the contents returned by a resolver; it does not make
-an RPC liveness claim. The CKB adapter must still resolve both out points as
-live Cells on the receipt's exact chain immediately before signing. No source
-type or on-chain helper consumes `DeploymentLineHandle` yet. The next phase
-must add those runtime checks, standalone-checker mutations, and real CKB-VM
-stale/yank/substitution cases. Compatible open handles remain a later phase
-and cannot infer behavioral equivalence from interface compatibility.
+The Rust validator checks the contents returned by a resolver. The CKB adapter
+now obtains every admission/code out point with data from the selected node,
+requires live status on the receipt's exact chain, and independently compares
+the returned Lock, TYPE_ID Script, data hash, out point, and transaction
+position. `ReadyToSignProtocolBundleTx` is unreachable unless all ordinary and
+deployment-line dependencies pass together.
+
+No source type or on-chain helper consumes `DeploymentLineHandle` yet. The
+next phase must add those runtime checks, standalone-checker mutations, and
+real CKB-VM stale/yank/substitution cases. Compatible open handles remain a
+later phase and cannot infer behavioral equivalence from interface
+compatibility.

@@ -396,6 +396,17 @@
   helpers remain later closure. Advance the artifact cache identity to
   `project-source-set-v47-0.30-dev5-deployment-line-admission`.
 
+- Close node-backed deployment-line liveness in the CKB adapter. Resolved
+  ProtocolBundle artifacts now retain the target-profile name, so the adapter
+  independently requires one deployment line for every `ckb-type-hash`
+  artifact and rechecks the `data2`/`type` split. Dependency resolution queries
+  the union of ordinary code, admission, and Type ID code CellDeps; verifies
+  each live out point, Lock Script, Type Script, data hash, chain identity, and
+  transaction position; and blocks `ReadyToSignProtocolBundleTx` on any stale
+  or substituted Cell. On-chain source/runtime checks remain open. Advance the
+  artifact cache identity to
+  `project-source-set-v48-0.30-dev6-live-deployment-line`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

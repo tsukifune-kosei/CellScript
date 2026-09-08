@@ -351,8 +351,10 @@ and require the standalone checker to bind it to `deployment_hash_types =
 foundation is still off-chain evidence only. The gate must not present it as
 runtime-complete. `dev` and `ci` additionally check standard TYPE_ID admission
 creation/replacement, exact active admission/code Cell data, mandatory
-`ckb-type-hash` ProtocolBundle binding, and direct CellDep positions. The
-remaining release boundary is node-backed liveness, source/runtime helpers,
+`ckb-type-hash` ProtocolBundle binding, and direct CellDep positions. The CKB
+adapter covers node-backed admission/code Cell liveness and refuses the
+ready-to-sign state after any network, out-point, Lock, Type, data, or position
+substitution. The remaining release boundary is source/runtime helpers,
 independent deployment-line checker records, and real CKB-VM cases. See
 [the deployment-line handle contract](CELLSCRIPT_DEPLOYMENT_LINE_HANDLES.md).
 

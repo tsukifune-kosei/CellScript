@@ -277,9 +277,10 @@ committed as `CSREGv1 || handle_hash`. The distinct `ckb-type-hash` target
 profile now admits only Type-hash generated-artifact deployment and the
 standalone checker preserves that profile/hash-type contract. Standard TYPE_ID
 admission/code Cell evidence, exact admission transitions, and mandatory
-ProtocolBundle binding are implemented off chain. Node-backed liveness and the
-runtime helper needed to reject stale line versions in consensus are not
-implemented. Generic
+ProtocolBundle binding are implemented off chain. The CKB adapter independently
+resolves both TYPE_ID Cells as live, rechecks their exact Scripts/data/network,
+and blocks signing on substitution. The runtime helper needed to reject stale
+line versions in consensus is not implemented. Generic
 `ScriptHandle<I>` types, runtime-selected compatible construction,
 compatible-open handles, and open cross-Script roles remain open.
 

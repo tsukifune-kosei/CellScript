@@ -8682,6 +8682,7 @@ export interface ProtocolBundleArtifactBinding {
   artifactHash: string;
   interfaceHash: string;
   typedSemanticsHash: string;
+  targetProfile: "ckb" | "ckb-type-hash";
   targetProfileHash: string;
   runtimeAbiHash: string;
   verifiedBundleId: string | null;
@@ -8703,6 +8704,7 @@ export const protocolBundleArtifactIdentity = Object.freeze({
   artifactHash: builderManifest.artifact_hash,
   interfaceHash: metadata.interface_hash,
   typedSemanticsHash: builderManifest.typed_semantics_hash,
+  targetProfile: builderManifest.target_profile,
   targetProfileHash: builderManifest.target_profile_hash,
   runtimeAbiHash: builderManifest.runtime_abi_hash,
   verifiedBundleId: builderManifest.verified_bundle_id,
@@ -8744,6 +8746,7 @@ export function bindProtocolBundleArtifact(options: {
     artifactHash,
     interfaceHash: protocolBundleArtifactIdentity.interfaceHash,
     typedSemanticsHash: protocolBundleArtifactIdentity.typedSemanticsHash,
+    targetProfile: protocolBundleArtifactIdentity.targetProfile,
     targetProfileHash: protocolBundleArtifactIdentity.targetProfileHash,
     runtimeAbiHash: protocolBundleArtifactIdentity.runtimeAbiHash,
     verifiedBundleId: protocolBundleArtifactIdentity.verifiedBundleId,
