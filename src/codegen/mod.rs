@@ -1571,6 +1571,13 @@ impl CodeGenerator {
     }
 
     fn emit_global(&mut self, name: &str) {
+        // Schema-size facts are local to one generated function. Runtime
+        // helpers reuse small stack offsets, so carrying a fact from the
+        // previous helper can otherwise suppress a required syscall result
+        // length check in the next helper.
+        self.dominant_schema_exact_sizes.clear();
+        self.block_schema_exact_sizes.clear();
+        self.block_schema_min_sizes.clear();
         self.assembly.push(format!(".global {}", name));
         self.assembly.push(format!(".type {}, @function", name));
     }

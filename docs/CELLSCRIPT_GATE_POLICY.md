@@ -318,6 +318,15 @@ Playground, and six-family business-fixture checks. The canonical browser
 summary build is 560,647 bytes gzip. Full candidate gates and independent
 review are still required to close the temporal issue or the release gate.
 
+Lowering record v7 specializes those five HeaderDep reads. `dev` and `ci`
+require the standalone checker to match runtime-access provenance and typed
+calls to the final `LOAD_HEADER_BY_FIELD`/`LOAD_HEADER` syscall number, field
+selector or RawHeader offset, SourceView kind/index, 8/208-byte request and
+response checks, and errors 44/45/4. The rebound mutation suite changes each
+of those record and instruction boundaries. The backend must also clear
+schema-size facts between generated functions so one helper cannot suppress
+another helper's length guard.
+
 Metadata schema 71 additionally binds
 `cellscript-ckb-sighash-all-zero-lock-v1`. Reviewers must check the current
 input Script-group scope, complete first-lock zero transform, witness order,

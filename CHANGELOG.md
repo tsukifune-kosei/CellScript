@@ -422,6 +422,19 @@
   outside this bounded exact-line path. Advance the artifact cache identity to
   `project-source-set-v49-0.30-dev7-deployment-line-runtime`.
 
+- Bind typed HeaderDep reads to an independent machine contract. Lowering
+  record v7 now records the exact `LOAD_HEADER_BY_FIELD` or `LOAD_HEADER`
+  syscall number, field-specific contract, bounded SourceView index domain,
+  and 8/208-byte buffer for epoch number, epoch start, epoch length, block
+  number, and timestamp. The standalone checker validates those declarations
+  against typed calls, runtime-access provenance, the generated syscall and
+  field selector, full-header offsets, exact-length checks, and terminal errors
+  44/45/4. Hash-rebound record and instruction mutations reject. Also clear
+  schema-size facts at every generated function boundary; this fixes a backend
+  bug where one runtime helper could suppress another helper's required syscall
+  result-length check. Advance the artifact cache identity to
+  `project-source-set-v50-0.30-dev8-header-dep-machine-contract`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

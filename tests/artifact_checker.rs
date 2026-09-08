@@ -59,6 +59,19 @@ action inspect() -> u64 {
 }
 "#;
 
+const HEADER_DEP_SOURCE: &str = r#"
+module artifact_checker_header_dep
+
+action inspect(witness source_index: u64) -> u64 {
+    let header = ckb::header_dep(source_index)
+    return ckb::epoch_number_to_u64(header.epoch_number)
+        + ckb::block_number_to_u64(header.epoch_start_block_number)
+        + ckb::epoch_length_to_u64(header.epoch_length)
+        + ckb::block_number_to_u64(header.block_number)
+        + ckb::timestamp_millis_to_u64(header.timestamp)
+}
+"#;
+
 const EXACT_HANDLE_SOURCE: &str = r#"
 module artifact_checker_exact_handle
 
@@ -373,6 +386,179 @@ fn checker_rejects_runtime_access_provenance_tampering_after_hash_rebinding() {
     handle["provenance"]["index"]["binding"] = Value::String(String::new());
     changed.rebind_sidecars();
     assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+}
+
+#[test]
+fn checker_binds_header_dep_fields_widths_syscalls_and_terminal_errors_to_machine_code() {
+    let valid = Fixture::from_result(
+        compile(
+            HEADER_DEP_SOURCE,
+            CompileOptions {
+                edition: NEXT_EDITION,
+                target: Some("riscv64-elf".to_string()),
+                target_profile: Some("ckb".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    );
+
+    let mutate_access = |metadata: &mut Value, operation: &str, mutation: &dyn Fn(&mut Value)| {
+        for pointer in ["/runtime/ckb_runtime_accesses", "/actions/0/ckb_runtime_accesses"] {
+            let access = metadata
+                .pointer_mut(pointer)
+                .and_then(Value::as_array_mut)
+                .unwrap()
+                .iter_mut()
+                .find(|access| access["operation"] == operation)
+                .unwrap_or_else(|| panic!("missing HeaderDep access {operation}"));
+            mutation(access);
+        }
+    };
+    for (operation, mutation) in [
+        ("header-dep-epoch-number", ("syscall", Value::String("LOAD_HEADER".to_string()))),
+        ("header-dep-epoch-start-block-number", ("binding", Value::String("HeaderDepView.timestamp".to_string()))),
+        ("header-dep-epoch-length", ("source", Value::String("Input".to_string()))),
+    ] {
+        let mut changed = valid.clone();
+        mutate_access(&mut changed.metadata, operation, &|access| access[mutation.0] = mutation.1.clone());
+        changed.rebind_sidecars();
+        assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+    }
+
+    let mut changed = valid.clone();
+    mutate_access(&mut changed.metadata, "header-dep-block-number", &|access| {
+        access["provenance"]["range"]["length"]["value"] = Value::from(207);
+        access["provenance"]["range"]["length"]["max_inclusive"] = Value::from(207);
+    });
+    changed.rebind_sidecars();
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let mut changed = valid.clone();
+    let timestamp_call = changed
+        .record
+        .typed_semantics
+        .entries
+        .iter_mut()
+        .flat_map(|entry| &mut entry.blocks)
+        .flat_map(|block| &mut block.operations)
+        .find(|operation| operation.call.as_ref().is_some_and(|call| call.target == "__ckb_header_dep_timestamp_millis"))
+        .expect("timestamp typed helper call");
+    timestamp_call.call.as_mut().unwrap().return_type = "BlockNumber".to_string();
+    changed.rebind_typed_semantics();
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let scalar_site = valid
+        .record
+        .syscall_sites
+        .iter()
+        .find(|site| site.contract == "ckb-header-dep-epoch-number-v1")
+        .expect("epoch-number syscall site")
+        .clone();
+    let full_site = valid
+        .record
+        .syscall_sites
+        .iter()
+        .find(|site| site.contract == "ckb-header-dep-block-number-v1")
+        .expect("block-number syscall site")
+        .clone();
+
+    for mutate in [
+        |site: &mut cellscript_artifact_checker::SyscallSite| site.syscall_number = Some(2081),
+        |site: &mut cellscript_artifact_checker::SyscallSite| site.source_domain = "HeaderDep".to_string(),
+        |site: &mut cellscript_artifact_checker::SyscallSite| site.index_domain = "unbounded".to_string(),
+        |site: &mut cellscript_artifact_checker::SyscallSite| site.return_code_checked = false,
+        |site: &mut cellscript_artifact_checker::SyscallSite| site.buffer_limit_bytes = 7,
+    ] {
+        let mut changed = valid.clone();
+        let site = changed.record.syscall_sites.iter_mut().find(|site| site.address == scalar_site.address).unwrap();
+        mutate(site);
+        changed.rebind_sidecars();
+        assert_code(&changed, CheckerRejectionCode::V2417SyscallContractInvalid);
+    }
+
+    for delta in [-48_i64, -40, -12, -4, 4, 20] {
+        let mut changed = valid.clone();
+        let address = scalar_site.address.checked_add_signed(delta).unwrap();
+        let word = parse_elf(&changed.artifact, CheckerBudgets::default().instructions)
+            .unwrap()
+            .instructions
+            .iter()
+            .find(|instruction| instruction.address == address)
+            .unwrap()
+            .word;
+        changed.replace_machine_word(address, word ^ (1 << 20));
+        assert_eq!(changed.check(), Err(CheckerRejectionCode::V2417SyscallContractInvalid), "scalar delta {delta}");
+    }
+
+    for delta in [-44_i64, -36, -4, 4, 20, 28] {
+        let mut changed = valid.clone();
+        let address = full_site.address.checked_add_signed(delta).unwrap();
+        let word = parse_elf(&changed.artifact, CheckerBudgets::default().instructions)
+            .unwrap()
+            .instructions
+            .iter()
+            .find(|instruction| instruction.address == address)
+            .unwrap()
+            .word;
+        changed.replace_machine_word(address, word ^ (1 << 20));
+        assert_eq!(changed.check(), Err(CheckerRejectionCode::V2417SyscallContractInvalid), "full delta {delta}");
+    }
+
+    for (site, delta) in [(&scalar_site, 8_i64), (&full_site, 8), (&full_site, 40)] {
+        let mut changed = valid.clone();
+        let address = site.address.checked_add_signed(delta).unwrap();
+        let word = parse_elf(&changed.artifact, CheckerBudgets::default().instructions)
+            .unwrap()
+            .instructions
+            .iter()
+            .find(|instruction| instruction.address == address)
+            .unwrap()
+            .word;
+        changed.replace_machine_word(address, word ^ (1 << 20));
+        assert_eq!(changed.check(), Err(CheckerRejectionCode::V2414ControlFlowInvalid), "terminal error delta {delta}");
+    }
+
+    for opt_level in 0..=3 {
+        let fixture = Fixture::from_result(
+            compile(
+                HEADER_DEP_SOURCE,
+                CompileOptions {
+                    edition: NEXT_EDITION,
+                    target: Some("riscv64-elf".to_string()),
+                    target_profile: Some("ckb".to_string()),
+                    opt_level,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            fixture.record.syscall_sites.iter().filter(|site| site.contract.starts_with("ckb-header-dep-")).count(),
+            5,
+            "optimization level {opt_level} must retain every specialized HeaderDep syscall site"
+        );
+    }
+
+    let elf = parse_elf(&valid.artifact, CheckerBudgets::default().instructions).unwrap();
+    let invalid_source_error = valid
+        .record
+        .blocks
+        .iter()
+        .filter(|block| block.owner_entry == "runtime:__ckb_header_dep_epoch_number")
+        .flat_map(|block| elf.instructions.iter().filter(move |instruction| block.range.contains(instruction.address)))
+        .find(|instruction| {
+            instruction.word & 0x7f == 0x13
+                && (instruction.word >> 7) & 0x1f == 10
+                && (instruction.word >> 15) & 0x1f == 0
+                && (instruction.word as i32) >> 20 == 44
+        })
+        .expect("invalid HeaderDep source error")
+        .address;
+    let mut changed = valid;
+    let word = elf.instructions.iter().find(|instruction| instruction.address == invalid_source_error).unwrap().word;
+    changed.replace_machine_word(invalid_source_error, word ^ (1 << 20));
+    assert_code(&changed, CheckerRejectionCode::V2414ControlFlowInvalid);
 }
 
 #[test]

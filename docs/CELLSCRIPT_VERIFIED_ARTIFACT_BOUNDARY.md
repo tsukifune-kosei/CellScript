@@ -1,8 +1,9 @@
 # CellScript Verified Artifact Boundary
 
-**Status**: semantic-foundation preview implemented on the `0.26b` branch
+**Status**: semantic-foundation and bounded machine contracts implemented on
+the `0.30` development branch
 
-**Schemas**: `cellscript-verified-lowering-record-v6`,
+**Schemas**: `cellscript-verified-lowering-record-v7`,
 `cellscript-typed-semantics-v8`,
 `cellscript-semantic-foundation-v3`,
 `cellscript-value-provenance-dag-v1`,
@@ -10,7 +11,7 @@
 `cellscript-verified-artifact-boundary-v2`, plus
 `cellscript-artifact-checker-policy-v1`
 
-**Metadata schema**: 66
+**Metadata schema**: 71
 
 ## Purpose
 
@@ -33,7 +34,7 @@ classes, legacy migration nodes, and layered semantic identities. Typed
 semantics v8 additionally binds exact trusted-external verifier declarations
 to ordered CellDep data-hash checks and delegation calls while retaining an
 explicit no-proof-of-internals flag. Lowering
-record v6 embeds that record and binds it to the final machine layout. Every
+record v7 embeds that record and binds it to the final machine layout. Every
 typed block is accounted for;
 optimized/elided typed blocks have an explicit empty machine-block list, while
 materialized blocks carry exact typed-block hashes. Source-map v2 binds source
@@ -81,7 +82,7 @@ this contract in the versioned core semantic identity. Scalar, predicate, wide
 integer and tuple return values keep their established ABI; deliberately
 exposed syscall statuses are not reclassified merely because they are nonzero.
 
-Lowering record v6 adds mandatory `verifier_failure_exits`, separately from the
+Lowering records retain mandatory `verifier_failure_exits`, separately from the
 existing diagnostic `runtime_error_exits`. The checker decodes each static
 site's exact error constant and tail jump to a complete, memory-free EXIT sink.
 It checks the syscall number and non-returning fallback, rejects entry into the
@@ -91,6 +92,15 @@ failure block to reach a recorded site. Only this verified sink is exempt from
 joining incoming stack depths: it never reads a caller frame or returns.
 An exact decoded EXIT sink also requires its declared contract; renaming the
 entry and dropping its static-site list cannot hide it.
+
+Lowering record v7 additionally specializes typed HeaderDep syscall sites.
+For each epoch number, epoch start, epoch length, block number, or timestamp
+helper, the checker binds the exact syscall number, field selector or RawHeader
+offset, `HeaderDepView` source and 32-bit index domain, 8/208-byte buffer,
+return-code branch, exact-length comparison, and terminal errors 44, 45, and 4
+to decoded RISC-V instructions. The matching runtime-access record and typed
+call must identify the same field and width. This is a bounded contract for
+those five helpers, rather than a claim of general syscall dataflow recovery.
 
 This bounded check does not establish completeness of every compiler-inserted
 guard, arbitrary callee behavior, or the provenance of every dynamic verifier

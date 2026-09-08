@@ -230,7 +230,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v49-0.30-dev7-deployment-line-runtime";
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v50-0.30-dev8-header-dep-machine-contract";
 pub const METADATA_SCHEMA_VERSION: u32 = 71;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -36924,7 +36924,7 @@ action inspect() -> u64 {
         let lock = ckb::lock_script(input)
         require lock.args_empty || lock.hash_type <= 4
         require dep.data_hash == dep.data_hash
-        return input.capacity + input.occupied_capacity + input.unoccupied_capacity + ckb::since_to_raw(input.since) + output.output_index + dep.data_size + witness_args.size + out_point.index + ckb::epoch_number_to_u64(header.epoch_number) + ckb::block_number_to_u64(header.epoch_start_block_number) + ckb::epoch_length_to_u64(header.epoch_length)
+        return input.capacity + input.occupied_capacity + input.unoccupied_capacity + ckb::since_to_raw(input.since) + output.output_index + dep.data_size + witness_args.size + out_point.index + ckb::epoch_number_to_u64(header.epoch_number) + ckb::block_number_to_u64(header.epoch_start_block_number) + ckb::epoch_length_to_u64(header.epoch_length) + ckb::block_number_to_u64(header.block_number) + ckb::timestamp_millis_to_u64(header.timestamp)
 }
 "#;
 
@@ -36959,11 +36959,19 @@ action inspect() -> u64 {
             "__ckb_header_dep_epoch_number",
             "__ckb_header_dep_epoch_start_block_number",
             "__ckb_header_dep_epoch_length",
+            "__ckb_header_dep_block_number",
+            "__ckb_header_dep_timestamp_millis",
             "__ckb_cell_lock_args_empty",
             "__ckb_cell_lock_hash_type",
         ] {
             assert!(asm.contains(helper), "typed transaction view did not retain runtime helper {helper}:\n{asm}");
         }
+        assert_eq!(
+            asm.matches("exact size check HeaderDep scalar return expected=8\n").count(),
+            3,
+            "each independent HeaderDep field helper must check its own syscall return length:\n{asm}"
+        );
+        assert!(!asm.contains("exact size check HeaderDep scalar return expected=8 elided by proven size"), "{asm}");
 
         let mut tampered = result.metadata.clone();
         tampered.runtime.ckb_runtime_view_contract = "cellscript-ckb-runtime-view-v0".to_string();

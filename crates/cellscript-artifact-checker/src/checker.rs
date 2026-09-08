@@ -702,6 +702,7 @@ fn validate_runtime_access_provenance_metadata(metadata: &Value, typed_semantics
                 )));
             }
         }
+        validate_header_dep_runtime_accesses(&module_accesses, &typed_handles, typed_semantics)?;
     }
     if schema >= SIGHASH_ZERO_LOCK_METADATA_SCHEMA {
         validate_sighash_zero_lock_domains(metadata, &module_accesses, typed_semantics)?;
@@ -998,8 +999,142 @@ fn parse_runtime_accesses(value: Option<&Value>, label: &str) -> Result<Vec<Runt
         validate_runtime_access_provenance(&prefix, &access.source, Some(access.index), &access.provenance)?;
         validate_canonical_transaction_hash_runtime_access(&prefix, access)?;
         validate_canonical_sighash_zero_lock_runtime_access(&prefix, access)?;
+        validate_canonical_header_dep_runtime_access(&prefix, access)?;
     }
     Ok(accesses)
+}
+
+#[derive(Clone, Copy)]
+struct HeaderDepAccessContract {
+    target: &'static str,
+    operation: &'static str,
+    syscall: &'static str,
+    binding: &'static str,
+    return_type: &'static str,
+    width: u64,
+}
+
+const HEADER_DEP_ACCESS_CONTRACTS: [HeaderDepAccessContract; 5] = [
+    HeaderDepAccessContract {
+        target: "__ckb_header_dep_epoch_number",
+        operation: "header-dep-epoch-number",
+        syscall: "LOAD_HEADER_BY_FIELD",
+        binding: "HeaderDepView.epoch_number",
+        return_type: "EpochNumber",
+        width: 8,
+    },
+    HeaderDepAccessContract {
+        target: "__ckb_header_dep_epoch_start_block_number",
+        operation: "header-dep-epoch-start-block-number",
+        syscall: "LOAD_HEADER_BY_FIELD",
+        binding: "HeaderDepView.epoch_start_block_number",
+        return_type: "BlockNumber",
+        width: 8,
+    },
+    HeaderDepAccessContract {
+        target: "__ckb_header_dep_epoch_length",
+        operation: "header-dep-epoch-length",
+        syscall: "LOAD_HEADER_BY_FIELD",
+        binding: "HeaderDepView.epoch_length",
+        return_type: "EpochLength",
+        width: 8,
+    },
+    HeaderDepAccessContract {
+        target: "__ckb_header_dep_block_number",
+        operation: "header-dep-block-number",
+        syscall: "LOAD_HEADER",
+        binding: "HeaderDepView.block_number",
+        return_type: "BlockNumber",
+        width: 208,
+    },
+    HeaderDepAccessContract {
+        target: "__ckb_header_dep_timestamp_millis",
+        operation: "header-dep-timestamp-millis",
+        syscall: "LOAD_HEADER",
+        binding: "HeaderDepView.timestamp",
+        return_type: "TimestampMillis",
+        width: 208,
+    },
+];
+
+fn validate_canonical_header_dep_runtime_access(prefix: &str, access: &RuntimeAccess) -> Result<(), CheckerError> {
+    let expected = HEADER_DEP_ACCESS_CONTRACTS.iter().find(|contract| contract.operation == access.operation);
+    let identifies_header_field =
+        expected.is_some() || access.operation.starts_with("header-dep-") || access.binding.starts_with("HeaderDepView.");
+    if !identifies_header_field {
+        return Ok(());
+    }
+    let Some(expected) = expected else {
+        return Err(metadata_binding_error(format!("{prefix} names an unknown HeaderDep field contract")));
+    };
+    let range = &access.provenance.range;
+    if access.syscall != expected.syscall
+        || access.source != "HeaderDep"
+        || access.binding != expected.binding
+        || access.provenance.source.resolved_source != "HeaderDep"
+        || access.provenance.source.origin != "inherited-source-view"
+        || access.provenance.source.binding.as_deref().is_none_or(str::is_empty)
+        || !matches!(access.provenance.index.kind.as_str(), "static" | "dynamic")
+        || access.provenance.index.max_inclusive != Some(u64::from(u32::MAX))
+        || range.kind != "fixed-width"
+        || range.offset.kind != "not-applicable"
+        || range.length.kind != "static"
+        || range.length.value != Some(expected.width)
+        || range.length.max_inclusive != Some(expected.width)
+    {
+        return Err(metadata_binding_error(format!("{prefix} does not match the canonical {} contract", expected.binding)));
+    }
+    Ok(())
+}
+
+fn validate_header_dep_runtime_accesses(
+    accesses: &[RuntimeAccess],
+    handles: &[RuntimeTransactionViewHandle],
+    typed_semantics: &TypedSemanticRecord,
+) -> Result<(), CheckerError> {
+    for expected in HEADER_DEP_ACCESS_CONTRACTS {
+        let matching_accesses = accesses.iter().filter(|access| access.operation == expected.operation).collect::<Vec<_>>();
+        let matching_calls = typed_semantics
+            .entries
+            .iter()
+            .flat_map(|entry| &entry.blocks)
+            .flat_map(|block| &block.operations)
+            .filter(|operation| operation.call.as_ref().is_some_and(|call| call.target == expected.target))
+            .collect::<Vec<_>>();
+        if matching_accesses.len() != matching_calls.len() {
+            return Err(metadata_binding_error(format!(
+                "HeaderDep runtime access '{}' does not match typed helper calls",
+                expected.operation
+            )));
+        }
+        for operation in matching_calls {
+            let call = operation.call.as_ref().expect("filtered typed call");
+            if call.params != ["HeaderDepView"]
+                || call.return_type != expected.return_type
+                || operation.operands.len() != 1
+                || operation.operands[0].ty != "HeaderDepView"
+            {
+                return Err(metadata_binding_error(format!(
+                    "typed helper '{}' does not preserve the canonical HeaderDep operand and result types",
+                    expected.target
+                )));
+            }
+        }
+        for access in matching_accesses {
+            if !handles.iter().any(|handle| {
+                handle.handle_type == "HeaderDepView"
+                    && handle.source == "HeaderDep"
+                    && access.provenance.source.binding.as_deref() == Some(handle.binding.as_str())
+                    && access.provenance.index == handle.provenance.index
+            }) {
+                return Err(metadata_binding_error(format!(
+                    "HeaderDep runtime access '{}' has no matching typed source-view handle",
+                    expected.operation
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_canonical_transaction_hash_runtime_access(prefix: &str, access: &RuntimeAccess) -> Result<(), CheckerError> {
@@ -4105,20 +4240,249 @@ fn validate_syscalls(record: &VerifiedLoweringRecord, elf: &ParsedElf) -> Result
     }
     let blocks = record.blocks.iter().map(|block| (block.id.as_str(), block)).collect::<BTreeMap<_, _>>();
     for site in &record.syscall_sites {
+        let block = blocks.get(site.block_id.as_str()).copied();
         if site.contract.is_empty()
             || site.source_domain.is_empty()
             || site.index_domain.is_empty()
             || site.buffer_limit_bytes == 0
             || !site.return_code_checked
-            || blocks.get(site.block_id.as_str()).is_none_or(|block| !block.range.contains(site.address))
+            || block.is_none_or(|block| !block.range.contains(site.address))
         {
             return Err(CheckerError::new(
                 CheckerRejectionCode::V2417SyscallContractInvalid,
                 format!("syscall site at {:#x} has an invalid bounded contract", site.address),
             ));
         }
+        validate_header_dep_syscall_site(record, elf, site, block.expect("validated syscall block"))?;
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct HeaderDepSyscallContract {
+    name: &'static str,
+    syscall_number: u64,
+    field_id: Option<i32>,
+    buffer_bytes: u32,
+    result_stack_offset: Option<i32>,
+}
+
+fn header_dep_syscall_contract(owner_entry: &str) -> Option<HeaderDepSyscallContract> {
+    match owner_entry {
+        "runtime:__ckb_header_dep_epoch_number" => Some(HeaderDepSyscallContract {
+            name: "ckb-header-dep-epoch-number-v1",
+            syscall_number: 2082,
+            field_id: Some(0),
+            buffer_bytes: 8,
+            result_stack_offset: None,
+        }),
+        "runtime:__ckb_header_dep_epoch_start_block_number" => Some(HeaderDepSyscallContract {
+            name: "ckb-header-dep-epoch-start-block-number-v1",
+            syscall_number: 2082,
+            field_id: Some(1),
+            buffer_bytes: 8,
+            result_stack_offset: None,
+        }),
+        "runtime:__ckb_header_dep_epoch_length" => Some(HeaderDepSyscallContract {
+            name: "ckb-header-dep-epoch-length-v1",
+            syscall_number: 2082,
+            field_id: Some(2),
+            buffer_bytes: 8,
+            result_stack_offset: None,
+        }),
+        "runtime:__ckb_header_dep_block_number" => Some(HeaderDepSyscallContract {
+            name: "ckb-header-dep-block-number-v1",
+            syscall_number: 2072,
+            field_id: None,
+            buffer_bytes: 208,
+            result_stack_offset: Some(32),
+        }),
+        "runtime:__ckb_header_dep_timestamp_millis" => Some(HeaderDepSyscallContract {
+            name: "ckb-header-dep-timestamp-millis-v1",
+            syscall_number: 2072,
+            field_id: None,
+            buffer_bytes: 208,
+            result_stack_offset: Some(24),
+        }),
+        _ => None,
+    }
+}
+
+fn validate_header_dep_syscall_site(
+    record: &VerifiedLoweringRecord,
+    elf: &ParsedElf,
+    site: &SyscallSite,
+    block: &LoweringBlock,
+) -> Result<(), CheckerError> {
+    let Some(expected) = header_dep_syscall_contract(&block.owner_entry) else {
+        if site.contract.starts_with("ckb-header-dep-") {
+            return Err(header_dep_machine_error(site, "a HeaderDep syscall contract is attached to the wrong runtime helper"));
+        }
+        return Ok(());
+    };
+    if site.syscall_number != Some(expected.syscall_number)
+        || site.contract != expected.name
+        || site.source_domain != "HeaderDepView/source=HeaderDep"
+        || site.index_domain != "u32-source-view"
+        || !site.return_code_checked
+        || site.buffer_limit_bytes != expected.buffer_bytes
+    {
+        return Err(header_dep_machine_error(site, "the declared HeaderDep syscall contract differs from its helper"));
+    }
+
+    let word = |delta: i64| -> Result<u32, CheckerError> {
+        let address =
+            site.address.checked_add_signed(delta).ok_or_else(|| header_dep_machine_error(site, "instruction address overflow"))?;
+        elf.instructions
+            .iter()
+            .find(|instruction| instruction.address == address)
+            .map(|instruction| instruction.word)
+            .ok_or_else(|| header_dep_machine_error(site, format!("missing instruction at {address:#x}")))
+    };
+    let syscall_lower = i32::try_from(expected.syscall_number).expect("CKB syscall fits i32") - 4096;
+    if word(0)? != 0x0000_0073 || !is_lui(word(-8)?, 17, 0x1000) || !is_addi(word(-4)?, 17, 17, syscall_lower) {
+        return Err(header_dep_machine_error(site, "the machine code does not materialize the declared HeaderDep syscall number"));
+    }
+    if !is_beq(word(4)?, 10, 0) || !is_addi(word(8)?, 10, 0, 45) || !machine_error_jumps_to_abort(record, elf, site.address + 8, 45) {
+        return Err(header_dep_machine_error(site, "the HeaderDep syscall status does not terminate with error 45"));
+    }
+
+    if let Some(field_id) = expected.field_id {
+        if !is_addi(word(-48)?, 5, 0, 4)
+            || !is_bne(word(-44)?, 7, 5)
+            || !is_addi(word(-40)?, 5, 0, 8)
+            || !is_sd(word(-36)?, 5, 2, 8)
+            || !is_addi(word(-20)?, 13, 6, 0)
+            || !is_addi(word(-16)?, 14, 7, 0)
+            || !is_addi(word(-12)?, 15, 0, field_id)
+        {
+            return Err(header_dep_machine_error(
+                site,
+                "the HeaderDep field selector, source, index, or 8-byte buffer contract changed",
+            ));
+        }
+        if !is_ld(word(16)?, 10, 2, 8)
+            || !is_addi(word(20)?, 11, 0, 8)
+            || !is_sub(word(24)?, 10, 10, 11)
+            || !is_beq(word(28)?, 10, 0)
+            || !machine_error_jumps_to_abort(record, elf, site.address + 32, 4)
+        {
+            return Err(header_dep_machine_error(site, "the HeaderDep scalar exact-width check does not terminate with error 4"));
+        }
+    } else {
+        if !is_addi(word(-44)?, 5, 0, 4)
+            || !is_bne(word(-40)?, 7, 5)
+            || !is_addi(word(-36)?, 5, 0, 208)
+            || !is_sd(word(-32)?, 5, 2, 0)
+            || !is_addi(word(-16)?, 13, 6, 0)
+            || !is_addi(word(-12)?, 14, 7, 0)
+        {
+            return Err(header_dep_machine_error(site, "the full HeaderDep source, index, or 208-byte buffer contract changed"));
+        }
+        let result_stack_offset = expected.result_stack_offset.expect("full HeaderDep field offset");
+        if !is_ld(word(16)?, 5, 2, 0)
+            || !is_addi(word(20)?, 6, 0, 208)
+            || !is_bne(word(24)?, 5, 6)
+            || !is_ld(word(28)?, 10, 2, result_stack_offset)
+            || !machine_error_jumps_to_abort(record, elf, site.address + 40, 4)
+        {
+            return Err(header_dep_machine_error(site, "the full HeaderDep exact-width or RawHeader field-offset contract changed"));
+        }
+    }
+
+    if !owner_has_abort_error(record, elf, &block.owner_entry, 44) {
+        return Err(header_dep_machine_error(site, "an invalid HeaderDep source does not terminate with error 44"));
+    }
+    Ok(())
+}
+
+fn header_dep_machine_error(site: &SyscallSite, message: impl Into<String>) -> CheckerError {
+    CheckerError::new(
+        CheckerRejectionCode::V2417SyscallContractInvalid,
+        format!("HeaderDep syscall site at {:#x}: {}", site.address, message.into()),
+    )
+}
+
+fn machine_error_jumps_to_abort(record: &VerifiedLoweringRecord, elf: &ParsedElf, address: u64, code: i32) -> bool {
+    let Some(first) = elf.instructions.iter().find(|instruction| instruction.address == address) else {
+        return false;
+    };
+    let Some(second) = elf.instructions.iter().find(|instruction| instruction.address == address + 4) else {
+        return false;
+    };
+    let Some(abort_entry) = record.entries.iter().find(|entry| entry.id == "runtime:__cellscript_abort") else {
+        return false;
+    };
+    let Some(abort_block) = record.blocks.iter().find(|block| block.id == abort_entry.entry_block) else {
+        return false;
+    };
+    is_addi(first.word, 10, 0, code)
+        && is_jal_zero(second.word)
+        && elf.control_flow.iter().any(|edge| edge.address == second.address && edge.target == abort_block.range.start)
+}
+
+fn owner_has_abort_error(record: &VerifiedLoweringRecord, elf: &ParsedElf, owner_entry: &str, code: i32) -> bool {
+    record.blocks.iter().filter(|block| block.owner_entry == owner_entry).any(|block| {
+        elf.instructions
+            .iter()
+            .filter(|instruction| block.range.contains(instruction.address))
+            .any(|instruction| machine_error_jumps_to_abort(record, elf, instruction.address, code))
+    })
+}
+
+fn is_addi(word: u32, rd: u32, rs1: u32, immediate: i32) -> bool {
+    word & 0x7f == 0x13
+        && (word >> 12) & 0x7 == 0
+        && (word >> 7) & 0x1f == rd
+        && (word >> 15) & 0x1f == rs1
+        && (word as i32) >> 20 == immediate
+}
+
+fn is_lui(word: u32, rd: u32, immediate: u32) -> bool {
+    word & 0x7f == 0x37 && (word >> 7) & 0x1f == rd && word & 0xffff_f000 == immediate
+}
+
+fn is_ld(word: u32, rd: u32, rs1: u32, immediate: i32) -> bool {
+    word & 0x7f == 0x03
+        && (word >> 12) & 0x7 == 0x3
+        && (word >> 7) & 0x1f == rd
+        && (word >> 15) & 0x1f == rs1
+        && (word as i32) >> 20 == immediate
+}
+
+fn is_sd(word: u32, rs2: u32, rs1: u32, immediate: i32) -> bool {
+    let decoded = (((word >> 25) & 0x7f) << 5) | ((word >> 7) & 0x1f);
+    let decoded = ((decoded as i32) << 20) >> 20;
+    word & 0x7f == 0x23
+        && (word >> 12) & 0x7 == 0x3
+        && (word >> 20) & 0x1f == rs2
+        && (word >> 15) & 0x1f == rs1
+        && decoded == immediate
+}
+
+fn is_sub(word: u32, rd: u32, rs1: u32, rs2: u32) -> bool {
+    word & 0x7f == 0x33
+        && (word >> 25) & 0x7f == 0x20
+        && (word >> 12) & 0x7 == 0
+        && (word >> 7) & 0x1f == rd
+        && (word >> 15) & 0x1f == rs1
+        && (word >> 20) & 0x1f == rs2
+}
+
+fn is_beq(word: u32, rs1: u32, rs2: u32) -> bool {
+    is_branch(word, 0, rs1, rs2)
+}
+
+fn is_bne(word: u32, rs1: u32, rs2: u32) -> bool {
+    is_branch(word, 1, rs1, rs2)
+}
+
+fn is_branch(word: u32, function: u32, rs1: u32, rs2: u32) -> bool {
+    word & 0x7f == 0x63 && (word >> 12) & 0x7 == function && (word >> 15) & 0x1f == rs1 && (word >> 20) & 0x1f == rs2
+}
+
+fn is_jal_zero(word: u32) -> bool {
+    word & 0x7f == 0x6f && (word >> 7) & 0x1f == 0
 }
 
 fn validate_source_map(

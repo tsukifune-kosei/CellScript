@@ -146,7 +146,12 @@ the metadata-only browser summary exposes it as well.
 `tests/artifact_checker.rs` changes source, index bound, range, contract,
 transaction-hash operation/syscall/binding/width, bounded owner/maximum,
 handle, and module/entry copies after outer hash rebinding and requires
-independent `V2410` rejection. Generated
+independent `V2410` rejection. HeaderDep-specific cases additionally change
+each access record, typed result, declared syscall contract, CKB syscall
+number, field selector, SourceView kind/index, 8/208-byte request and response
+width, RawHeader offset, return-code branch, and errors 44/45/4 in the final
+RISC-V instructions. Lowering record v7 rejects those rebound record or machine
+mutations. Generated
 TypeScript builder tests retain the same dynamic parameter bound.
 `tests/authoring_replace.rs` exercises the
 `ScriptHash` domain against real output Lock Script hashes. Existing
@@ -159,8 +164,6 @@ The following work remains before issue #24 can close:
 - any additional signing domain selected by the business corpus, including a
   multisig prefix-preserving layout, as a separately named contract;
 - persistent-policy and generated-builder parity for every admitted row;
-- standalone-checker machine mutations for the new HeaderDep source/index,
-  field selector, exact width, syscall status, and terminal error;
 - maximum-bound cycle, stack, ELF, witness, and transaction-size measurements;
   and
 - `ci`, `backend`, release, and independent-review evidence on the exact

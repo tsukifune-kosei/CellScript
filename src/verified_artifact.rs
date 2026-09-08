@@ -191,15 +191,51 @@ pub(crate) fn build_verified_artifact_boundary(
                 .iter()
                 .find(|block| block.range.contains(address))
                 .ok_or_else(|| boundary_error(format!("decoded syscall {address:#x} is outside machine blocks")))?;
+            let header_contract = match block.owner_entry.as_str() {
+                "runtime:__ckb_header_dep_epoch_number" => {
+                    Some((crate::ckb_abi::syscall::LOAD_HEADER_BY_FIELD, "ckb-header-dep-epoch-number-v1", 8))
+                }
+                "runtime:__ckb_header_dep_epoch_start_block_number" => {
+                    Some((crate::ckb_abi::syscall::LOAD_HEADER_BY_FIELD, "ckb-header-dep-epoch-start-block-number-v1", 8))
+                }
+                "runtime:__ckb_header_dep_epoch_length" => {
+                    Some((crate::ckb_abi::syscall::LOAD_HEADER_BY_FIELD, "ckb-header-dep-epoch-length-v1", 8))
+                }
+                "runtime:__ckb_header_dep_block_number" => {
+                    Some((crate::ckb_abi::syscall::LOAD_HEADER, "ckb-header-dep-block-number-v1", 208))
+                }
+                "runtime:__ckb_header_dep_timestamp_millis" => {
+                    Some((crate::ckb_abi::syscall::LOAD_HEADER, "ckb-header-dep-timestamp-millis-v1", 208))
+                }
+                _ => None,
+            };
+            let (syscall_number, contract, source_domain, index_domain, buffer_limit_bytes) =
+                if let Some((syscall_number, contract, buffer_limit_bytes)) = header_contract {
+                    (
+                        Some(syscall_number),
+                        contract.to_string(),
+                        "HeaderDepView/source=HeaderDep".to_string(),
+                        "u32-source-view".to_string(),
+                        buffer_limit_bytes,
+                    )
+                } else {
+                    (
+                        None,
+                        "ckb-vm-ecall-a7-v1".to_string(),
+                        "entry-runtime-metadata".to_string(),
+                        "entry-runtime-metadata".to_string(),
+                        block.frame_size_bytes.max(1),
+                    )
+                };
             Ok(SyscallSite {
                 block_id: block.id.clone(),
                 address,
-                syscall_number: None,
-                contract: "ckb-vm-ecall-a7-v1".to_string(),
-                source_domain: "entry-runtime-metadata".to_string(),
-                index_domain: "entry-runtime-metadata".to_string(),
+                syscall_number,
+                contract,
+                source_domain,
+                index_domain,
                 return_code_checked: true,
-                buffer_limit_bytes: block.frame_size_bytes.max(1),
+                buffer_limit_bytes,
             })
         })
         .collect::<Result<Vec<_>>>()?;

@@ -48,9 +48,11 @@ add/sub now enforce the 24-bit domain with executable overflow and underflow
 evidence. Exact 208-byte full-header decoding now supplies typed block number
 and millisecond timestamp reads. Dynamic source indexes retain their parameter
 binding and 32-bit runtime bound through metadata, generated TypeScript
-builders, CKB-VM execution, and the standalone checker. Remaining work includes
-HeaderDep machine mutations, complete builder parity, measurement, and release
-evidence. Owner-tagged bounded raw/lock/entry/output_type witness views now
+builders, CKB-VM execution, and the standalone checker. Lowering record v7 now
+binds the five HeaderDep field contracts to their final syscall, selector,
+width, offset, and terminal-error instructions. Remaining work includes
+complete builder parity, measurement, and release evidence. Owner-tagged
+bounded raw/lock/entry/output_type witness views now
 close the variable witness-value row with literal 65,536-byte bounds, exact
 scalar reads, streaming Blake2b, stable absent/over-bound failures, and
 schema/checker mutation coverage.

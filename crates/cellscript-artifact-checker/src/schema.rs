@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const LOWERING_RECORD_SCHEMA: &str = "cellscript-verified-lowering-record-v6";
+pub const LOWERING_RECORD_SCHEMA: &str = "cellscript-verified-lowering-record-v7";
 pub const TYPED_SEMANTICS_SCHEMA: &str = "cellscript-typed-semantics-v8";
 pub const SEMANTIC_FOUNDATION_SCHEMA: &str = "cellscript-semantic-foundation-v3";
 pub const PROVENANCE_GRAPH_SCHEMA: &str = "cellscript-value-provenance-dag-v1";
@@ -8,7 +8,7 @@ pub const SOURCE_MAP_SCHEMA: &str = "cellscript-source-artifact-map-v2";
 pub const VERIFIED_ARTIFACT_BOUNDARY_SCHEMA: &str = "cellscript-verified-artifact-boundary-v2";
 pub const CHECKER_POLICY_SCHEMA: &str = "cellscript-artifact-checker-policy-v1";
 pub const CHECKER_REPORT_SCHEMA: &str = "cellscript-artifact-checker-report-v1";
-pub const LOWERING_RECORD_VERSION: u32 = 6;
+pub const LOWERING_RECORD_VERSION: u32 = 7;
 pub const TYPED_SEMANTICS_VERSION: u32 = 8;
 pub const SEMANTIC_FOUNDATION_VERSION: u32 = 3;
 pub const PROVENANCE_GRAPH_VERSION: u32 = 1;
