@@ -723,5 +723,36 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(actual_since, expected_since, "stale typed temporal input since for {transaction}");
         }
+
+        const EPOCH_11_HEADER: &str = "0x690c44e7f3605a4c984edfe17dc953047114aff5e42ae1b2f108dc042a37a34d";
+        for transaction in [
+            "0xb74d691e2b3b09ba70b33cae3a78c04ab723fede031598d5ebbb30f3f79c8442",
+            "0x5fae038da17633b4994474ccfab8cd4769b9670ca984573a047d8e73fa1321f9",
+            "0xc962300d035f0d3e1a401d57d0420ee6e984c4cabc0da7cf8beae28bb3b0c040",
+            "0x73908c7815c16a3a45f876d8695355d173f8d1ab68c8b7e74d2bd6d398d440ae",
+            "0xc390427394790da202c9564f872551a36bcee7747e19fcc58d0eac765d7bbaae",
+            "0xdfb65c7699a692c39bdba73ec0647d99c56398310465d1db372c8a63369c0c93",
+            "0xf18073c9dd4436dfca5146f8b7aac0e4bfe4398b8b6f91f1727873aeef202c9d",
+            "0x17606461a3d98871a31a1d2dc71e0e81e47c2fb246665a0c19f207255b32f70a",
+            "0xc1992e679cdcbc64bb722f94b5d226099b2b9ead0529e4ccf45833055f369b2a",
+            "0x3b5f601fb0d58eec101f8758734ca3adaa979411bc16d348e7dad955ae10f23d",
+            "0x5e784733c02e52fe1d4c6996255dcfdbf2b792d69c36414970e539e90901d2b2",
+            "0x0538556ab99b85f0633cbb009edcc62be34efb26015f555c59d118424785c27b",
+            "0x226c0a2e34cedaa363a9d4b223982d2daf4fc419d302115e05e98396b3d68c9b",
+            "0xac9d28c6d3ff7bbf0357a655c0aac471c77bb9ad97374dbc2d507eae0541a733",
+            "0x8b4922b49150481d756b6c3af4236357618d9dcbff0eee4e164ff3288640e9f5",
+            "0x32a7a73a12207334bbb3966a636e22d5ea60ee3dbcf4b8f0d757c90e3cc282b6",
+            "0x4d6d94bf0b85a090775f7c8c7127e5b0b4d334547d299080282dac7fc94eafd9",
+        ] {
+            let recipe = &fixture["transactions"][transaction];
+            assert_eq!(recipe["header_deps"], json!([EPOCH_11_HEADER]), "stale multisig HeaderDep for {transaction}");
+            let witness = hex::decode(recipe["witnesses"][0].as_str().unwrap().trim_start_matches("0x")).unwrap();
+            let reported_time = u64::from_le_bytes(witness[witness.len() - 8..].try_into().unwrap());
+            assert_eq!(reported_time, 11, "multisig reported_time must match the rebound HeaderDep for {transaction}");
+        }
+        for lock_name in ["multisig.cell:can_execute", "multisig.cell:not_expired"] {
+            let case = fixture["lock_cases"].as_array().unwrap().iter().find(|case| case["name"] == lock_name).unwrap();
+            assert_eq!(case["invalid_tx"]["header_deps"], json!([EPOCH_11_HEADER]));
+        }
     }
 }

@@ -10,6 +10,13 @@
   pre-typed all-zero block-number encoding, which the current machine contract
   correctly rejects with `ckb-since-malformed` (37).
 
+- Rebind the HeaderDep-authenticated multisig recipes to epoch 11. Every
+  action and lock that compares `reported_time` with `HeaderDep.epoch_number`
+  now carries that HeaderDep and matching witness value; created wallet,
+  proposal, confirmation, and execution-record data use the same epoch. The
+  stateful create/propose/approve/execute chain therefore preserves one
+  authenticated time domain across its live Cells.
+
 - Add focused schema-change acknowledgements for Edition 2027
   `data = same except` relations. `cellc schema-ack` emits a canonical plan,
   blocks a newly added implicitly preserved field with `SACK1001`, creates a
