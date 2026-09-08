@@ -8693,11 +8693,29 @@ entry = "src/lib.cell"
     let util = lockfile.dependencies.get(util_node).expect("transitive util should be locked");
     assert_eq!(util.version, "0.1.0");
 
-    let update = Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("update").output().unwrap();
+    let lock_before_update = std::fs::read(root.join("Cell.lock")).unwrap();
+    let plan_path = root.join("upgrade-plan.json");
+    let update = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("update")
+        .arg("--output")
+        .arg(&plan_path)
+        .arg("--json")
+        .output()
+        .unwrap();
     assert!(update.status.success(), "stderr: {}", String::from_utf8_lossy(&update.stderr));
-    let update_stdout = String::from_utf8_lossy(&update.stdout);
-    assert!(update_stdout.contains("Updated 2 dependency nodes"), "{update_stdout}");
-    assert!(!update_stdout.contains("Warning: lockfile is not consistent"), "{update_stdout}");
+    assert_eq!(std::fs::read(root.join("Cell.lock")).unwrap(), lock_before_update);
+    let plan: serde_json::Value = serde_json::from_slice(&std::fs::read(&plan_path).unwrap()).unwrap();
+    assert_eq!(plan["apply_status"], "ready");
+    assert_eq!(plan["locks"][0]["new_lock"]["dependencies"].as_object().unwrap().len(), 2);
+    let apply = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("update")
+        .arg("--apply-plan")
+        .arg(&plan_path)
+        .output()
+        .unwrap();
+    assert!(apply.status.success(), "stderr: {}", String::from_utf8_lossy(&apply.stderr));
 
     let remove = Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("remove").arg("math").output().unwrap();
     assert!(remove.status.success(), "stderr: {}", String::from_utf8_lossy(&remove.stderr));
