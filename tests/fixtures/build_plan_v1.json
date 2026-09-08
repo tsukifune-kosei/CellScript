@@ -1,0 +1,28 @@
+{
+  "schema": "cellscript-build-plan-v1",
+  "schema_version": 1,
+  "compiler_version": "0.26.0",
+  "plan_digest": "sha256:fixture",
+  "resolve_graph_schema": "cellscript-resolve-graph-v1",
+  "resolve_graph_digest": "sha256:fixture",
+  "resolve_resolution_digest": "sha256:fixture",
+  "selection": {
+    "target": "riscv64-asm",
+    "artifact_format": "RISC-V assembly",
+    "target_profile": "ckb",
+    "optimization_level": 1,
+    "debug": false,
+    "release": false,
+    "primitive_compat": null,
+    "entry_action": null,
+    "entry_lock": null,
+    "artifact": null,
+    "production": false,
+    "deny_fail_closed": false,
+    "deny_ckb_runtime": false,
+    "deny_runtime_obligations": false
+  },
+  "units": [],
+  "unit_order": [],
+  "warnings": []
+}

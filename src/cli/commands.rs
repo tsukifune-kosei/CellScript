@@ -90,6 +90,8 @@ pub enum Command {
     Repl,
     Check(CheckArgs),
     Metadata(MetadataArgs),
+    ResolveGraph(ResolveGraphArgs),
+    BuildPlan(BuildPlanArgs),
     Expand(ExpandArgs),
     Migrate(MigrateArgs),
     Interface(InterfaceArgs),
@@ -300,6 +302,48 @@ pub struct MetadataArgs {
     pub output: Option<PathBuf>,
     pub target: Option<String>,
     pub target_profile: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct ResolveGraphArgs {
+    pub input: Option<PathBuf>,
+    pub package: Option<String>,
+    pub scope: String,
+    pub features: Vec<String>,
+    pub all_features: bool,
+    pub no_default_features: bool,
+    pub environment: Option<String>,
+    pub offline: bool,
+    pub schema_version: u32,
+    pub output: Option<PathBuf>,
+    pub json: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct BuildPlanArgs {
+    pub input: Option<PathBuf>,
+    pub package: Option<String>,
+    pub scope: String,
+    pub features: Vec<String>,
+    pub all_features: bool,
+    pub no_default_features: bool,
+    pub environment: Option<String>,
+    pub offline: bool,
+    pub schema_version: u32,
+    pub target: Option<String>,
+    pub target_profile: Option<String>,
+    pub release: bool,
+    pub debug: bool,
+    pub primitive_compat: Option<String>,
+    pub entry_action: Option<String>,
+    pub entry_lock: Option<String>,
+    pub artifact: Option<String>,
+    pub production: bool,
+    pub deny_fail_closed: bool,
+    pub deny_ckb_runtime: bool,
+    pub deny_runtime_obligations: bool,
+    pub output: Option<PathBuf>,
+    pub json: bool,
 }
 
 #[derive(Debug, Default)]
@@ -950,6 +994,8 @@ impl CommandExecutor {
             Command::Repl => Self::repl(),
             Command::Check(args) => Self::check(args),
             Command::Metadata(args) => Self::metadata(args),
+            Command::ResolveGraph(args) => Self::resolve_graph(args),
+            Command::BuildPlan(args) => Self::build_plan(args),
             Command::Expand(args) => Self::expand(args),
             Command::Migrate(args) => Self::migrate(args),
             Command::Interface(args) => Self::interface(args),
@@ -1059,6 +1105,10 @@ impl CommandExecutor {
         validate_check_policy(&result.metadata, &policy_args)?;
         let resolved = resolve_input_path(input)?;
         let output_path = default_output_path_for_input(input, &resolved, result.artifact_format)?;
+        let inspected_plan = inspect_build_plan_for_build(Path::new("."), &args)?;
+        let planned_unit =
+            inspected_plan.units.first().ok_or_else(|| CompileError::without_span("build plan did not select the current package"))?;
+        validate_build_unit_result(planned_unit, &result, &output_path)?;
         result.write_to_path(&output_path)?;
         let metadata_path = default_metadata_path_for_artifact(&output_path);
         result.write_metadata_to_path(&metadata_path)?;
@@ -1119,6 +1169,11 @@ impl CommandExecutor {
             "constraints": &result.metadata.constraints,
         });
         if let Some(object) = summary.as_object_mut() {
+            object.insert("build_plan_schema".to_string(), serde_json::json!(&inspected_plan.schema));
+            object.insert("build_plan_digest".to_string(), serde_json::json!(&inspected_plan.plan_digest));
+            object.insert("resolve_graph_digest".to_string(), serde_json::json!(&inspected_plan.resolve_graph_digest));
+            object.insert("resolve_resolution_digest".to_string(), serde_json::json!(&inspected_plan.resolve_resolution_digest));
+            object.insert("build_unit_id".to_string(), serde_json::json!(&planned_unit.id));
             object.insert(
                 "dependency_lock_mode".to_string(),
                 serde_json::json!(if args.frozen {
@@ -1166,6 +1221,9 @@ impl CommandExecutor {
                 (name.clone(), ws_root.join(&member.path))
             })
             .collect::<Vec<_>>();
+        let inspected_plan = inspect_build_plan_for_build(ws_root.as_std_path(), &args)?;
+        let planned_units =
+            inspected_plan.units.iter().map(|unit| (unit.package_name.clone(), unit.clone())).collect::<BTreeMap<_, _>>();
 
         let opt_level = if args.release { 3 } else { 1 };
         let mut member_results = Vec::new();
@@ -1248,6 +1306,21 @@ impl CommandExecutor {
 
                     let resolved = resolve_input_path(member_dir)?;
                     let output_path = default_output_path_for_input(member_dir, &resolved, result.artifact_format)?;
+                    let planned_unit = planned_units.get(member_name).ok_or_else(|| {
+                        CompileError::without_span(format!("build plan has no unit for workspace member '{member_name}'"))
+                    })?;
+                    if let Err(error) = validate_build_unit_result(planned_unit, &result, &output_path) {
+                        failure_diagnostics.push(error.clone().with_file(member_dir.clone()));
+                        member_results.push(serde_json::json!({
+                            "member": member_dir.as_str(),
+                            "member_name": member_name,
+                            "status": "failed",
+                            "error": error.message,
+                        }));
+                        failed_members.insert(member_name.clone());
+                        failed += 1;
+                        continue;
+                    }
                     result.write_to_path(&output_path)?;
                     let metadata_path = default_metadata_path_for_artifact(&output_path);
                     result.write_metadata_to_path(&metadata_path)?;
@@ -1260,6 +1333,7 @@ impl CommandExecutor {
                         "member": member_dir.as_str(),
                         "member_name": member_name,
                         "member_id": workspace_graph.members[member_name].id,
+                        "build_unit_id": planned_unit.id,
                         "order": order_index,
                         "dependencies": workspace_graph.member_edges.iter()
                             .filter(|edge| edge.from_member == *member_name)
@@ -1295,6 +1369,10 @@ impl CommandExecutor {
         if failed > 0 {
             return Err(diagnostics_to_error(&failure_diagnostics).with_details(serde_json::json!({
                 "mode": "workspace-build",
+                "build_plan_schema": inspected_plan.schema,
+                "build_plan_digest": inspected_plan.plan_digest,
+                "resolve_graph_digest": inspected_plan.resolve_graph_digest,
+                "resolve_resolution_digest": inspected_plan.resolve_resolution_digest,
                 "graph_schema": workspace_graph.schema,
                 "dependency_selection": workspace_graph.selection,
                 "build_selection": {
@@ -1324,6 +1402,10 @@ impl CommandExecutor {
             machine: serde_json::json!({
                 "status": "ok",
                 "mode": "workspace-build",
+                "build_plan_schema": inspected_plan.schema,
+                "build_plan_digest": inspected_plan.plan_digest,
+                "resolve_graph_digest": inspected_plan.resolve_graph_digest,
+                "resolve_resolution_digest": inspected_plan.resolve_resolution_digest,
                 "graph_schema": workspace_graph.schema,
                 "dependency_selection": workspace_graph.selection,
                 "build_selection": {
@@ -2243,6 +2325,53 @@ impl CommandExecutor {
             println!("{}", json);
         }
         Ok(())
+    }
+
+    fn resolve_graph(args: ResolveGraphArgs) -> Result<()> {
+        crate::package::inspection::validate_schema_version(args.schema_version)?;
+        let input = args.input.as_deref().unwrap_or_else(|| Path::new("."));
+        let options = inspection_resolution_options(
+            &args.scope,
+            &args.features,
+            args.all_features,
+            args.no_default_features,
+            args.environment.as_deref(),
+            args.offline,
+        )?;
+        let graph = crate::package::inspection::resolve_graph(input, args.package.as_deref(), &options)?;
+        emit_inspection_document("resolve graph", &graph, args.output.as_deref(), args.json)
+    }
+
+    fn build_plan(args: BuildPlanArgs) -> Result<()> {
+        crate::package::inspection::validate_schema_version(args.schema_version)?;
+        let input = args.input.as_deref().unwrap_or_else(|| Path::new("."));
+        let resolution = inspection_resolution_options(
+            &args.scope,
+            &args.features,
+            args.all_features,
+            args.no_default_features,
+            args.environment.as_deref(),
+            args.offline,
+        )?;
+        let graph = crate::package::inspection::resolve_graph(input, args.package.as_deref(), &resolution)?;
+        let plan = crate::package::inspection::build_plan(
+            &graph,
+            &crate::package::inspection::BuildPlanOptions {
+                target: args.target,
+                target_profile: args.target_profile,
+                release: args.release,
+                debug: args.debug,
+                primitive_compat: args.primitive_compat,
+                entry_action: args.entry_action,
+                entry_lock: args.entry_lock,
+                artifact: args.artifact,
+                production: args.production,
+                deny_fail_closed: args.deny_fail_closed,
+                deny_ckb_runtime: args.deny_ckb_runtime,
+                deny_runtime_obligations: args.deny_runtime_obligations,
+            },
+        )?;
+        emit_inspection_document("build plan", &plan, args.output.as_deref(), args.json)
     }
 
     fn expand(args: ExpandArgs) -> Result<()> {
@@ -5544,13 +5673,25 @@ impl CommandExecutor {
         }
         verification_modes.extend(manifest.environments.keys().cloned().map(Some));
         let mut resolved = BTreeMap::new();
+        let mut resolve_graphs = Vec::new();
         for environment in verification_modes {
             let options = crate::package::ResolutionOptions {
                 scope: crate::package::DependencyScope::Test,
                 all_features: true,
-                environment,
+                environment: environment.clone(),
                 ..crate::package::ResolutionOptions::default()
             };
+            match crate::package::inspection::resolve_graph(root, None, &options) {
+                Ok(graph) => resolve_graphs.push(serde_json::json!({
+                    "schema": graph.schema,
+                    "graph_digest": graph.graph_digest,
+                    "environment": environment,
+                    "nodes": graph.nodes.len(),
+                    "edges": graph.edges.len(),
+                    "stale_nodes": graph.stale_nodes.len(),
+                })),
+                Err(error) => violations.push(format!("resolve-graph inspection failed: {}", error.message)),
+            }
             let mut mode_manager = PackageManager::new(root);
             match mode_manager.resolve_locked_dependencies(&options) {
                 Ok(()) => resolved.extend(mode_manager.get_resolved().clone()),
@@ -5572,6 +5713,7 @@ impl CommandExecutor {
         let outcome = CommandOutcome {
             machine: serde_json::json!({
                 "status": if passed { "ok" } else { "failed" },
+                "resolve_graphs": resolve_graphs,
                 "violations": violations,
             }),
             human_lines: if passed {
@@ -12873,6 +13015,45 @@ fn resolution_options(
     }
 }
 
+fn inspection_resolution_options(
+    scope: &str,
+    features: &[String],
+    all_features: bool,
+    no_default_features: bool,
+    environment: Option<&str>,
+    offline: bool,
+) -> Result<crate::package::ResolutionOptions> {
+    let scope = match scope {
+        "runtime" => crate::package::DependencyScope::Runtime,
+        "test" => crate::package::DependencyScope::Test,
+        other => return Err(CompileError::without_span(format!("unsupported dependency scope '{other}'; expected runtime or test"))),
+    };
+    Ok(resolution_options(features, all_features, no_default_features, environment, offline, false, scope))
+}
+
+fn emit_inspection_document<T: serde::Serialize>(label: &str, value: &T, output: Option<&Path>, json: bool) -> Result<()> {
+    if let Some(output) = output {
+        if let Some(parent) = output.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut bytes = serde_json::to_vec_pretty(value)?;
+        bytes.push(b'\n');
+        std::fs::write(output, bytes)?;
+        return CommandOutcome {
+            machine: serde_json::json!({
+                "status": "ok",
+                "document": label,
+                "output": output.display().to_string(),
+            }),
+            human_lines: vec![format!("{} written to {}", label, output.display())],
+        }
+        .emit(json);
+    }
+    print_json(&serde_json::to_value(value)?)
+}
+
 fn build_resolution_options(args: &BuildArgs, scope: crate::package::DependencyScope) -> crate::package::ResolutionOptions {
     resolution_options(
         &args.features,
@@ -12883,6 +13064,65 @@ fn build_resolution_options(args: &BuildArgs, scope: crate::package::DependencyS
         args.frozen,
         scope,
     )
+}
+
+fn inspect_build_plan_for_build(input: &Path, args: &BuildArgs) -> Result<crate::package::inspection::BuildPlan> {
+    let resolution = build_resolution_options(args, crate::package::DependencyScope::Runtime);
+    let graph = crate::package::inspection::resolve_graph(input, args.package.as_deref(), &resolution)?;
+    crate::package::inspection::build_plan(
+        &graph,
+        &crate::package::inspection::BuildPlanOptions {
+            target: args.target.clone(),
+            target_profile: args.target_profile.clone(),
+            release: args.release,
+            debug: false,
+            primitive_compat: args.primitive_compat.clone(),
+            entry_action: args.entry_action.clone(),
+            entry_lock: args.entry_lock.clone(),
+            artifact: args.artifact.clone(),
+            production: args.production,
+            deny_fail_closed: args.deny_fail_closed,
+            deny_ckb_runtime: args.deny_ckb_runtime,
+            deny_runtime_obligations: args.deny_runtime_obligations,
+        },
+    )
+}
+
+fn validate_build_unit_result(
+    unit: &crate::package::inspection::BuildUnit,
+    result: &crate::CompileResult,
+    output_path: &Utf8Path,
+) -> Result<()> {
+    let mut mismatches = Vec::new();
+    if unit.artifact_format != result.artifact_format.display_name() {
+        mismatches.push(format!(
+            "artifact format planned '{}' but compiled '{}'",
+            unit.artifact_format,
+            result.artifact_format.display_name()
+        ));
+    }
+    if unit.target_profile != result.metadata.target_profile.name {
+        mismatches
+            .push(format!("target profile planned '{}' but compiled '{}'", unit.target_profile, result.metadata.target_profile.name));
+    }
+    if unit.compatibility_profile != result.metadata.compatibility_profile {
+        mismatches.push(format!(
+            "compatibility profile planned '{}' but compiled '{}'",
+            unit.compatibility_profile.id, result.metadata.compatibility_profile.id
+        ));
+    }
+    if unit.outputs.artifact != output_path.as_str() {
+        mismatches.push(format!("artifact path planned '{}' but build selected '{}'", unit.outputs.artifact, output_path));
+    }
+    if mismatches.is_empty() {
+        Ok(())
+    } else {
+        Err(CompileError::without_span(format!(
+            "build result diverged from {}: {}",
+            crate::package::inspection::BUILD_PLAN_SCHEMA,
+            mismatches.join("; ")
+        )))
+    }
 }
 
 fn check_resolution_options(args: &CheckArgs, scope: crate::package::DependencyScope) -> crate::package::ResolutionOptions {
@@ -15711,6 +15951,49 @@ impl CliParser {
                     .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash")),
             )
             .subcommand(
+                ClapCommand::new("resolve-graph")
+                    .display_order(31)
+                    .about("Inspect the versioned read-only package or workspace resolve graph")
+                    .arg(Arg::new("input").value_name("INPUT").help("Package, workspace, Cell.toml, or source path"))
+                    .arg(Arg::new("package").long("package").short('p').value_name("NAME").help("Select one workspace member and its transitive closure"))
+                    .arg(Arg::new("scope").long("scope").value_name("SCOPE").default_value("runtime").value_parser(["runtime", "test"]).help("Dependency scope"))
+                    .arg(Arg::new("features").long("features").value_delimiter(',').num_args(1..).value_name("FEATURES").help("Activate package features"))
+                    .arg(Arg::new("all-features").long("all-features").action(ArgAction::SetTrue).help("Activate all package features"))
+                    .arg(Arg::new("no-default-features").long("no-default-features").action(ArgAction::SetTrue).help("Do not activate the default feature"))
+                    .arg(Arg::new("environment").long("environment").value_name("NAME").help("Select an explicitly declared CKB dependency environment"))
+                    .arg(Arg::new("offline").long("offline").action(ArgAction::SetTrue).help("Declare that the query must use only local locked sources; inspection is always read-only and effectively offline"))
+                    .arg(Arg::new("schema-version").long("schema-version").value_name("N").default_value("1").value_parser(clap::value_parser!(u32)).help("Requested inspection JSON schema version"))
+                    .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write the resolve graph JSON to a file")),
+            )
+            .subcommand(
+                ClapCommand::new("build-plan")
+                    .display_order(32)
+                    .about("Inspect versioned build units without compiling or changing locks")
+                    .arg(Arg::new("input").value_name("INPUT").help("Package, workspace, Cell.toml, or source path"))
+                    .arg(Arg::new("package").long("package").short('p').value_name("NAME").help("Select one workspace member and its transitive closure"))
+                    .arg(Arg::new("scope").long("scope").value_name("SCOPE").default_value("runtime").value_parser(["runtime", "test"]).help("Dependency scope"))
+                    .arg(Arg::new("features").long("features").value_delimiter(',').num_args(1..).value_name("FEATURES").help("Activate package features"))
+                    .arg(Arg::new("all-features").long("all-features").action(ArgAction::SetTrue).help("Activate all package features"))
+                    .arg(Arg::new("no-default-features").long("no-default-features").action(ArgAction::SetTrue).help("Do not activate the default feature"))
+                    .arg(Arg::new("environment").long("environment").value_name("NAME").help("Select an explicitly declared CKB dependency environment"))
+                    .arg(Arg::new("offline").long("offline").action(ArgAction::SetTrue).help("Declare that the query must use only local locked sources; inspection is always read-only and effectively offline"))
+                    .arg(Arg::new("schema-version").long("schema-version").value_name("N").default_value("1").value_parser(clap::value_parser!(u32)).help("Requested inspection JSON schema version"))
+                    .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
+                    .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash"))
+                    .arg(Arg::new("release").long("release").short('r').action(ArgAction::SetTrue).help("Plan optimization level 3"))
+                    .arg(Arg::new("debug").long("debug").action(ArgAction::SetTrue).help("Plan debug metadata"))
+                    .arg(Arg::new("entry-action").long("entry-action").value_name("ACTION").help("Plan one action entrypoint"))
+                    .arg(Arg::new("entry-lock").long("entry-lock").value_name("LOCK").conflicts_with("entry-action").help("Plan one lock entrypoint"))
+                    .arg(Arg::new("artifact").long("artifact").value_name("NAME").conflicts_with_all(["entry-action", "entry-lock"]).help("Plan one declared policy artifact"))
+                    .arg(Arg::new("primitive-compat").long("primitive-compat").value_name("VERSION").conflicts_with("primitive-strict").help("Select an older primitive compatibility profile"))
+                    .arg(Arg::new("primitive-strict").long("primitive-strict").value_name("VERSION").conflicts_with("primitive-compat").help("Select a strict primitive compatibility profile"))
+                    .arg(Arg::new("production").long("production").action(ArgAction::SetTrue).help("Include the production policy requirement"))
+                    .arg(Arg::new("deny-fail-closed").long("deny-fail-closed").action(ArgAction::SetTrue).help("Include the fail-closed denial requirement"))
+                    .arg(Arg::new("deny-ckb-runtime").long("deny-ckb-runtime").action(ArgAction::SetTrue).help("Include the CKB-runtime denial requirement"))
+                    .arg(Arg::new("deny-runtime-obligations").long("deny-runtime-obligations").action(ArgAction::SetTrue).help("Include the runtime-obligation denial requirement"))
+                    .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write the build plan JSON to a file")),
+            )
+            .subcommand(
                 ClapCommand::new("expand")
                     .display_order(31)
                     .about("Render the canonical typed semantic foundation; the rendering is not a hash boundary")
@@ -17320,6 +17603,47 @@ impl CliParser {
                 output: m.get_one::<String>("output").map(PathBuf::from),
                 target: m.get_one::<String>("target").cloned(),
                 target_profile: m.get_one::<String>("target-profile").cloned(),
+            }),
+            Some(("resolve-graph", m)) => Command::ResolveGraph(ResolveGraphArgs {
+                input: m.get_one::<String>("input").map(PathBuf::from),
+                package: m.get_one::<String>("package").cloned(),
+                scope: m.get_one::<String>("scope").cloned().unwrap_or_else(|| "runtime".to_string()),
+                features: m.get_many::<String>("features").map(|values| values.cloned().collect()).unwrap_or_default(),
+                all_features: m.get_flag("all-features"),
+                no_default_features: m.get_flag("no-default-features"),
+                environment: m.get_one::<String>("environment").cloned(),
+                offline: m.get_flag("offline"),
+                schema_version: m.get_one::<u32>("schema-version").copied().unwrap_or(1),
+                output: m.get_one::<String>("output").map(PathBuf::from),
+                json: json_output(m),
+            }),
+            Some(("build-plan", m)) => Command::BuildPlan(BuildPlanArgs {
+                input: m.get_one::<String>("input").map(PathBuf::from),
+                package: m.get_one::<String>("package").cloned(),
+                scope: m.get_one::<String>("scope").cloned().unwrap_or_else(|| "runtime".to_string()),
+                features: m.get_many::<String>("features").map(|values| values.cloned().collect()).unwrap_or_default(),
+                all_features: m.get_flag("all-features"),
+                no_default_features: m.get_flag("no-default-features"),
+                environment: m.get_one::<String>("environment").cloned(),
+                offline: m.get_flag("offline"),
+                schema_version: m.get_one::<u32>("schema-version").copied().unwrap_or(1),
+                target: m.get_one::<String>("target").cloned(),
+                target_profile: m.get_one::<String>("target-profile").cloned(),
+                release: m.get_flag("release"),
+                debug: m.get_flag("debug"),
+                primitive_compat: resolve_primitive_compat(
+                    m.get_one::<String>("primitive-compat").cloned(),
+                    m.get_one::<String>("primitive-strict").cloned(),
+                ),
+                entry_action: m.get_one::<String>("entry-action").cloned(),
+                entry_lock: m.get_one::<String>("entry-lock").cloned(),
+                artifact: m.get_one::<String>("artifact").cloned(),
+                production: m.get_flag("production"),
+                deny_fail_closed: m.get_flag("deny-fail-closed"),
+                deny_ckb_runtime: m.get_flag("deny-ckb-runtime"),
+                deny_runtime_obligations: m.get_flag("deny-runtime-obligations"),
+                output: m.get_one::<String>("output").map(PathBuf::from),
+                json: json_output(m),
             }),
             Some(("expand", m)) => Command::Expand(ExpandArgs {
                 input: m.get_one::<String>("input").map(PathBuf::from),

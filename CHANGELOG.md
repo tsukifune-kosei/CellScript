@@ -2,6 +2,15 @@
 
 ## 0.30 - Capability closure development branch
 
+- Add negotiated, read-only `cellscript-resolve-graph-v1` and
+  `cellscript-build-plan-v1` inspection through `cellc resolve-graph` and
+  `cellc build-plan`. The schemas retain roots, aliases, edge provenance,
+  feature/test/environment selection, immutable source and lock identity,
+  stale nodes, compatibility/VM/codec axes, expected outputs, and stable cache
+  reasons. Builds validate the same unit IDs; package audit, LSP, VS Code, dev,
+  and CI consume the shared contract. Existing `cellc metadata` keeps its
+  compiled-program meaning.
+
 - Replace declaration-order workspace member loops and synthetic root locks
   with `cellscript-workspace-resolve-graph-v1`. Explicit members/exclusions,
   canonical path and package-name uniqueness, independently authoritative

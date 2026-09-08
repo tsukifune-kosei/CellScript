@@ -8238,6 +8238,15 @@ pub(crate) fn refresh_incremental_cache_for_input<P: AsRef<Utf8Path>>(
 /// Check incremental compilation cache for a previous compile result.
 /// Returns `Some(result)` if the cache is valid and the source has not changed.
 fn incremental_cache_hit(path: &Utf8Path, cache_units: &[SourceUnitMetadata], options: &CompileOptions) -> Option<CompileResult> {
+    incremental_cache_result(path, cache_units, options, true)
+}
+
+fn incremental_cache_result(
+    path: &Utf8Path,
+    cache_units: &[SourceUnitMetadata],
+    options: &CompileOptions,
+    refresh_recency: bool,
+) -> Option<CompileResult> {
     let max_entries = incremental_cache_max_entries();
     if max_entries == 0 {
         return None;
@@ -8312,9 +8321,43 @@ fn incremental_cache_hit(path: &Utf8Path, cache_units: &[SourceUnitMetadata], op
         cache_hit: true,
     };
     result.validate().ok()?;
-    refresh_incremental_cache_recency(&entry_dir);
-    prune_incremental_cache_entries(&cache_dir, &cache_key, max_entries);
+    if refresh_recency {
+        refresh_incremental_cache_recency(&entry_dir);
+        prune_incremental_cache_entries(&cache_dir, &cache_key, max_entries);
+    }
     Some(result)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IncrementalCacheInspection {
+    pub cache_key: String,
+    pub source_set_hash: String,
+    pub status: String,
+    pub rebuild_reason: String,
+}
+
+pub(crate) fn inspect_incremental_cache<P: AsRef<Utf8Path>>(input: P, options: &CompileOptions) -> Result<IncrementalCacheInspection> {
+    let resolved = resolve_input_path(input.as_ref())?;
+    let source_units = collect_source_units_for_compile_file(&resolved)?;
+    let cache_units = collect_cache_units_for_compile_file(&resolved, &source_units)?;
+    let cache_key = incremental_cache_key(&cache_units, options);
+    let source_set_hash = source_set_hash(&cache_units);
+    let cache_entry_exists =
+        incremental_cache_dir(&resolved).map(|directory| directory.join(&cache_key)).is_some_and(|entry| entry.exists());
+    let up_to_date = incremental_cache_result(&resolved, &cache_units, options, false).is_some();
+    let (status, rebuild_reason) = if up_to_date {
+        ("up-to-date", "cache-entry-valid")
+    } else if cache_entry_exists {
+        ("stale", "cache-entry-invalid")
+    } else {
+        ("missing", "cache-entry-missing")
+    };
+    Ok(IncrementalCacheInspection {
+        cache_key,
+        source_set_hash,
+        status: status.to_string(),
+        rebuild_reason: rebuild_reason.to_string(),
+    })
 }
 
 /// Store compile result to incremental cache after a successful compile.

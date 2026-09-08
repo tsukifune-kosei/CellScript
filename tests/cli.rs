@@ -12571,6 +12571,135 @@ fn cellc_workspace_propagates_dependency_failure_without_building_dependents() {
     assert!(!app.join("build").exists());
 }
 
+#[test]
+fn inspection_v1_fixtures_remain_deserializable() {
+    let graph: cellscript::package::inspection::ResolveGraph =
+        serde_json::from_str(include_str!("fixtures/resolve_graph_v1.json")).unwrap();
+    let plan: cellscript::package::inspection::BuildPlan = serde_json::from_str(include_str!("fixtures/build_plan_v1.json")).unwrap();
+    assert_eq!(graph.schema, cellscript::package::inspection::RESOLVE_GRAPH_SCHEMA);
+    assert_eq!(plan.schema, cellscript::package::inspection::BUILD_PLAN_SCHEMA);
+}
+
+#[test]
+fn cellc_resolve_graph_is_deterministic_read_only_and_reproduces_the_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let dependency = write_workspace_member(root, "dependency", "dependency", &[]);
+    let app = write_workspace_member(root, "app", "app", &[("dependency", "../dependency")]);
+    lock_package(&app);
+    let lock_before = std::fs::read(app.join("Cell.lock")).unwrap();
+
+    let query = || cellc_command().current_dir(&app).args(["resolve-graph", "--offline", "--json"]).output().unwrap();
+    let first = query();
+    let second = query();
+    assert!(first.status.success(), "stdout: {}", String::from_utf8_lossy(&first.stdout));
+    assert_eq!(first.stdout, second.stdout);
+    assert_eq!(std::fs::read(app.join("Cell.lock")).unwrap(), lock_before);
+    assert!(!app.join("build").exists());
+    assert!(!app.join(".cell").exists());
+    assert!(!dependency.join("build").exists());
+
+    let graph: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(graph["schema"], "cellscript-resolve-graph-v1");
+    assert_eq!(graph["schema_version"], 1);
+    assert_eq!(graph["lockfiles"][0]["content"].as_str().unwrap().as_bytes(), lock_before);
+    assert_eq!(graph["edges"][0]["alias"], "dependency");
+    assert_eq!(graph["edges"][0]["provenance"], "locked-runtime-root-edge");
+}
+
+#[test]
+fn cellc_build_plan_and_build_share_the_same_unit_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let package = write_workspace_member(dir.path(), "app", "app", &[]);
+    let plan_output = cellc_command().current_dir(&package).args(["build-plan", "--offline", "--json"]).output().unwrap();
+    assert!(plan_output.status.success(), "stdout: {}", String::from_utf8_lossy(&plan_output.stdout));
+    let plan: serde_json::Value = serde_json::from_slice(&plan_output.stdout).unwrap();
+    assert_eq!(plan["units"][0]["cache"]["status"], "missing");
+
+    let build_output = cellc_command().current_dir(&package).args(["build", "--offline", "--json"]).output().unwrap();
+    assert!(build_output.status.success(), "stdout: {}", String::from_utf8_lossy(&build_output.stdout));
+    let build: serde_json::Value = serde_json::from_slice(&build_output.stdout).unwrap();
+    assert_eq!(build["build_plan_schema"], "cellscript-build-plan-v1");
+    assert_eq!(build["resolve_graph_digest"], plan["resolve_graph_digest"]);
+    assert_eq!(build["build_unit_id"], plan["units"][0]["id"]);
+
+    let cached_output = cellc_command().current_dir(&package).args(["build-plan", "--offline", "--json"]).output().unwrap();
+    let cached: serde_json::Value = serde_json::from_slice(&cached_output.stdout).unwrap();
+    assert_ne!(cached["resolve_graph_digest"], plan["resolve_graph_digest"]);
+    assert_eq!(cached["resolve_resolution_digest"], plan["resolve_resolution_digest"]);
+    assert_eq!(cached["units"][0]["id"], plan["units"][0]["id"]);
+    assert_eq!(cached["units"][0]["cache"]["status"], "up-to-date");
+    assert_eq!(cached["units"][0]["cache"]["rebuild_reason"], "cache-entry-valid");
+
+    let verify_output = cellc_command().current_dir(&package).args(["package", "verify", "--json"]).output().unwrap();
+    assert!(verify_output.status.success(), "stdout: {}", String::from_utf8_lossy(&verify_output.stdout));
+    let verification: serde_json::Value = serde_json::from_slice(&verify_output.stdout).unwrap();
+    assert_eq!(verification["resolve_graphs"][0]["schema"], "cellscript-resolve-graph-v1");
+}
+
+#[test]
+fn cellc_resolve_graph_records_feature_environment_and_test_selection() {
+    let package = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/package_graph");
+    let output = cellc_command()
+        .current_dir(&package)
+        .args(["resolve-graph", "--scope", "test", "--features", "auditing", "--environment", "testnet", "--offline", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "stdout: {}", String::from_utf8_lossy(&output.stdout));
+    let graph: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(graph["selection"]["scope"], "test");
+    assert_eq!(graph["selection"]["environment"], "testnet");
+    assert_eq!(graph["selection"]["effective_features"], serde_json::json!(["auditing", "default"]));
+    let edges = graph["edges"].as_array().unwrap();
+    assert!(edges.iter().any(|edge| edge["alias"] == "test_support" && edge["dependency_kind"] == "test"));
+    assert!(graph["nodes"].as_object().unwrap().keys().all(|node| node.starts_with("package-node:")));
+    assert!(graph["nodes"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|node| node["environment_identity"].as_str().unwrap().contains("chain=636b622d746573746e6574")));
+    assert_eq!(graph["lockfiles"][0]["content"], std::fs::read_to_string(package.join("Cell.lock")).unwrap());
+}
+
+#[test]
+fn cellc_build_plan_workspace_units_follow_the_member_graph() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("Cell.toml"), "[workspace]\nmembers = [\"app\", \"right\", \"left\", \"shared\"]\n").unwrap();
+    write_workspace_member(root, "shared", "shared", &[]);
+    let left = write_workspace_member(root, "left", "left", &[("shared", "../shared")]);
+    let right = write_workspace_member(root, "right", "right", &[("shared", "../shared")]);
+    let app = write_workspace_member(root, "app", "app", &[("left", "../left"), ("right", "../right")]);
+    lock_package(&left);
+    lock_package(&right);
+    lock_package(&app);
+
+    let output = cellc_command().current_dir(root).args(["build-plan", "-p", "app", "--offline", "--json"]).output().unwrap();
+    assert!(output.status.success(), "stdout: {}", String::from_utf8_lossy(&output.stdout));
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let units = plan["units"].as_array().unwrap();
+    assert_eq!(
+        units.iter().map(|unit| unit["package_name"].as_str().unwrap()).collect::<Vec<_>>(),
+        ["shared", "left", "right", "app"]
+    );
+    assert!(units[0]["direct_dependencies"].as_array().unwrap().is_empty());
+    assert_eq!(units[1]["direct_dependencies"], serde_json::json!([units[0]["id"].clone()]));
+    assert_eq!(units[2]["direct_dependencies"], serde_json::json!([units[0]["id"].clone()]));
+    assert_eq!(units[3]["direct_dependencies"], serde_json::json!([units[1]["id"].clone(), units[2]["id"].clone()]));
+}
+
+#[test]
+fn cellc_inspection_rejects_unknown_schema_versions() {
+    let dir = tempfile::tempdir().unwrap();
+    let package = write_workspace_member(dir.path(), "app", "app", &[]);
+    for command in ["resolve-graph", "build-plan"] {
+        let output = cellc_command().current_dir(&package).args([command, "--schema-version", "2", "--json"]).output().unwrap();
+        assert!(!output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(report["diagnostics"][0]["message"].as_str().unwrap().contains("unsupported inspection schema version 2"));
+    }
+}
+
 // ── Incremental compilation e2e tests ────────────────────────────────────────
 
 #[test]

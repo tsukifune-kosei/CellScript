@@ -88,6 +88,14 @@ struct LoadedMember {
     manifest: PackageManifest,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct CanonicalPackageIdentity {
+    pub source_kind: String,
+    pub source_identity: String,
+    pub node_id: String,
+    pub instance_identity: String,
+}
+
 pub fn resolve_workspace_graph(root: &Path, options: &ResolutionOptions) -> Result<WorkspaceResolveGraph> {
     let root = if root.as_os_str().is_empty() { Path::new(".") } else { root };
     let canonical_root = std::fs::canonicalize(root)
@@ -145,35 +153,35 @@ pub fn resolve_workspace_graph(root: &Path, options: &ResolutionOptions) -> Resu
 
         for package in manager.get_resolved().values() {
             let coordinate = (package.namespace.clone(), package.name.clone());
-            let (source_kind, source_identity, workspace_node_id, instance_identity) =
-                workspace_package_identity(&canonical_root, package)?;
+            let package_identity = canonical_package_identity(&canonical_root, package)?;
             if let Some((selected_identity, selected_node_id)) = selected_coordinates.get(&coordinate) {
-                if selected_identity != &instance_identity {
+                if selected_identity != &package_identity.instance_identity {
                     return Err(CompileError::without_span(format!(
                         "workspace package instance conflict for '{}': selected '{}' and '{}'",
                         display_coordinate(&coordinate),
                         selected_node_id,
-                        workspace_node_id
+                        package_identity.node_id
                     ))
                     .with_code("E2601")
                     .with_details(serde_json::json!({
                         "coordinate": { "namespace": coordinate.0, "name": coordinate.1 },
                         "selected_node_id": selected_node_id,
-                        "incoming_node_id": workspace_node_id,
+                        "incoming_node_id": package_identity.node_id,
                         "workspace_member": member.identity.name,
                         "phase": "workspace-resolution",
                     })));
                 }
             } else {
-                selected_coordinates.insert(coordinate, (instance_identity, workspace_node_id.clone()));
+                selected_coordinates
+                    .insert(coordinate, (package_identity.instance_identity.clone(), package_identity.node_id.clone()));
             }
-            resolved_nodes.entry(workspace_node_id.clone()).or_insert_with(|| WorkspaceResolvedNode {
-                node_id: workspace_node_id,
+            resolved_nodes.entry(package_identity.node_id.clone()).or_insert_with(|| WorkspaceResolvedNode {
+                node_id: package_identity.node_id,
                 name: package.name.clone(),
                 namespace: package.namespace.clone(),
                 version: package.version.clone(),
-                source_kind,
-                source_identity,
+                source_kind: package_identity.source_kind,
+                source_identity: package_identity.source_identity,
                 source_hash: package.source_hash.clone(),
                 manifest_digest: package.manifest_digest.clone(),
                 compiler_requirement: package.compiler_requirement.clone(),
@@ -348,7 +356,7 @@ fn member_id(manifest: &PackageManifest, path: &str, digest: &str) -> String {
     format!("workspace-member:{}", hex::encode(Sha256::digest(input.as_bytes())))
 }
 
-fn workspace_package_identity(root: &Path, package: &ResolvedPackage) -> Result<(String, String, String, String)> {
+pub(crate) fn canonical_package_identity(root: &Path, package: &ResolvedPackage) -> Result<CanonicalPackageIdentity> {
     let (source_kind, source_identity, node_source) = match &package.source {
         PackageSource::Local(_) => {
             let canonical = std::fs::canonicalize(&package.path).map_err(|error| {
@@ -379,7 +387,7 @@ fn workspace_package_identity(root: &Path, package: &ResolvedPackage) -> Result<
         package.manifest_digest,
         package.compiler_requirement
     );
-    Ok((source_kind, source_identity, workspace_node_id, instance_identity))
+    Ok(CanonicalPackageIdentity { source_kind, source_identity, node_id: workspace_node_id, instance_identity })
 }
 
 fn display_coordinate(coordinate: &(Option<String>, String)) -> String {

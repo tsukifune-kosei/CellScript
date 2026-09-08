@@ -1859,6 +1859,16 @@ impl LspServer {
                 edit: None,
             });
             actions.push(CodeAction {
+                title: "Inspect locked package selection with `cellc resolve-graph --offline`".to_string(),
+                kind: "quickfix".to_string(),
+                edit: None,
+            });
+            actions.push(CodeAction {
+                title: "Inspect build units with `cellc build-plan --offline`".to_string(),
+                kind: "quickfix".to_string(),
+                edit: None,
+            });
+            actions.push(CodeAction {
                 title: "Use `--target riscv64-asm` until executable stateful lowering is implemented".to_string(),
                 kind: "quickfix".to_string(),
                 edit: None,
@@ -3736,6 +3746,8 @@ action update(amount: u64) -> u64 {
 
         let actions = server.code_action(&uri, diagnostic_range);
         assert!(actions.iter().any(|action| action.title.contains("cellc metadata")));
+        assert!(actions.iter().any(|action| action.title.contains("cellc resolve-graph")));
+        assert!(actions.iter().any(|action| action.title.contains("cellc build-plan")));
         assert!(actions.iter().any(|action| action.title.contains("riscv64-asm")));
         assert!(actions.iter().all(|action| action.edit.is_none()));
     }

@@ -235,6 +235,23 @@ dependents. Successful non-frozen builds refresh each member's own build
 identity and never encode artifact hashes as dependency nodes at the workspace
 root. See [Canonical Workspace Graph](../CELLSCRIPT_WORKSPACE_GRAPH.md).
 
+## Inspect Resolution And Build Units
+
+Use the package inspection commands before compiling when CI, an editor, or a
+reviewer needs the exact selection:
+
+```bash
+cellc resolve-graph . --environment testnet --offline --json
+cellc build-plan . --target riscv64-elf --target-profile ckb --offline --json
+```
+
+These commands read existing locks and local sources without updating locks or
+cache recency. `resolve-graph` shows aliases, runtime/test scope, features,
+environment identity, source hashes, and stale lock nodes. `build-plan` adds
+entry, target/profile, compatibility, VM/codec, expected outputs, direct units,
+and cache status. A later `cellc build --json` reports the same unit identity.
+See [Package Resolve Graph And Build Plan](../CELLSCRIPT_PACKAGE_INSPECTION.md).
+
 ## Execute Package Scenarios
 
 Executable tests are versioned `*.scenario.json` files under `tests/`. Name a

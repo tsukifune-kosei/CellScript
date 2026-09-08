@@ -669,6 +669,7 @@ CKB cycle/capacity estimates.
 |---|---|
 | **Package workflow** (`package/`) | `Cell.toml` parsing, enforced compiler SemVer requirements, single-instance package-coordinate unification, path/git/registry source resolution, manifest-bound `Cell.lock` v5 graphs, aliases, features/dev modes, genesis-bound environments, and bounded update-time resolvers; `cellc init`/`add`/`remove`/`lock`/`install`/`update`/`info`. Builds consume exact immutable Git/Registry pins and verified source hashes without mutable discovery; the Registry profile catalog keeps non-CellScript artifacts non-resolving. |
 | **Workspace graph** (`package/workspace.rs`) | Canonical explicit members and exclusions, unique member names/paths, independently authoritative member locks, dependency-first scheduling, package-selection closure, failure propagation, and the versioned `cellscript-workspace-resolve-graph-v1` model. Virtual roots never receive synthetic package locks. |
+| **Package inspection** (`package/inspection.rs`) | Read-only, negotiated `cellscript-resolve-graph-v1` and `cellscript-build-plan-v1` schemas with stable source/build identities, edge provenance, exact lock snapshots, cache reasons, expected outputs, and build-time identity validation. |
 | **Incremental compiler** (`incremental/`) | Dependency-graph-aware build cache — skips recompilation when inputs are unchanged and retains the 32 most recently used identities per cache root. |
 | **Build integration** (`lib.rs`) | Resolves `Cell.toml` → `CellBuildConfig`, merges CLI + manifest options, selects entry scope, runs policy gates, writes artifacts + metadata. |
 
@@ -797,6 +798,10 @@ Non-CellScript artifact profiles still fail closed.
 - `cellc build --workspace` / `check --workspace` — validate one canonical
   member graph, then process dependencies before dependents; `-p <name>` also
   includes the selected member's transitive workspace closure
+- `cellc resolve-graph [INPUT]` — inspect authoritative roots, locked package
+  nodes, aliases, scopes, features, environments, provenance, and stale nodes
+- `cellc build-plan [INPUT]` — inspect build units, direct unit dependencies,
+  compatibility/VM/codec identities, outputs, cache keys, and rebuild reasons
 - `cellc test --backend simulator|ckb-vm|all` — execute versioned
   `*.scenario.json` fixtures; `--no-run` is the explicit compile-only mode
 - top-level `cellc <input>` and report commands accept `.cell` files, package

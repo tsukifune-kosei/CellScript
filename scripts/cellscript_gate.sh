@@ -450,6 +450,13 @@ check_workspace_graph_example() {
         -p cellscript --bin cellc -- check --workspace --frozen --offline --json
 }
 
+check_package_inspection_schemas() {
+    run cargo run --quiet --locked -p cellscript --bin cellc -- \
+        resolve-graph examples/package_graph --environment mainnet --offline --schema-version 1 --json
+    run cargo run --quiet --locked -p cellscript --bin cellc -- \
+        build-plan examples/workspace_graph --package app --offline --schema-version 1 --json
+}
+
 run_registry_type_script_check() {
     run cargo fmt --manifest-path contracts/registry-type-script/Cargo.toml -- --check
     run contracts/registry-type-script/build_reproducible_release.sh
@@ -567,6 +574,7 @@ run_dev_gate() {
     run ./scripts/cellscript_syntax_combo_audit.sh quick
     run_executable_package_scenarios simulator
     check_workspace_graph_example
+    check_package_inspection_schemas
     run cargo run --quiet --locked -p cellscript-tools --bin cellscript-tools -- \
         --root "$ROOT_DIR" check-skill-pack
     check_cellscript_doc_status_freshness
@@ -600,6 +608,7 @@ run_ci_gate() {
     run cargo test --locked -p cellscript-tools -- --test-threads=1
     run_executable_package_scenarios all
     check_workspace_graph_example
+    check_package_inspection_schemas
     run cargo clippy --locked -p cellscript --all-targets -- -D warnings
     run cargo clippy --locked -p cellscript-artifact-checker --all-targets -- -D warnings
     run cargo clippy --locked -p cellscript-fiber-adapter --all-targets -- -D warnings

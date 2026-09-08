@@ -59,6 +59,12 @@ failure propagation, and member-local build-identity refresh. Virtual workspace
 roots reject synthetic `Cell.lock` artifact lists. The frozen/offline diamond
 fixture is part of both local and CI gates.
 
+Issue #19 is implemented through separately negotiated resolve-graph and
+build-plan v1 schemas. Queries are locked, offline, deterministic, and
+side-effect free; build results validate the same unit identity. Package audit,
+LSP/VS Code, and both routine gates use the shared schemas. `cellc metadata`
+continues to mean compiled-program metadata.
+
 Until this branch passes those criteria, treat it as development work, use
 `0.26b` only as its experimental implementation baseline, and retain 0.25 as
 the predecessor release contract. Do not publish a 0.26 tag solely to preserve

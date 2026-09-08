@@ -1,0 +1,31 @@
+{
+  "schema": "cellscript-resolve-graph-v1",
+  "schema_version": 1,
+  "compiler_version": "0.26.0",
+  "graph_digest": "sha256:fixture",
+  "resolution_digest": "sha256:fixture",
+  "root_kind": "package",
+  "workspace_root": ".",
+  "selection": {
+    "scope": "runtime",
+    "scope_source": "default",
+    "requested_features": [],
+    "effective_features": ["default"],
+    "feature_source": "default",
+    "all_features": false,
+    "default_features": true,
+    "environment": null,
+    "environment_source": "default",
+    "requested_offline": true,
+    "effective_offline": true,
+    "lock_mode": "read-only-authoritative",
+    "mutable_resolution_allowed": false
+  },
+  "roots": [],
+  "nodes": {},
+  "edges": [],
+  "build_order": [],
+  "stale_nodes": [],
+  "warnings": [],
+  "lockfiles": []
+}
