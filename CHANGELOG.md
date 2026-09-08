@@ -492,7 +492,9 @@
   bounded typed-witness backend with a single-process 220-case replay and a
   second read-only 220-case replay; the 22 affected probe artifacts and their
   transaction-context hashes change while acceptance, rejection, failure-mode,
-  original-binary, and normalized-fixture evidence remains stable.
+  original-binary, and normalized-fixture evidence remains stable. Refresh the
+  production evidence inventory for the typed-temporal and zero-lock sighash
+  language examples while retaining their non-production classification.
 
 ## 0.26b - Experimental semantic-foundation branch
 

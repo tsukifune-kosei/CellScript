@@ -53,6 +53,8 @@ pub(crate) const EXPECTED_LANGUAGE_EXAMPLES: &[&str] = &[
     "ckb/blake2b_hash.cell",
     "ckb/multi_step_pipeline.cell",
     "ckb/witness_source.cell",
+    "ckb/typed_temporal.cell",
+    "ckb/sighash_all_zero_lock.cell",
     "ownership/identity_lifecycle.cell",
     "ownership/semantic_foundation.cell",
     "ownership/borrow.cell",
