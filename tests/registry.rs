@@ -337,6 +337,7 @@ fn registry_index_write_read_round_trip() {
             yanked_reason: None,
             replaced_by: None,
             audit: None,
+            compiler_requirement: "*".to_string(),
         }],
     };
 
@@ -374,6 +375,7 @@ fn registry_index_append_version_creates_new_file() {
         yanked_reason: None,
         replaced_by: None,
         audit: None,
+        compiler_requirement: "*".to_string(),
     };
 
     RegistryIndex::append_version(temp.path(), "my_pkg", "my_ns", version).unwrap();
@@ -407,6 +409,7 @@ fn registry_index_append_version_updates_existing() {
         yanked_reason: None,
         replaced_by: None,
         audit: None,
+        compiler_requirement: "*".to_string(),
     };
     RegistryIndex::append_version(temp.path(), "pkg", "ns", v1).unwrap();
 
@@ -428,6 +431,7 @@ fn registry_index_append_version_updates_existing() {
         yanked_reason: None,
         replaced_by: None,
         audit: None,
+        compiler_requirement: "*".to_string(),
     };
     RegistryIndex::append_version(temp.path(), "pkg", "ns", v2).unwrap();
 
@@ -453,6 +457,7 @@ fn registry_index_append_version_updates_existing() {
         yanked_reason: None,
         replaced_by: None,
         audit: None,
+        compiler_requirement: "*".to_string(),
     };
     RegistryIndex::append_version(temp.path(), "pkg", "ns", v1_updated).unwrap();
 
@@ -490,6 +495,7 @@ fn registry_index_with_dependencies_and_audit() {
         yanked_reason: None,
         replaced_by: None,
         audit: Some(RegistryAuditInfo { report_hash: Some("0x5555".to_string()), acceptance_gate: Some("passed".to_string()) }),
+        compiler_requirement: "*".to_string(),
     };
 
     RegistryIndex::append_version(temp.path(), "amm", "cellscript", version).unwrap();
@@ -717,6 +723,8 @@ fn lockfile_with_build_and_deployment_round_trip() {
         namespace: Some("cellscript".to_string()),
         source_hash: Some("blake2b:0xfeed".to_string()),
         compiler_source_hash: None,
+        compiler_requirement: "*".to_string(),
+        resolver_compiler_version: cellscript::VERSION.to_string(),
     };
     lockfile.package_build = Some(LockedBuildInfo {
         edition: cellscript::CURRENT_EDITION,
@@ -762,6 +770,8 @@ fn lockfile_with_build_and_deployment_round_trip() {
                 constraints_hash: Some("blake2b:0xtoken_constraints".to_string()),
                 ..Default::default()
             }),
+            compiler_requirement: "*".to_string(),
+            resolver_compiler_version: cellscript::VERSION.to_string(),
         },
     );
 
@@ -823,6 +833,8 @@ namespace = "cellscript"
             manifest_digest: "sha256:test-token-manifest".to_string(),
             dependencies: BTreeMap::new(),
             build: None,
+            compiler_requirement: "*".to_string(),
+            resolver_compiler_version: cellscript::VERSION.to_string(),
         },
     );
     lockfile.root.dependencies.insert("token".to_string(), "token".to_string());
@@ -863,6 +875,7 @@ fn publish_flow_computes_source_hash_and_writes_registry_json() {
         yanked_reason: None,
         replaced_by: None,
         audit: None,
+        compiler_requirement: "*".to_string(),
     };
 
     RegistryIndex::append_version(pkg_dir, "my-lib", "myns", version).unwrap();
@@ -910,6 +923,7 @@ fn full_publish_install_verify_flow_with_local_git() {
         yanked_reason: None,
         replaced_by: None,
         audit: None,
+        compiler_requirement: "*".to_string(),
     };
     RegistryIndex::append_version(&source_repo, "token", "cellscript", version).unwrap();
 
@@ -981,6 +995,7 @@ fn package_manager_resolves_artifact_api_dependency_with_source_hash() {
             yanked_reason: None,
             replaced_by: None,
             audit: None,
+            compiler_requirement: "*".to_string(),
         },
     )
     .unwrap();
@@ -1066,6 +1081,7 @@ fn package_manager_rejects_unverified_registry_entry_by_default() {
             yanked_reason: None,
             replaced_by: None,
             audit: None,
+            compiler_requirement: "*".to_string(),
         },
     )
     .unwrap();
@@ -1143,6 +1159,7 @@ fn package_manager_persists_unverified_registry_policy_in_dependency_manifest() 
             yanked_reason: None,
             replaced_by: None,
             audit: None,
+            compiler_requirement: "*".to_string(),
         },
     )
     .unwrap();
@@ -1220,6 +1237,7 @@ fn package_manager_rejects_registry_source_hash_mismatch() {
             yanked_reason: None,
             replaced_by: None,
             audit: None,
+            compiler_requirement: "*".to_string(),
         },
     )
     .unwrap();
@@ -1292,6 +1310,8 @@ fn package_verify_detects_missing_source_hash() {
         namespace: None,
         source_hash: Some("deliberately_wrong_hash".to_string()),
         compiler_source_hash: None,
+        compiler_requirement: "*".to_string(),
+        resolver_compiler_version: cellscript::VERSION.to_string(),
     };
     lockfile.write_to_root(temp.path()).unwrap();
 
@@ -1339,6 +1359,8 @@ namespace = "cellscript"
             manifest_digest: "sha256:test-token-manifest".to_string(),
             dependencies: BTreeMap::new(),
             build: None,
+            compiler_requirement: "*".to_string(),
+            resolver_compiler_version: cellscript::VERSION.to_string(),
         },
     );
     lockfile.root.dependencies.insert("token".to_string(), "token".to_string());
@@ -1388,6 +1410,8 @@ namespace = "cellscript"
             manifest_digest: "sha256:test-token-manifest".to_string(),
             dependencies: BTreeMap::new(),
             build: None,
+            compiler_requirement: "*".to_string(),
+            resolver_compiler_version: cellscript::VERSION.to_string(),
         },
     );
     lockfile.root.dependencies.insert("token".to_string(), "token".to_string());

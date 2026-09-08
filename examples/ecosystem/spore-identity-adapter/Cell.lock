@@ -1,11 +1,13 @@
-version = 3
-schema = "cellscript-lock-v0.24-graph-v1"
+version = 4
+schema = "cellscript-lock-v0.30-compiler-requirement-v1"
 
 [package]
 edition = "2026"
 name = "spore-identity-adapter"
 version = "0.1.0"
 source_hash = "dde328d2a240144d0bf38f17fc2ab7bacf6c7bcd8d153adaace02e11801e97bf"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
 [root]
 manifest_digest = "sha256:b90a106e1761fcce0e3c62fffe787624635d6cd67e81cbe2a19992cdb496a17d"

@@ -1312,6 +1312,11 @@ pub struct RegistryVersion {
     pub tag: String,
     pub source_hash: String,
     pub cellscript_version: String,
+    /// Source compatibility requirement copied from the package manifest.
+    /// `cellscript_version` above remains the exact compiler that produced the
+    /// published artifact metadata.
+    #[serde(default = "default_registry_compiler_requirement")]
+    pub compiler_requirement: String,
     /// Long-lived source-language semantics epoch.
     pub edition: crate::CellScriptEdition,
     /// Hash of the resolved source/target/assurance/ABI/schema profile.
@@ -1347,6 +1352,10 @@ impl RegistryVersion {
         } else {
             self.status.clone()
         }
+    }
+
+    pub fn supports_compiler(&self, compiler_version: &str) -> bool {
+        crate::package::compiler_requirement_matches(&self.compiler_requirement, compiler_version).unwrap_or(false)
     }
 
     pub fn resolver_block_reason(&self, policy: RegistryResolutionPolicy, allow_suppressed_exact_pin: bool) -> Option<&'static str> {
@@ -1387,13 +1396,29 @@ pub struct RegistryAuditInfo {
 impl RegistryIndex {
     pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
-    fn ensure_current_schema(&self) -> Result<()> {
+    pub(crate) fn ensure_current_schema(&self) -> Result<()> {
         if self.schema_version != Self::CURRENT_SCHEMA_VERSION {
             return Err(CompileError::without_span(format!(
                 "unsupported registry.json schema_version {}; current registry contract requires schema_version {}",
                 self.schema_version,
                 Self::CURRENT_SCHEMA_VERSION,
             )));
+        }
+        for version in &self.versions {
+            crate::package::parse_compiler_requirement(&version.compiler_requirement).map_err(|error| {
+                CompileError::without_span(format!(
+                    "registry package '{}/{}@{}' has invalid compiler_requirement '{}': {}",
+                    self.namespace, self.name, version.version, version.compiler_requirement, error.message
+                ))
+                .with_code("E2600")
+            })?;
+            semver::Version::parse(&version.cellscript_version).map_err(|error| {
+                CompileError::without_span(format!(
+                    "registry package '{}/{}@{}' has invalid build compiler version '{}': {error}",
+                    self.namespace, self.name, version.version, version.cellscript_version
+                ))
+                .with_code("E2600")
+            })?;
         }
         Ok(())
     }
@@ -1472,6 +1497,20 @@ impl RegistryIndex {
         self.find_matching_version_with_req_and_policy(&req, allow_suppressed_exact_pin, policy)
     }
 
+    pub(crate) fn find_matching_version_for_resolution_ignoring_compiler(
+        &self,
+        version_req: &str,
+        policy: RegistryResolutionPolicy,
+    ) -> Option<&RegistryVersion> {
+        let req = crate::package::version::parse_version_req(version_req).ok()?;
+        let allow_suppressed_exact_pin = matches!(req, crate::package::VersionReq::Exact(_));
+        self.versions
+            .iter()
+            .filter(|version| version.resolver_block_reason(policy, allow_suppressed_exact_pin).is_none())
+            .filter(|version| crate::package::version::satisfies(&version.version, &req))
+            .max_by(|left, right| compare_registry_versions(&left.version, &right.version))
+    }
+
     fn find_matching_version_with_req(&self, req: &crate::package::VersionReq, allow_yanked: bool) -> Option<&RegistryVersion> {
         self.find_matching_version_with_req_and_policy(
             req,
@@ -1490,8 +1529,13 @@ impl RegistryIndex {
             .iter()
             .filter(|v| v.resolver_block_reason(policy, allow_suppressed_exact_pin).is_none())
             .filter(|v| crate::package::version::satisfies(&v.version, req))
+            .filter(|v| v.supports_compiler(crate::VERSION))
             .max_by(|a, b| compare_registry_versions(&a.version, &b.version))
     }
+}
+
+fn default_registry_compiler_requirement() -> String {
+    "*".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -2141,6 +2185,7 @@ left = "a"
                     yanked_reason: None,
                     replaced_by: None,
                     audit: None,
+                    compiler_requirement: "*".to_string(),
                 },
                 RegistryVersion {
                     edition: crate::CURRENT_EDITION,
@@ -2160,6 +2205,7 @@ left = "a"
                     yanked_reason: None,
                     replaced_by: None,
                     audit: None,
+                    compiler_requirement: "*".to_string(),
                 },
                 RegistryVersion {
                     edition: crate::CURRENT_EDITION,
@@ -2179,6 +2225,7 @@ left = "a"
                     yanked_reason: None,
                     replaced_by: None,
                     audit: None,
+                    compiler_requirement: "*".to_string(),
                 },
             ],
         };
@@ -2194,6 +2241,98 @@ left = "a"
 
         // Should not find a non-existent major version
         assert!(index.find_matching_version("1.0.0").is_none());
+    }
+
+    #[test]
+    fn registry_resolution_selects_latest_compiler_compatible_release() {
+        let compatible = RegistryVersion {
+            edition: crate::CURRENT_EDITION,
+            compatibility_profile_hash: "test-compatibility-profile".to_string(),
+            version: "1.0.0".to_string(),
+            tag: "v1.0.0".to_string(),
+            source_hash: "compatible".to_string(),
+            cellscript_version: crate::VERSION.to_string(),
+            compiler_requirement: "*".to_string(),
+            dependencies: BTreeMap::new(),
+            abi_index: None,
+            schema_hash: None,
+            license: None,
+            released_at: None,
+            status: RegistryEntryStatus::VerifiedBuild,
+            yanked: false,
+            yanked_at: None,
+            yanked_reason: None,
+            replaced_by: None,
+            audit: None,
+        };
+        let incompatible = RegistryVersion {
+            version: "1.1.0".to_string(),
+            tag: "v1.1.0".to_string(),
+            source_hash: "future".to_string(),
+            compiler_requirement: ">=999.0.0".to_string(),
+            ..compatible.clone()
+        };
+        let next_interface_line = RegistryVersion {
+            version: "2.0.0".to_string(),
+            tag: "v2.0.0".to_string(),
+            source_hash: "next-interface-line".to_string(),
+            ..compatible.clone()
+        };
+        let index = RegistryIndex {
+            schema_version: RegistryIndex::CURRENT_SCHEMA_VERSION,
+            name: "token".to_string(),
+            namespace: "cellscript".to_string(),
+            versions: vec![compatible, incompatible, next_interface_line],
+        };
+
+        let selected = index
+            .find_matching_version_for_resolution(">=1.0.0, <2.0.0", RegistryResolutionPolicy::default())
+            .expect("the latest compiler-compatible release must be selected");
+        assert_eq!(selected.version, "1.0.0");
+        assert!(index.find_matching_version_for_resolution("=1.1.0", RegistryResolutionPolicy::default()).is_none());
+        assert_eq!(
+            index
+                .find_matching_version_for_resolution_ignoring_compiler("=1.1.0", RegistryResolutionPolicy::default())
+                .expect("diagnostics retain the incompatible candidate")
+                .version,
+            "1.1.0"
+        );
+    }
+
+    #[test]
+    fn registry_index_rejects_malformed_compiler_requirement() {
+        let index = RegistryIndex {
+            schema_version: RegistryIndex::CURRENT_SCHEMA_VERSION,
+            name: "token".to_string(),
+            namespace: "cellscript".to_string(),
+            versions: vec![RegistryVersion {
+                edition: crate::CURRENT_EDITION,
+                compatibility_profile_hash: "test-compatibility-profile".to_string(),
+                version: "1.0.0".to_string(),
+                tag: "v1.0.0".to_string(),
+                source_hash: "hash".to_string(),
+                cellscript_version: crate::VERSION.to_string(),
+                compiler_requirement: "not-semver".to_string(),
+                dependencies: BTreeMap::new(),
+                abi_index: None,
+                schema_hash: None,
+                license: None,
+                released_at: None,
+                status: RegistryEntryStatus::VerifiedBuild,
+                yanked: false,
+                yanked_at: None,
+                yanked_reason: None,
+                replaced_by: None,
+                audit: None,
+            }],
+        };
+        let repo = tempfile::tempdir().unwrap();
+
+        let error = index.write_to_repo(repo.path()).unwrap_err();
+
+        assert_eq!(error.code.as_deref(), Some("E2600"));
+        assert!(error.message.contains("not-semver"), "{}", error.message);
+        assert!(!repo.path().join("registry.json").exists());
     }
 
     #[test]
@@ -2220,6 +2359,7 @@ left = "a"
                 yanked_reason: None,
                 replaced_by: None,
                 audit: None,
+                compiler_requirement: "*".to_string(),
             }],
         };
 
@@ -2252,6 +2392,7 @@ left = "a"
             yanked_reason: Some("security advisory".to_string()),
             replaced_by: Some("1.2.1".to_string()),
             audit: None,
+            compiler_requirement: "*".to_string(),
         };
 
         let json = serde_json::to_string_pretty(&yanked).unwrap();
@@ -2301,6 +2442,7 @@ left = "a"
                     yanked_reason: None,
                     replaced_by: None,
                     audit: None,
+                    compiler_requirement: "*".to_string(),
                 },
                 RegistryVersion {
                     edition: crate::CURRENT_EDITION,
@@ -2320,6 +2462,7 @@ left = "a"
                     yanked_reason: None,
                     replaced_by: None,
                     audit: None,
+                    compiler_requirement: "*".to_string(),
                 },
                 RegistryVersion {
                     edition: crate::CURRENT_EDITION,
@@ -2339,6 +2482,7 @@ left = "a"
                     yanked_reason: None,
                     replaced_by: None,
                     audit: None,
+                    compiler_requirement: "*".to_string(),
                 },
             ],
         };
@@ -2459,6 +2603,7 @@ left = "a"
                     report_hash: Some("blake2b:0x5555".to_string()),
                     acceptance_gate: Some("passed".to_string()),
                 }),
+                compiler_requirement: "*".to_string(),
             }],
         };
 

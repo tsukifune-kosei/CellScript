@@ -186,6 +186,12 @@ pub const COMPILER_ERROR_INFOS: &[CompilerErrorInfo] = &[
         hint: "Inspect every reported compatibility dimension and intentionally version or reverse the incompatible change before Registry publication.",
     },
     CompilerErrorInfo {
+        code: "E2600",
+        name: "package-compiler-incompatible",
+        description: "A package declares a malformed or incompatible CellScript compiler requirement.",
+        hint: "Select a package version supported by this cellc release, or use a compiler satisfying the package's CellScript SemVer requirement.",
+    },
+    CompilerErrorInfo {
         code: "E2900",
         name: "backend-invariant",
         description: "A backend invariant was violated after semantic checking.",

@@ -1,11 +1,13 @@
-version = 3
-schema = "cellscript-lock-v0.24-graph-v1"
+version = 4
+schema = "cellscript-lock-v0.30-compiler-requirement-v1"
 
 [package]
 edition = "2027"
 name = "semantic-foundation-2027"
 version = "0.1.0"
-source_hash = "95ac46e63de84a38de7ab1b7ef685bd268c2c951e8861884c3cb2492380b37ec"
+source_hash = "855e6f44c89d2d9083f2a74bb280b761b0659b878f3851db077a9a33b0696e38"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
 [root]
 manifest_digest = "sha256:fbf5ca16f485f4713e71188c79796bd467dbbb743ba8d00c0cbc837c6466a12a"

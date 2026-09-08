@@ -1,11 +1,13 @@
-version = 3
-schema = "cellscript-lock-v0.24-graph-v1"
+version = 4
+schema = "cellscript-lock-v0.30-compiler-requirement-v1"
 
 [package]
 edition = "2026"
 name = "scenario_basics"
 version = "0.1.0"
 source_hash = "1ae9e3846d862a5dfcd0f430315d68bc7a415bbf7b9d70afd12edac9b39646c6"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
 [root]
 manifest_digest = "sha256:27f66dac6971a8727e2d43d4bde373e7c67e32a2f229b1833af512c4e4429d81"

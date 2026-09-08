@@ -2,6 +2,19 @@
 
 ## 0.30 - Capability closure development branch
 
+- Enforce `[package].cellscript_version` as a real compiler SemVer
+  requirement before source loading. Legacy omission remains `*`, historical
+  bare versions mean a minimum, and malformed or incompatible requirements
+  fail with stable `E2600`. Dependency preflight aggregates every discovered
+  incompatible path/Git/Registry package and incoming edge in machine JSON;
+  Registry selection deterministically chooses the newest compiler-compatible
+  package version while keeping the exact build compiler as separate evidence.
+  Advance `Cell.lock` to version 4 and
+  `cellscript-lock-v0.30-compiler-requirement-v1`: the root, every dependency,
+  and canonical node identity bind the declared requirement and resolving
+  compiler release. Frozen builds revalidate without selecting replacements,
+  while explicit `cellc lock`/`update` may repin version 1-3 locks.
+
 - Rebind the CKB acceptance transaction recipes to the typed timelock
   contract. `request_release`, `execute_release`, and `can_unlock_lock` now
   supply canonical absolute-epoch `since` values for the selected `TimeLock`;

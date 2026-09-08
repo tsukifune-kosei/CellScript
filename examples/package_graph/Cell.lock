@@ -1,85 +1,103 @@
-version = 3
-schema = "cellscript-lock-v0.24-graph-v1"
+version = 4
+schema = "cellscript-lock-v0.30-compiler-requirement-v1"
 
 [package]
 edition = "2026"
 name = "package_graph_demo"
 version = "0.1.0"
 source_hash = "5f146552641c097ec165eeb72cc368f3c2b4f762221417da3960960967ef26cd"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
 [root]
 manifest_digest = "sha256:57f0f363771fc6ca67b678e3b9a676b1e1ee4021acfa25e0cf6eeb5a7f7edad2"
 
-[dependencies."audit_helpers@0.4.2|path:deps/audit-helpers|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"]
+[dependencies."audit_helpers@0.4.2|path:deps/audit-helpers|compiler=2a|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"]
 name = "audit_helpers"
 version = "0.4.2"
 source_hash = "44b8be2a00aaba5c51b296623598792a95caa48c8d0cbd5036936a92a68038b4"
 manifest_digest = "sha256:e24ef32ca50f1e257c7757d6c16d483a07c7e574236267947b16d2aa36cdc8fc"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
-[dependencies."audit_helpers@0.4.2|path:deps/audit-helpers|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default".source.Path]
+[dependencies."audit_helpers@0.4.2|path:deps/audit-helpers|compiler=2a|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default".source.Path]
 path = "deps/audit-helpers"
 
-[dependencies."audit_helpers@0.4.2|path:deps/audit-helpers|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"]
+[dependencies."audit_helpers@0.4.2|path:deps/audit-helpers|compiler=2a|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"]
 name = "audit_helpers"
 version = "0.4.2"
 source_hash = "44b8be2a00aaba5c51b296623598792a95caa48c8d0cbd5036936a92a68038b4"
 manifest_digest = "sha256:e24ef32ca50f1e257c7757d6c16d483a07c7e574236267947b16d2aa36cdc8fc"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
-[dependencies."audit_helpers@0.4.2|path:deps/audit-helpers|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default".source.Path]
+[dependencies."audit_helpers@0.4.2|path:deps/audit-helpers|compiler=2a|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default".source.Path]
 path = "deps/audit-helpers"
 
-[dependencies."canonical_math@1.2.3|path:deps/canonical-math|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"]
+[dependencies."canonical_math@1.2.3|path:deps/canonical-math|compiler=2a|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"]
 name = "canonical_math"
 version = "1.2.3"
 source_hash = "fd053efe46302c263148061ecd62e798100d31c38b2308285097462f70331864"
 manifest_digest = "sha256:bcb871cd37a39cf52b5b30b3b23c43ada0b90f0c68476b1218a08a0dd223b5ea"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
-[dependencies."canonical_math@1.2.3|path:deps/canonical-math|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default".source.Path]
+[dependencies."canonical_math@1.2.3|path:deps/canonical-math|compiler=2a|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default".source.Path]
 path = "deps/canonical-math"
 
-[dependencies."canonical_math@1.2.3|path:deps/canonical-math|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"]
+[dependencies."canonical_math@1.2.3|path:deps/canonical-math|compiler=2a|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"]
 name = "canonical_math"
 version = "1.2.3"
 source_hash = "fd053efe46302c263148061ecd62e798100d31c38b2308285097462f70331864"
 manifest_digest = "sha256:bcb871cd37a39cf52b5b30b3b23c43ada0b90f0c68476b1218a08a0dd223b5ea"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
-[dependencies."canonical_math@1.2.3|path:deps/canonical-math|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default".source.Path]
+[dependencies."canonical_math@1.2.3|path:deps/canonical-math|compiler=2a|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default".source.Path]
 path = "deps/canonical-math"
 
-[dependencies."network_contracts@1.0.0|path:deps/contracts-mainnet|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"]
+[dependencies."network_contracts@1.0.0|path:deps/contracts-mainnet|compiler=2a|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"]
 name = "network_contracts"
 version = "1.0.0"
 source_hash = "509ab43e27f7e1cba59a079b92ed7d0e04128aab27de513817bb5225c71d7274"
 manifest_digest = "sha256:2e2fc06b5cf1f269e91356b8c39efc68f182e43592b6384df0629271dcfee6fe"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
-[dependencies."network_contracts@1.0.0|path:deps/contracts-mainnet|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default".source.Path]
+[dependencies."network_contracts@1.0.0|path:deps/contracts-mainnet|compiler=2a|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default".source.Path]
 path = "deps/contracts-mainnet"
 
-[dependencies."network_contracts@2.0.0|path:deps/contracts-testnet|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"]
+[dependencies."network_contracts@2.0.0|path:deps/contracts-testnet|compiler=2a|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"]
 name = "network_contracts"
 version = "2.0.0"
 source_hash = "148e0ead158a5dfa4f84b6ec4b7c3d7783debe732d894dbf0157c0b8309e9539"
 manifest_digest = "sha256:b7269f73fc0802b76cd2dcc357d3927aca7d62c2194449082c02e5b083c5828c"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
-[dependencies."network_contracts@2.0.0|path:deps/contracts-testnet|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default".source.Path]
+[dependencies."network_contracts@2.0.0|path:deps/contracts-testnet|compiler=2a|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default".source.Path]
 path = "deps/contracts-testnet"
 
-[dependencies."scenario_test_support@0.1.0|path:deps/test-support|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"]
+[dependencies."scenario_test_support@0.1.0|path:deps/test-support|compiler=2a|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"]
 name = "scenario_test_support"
 version = "0.1.0"
 source_hash = "34956e5ec9750c7ba52b41b76396456f4f006952903579b1680863fa23f33d63"
 manifest_digest = "sha256:3d736afd4e06f265e1d00489321475a5b89b0c60bf040ed05814f21e7ec86c54"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
-[dependencies."scenario_test_support@0.1.0|path:deps/test-support|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default".source.Path]
+[dependencies."scenario_test_support@0.1.0|path:deps/test-support|compiler=2a|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default".source.Path]
 path = "deps/test-support"
 
-[dependencies."scenario_test_support@0.1.0|path:deps/test-support|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"]
+[dependencies."scenario_test_support@0.1.0|path:deps/test-support|compiler=2a|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"]
 name = "scenario_test_support"
 version = "0.1.0"
 source_hash = "34956e5ec9750c7ba52b41b76396456f4f006952903579b1680863fa23f33d63"
 manifest_digest = "sha256:3d736afd4e06f265e1d00489321475a5b89b0c60bf040ed05814f21e7ec86c54"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
-[dependencies."scenario_test_support@0.1.0|path:deps/test-support|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default".source.Path]
+[dependencies."scenario_test_support@0.1.0|path:deps/test-support|compiler=2a|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default".source.Path]
 path = "deps/test-support"
 
 [environments.mainnet]
@@ -87,21 +105,21 @@ chain_id = "ckb-mainnet"
 genesis_hash = "0x1111111111111111111111111111111111111111111111111111111111111111"
 
 [environments.mainnet.dependencies]
-audit = "audit_helpers@0.4.2|path:deps/audit-helpers|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"
-contracts = "network_contracts@1.0.0|path:deps/contracts-mainnet|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"
-core = "canonical_math@1.2.3|path:deps/canonical-math|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"
+audit = "audit_helpers@0.4.2|path:deps/audit-helpers|compiler=2a|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"
+contracts = "network_contracts@1.0.0|path:deps/contracts-mainnet|compiler=2a|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"
+core = "canonical_math@1.2.3|path:deps/canonical-math|compiler=2a|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"
 
 [environments.mainnet.dev_dependencies]
-test_support = "scenario_test_support@0.1.0|path:deps/test-support|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"
+test_support = "scenario_test_support@0.1.0|path:deps/test-support|compiler=2a|env=environment-independent:root=6d61696e6e6574:local=-:chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111|features=default"
 
 [environments.testnet]
 chain_id = "ckb-testnet"
 genesis_hash = "0x2222222222222222222222222222222222222222222222222222222222222222"
 
 [environments.testnet.dependencies]
-audit = "audit_helpers@0.4.2|path:deps/audit-helpers|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"
-contracts = "network_contracts@2.0.0|path:deps/contracts-testnet|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"
-core = "canonical_math@1.2.3|path:deps/canonical-math|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"
+audit = "audit_helpers@0.4.2|path:deps/audit-helpers|compiler=2a|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"
+contracts = "network_contracts@2.0.0|path:deps/contracts-testnet|compiler=2a|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"
+core = "canonical_math@1.2.3|path:deps/canonical-math|compiler=2a|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"
 
 [environments.testnet.dev_dependencies]
-test_support = "scenario_test_support@0.1.0|path:deps/test-support|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"
+test_support = "scenario_test_support@0.1.0|path:deps/test-support|compiler=2a|env=environment-independent:root=746573746e6574:local=-:chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222|features=default"

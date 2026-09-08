@@ -179,12 +179,15 @@ The 0.23 line deliberately starts new persisted identities:
 Readers reject earlier versions. They do not silently fill edition/profile
 fields or rewrite old files.
 
-The 0.24 line advances only the lock carrier to version 3 with schema
-`cellscript-lock-v0.24-graph-v1`. This is a dependency-resolution and source
-identity change, not a new source edition: Edition 2026, the compatibility
-profile, `Deployed.toml`, receipt, and generated-builder identities remain
-independently versioned. Build/check/test reject older locks; only explicit
-`cellc lock` or `cellc update` may repin them.
+The 0.24 line advanced the lock carrier to version 3. The 0.30 development
+line advances it to version 4 with schema
+`cellscript-lock-v0.30-compiler-requirement-v1`, binding the root and every
+dependency's compiler range plus the compiler release that resolved the graph.
+This is a dependency-resolution and source-tool compatibility change, not a
+new source edition: Edition 2026, the compatibility profile, `Deployed.toml`,
+receipt, and generated-builder identities remain independently versioned.
+Build/check/test reject older locks; only explicit `cellc lock` or
+`cellc update` may repin them.
 
 ## API Boundary
 

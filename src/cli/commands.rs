@@ -1294,6 +1294,8 @@ impl CommandExecutor {
                             manifest_digest: "workspace-member-artifact".to_string(),
                             dependencies: BTreeMap::new(),
                             build: None,
+                            compiler_requirement: "*".to_string(),
+                            resolver_compiler_version: crate::VERSION.to_string(),
                         },
                     );
                 }
@@ -6535,6 +6537,7 @@ fn build_publish_registry_version(
         tag: format!("v{}", manifest.package.version),
         source_hash: source_hash.to_string(),
         cellscript_version: result.metadata.compiler_version.clone(),
+        compiler_requirement: manifest.package.cellscript_version.clone(),
         edition: result.metadata.edition,
         compatibility_profile_hash: hash_json_value("compatibility_profile", &result.metadata.compatibility_profile)?,
         dependencies: deps,
@@ -13097,7 +13100,7 @@ fn read_lockfile_for_explicit_repin(root: &Path) -> Result<Lockfile> {
             let path = root.join("Cell.lock");
             let source = std::fs::read_to_string(&path).map_err(|_| error.clone())?;
             let value: toml::Value = toml::from_str(&source).map_err(|_| error.clone())?;
-            if value.get("version").and_then(toml::Value::as_integer).is_some_and(|version| matches!(version, 1 | 2)) {
+            if value.get("version").and_then(toml::Value::as_integer).is_some_and(|version| matches!(version, 1 | 2 | 3)) {
                 Ok(Lockfile::new())
             } else {
                 Err(error)
@@ -13180,6 +13183,8 @@ fn lockfile_package_info(root: &Path, manifest: &crate::package::PackageManifest
         namespace: manifest.package.namespace.clone(),
         source_hash: Some(crate::package::registry::compute_source_hash(root)?),
         compiler_source_hash: None,
+        compiler_requirement: manifest.package.cellscript_version.clone(),
+        resolver_compiler_version: crate::VERSION.to_string(),
     })
 }
 

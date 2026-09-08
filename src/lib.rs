@@ -21953,6 +21953,8 @@ fn load_manifest(package_root: &Utf8Path) -> Result<PackageManifest> {
     let manifest: PackageManifest = toml::from_str(&manifest_source)
         .map_err(|e| CompileError::new(format!("failed to parse manifest '{}': {}", manifest_path, e), error::Span::default()))?;
     artifact::validate_declarations(&manifest.artifacts)?;
+    crate::package::validate_package_compiler_requirement(&manifest.package)
+        .map_err(|error| error.with_file(manifest_path.clone()))?;
     Ok(manifest)
 }
 
@@ -22018,6 +22020,8 @@ mod tests {
             namespace: manifest.package.namespace.clone(),
             source_hash: None,
             compiler_source_hash: None,
+            compiler_requirement: manifest.package.cellscript_version.clone(),
+            resolver_compiler_version: crate::VERSION.to_string(),
         };
         lockfile.replace_with_resolution(&manager, &manifest, &options)?;
         lockfile.write_to_root(root.as_std_path())

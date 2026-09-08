@@ -48,6 +48,7 @@ A minimal manifest looks like this:
 edition = "2026"
 name = "my_contract"
 version = "0.1.0"
+cellscript_version = ">=0.26.0"
 entry = "src/main.cell"
 source_roots = ["src"]
 
@@ -65,6 +66,9 @@ Read the manifest as a build promise:
 - `edition = "2026"` selects the source-language semantic epoch. It is
   mandatory; CellScript does not infer, migrate, or accept any other edition,
   and the year does not imply an annual release cadence;
+- `cellscript_version` is the SemVer range of `cellc` releases allowed to load
+  the package. Legacy omission means `*`; new packages record an explicit
+  minimum;
 - `entry` tells the compiler where the package starts;
 - `source_roots` tells the compiler which package directories contain `.cell`
   modules;
@@ -75,7 +79,8 @@ Read the manifest as a build promise:
   explicit and lockable.
 
 Production Registry source-package resolution selects an accepted version from
-the public API, downloads its immutable source snapshot, and verifies object
+the public API, filters out versions incompatible with the active compiler,
+downloads its immutable source snapshot, and verifies object
 SHA-256, safe paths, per-file BLAKE2b, `Cell.toml`, Edition/profile identity,
 and the whole-tree `source_hash`. `registry.json` plus tag-pinned Git remain the
 explicit offline/mirror authority. Local path dependencies remain the fastest
@@ -89,10 +94,12 @@ profile hash commits to the complete combination in every downstream
 build/deployment identity. See
 [CellScript Edition Policy](../CELLSCRIPT_EDITION_POLICY.md).
 
-As a rule of thumb, compiler SemVer answers “which implementation produced
-this output?”, Edition answers “how is this source understood?”, and the
-resolved compatibility profile answers “which complete source/target/ABI/schema
-contract was used?”.
+As a rule of thumb, `cellscript_version` answers “which compiler releases may
+load this package?”, exact compiler/build evidence answers “which
+implementation produced this output?”, Edition answers “how is this source
+understood?”, and the resolved compatibility profile answers “which complete
+source/target/ABI/schema contract was used?”. See
+[Package Compiler Requirements](../CELLSCRIPT_COMPILER_REQUIREMENTS.md).
 
 ## Multi-file Packages
 
@@ -405,12 +412,15 @@ cellc remove my_lib
 `add`, `install`, `update`, and normal dependency removal refresh the lockfile so
 direct and transitive local path dependencies stay consistent.
 
-`Cell.lock` v3 is a graph rather than a flat list. It binds the exact root
-manifest digest, each dependency manifest and whole source tree, outgoing
+`Cell.lock` v4 is a graph rather than a flat list. It binds the exact root
+manifest digest, each dependency manifest and whole source tree, package
+compiler requirements, the compiler release that resolved the graph, outgoing
 alias-to-node edges, feature/test modes, and named CKB environments. Local
 projects should commit it to version control: the lockfile is reviewed build
 input, not a local cache, and normal build/check/test commands do not silently
-repin it. Dependency aliases can differ from declared package names:
+repin it. Locks from versions 1 through 3 require an explicit `cellc lock` or
+`cellc update` migration. Dependency aliases can differ from declared package
+names:
 
 ```toml
 [dependencies.math]

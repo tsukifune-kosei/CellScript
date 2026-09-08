@@ -1,36 +1,42 @@
-version = 3
-schema = "cellscript-lock-v0.24-graph-v1"
+version = 4
+schema = "cellscript-lock-v0.30-compiler-requirement-v1"
 
 [package]
 edition = "2026"
 name = "launch"
 version = "0.1.0"
 source_hash = "23c016db10e5cd19e5592a78300bb849fac358e3771ca2bd9e664edb0a19194d"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
 [root]
 manifest_digest = "sha256:9629cf5051cae3a674cd370db56cdc9adbe65014629e1cd2403f93caf5dc7d17"
 
 [root.dependencies]
-amm_pool = "amm_pool@0.1.0|path:../amm_pool|env=default|features=default"
-token = "token@0.1.0|path:../token|env=default|features=default"
+amm_pool = "amm_pool@0.1.0|path:../amm_pool|compiler=2a|env=default|features=default"
+token = "token@0.1.0|path:../token|compiler=2a|env=default|features=default"
 
-[dependencies."amm_pool@0.1.0|path:../amm_pool|env=default|features=default"]
+[dependencies."amm_pool@0.1.0|path:../amm_pool|compiler=2a|env=default|features=default"]
 name = "amm_pool"
 version = "0.1.0"
 source_hash = "3931af98c3db3e68e166ddd4f7f367679ddbc1144243d9475a60f62348e760c6"
 manifest_digest = "sha256:f3899870aed3db9e1fbfe237b0425f90f5fcbd2953d7d929da9833f136191d06"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
-[dependencies."amm_pool@0.1.0|path:../amm_pool|env=default|features=default".source.Path]
+[dependencies."amm_pool@0.1.0|path:../amm_pool|compiler=2a|env=default|features=default".source.Path]
 path = "../amm_pool"
 
-[dependencies."amm_pool@0.1.0|path:../amm_pool|env=default|features=default".dependencies]
-token = "token@0.1.0|path:../token|env=default|features=default"
+[dependencies."amm_pool@0.1.0|path:../amm_pool|compiler=2a|env=default|features=default".dependencies]
+token = "token@0.1.0|path:../token|compiler=2a|env=default|features=default"
 
-[dependencies."token@0.1.0|path:../token|env=default|features=default"]
+[dependencies."token@0.1.0|path:../token|compiler=2a|env=default|features=default"]
 name = "token"
 version = "0.1.0"
 source_hash = "d5ecb3241eeb97983005b9622cbe7a9540cbdec133ec22105c07955f99c7b889"
 manifest_digest = "sha256:3adaae2b8a70a8a49246c28c95a6bd3686fefaed383dfb598c7d35da2a2ad4f9"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
-[dependencies."token@0.1.0|path:../token|env=default|features=default".source.Path]
+[dependencies."token@0.1.0|path:../token|compiler=2a|env=default|features=default".source.Path]
 path = "../token"

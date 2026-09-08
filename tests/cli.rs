@@ -2182,6 +2182,8 @@ fn write_live_registry_fixture_with(root: &std::path::Path, data_hash: &str, cod
         namespace: Some("cellscript".to_string()),
         source_hash: Some("source_hash".to_string()),
         compiler_source_hash: None,
+        compiler_requirement: "*".to_string(),
+        resolver_compiler_version: cellscript::VERSION.to_string(),
     };
     lockfile.package_build = Some(cellscript::package::LockedBuildInfo {
         edition: cellscript::CURRENT_EDITION,
@@ -3644,6 +3646,7 @@ resource Token has store, replace, relock, consume, burn {
             yanked_reason: None,
             replaced_by: None,
             audit: None,
+            compiler_requirement: "*".to_string(),
         }],
     };
 
@@ -3832,6 +3835,7 @@ fn cellc_registry_edit_yanks_existing_version() {
             yanked_reason: None,
             replaced_by: None,
             audit: None,
+            compiler_requirement: "*".to_string(),
         },
     )
     .unwrap();
@@ -3890,6 +3894,8 @@ fn cellc_registry_verify_json_fails_closed_for_missing_deployment_ref() {
         namespace: Some("cellscript".to_string()),
         source_hash: Some("source_hash".to_string()),
         compiler_source_hash: None,
+        compiler_requirement: "*".to_string(),
+        resolver_compiler_version: cellscript::VERSION.to_string(),
     };
     lockfile.package_build = Some(cellscript::package::LockedBuildInfo {
         edition: cellscript::CURRENT_EDITION,
@@ -3980,6 +3986,8 @@ fn write_offline_fixture_with_lineage(root: &std::path::Path, lineage: Option<&s
         namespace: Some("cellscript".to_string()),
         source_hash: Some("source_hash".to_string()),
         compiler_source_hash: None,
+        compiler_requirement: "*".to_string(),
+        resolver_compiler_version: cellscript::VERSION.to_string(),
     };
     lockfile.package_build = Some(cellscript::package::LockedBuildInfo {
         edition: cellscript::CURRENT_EDITION,
@@ -5042,6 +5050,93 @@ action ping() -> u64 {
     assert_eq!(stdout["constraints"]["target_profile"], "ckb");
     assert_eq!(stdout["constraints"]["status"], "warn");
     assert!(stdout["constraints"]["artifact"]["artifact_size_bytes"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn cellc_rejects_incompatible_package_compiler_before_source_parsing() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+edition = "2026"
+name = "future-package"
+version = "1.0.0"
+cellscript_version = ">=999.0.0"
+"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("src/main.cell"), "this source must never reach the parser").unwrap();
+
+    let output = cellc_command().current_dir(root).args(["check", "--json"]).output().unwrap();
+
+    assert!(!output.status.success(), "unexpected success: {}", String::from_utf8_lossy(&output.stdout));
+    assert!(output.stderr.is_empty(), "unexpected stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["diagnostics"][0]["code"], "E2600");
+    assert_eq!(report["package"], "future-package");
+    assert_eq!(report["compiler_requirement"], ">=999.0.0");
+    assert_eq!(report["phase"], "manifest-before-source");
+    assert!(!report.to_string().contains("parser"), "unexpected parse diagnostic: {report}");
+}
+
+#[test]
+fn cellc_json_reports_all_incompatible_dependency_packages_and_incoming_edges() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    for package in ["future_a", "future_b"] {
+        let package_root = root.join(package);
+        std::fs::create_dir_all(package_root.join("src")).unwrap();
+        std::fs::write(
+            package_root.join("Cell.toml"),
+            format!(
+                r#"
+[package]
+edition = "2026"
+name = "{package}"
+version = "1.0.0"
+cellscript_version = ">=999.0.0"
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(package_root.join("src/lib.cell"), "invalid source must not be parsed").unwrap();
+    }
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+edition = "2026"
+name = "app"
+version = "1.0.0"
+
+[dependencies.first]
+package = "future_a"
+path = "future_a"
+
+[dependencies.second]
+package = "future_b"
+path = "future_b"
+"#,
+    )
+    .unwrap();
+
+    let output = cellc_command().current_dir(root).args(["lock", "--json"]).output().unwrap();
+
+    assert!(!output.status.success(), "unexpected success: {}", String::from_utf8_lossy(&output.stdout));
+    assert!(output.stderr.is_empty(), "unexpected stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["diagnostics"][0]["code"], "E2600");
+    assert_eq!(report["phase"], "dependency-compatibility-preflight");
+    let incompatible = report["incompatible_packages"].as_array().unwrap();
+    assert_eq!(incompatible.len(), 2);
+    assert_eq!(incompatible[0]["package"], "future_a");
+    assert_eq!(incompatible[0]["incoming_edge"]["alias"], "first");
+    assert_eq!(incompatible[1]["package"], "future_b");
+    assert_eq!(incompatible[1]["incoming_edge"]["alias"], "second");
+    assert!(!root.join("Cell.lock").exists());
 }
 
 #[test]
@@ -7959,6 +8054,20 @@ fn cellc_explain_subcommand_reports_public_interface_breaking_error() {
 }
 
 #[test]
+fn cellc_explain_subcommand_reports_package_compiler_error() {
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc")).args(["explain", "E2600", "--json"]).output().unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["status"], "ok");
+    assert_eq!(summary["domain"], "compiler");
+    assert_eq!(summary["code"], "E2600");
+    assert_eq!(summary["name"], "package-compiler-incompatible");
+    assert!(summary["description"].as_str().unwrap().contains("compiler requirement"));
+    assert!(summary["hint"].as_str().unwrap().contains("Select a package version"));
+}
+
+#[test]
 fn cellc_explain_profile_reports_ckb_v0_14_contract() {
     let output = Command::new(env!("CARGO_BIN_EXE_cellc")).args(["explain", "profile", "ckb", "--json"]).output().unwrap();
     assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
@@ -8603,6 +8712,58 @@ version = "1.2.3"
 }
 
 #[test]
+fn cellc_explicit_lock_migrates_v3_compiler_requirement_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+edition = "2026"
+name = "legacy-lock"
+version = "1.0.0"
+cellscript_version = ">=0.20"
+"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("src/main.cell"), "module legacy_lock;\n\naction ping() -> u64 {\n    verification\n        1\n}\n")
+        .unwrap();
+    std::fs::write(
+        root.join("Cell.lock"),
+        r#"version = 3
+schema = "cellscript-lock-v0.24-graph-v1"
+
+[package]
+edition = "2026"
+name = "legacy-lock"
+version = "1.0.0"
+
+[root]
+manifest_digest = "legacy"
+
+[dependencies]
+"#,
+    )
+    .unwrap();
+
+    let frozen = cellc_command().current_dir(root).args(["check", "--frozen", "--offline"]).output().unwrap();
+    assert!(!frozen.status.success(), "legacy lock unexpectedly admitted");
+    assert!(String::from_utf8_lossy(&frozen.stderr).contains("unsupported Cell.lock version 3"));
+
+    let migrated = cellc_command().current_dir(root).args(["lock", "--json"]).output().unwrap();
+    assert!(migrated.status.success(), "stderr: {}", String::from_utf8_lossy(&migrated.stderr));
+    let lockfile: cellscript::package::Lockfile = toml::from_str(&std::fs::read_to_string(root.join("Cell.lock")).unwrap()).unwrap();
+    assert_eq!(lockfile.version, cellscript::package::Lockfile::CURRENT_VERSION);
+    assert_eq!(lockfile.schema, cellscript::package::Lockfile::CURRENT_SCHEMA);
+    assert_eq!(lockfile.package.compiler_requirement, ">=0.20");
+    assert_eq!(lockfile.package.resolver_compiler_version, cellscript::VERSION);
+
+    let frozen = cellc_command().current_dir(root).args(["check", "--frozen", "--offline"]).output().unwrap();
+    assert!(frozen.status.success(), "stderr: {}", String::from_utf8_lossy(&frozen.stderr));
+}
+
+#[test]
 fn bundled_scenario_basics_executes_positive_and_exact_negative_cases_on_both_backends() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/scenario_basics");
     let lock_before = std::fs::read(root.join("Cell.lock")).expect("scenario example must carry a tracked lockfile");
@@ -8692,18 +8853,23 @@ fn bundled_package_graph_exercises_alias_features_test_scope_and_ckb_environment
     let lock_before = std::fs::read(root.join("Cell.lock")).expect("package graph example must carry a tracked lockfile");
     let lock_text = String::from_utf8(lock_before.clone()).unwrap();
     for needle in [
-        "schema = \"cellscript-lock-v0.24-graph-v1\"",
+        "schema = \"cellscript-lock-v0.30-compiler-requirement-v1\"",
+        "compiler_requirement = \"*\"",
         "[environments.mainnet.dependencies]",
         "[environments.mainnet.dev_dependencies]",
         "[environments.testnet.dependencies]",
         "[environments.testnet.dev_dependencies]",
-        "network_contracts@1.0.0|path:deps/contracts-mainnet|env=environment-independent:root=6d61696e6e6574",
-        "network_contracts@2.0.0|path:deps/contracts-testnet|env=environment-independent:root=746573746e6574",
+        "network_contracts@1.0.0|path:deps/contracts-mainnet|compiler=2a|env=environment-independent:root=6d61696e6e6574",
+        "network_contracts@2.0.0|path:deps/contracts-testnet|compiler=2a|env=environment-independent:root=746573746e6574",
         "chain=636b622d6d61696e6e6574:genesis=0x1111111111111111111111111111111111111111111111111111111111111111",
         "chain=636b622d746573746e6574:genesis=0x2222222222222222222222222222222222222222222222222222222222222222",
     ] {
         assert!(lock_text.contains(needle), "package graph lock should contain `{needle}`");
     }
+    assert!(
+        lock_text.contains(&format!("resolver_compiler_version = \"{}\"", cellscript::VERSION)),
+        "package graph lock should name the active resolving compiler"
+    );
 
     let missing_environment =
         Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(&root).args(["check", "--frozen", "--offline"]).output().unwrap();
@@ -10886,6 +11052,8 @@ action mint(amount: u64, owner: Address) -> Token {
             namespace: None,
             source_hash: Some(package_source_hash.clone()),
             compiler_source_hash: metadata.source_hash.clone(),
+            compiler_requirement: "*".to_string(),
+            resolver_compiler_version: cellscript::VERSION.to_string(),
         },
         root: Default::default(),
         dependencies: Default::default(),

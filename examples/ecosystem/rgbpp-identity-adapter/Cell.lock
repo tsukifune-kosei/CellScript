@@ -1,11 +1,13 @@
-version = 3
-schema = "cellscript-lock-v0.24-graph-v1"
+version = 4
+schema = "cellscript-lock-v0.30-compiler-requirement-v1"
 
 [package]
 edition = "2026"
 name = "rgbpp-identity-adapter"
 version = "0.1.0"
 source_hash = "ccd0b78a969aed2eb9369b6b084e936c0cc424b9e148fe2260d3686316c0cf65"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
 [root]
 manifest_digest = "sha256:3b780858ff3139137e16a91ad2000b38fb8f1b604a9abc631b3a4388ec96c82f"

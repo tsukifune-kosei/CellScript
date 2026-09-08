@@ -433,10 +433,11 @@ Source code references types via their full module path (e.g.,
 should be), not deployment *facts* (which specific out_point was deployed to).
 Intents are determined at compile time; facts are determined after deployment.
 
-### Cell.lock — Graph And Build Identity Lock
+### Cell.lock — Graph, Compiler Compatibility, And Build Identity Lock
 
-`Cell.lock` v3 separates mutable resolution from compilation. It records the
-root manifest digest, canonical dependency nodes and outgoing alias edges,
+`Cell.lock` v4 separates mutable resolution from compilation. It records the
+root manifest digest, root and dependency compiler requirements, the resolving
+compiler release, canonical dependency nodes and outgoing alias edges,
 runtime/test and environment roots, exact source/content identity, build
 identity hashes, and deployment references. For an environment-selected graph,
 each canonical node ID also binds the root environment name, dependency-local
@@ -447,8 +448,8 @@ environment decision used to build its transitive dependency set.
 **Lockfile schema**:
 
 ```toml
-version = 3
-schema = "cellscript-lock-v0.24-graph-v1"
+version = 4
+schema = "cellscript-lock-v0.30-compiler-requirement-v1"
 
 [package]
 edition = "2026"
@@ -456,6 +457,8 @@ name = "amm_pool"
 version = "1.2.0"
 namespace = "cellscript"
 source_hash = "blake2b:0xabcd..."
+compiler_requirement = ">=0.26.0, <0.31.0"
+resolver_compiler_version = "0.26.0"
 
 [package_build]
 edition = "2026"
@@ -479,7 +482,8 @@ test_helper = "test_helper@0.1.0|path:...|env=default|features=default"
 
 # Each entry under [dependencies] is keyed by canonical node ID and records:
 # name, namespace, version, exact Path/Git/Registry source, source_hash,
-# manifest_digest, outgoing alias-to-node dependencies, and optional build facts.
+# manifest_digest, compiler_requirement, resolver_compiler_version,
+# outgoing alias-to-node dependencies, and optional build facts.
 
 [environments.mainnet]
 chain_id = "ckb"
@@ -574,9 +578,10 @@ checks that it matches the actual `Deployed.toml` entry; if absent, the
 verification step is skipped with a warning. Future phases may require
 `record_hash` for production packages.
 
-**No implicit backward compatibility**: readers accept only lockfile version 3
-and schema `cellscript-lock-v0.24-graph-v1`. Explicit `cellc lock`/`update` may
-replace a version 1 or 2 lock; build/check/test never migrate or repin it.
+**No implicit backward compatibility**: readers accept only lockfile version 4
+and schema `cellscript-lock-v0.30-compiler-requirement-v1`. Explicit
+`cellc lock`/`update` may replace a version 1, 2, or 3 lock; build/check/test
+never migrate or repin it.
 `[package]` is required. When `[package_build]` exists, both `edition` and
 `compatibility_profile_hash` are required fields; readers do not infer them.
 The `[deployment.*]` sections may remain absent until a deployment exists.
@@ -1545,8 +1550,8 @@ the resolved compatibility profile; they are not derived from the edition year.
 
 ### Edition 2026 Breaking Boundary
 
-- `Cell.lock` version 3 records the package edition and manifest-bound source
-  graph. A present
+- `Cell.lock` version 4 records the package edition, compiler requirement,
+  resolving compiler release, and manifest-bound source graph. A present
   `[package_build]` must use the same edition and a non-empty compatibility
   profile hash.
 - `Deployed.toml` version 2 uses
@@ -1599,12 +1604,13 @@ this. No code change needed; the document should reference this convention.
 **Gap**: `version = 1` and `lock_schema = "cellscript-lock-v1"` are redundant.
 No migration path is defined between lockfile schema generations.
 
-**Resolution**: `Cell.lock` version 3 with
-`cellscript-lock-v0.24-graph-v1` is the sole accepted build-time lock
-generation. Readers reject older versions and never rewrite them implicitly;
-explicit lock/update may repin them. Edition and compatibility profile remain
-part of build identity, while root/dependency manifest digests and graph edges
-form dependency identity.
+**Resolution**: `Cell.lock` version 4 with
+`cellscript-lock-v0.30-compiler-requirement-v1` is the sole accepted build-time
+lock generation. Readers reject older versions and never rewrite them
+implicitly; explicit lock/update may repin versions 1 through 3. Edition and
+compatibility profile remain part of build identity, while compiler
+requirements, resolver compiler releases, root/dependency manifest digests,
+and graph edges form dependency identity.
 
 #### 3. Deployed.toml Schema — Dual Version Identifier
 

@@ -166,6 +166,8 @@ export interface RegistryVersionEntry {
   tag: string;
   source_hash: string;
   cellscript_version?: string;
+  /** SemVer range declared by the source package for compatible cellc releases. */
+  compiler_requirement?: string;
   /** Source-language semantics only; target/ABI/schema identity is separate. */
   edition?: typeof CELLSCRIPT_EDITION;
   /** Hash of the resolved edition + target + assurance + ABI + schema axes. */
@@ -979,7 +981,12 @@ function validateRegistryEntry(
       if (published["profile_contract"] !== undefined) {
         throw new ApiError(400, "invalid_profile_contract", "CellScript source releases do not use profile_contract");
       }
-      requireString(published, "cellscript_version");
+      validateVersion(requireString(published, "cellscript_version"));
+      const compilerRequirement = requireString(published, "compiler_requirement");
+      if (compilerRequirement.length > 128 || !/[0-9*]/.test(compilerRequirement)
+        || !/^[0-9A-Za-z.*+<>=^~|, -]+$/.test(compilerRequirement)) {
+        throw new ApiError(400, "invalid_compiler_requirement", "compiler_requirement must be a bounded SemVer requirement");
+      }
       if (published["edition"] !== CELLSCRIPT_EDITION) {
         throw new ApiError(400, "unsupported_cellscript_edition", `registry version edition must be ${CELLSCRIPT_EDITION}`);
       }

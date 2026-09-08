@@ -63,7 +63,10 @@ pub struct PackageInfo {
     pub keywords: Vec<String>,
     #[serde(default)]
     pub categories: Vec<String>,
-    #[serde(default)]
+    /// SemVer requirement for the CellScript compiler that may load this
+    /// package. Omission preserves legacy packages as unconstrained; newly
+    /// created packages record an explicit minimum.
+    #[serde(default = "default_compiler_requirement")]
     pub cellscript_version: String,
     #[serde(default = "default_entry")]
     pub entry: String,
@@ -77,6 +80,10 @@ pub struct PackageInfo {
 
 fn default_entry() -> String {
     "src/main.cell".to_string()
+}
+
+fn default_compiler_requirement() -> String {
+    "*".to_string()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -474,6 +481,7 @@ pub struct ResolvedPackage {
     pub namespace: Option<String>,
     pub source_hash: Option<String>,
     pub manifest_digest: String,
+    pub compiler_requirement: String,
 }
 
 /// Emit yank-related notices to stderr during registry resolution.
@@ -630,7 +638,115 @@ fn package_node_id(
     }
     features.sort();
     let environment = environment.map(environment_node_identity).unwrap_or_else(|| "default".to_string());
-    format!("{}@{}|{}|env={}|features={}", package.name, package.version, source, environment, features.join(","))
+    format!(
+        "{}@{}|{}|compiler={}|env={}|features={}",
+        package.name,
+        package.version,
+        source,
+        hex::encode(package.compiler_requirement.as_bytes()),
+        environment,
+        features.join(",")
+    )
+}
+
+/// Parse the public `[package].cellscript_version` compatibility contract.
+///
+/// Existing manifests used bare versions such as `0.16` to mean the minimum
+/// compiler generation they were written for. Preserve that meaning by
+/// normalising a bare version to `>=version`; explicit operators use standard
+/// SemVer requirement syntax.
+pub fn parse_compiler_requirement(requirement: &str) -> Result<semver::VersionReq> {
+    let requirement = requirement.trim();
+    if requirement.is_empty() {
+        return Err(CompileError::without_span(
+            "package cellscript_version must not be empty; omit it for an unconstrained legacy package or use a SemVer requirement",
+        )
+        .with_code("E2600"));
+    }
+    let normalized = if requirement == "*"
+        || requirement.chars().any(|character| matches!(character, '<' | '>' | '=' | '^' | '~' | '*' | ',' | '|'))
+    {
+        requirement.to_string()
+    } else {
+        format!(">={requirement}")
+    };
+    semver::VersionReq::parse(&normalized).map_err(|error| {
+        CompileError::without_span(format!("invalid package cellscript_version requirement '{}': {error}", requirement))
+            .with_code("E2600")
+    })
+}
+
+pub fn compiler_requirement_matches(requirement: &str, compiler_version: &str) -> Result<bool> {
+    let requirement = parse_compiler_requirement(requirement)?;
+    let compiler_version = semver::Version::parse(compiler_version).map_err(|error| {
+        CompileError::without_span(format!("active CellScript compiler version '{compiler_version}' is not valid SemVer: {error}"))
+            .with_code("E2600")
+    })?;
+    Ok(requirement.matches(&compiler_version))
+}
+
+pub fn validate_package_compiler_requirement(package: &PackageInfo) -> Result<()> {
+    if compiler_requirement_matches(&package.cellscript_version, crate::VERSION)? {
+        return Ok(());
+    }
+    Err(CompileError::without_span(format!(
+        "package '{}@{}' requires CellScript compiler '{}', but active cellc is '{}'; select a compatible package/compiler version before loading source",
+        package.name, package.version, package.cellscript_version, crate::VERSION
+    ))
+    .with_code("E2600")
+    .with_details(serde_json::json!({
+        "package": package.name,
+        "package_version": package.version,
+        "compiler_requirement": package.cellscript_version,
+        "active_compiler_version": crate::VERSION,
+        "phase": "manifest-before-source",
+    })))
+}
+
+fn compiler_error_with_incoming_edge(mut error: CompileError, parent_package: &str, alias: &str, package: &str) -> CompileError {
+    if error.code.as_deref() != Some("E2600") {
+        return error;
+    }
+    let mut details = error.details.take().and_then(|value| value.as_object().cloned()).unwrap_or_default();
+    details.entry("package".to_string()).or_insert_with(|| serde_json::Value::String(package.to_string()));
+    details.insert(
+        "incoming_edge".to_string(),
+        serde_json::json!({
+            "from_package": parent_package,
+            "alias": alias,
+            "to_package": package,
+        }),
+    );
+    error.details = Some(serde_json::Value::Object(details));
+    error
+}
+
+fn aggregate_compiler_incompatibilities(errors: Vec<CompileError>) -> CompileError {
+    let entries = errors
+        .iter()
+        .map(|error| {
+            let mut entry = error.details.clone().unwrap_or_else(|| serde_json::json!({}));
+            if let Some(object) = entry.as_object_mut() {
+                object.insert("message".to_string(), serde_json::Value::String(error.message.clone()));
+            }
+            entry
+        })
+        .collect::<Vec<_>>();
+    let packages =
+        entries.iter().filter_map(|entry| entry.get("package").and_then(serde_json::Value::as_str)).collect::<Vec<_>>().join(", ");
+    CompileError::without_span(format!(
+        "{} package compiler requirement(s) are incompatible with cellc {}: {}",
+        errors.len(),
+        crate::VERSION,
+        packages
+    ))
+    .with_code("E2600")
+    .with_details(serde_json::json!({
+        "active_compiler_version": crate::VERSION,
+        "phase": "dependency-compatibility-preflight",
+        "incompatible_packages": entries,
+    }))
+    .with_related(errors)
 }
 
 fn environment_node_identity(environment: &SelectedEnvironmentContext) -> String {
@@ -896,6 +1012,7 @@ impl PackageManager {
         let content = std::fs::read_to_string(&manifest_path)?;
         let manifest: PackageManifest = toml::from_str(&content)?;
         validate_declarations(&manifest.artifacts)?;
+        validate_package_compiler_requirement(&manifest.package)?;
         Ok(manifest)
     }
 
@@ -944,7 +1061,7 @@ impl PackageManager {
                 documentation: String::new(),
                 keywords: vec![],
                 categories: vec![],
-                cellscript_version: String::new(),
+                cellscript_version: format!(">={}", crate::VERSION),
                 entry: entry.to_string(),
                 source_roots: vec![],
                 include: vec![],
@@ -1007,17 +1124,27 @@ dist/
         self.root_dependencies.clear();
 
         let dependencies = self.selected_dependencies(&manifest, options, true)?;
+        let mut compiler_errors = Vec::new();
         for (alias, dep) in dependencies {
             let node_id = self.resolve_dependency_from_root(
                 &alias,
                 &dep,
+                &manifest.package.name,
                 &self.root.clone(),
                 options,
                 root_environment.as_ref(),
                 &mut Vec::new(),
                 &mut Vec::new(),
+                &mut compiler_errors,
             )?;
-            self.root_dependencies.insert(alias, node_id);
+            if let Some(node_id) = node_id {
+                self.root_dependencies.insert(alias, node_id);
+            }
+        }
+        if !compiler_errors.is_empty() {
+            self.resolved.clear();
+            self.root_dependencies.clear();
+            return Err(aggregate_compiler_incompatibilities(compiler_errors));
         }
 
         Ok(())
@@ -1032,6 +1159,7 @@ dist/
         self.root_dependencies.clear();
         if selected.is_empty() {
             if let Some(lockfile) = Lockfile::read_from_root(&self.root)? {
+                validate_locked_root_compiler_contract(&lockfile, &manifest)?;
                 let actual_manifest_digest = compute_manifest_digest(&self.root)?;
                 if !lockfile.root.manifest_digest.is_empty() && lockfile.root.manifest_digest != actual_manifest_digest {
                     return Err(CompileError::without_span(format!(
@@ -1048,6 +1176,7 @@ dist/
                 "Cell.toml declares dependencies but Cell.lock is missing; run 'cellc lock' or 'cellc update' explicitly",
             )
         })?;
+        validate_locked_root_compiler_contract(&lockfile, &manifest)?;
         let manifest_bytes = std::fs::read(self.root.join("Cell.toml"))?;
         let actual_manifest_digest = manifest_digest(&manifest_bytes);
         if lockfile.root.manifest_digest != actual_manifest_digest {
@@ -1164,7 +1293,38 @@ dist/
         let manifest: PackageManifest = toml::from_str(manifest_source).map_err(|error| {
             CompileError::without_span(format!("failed to parse locked dependency manifest '{}': {}", manifest_path.display(), error))
         })?;
-        self.validate_manifest_package_contract(&manifest)?;
+        self.validate_manifest_package_contract(&manifest).map_err(|error| {
+            let parent_package = stack
+                .last()
+                .and_then(|parent| lockfile.dependencies.get(parent))
+                .map(|parent| parent.name.as_str())
+                .unwrap_or(lockfile.package.name.as_str());
+            compiler_error_with_incoming_edge(error, parent_package, edge_alias, &locked.name)
+        })?;
+        if locked.compiler_requirement != manifest.package.cellscript_version {
+            return Err(CompileError::without_span(format!(
+                "locked dependency '{}' compiler requirement '{}' does not match Cell.toml '{}'; run 'cellc update' explicitly",
+                node_id, locked.compiler_requirement, manifest.package.cellscript_version
+            ))
+            .with_code("E2600")
+            .with_details(serde_json::json!({
+                "package": manifest.package.name,
+                "package_version": manifest.package.version,
+                "locked_compiler_requirement": locked.compiler_requirement,
+                "compiler_requirement": manifest.package.cellscript_version,
+                "active_compiler_version": crate::VERSION,
+                "incoming_edge": {
+                    "from_package": stack
+                        .last()
+                        .and_then(|parent| lockfile.dependencies.get(parent))
+                        .map(|parent| parent.name.as_str())
+                        .unwrap_or(lockfile.package.name.as_str()),
+                    "alias": edge_alias,
+                    "to_package": manifest.package.name,
+                },
+                "phase": "locked-materialization",
+            })));
+        }
         if manifest.package.name != locked.name || manifest.package.version != locked.version {
             return Err(CompileError::without_span(format!(
                 "locked dependency '{}' manifest identity is '{}@{}', expected '{}@{}'",
@@ -1193,6 +1353,7 @@ dist/
             namespace: locked.namespace.clone(),
             source_hash: Some(source_hash.clone()),
             manifest_digest: digest.clone(),
+            compiler_requirement: manifest.package.cellscript_version.clone(),
         };
         let expected_node_id = package_node_id(&locked_package, &node_options, node_environment.as_ref());
         if node_id != expected_node_id {
@@ -1253,6 +1414,7 @@ dist/
                 namespace: locked.namespace.clone(),
                 source_hash: Some(source_hash),
                 manifest_digest: digest,
+                compiler_requirement: manifest.package.cellscript_version.clone(),
             },
         );
         Ok(())
@@ -1318,6 +1480,11 @@ dist/
     }
 
     fn validate_manifest_package_contract(&self, manifest: &PackageManifest) -> Result<()> {
+        validate_package_compiler_requirement(&manifest.package)?;
+        self.validate_manifest_package_structure(manifest)
+    }
+
+    fn validate_manifest_package_structure(&self, manifest: &PackageManifest) -> Result<()> {
         validate_declarations(&manifest.artifacts)?;
         semver::Version::parse(&manifest.package.version).map_err(|error| {
             CompileError::without_span(format!(
@@ -1462,16 +1629,18 @@ dist/
         &mut self,
         alias: &str,
         dep: &Dependency,
+        parent_package: &str,
         base_root: &Path,
         parent_options: &ResolutionOptions,
         parent_environment: Option<&SelectedEnvironmentContext>,
         stack_ids: &mut Vec<String>,
         stack_labels: &mut Vec<String>,
-    ) -> Result<String> {
+        compiler_errors: &mut Vec<CompileError>,
+    ) -> Result<Option<String>> {
         let package_name = dependency_package_name(alias, dep);
-        let (mut resolved, manifest) = match dep {
+        let resolution: Result<(ResolvedPackage, PackageManifest)> = (|| match dep {
             Dependency::Simple(version) => {
-                self.resolve_from_registry_with_manifest(&package_name, version, None, registry::RegistryResolutionPolicy::default())?
+                self.resolve_from_registry_with_manifest(&package_name, version, None, registry::RegistryResolutionPolicy::default())
             }
             Dependency::Detailed(detailed) => {
                 if detailed.resolver.is_some() {
@@ -1500,11 +1669,11 @@ dist/
                             alias, resolved.0.version
                         )));
                     }
-                    resolved
+                    Ok(resolved)
                 } else if let Some(path) = &detailed.path {
-                    self.resolve_from_path_at(&package_name, path, base_root)?
+                    self.resolve_from_path_at(&package_name, path, base_root)
                 } else if let Some(git) = &detailed.git {
-                    self.resolve_from_git_with_manifest(&package_name, git, detailed)?
+                    self.resolve_from_git_with_manifest(&package_name, git, detailed)
                 } else {
                     let ns = detailed.namespace.as_deref();
                     self.resolve_from_registry_with_manifest(
@@ -1515,12 +1684,23 @@ dist/
                             allow_unverified: detailed.allow_unverified,
                             allow_quarantined: detailed.allow_quarantined,
                         },
-                    )?
+                    )
                 }
             }
+        })();
+        let (mut resolved, manifest) = match resolution {
+            Ok(resolution) => resolution,
+            Err(error) if error.code.as_deref() == Some("E2600") => {
+                compiler_errors.push(compiler_error_with_incoming_edge(error, parent_package, alias, &package_name));
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
         };
 
-        self.validate_manifest_package_contract(&manifest)?;
+        if let Err(error) = validate_package_compiler_requirement(&manifest.package) {
+            compiler_errors.push(compiler_error_with_incoming_edge(error, parent_package, alias, &package_name));
+        }
+        self.validate_manifest_package_structure(&manifest)?;
         if manifest.package.name != package_name {
             return Err(CompileError::without_span(format!(
                 "dependency alias '{}' expects package '{}' but '{}' declares package name '{}'",
@@ -1549,7 +1729,7 @@ dist/
                     node_id
                 )));
             }
-            return Ok(node_id);
+            return Ok(Some(node_id));
         }
         if let Some(position) = stack_ids.iter().position(|item| item == &node_id) {
             let mut cycle = stack_labels[position..].to_vec();
@@ -1565,13 +1745,17 @@ dist/
             let child_id = self.resolve_dependency_from_root(
                 &child_alias,
                 &child_dep,
+                &manifest.package.name,
                 &resolved.path,
                 &child_options,
                 child_environment.as_ref(),
                 stack_ids,
                 stack_labels,
+                compiler_errors,
             )?;
-            child_edges.insert(child_alias, child_id);
+            if let Some(child_id) = child_id {
+                child_edges.insert(child_alias, child_id);
+            }
         }
         stack_ids.pop();
         stack_labels.pop();
@@ -1579,7 +1763,7 @@ dist/
         resolved.node_id = node_id.clone();
         resolved.dependencies = child_edges;
         self.resolved.insert(node_id.clone(), resolved);
-        Ok(node_id)
+        Ok(Some(node_id))
     }
 
     fn resolve_external_dependency(
@@ -1864,15 +2048,7 @@ dist/
             Some(index) => index,
             None => registry::RegistryIndex::read_from_repo(legacy_clone.as_ref().expect("legacy clone exists"))?,
         };
-        if reg_index.schema_version != registry::RegistryIndex::CURRENT_SCHEMA_VERSION {
-            return Err(CompileError::without_span(format!(
-                "registry package '{}/{}' uses unsupported registry.json schema_version {}; expected {}",
-                resolved_namespace,
-                name,
-                reg_index.schema_version,
-                registry::RegistryIndex::CURRENT_SCHEMA_VERSION
-            )));
-        }
+        reg_index.ensure_current_schema()?;
         if reg_index.name != name || reg_index.namespace != resolved_namespace {
             return Err(CompileError::without_span(format!(
                 "registry.json identity mismatch for '{}/{}': found '{}/{}'",
@@ -1880,6 +2056,27 @@ dist/
             )));
         }
         let selected_version = reg_index.find_matching_version_for_resolution(version, policy).cloned().ok_or_else(|| {
+            if let Some(incompatible) = reg_index.find_matching_version_for_resolution_ignoring_compiler(version, policy) {
+                return CompileError::without_span(format!(
+                    "registry package '{}/{}@{}' matched version '{}' requiring CellScript compiler '{}', but active cellc is '{}'; update selected the newest compiler-compatible release only",
+                    resolved_namespace,
+                    name,
+                    version,
+                    incompatible.version,
+                    incompatible.compiler_requirement,
+                    crate::VERSION
+                ))
+                .with_code("E2600")
+                .with_details(serde_json::json!({
+                    "package": name,
+                    "namespace": resolved_namespace,
+                    "requested_version": version,
+                    "matched_package_version": incompatible.version,
+                    "compiler_requirement": incompatible.compiler_requirement,
+                    "active_compiler_version": crate::VERSION,
+                    "phase": "registry-candidate-selection",
+                }));
+            }
             if let Some(blocked) = reg_index.find_matching_version_allowing_yanked_pin(version) {
                 return registry_resolution_blocked_error(&resolved_namespace, name, version, blocked, policy);
             }
@@ -1946,6 +2143,8 @@ dist/
                 )?;
             if tagged_version.source_hash != selected_version.source_hash
                 || tagged_version.tag != selected_version.tag
+                || tagged_version.cellscript_version != selected_version.cellscript_version
+                || tagged_version.compiler_requirement != selected_version.compiler_requirement
                 || tagged_version.edition != selected_version.edition
                 || tagged_version.compatibility_profile_hash != selected_version.compatibility_profile_hash
             {
@@ -2000,6 +2199,17 @@ dist/
                 resolved_namespace, name, tagged_version.version, resolved_namespace
             )));
         }
+        if manifest.package.cellscript_version != tagged_version.compiler_requirement {
+            return Err(CompileError::without_span(format!(
+                "registry package '{}/{}@{}' compiler requirement '{}' does not match Cell.toml '{}'",
+                resolved_namespace,
+                name,
+                tagged_version.version,
+                tagged_version.compiler_requirement,
+                manifest.package.cellscript_version
+            ))
+            .with_code("E2600"));
+        }
 
         Ok((
             ResolvedPackage {
@@ -2018,6 +2228,7 @@ dist/
                 namespace: Some(resolved_namespace),
                 source_hash: Some(computed_source_hash),
                 manifest_digest: manifest_digest(content.as_bytes()),
+                compiler_requirement: manifest.package.cellscript_version.clone(),
             },
             manifest,
         ))
@@ -2062,6 +2273,7 @@ dist/
                 namespace: manifest.package.namespace.clone(),
                 source_hash: Some(source_hash),
                 manifest_digest: manifest_digest(content.as_bytes()),
+                compiler_requirement: manifest.package.cellscript_version.clone(),
             },
             manifest,
         ))
@@ -2154,6 +2366,7 @@ dist/
                 namespace: manifest.package.namespace.clone(),
                 source_hash: Some(source_hash),
                 manifest_digest: manifest_digest(content.as_bytes()),
+                compiler_requirement: manifest.package.cellscript_version.clone(),
             },
             manifest,
         ))
@@ -2317,6 +2530,29 @@ fn locked_source_to_package_source(source: &LockedSource) -> PackageSource {
     }
 }
 
+fn validate_locked_root_compiler_contract(lockfile: &Lockfile, manifest: &PackageManifest) -> Result<()> {
+    if lockfile.package.compiler_requirement != manifest.package.cellscript_version {
+        return Err(CompileError::without_span(format!(
+            "Cell.lock compiler requirement '{}' does not match Cell.toml '{}'; run 'cellc update' explicitly",
+            lockfile.package.compiler_requirement, manifest.package.cellscript_version
+        ))
+        .with_code("E2600")
+        .with_details(serde_json::json!({
+            "package": manifest.package.name,
+            "package_version": manifest.package.version,
+            "locked_compiler_requirement": lockfile.package.compiler_requirement,
+            "compiler_requirement": manifest.package.cellscript_version,
+            "active_compiler_version": crate::VERSION,
+            "incoming_edge": serde_json::Value::Null,
+            "phase": "locked-root-validation",
+        })));
+    }
+    // `validate_manifest_package_contract` already checked the active compiler.
+    // Keep the lock's resolver version informational so a later compatible
+    // compiler can reproduce locked source selection without an exact pin.
+    Ok(())
+}
+
 pub struct DependencyGraph {
     nodes: Vec<String>,
     edges: HashMap<String, Vec<String>>,
@@ -2439,6 +2675,13 @@ pub struct LockfilePackageInfo {
     pub source_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compiler_source_hash: Option<String>,
+    /// Source compatibility range declared by `[package].cellscript_version`.
+    #[serde(default)]
+    pub compiler_requirement: String,
+    /// Compiler release that resolved this lock graph. This is evidence, not
+    /// an exact build pin; locked builds revalidate `compiler_requirement`.
+    #[serde(default)]
+    pub resolver_compiler_version: String,
 }
 
 /// A reference from Cell.lock [deployment.<network>] to a Deployed.toml entry.
@@ -2456,14 +2699,18 @@ pub struct LockfileDeploymentRef {
 }
 
 impl Lockfile {
-    pub const CURRENT_VERSION: u32 = 3;
-    pub const CURRENT_SCHEMA: &'static str = "cellscript-lock-v0.24-graph-v1";
+    pub const CURRENT_VERSION: u32 = 4;
+    pub const CURRENT_SCHEMA: &'static str = "cellscript-lock-v0.30-compiler-requirement-v1";
 
     pub fn new() -> Self {
         Self {
             version: Self::CURRENT_VERSION,
             schema: Self::CURRENT_SCHEMA.to_string(),
-            package: LockfilePackageInfo::default(),
+            package: LockfilePackageInfo {
+                compiler_requirement: "*".to_string(),
+                resolver_compiler_version: crate::VERSION.to_string(),
+                ..LockfilePackageInfo::default()
+            },
             root: LockedRootGraph::default(),
             dependencies: BTreeMap::new(),
             environments: BTreeMap::new(),
@@ -2508,6 +2755,19 @@ impl Lockfile {
                 Self::CURRENT_SCHEMA
             )));
         }
+        if self.package.compiler_requirement.is_empty() || self.package.resolver_compiler_version.is_empty() {
+            return Err(CompileError::without_span(
+                "Cell.lock v4 package requires compiler_requirement and resolver_compiler_version; run 'cellc lock' or 'cellc update' explicitly",
+            )
+            .with_code("E2600"));
+        }
+        parse_compiler_requirement(&self.package.compiler_requirement)?;
+        semver::Version::parse(&self.package.resolver_compiler_version).map_err(|error| {
+            CompileError::without_span(format!(
+                "Cell.lock package resolver_compiler_version '{}' is invalid: {error}",
+                self.package.resolver_compiler_version
+            ))
+        })?;
         if let Some(build) = &self.package_build {
             if build.edition != self.package.edition {
                 return Err(CompileError::without_span(format!(
@@ -2516,7 +2776,7 @@ impl Lockfile {
                 )));
             }
             if build.compatibility_profile_hash.is_empty() {
-                return Err(CompileError::without_span("Cell.lock v3 package_build requires compatibility_profile_hash"));
+                return Err(CompileError::without_span("Cell.lock v4 package_build requires compatibility_profile_hash"));
             }
         }
         self.validate_graph()?;
@@ -2528,12 +2788,22 @@ impl Lockfile {
             if dependency.name.is_empty()
                 || dependency.manifest_digest.is_empty()
                 || dependency.source_hash.as_deref().is_none_or(str::is_empty)
+                || dependency.compiler_requirement.is_empty()
+                || dependency.resolver_compiler_version.is_empty()
             {
                 return Err(CompileError::without_span(format!(
-                    "Cell.lock dependency node '{}' requires name, manifest_digest, and source_hash",
+                    "Cell.lock dependency node '{}' requires name, manifest_digest, source_hash, compiler_requirement, and resolver_compiler_version",
                     node_id
-                )));
+                ))
+                .with_code("E2600"));
             }
+            parse_compiler_requirement(&dependency.compiler_requirement)?;
+            semver::Version::parse(&dependency.resolver_compiler_version).map_err(|error| {
+                CompileError::without_span(format!(
+                    "Cell.lock dependency node '{}' resolver_compiler_version '{}' is invalid: {error}",
+                    node_id, dependency.resolver_compiler_version
+                ))
+            })?;
             for (alias, target) in &dependency.dependencies {
                 if !self.dependencies.contains_key(target) {
                     return Err(CompileError::without_span(format!(
@@ -2604,6 +2874,8 @@ impl Lockfile {
                 manifest_digest: package.manifest_digest.clone(),
                 dependencies: package.dependencies.clone(),
                 build: None,
+                compiler_requirement: package.compiler_requirement.clone(),
+                resolver_compiler_version: crate::VERSION.to_string(),
             };
             self.dependencies.insert(node_id.clone(), locked);
         }
@@ -2632,6 +2904,12 @@ impl Lockfile {
         manifest: &PackageManifest,
         options: &ResolutionOptions,
     ) -> Result<()> {
+        self.package.edition = manifest.package.edition;
+        self.package.name = manifest.package.name.clone();
+        self.package.version = manifest.package.version.clone();
+        self.package.namespace = manifest.package.namespace.clone();
+        self.package.compiler_requirement = manifest.package.cellscript_version.clone();
+        self.package.resolver_compiler_version = crate::VERSION.to_string();
         self.update_from_resolved(manager.get_resolved());
         let manifest_bytes = std::fs::read(manager.root.join("Cell.toml"))?;
         self.root.manifest_digest = manifest_digest(&manifest_bytes);
@@ -2696,6 +2974,12 @@ impl Lockfile {
             issues.push(format!(
                 "package edition mismatch: Cell.toml has '{}' but Cell.lock records '{}'",
                 manifest.package.edition, self.package.edition
+            ));
+        }
+        if self.package.compiler_requirement != manifest.package.cellscript_version {
+            issues.push(format!(
+                "package compiler requirement mismatch: Cell.toml has '{}' but Cell.lock records '{}'",
+                manifest.package.cellscript_version, self.package.compiler_requirement
             ));
         }
 
@@ -2847,6 +3131,12 @@ fn resolved_dependency_consistency_issues(name: &str, package: &ResolvedPackage,
         issues.push(format!(
             "resolved dependency node '{}' manifest digest '{}' does not match Cell.lock '{}'",
             name, package.manifest_digest, locked.manifest_digest
+        ));
+    }
+    if locked.compiler_requirement != package.compiler_requirement {
+        issues.push(format!(
+            "resolved dependency node '{}' compiler requirement '{}' does not match Cell.lock '{}'",
+            name, package.compiler_requirement, locked.compiler_requirement
         ));
     }
     if locked.dependencies != package.dependencies {
@@ -3055,6 +3345,12 @@ pub struct LockedDependency {
     pub source_hash: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub manifest_digest: String,
+    /// Source compatibility range declared by the dependency manifest.
+    #[serde(default)]
+    pub compiler_requirement: String,
+    /// Compiler release that resolved this dependency node.
+    #[serde(default)]
+    pub resolver_compiler_version: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dependencies: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3333,7 +3629,7 @@ mod tests {
                 documentation: String::new(),
                 keywords: vec!["test".to_string()],
                 categories: vec!["test".to_string()],
-                cellscript_version: String::new(),
+                cellscript_version: "*".to_string(),
                 entry: "src/main.cell".to_string(),
                 source_roots: vec![],
                 include: vec![],
@@ -3461,8 +3757,239 @@ version = "0.1.0"
         PackageManager::new(temp.path()).init("demo").unwrap();
         let source = std::fs::read_to_string(temp.path().join("Cell.toml")).unwrap();
         assert!(source.contains("edition = \"2026\""));
+        assert!(source.contains(&format!("cellscript_version = \">={}\"", crate::VERSION)));
         let manifest: PackageManifest = toml::from_str(&source).unwrap();
         assert_eq!(manifest.package.edition, CURRENT_EDITION);
+    }
+
+    #[test]
+    fn compiler_requirement_is_semver_checked_and_legacy_bare_versions_are_minimums() {
+        assert!(compiler_requirement_matches("*", "0.1.0").unwrap());
+        assert!(compiler_requirement_matches("0.16", "0.26.0").unwrap());
+        assert!(!compiler_requirement_matches("0.30", "0.29.9").unwrap());
+        assert!(compiler_requirement_matches("0.30", "0.30.0").unwrap());
+        assert!(!compiler_requirement_matches("^0.30", "0.31.0").unwrap());
+        assert!(compiler_requirement_matches(">=0.26.0-alpha.1", "0.26.0").unwrap());
+        assert!(compiler_requirement_matches("=0.30.0-alpha.1", "0.30.0-alpha.1").unwrap());
+        assert!(!compiler_requirement_matches("=0.30.0-alpha.1", "0.30.0-alpha.2").unwrap());
+        assert!(parse_compiler_requirement("").unwrap_err().message.contains("must not be empty"));
+        assert!(parse_compiler_requirement("not-semver").unwrap_err().message.contains("invalid package cellscript_version"));
+
+        let incompatible: PackageManifest = toml::from_str(
+            r#"
+[package]
+edition = "2026"
+name = "future"
+version = "1.0.0"
+cellscript_version = ">=999.0.0"
+"#,
+        )
+        .unwrap();
+        let error = validate_package_compiler_requirement(&incompatible.package).unwrap_err();
+        assert!(error.message.contains("future@1.0.0"), "{}", error.message);
+        assert!(error.message.contains(crate::VERSION), "{}", error.message);
+    }
+
+    #[test]
+    fn transitive_path_package_rejects_incompatible_compiler_before_source_loading() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join("deps/middle/src")).unwrap();
+        std::fs::create_dir_all(root.join("deps/future/src")).unwrap();
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+edition = "2026"
+name = "app"
+version = "1.0.0"
+
+[dependencies.middle]
+path = "deps/middle"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("deps/middle/Cell.toml"),
+            r#"
+[package]
+edition = "2026"
+name = "middle"
+version = "1.0.0"
+
+[dependencies.future]
+path = "../future"
+"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("deps/middle/src/lib.cell"), "module middle;\n").unwrap();
+        std::fs::write(
+            root.join("deps/future/Cell.toml"),
+            r#"
+[package]
+edition = "2026"
+name = "future"
+version = "1.0.0"
+cellscript_version = ">=999.0.0"
+"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("deps/future/src/lib.cell"), "this is deliberately invalid CellScript").unwrap();
+
+        let error = PackageManager::new(root).resolve_dependencies().unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("E2600"));
+        let incompatible = &error.details.as_ref().unwrap()["incompatible_packages"][0];
+        assert_eq!(incompatible["package"], "future");
+        assert_eq!(incompatible["package_version"], "1.0.0");
+        assert_eq!(incompatible["incoming_edge"]["from_package"], "middle");
+        assert_eq!(incompatible["incoming_edge"]["alias"], "future");
+        assert!(incompatible["message"].as_str().unwrap().contains("before loading source"));
+        assert!(!incompatible["message"].as_str().unwrap().contains("parse"));
+    }
+
+    #[test]
+    fn dependency_preflight_reports_every_incompatible_package_and_incoming_edge() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        for package in ["future_a", "future_b"] {
+            let package_root = root.join("deps").join(package);
+            std::fs::create_dir_all(package_root.join("src")).unwrap();
+            std::fs::write(
+                package_root.join("Cell.toml"),
+                format!(
+                    r#"
+[package]
+edition = "2026"
+name = "{package}"
+version = "1.0.0"
+cellscript_version = ">=999.0.0"
+"#
+                ),
+            )
+            .unwrap();
+            std::fs::write(package_root.join("src/lib.cell"), "this source is intentionally invalid").unwrap();
+        }
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+edition = "2026"
+name = "app"
+version = "1.0.0"
+
+[dependencies.first]
+package = "future_a"
+path = "deps/future_a"
+
+[dependencies.second]
+package = "future_b"
+path = "deps/future_b"
+"#,
+        )
+        .unwrap();
+
+        let mut manager = PackageManager::new(root);
+        let error = manager.resolve_dependencies().unwrap_err();
+
+        assert_eq!(error.code.as_deref(), Some("E2600"));
+        let incompatible = error.details.as_ref().unwrap()["incompatible_packages"].as_array().unwrap();
+        assert_eq!(incompatible.len(), 2, "{}", error.message);
+        assert_eq!(incompatible.iter().map(|entry| entry["package"].as_str().unwrap()).collect::<Vec<_>>(), ["future_a", "future_b"]);
+        assert_eq!(incompatible[0]["incoming_edge"]["alias"], "first");
+        assert_eq!(incompatible[1]["incoming_edge"]["alias"], "second");
+        assert!(manager.get_resolved().is_empty());
+    }
+
+    #[test]
+    fn lockfile_binds_root_and_transitive_compiler_requirements() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        write_path_package(root, "deps/math", "math", "1.2.3");
+        let dependency_manifest = root.join("deps/math/Cell.toml");
+        let dependency_source = std::fs::read_to_string(&dependency_manifest)
+            .unwrap()
+            .replace("version = \"1.2.3\"", "version = \"1.2.3\"\ncellscript_version = \">=0.16\"");
+        std::fs::write(&dependency_manifest, dependency_source).unwrap();
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+edition = "2026"
+name = "app"
+version = "1.0.0"
+cellscript_version = ">=0.20"
+
+[dependencies.math]
+path = "deps/math"
+version = "1.2.3"
+"#,
+        )
+        .unwrap();
+
+        write_test_lock(root, &ResolutionOptions::default());
+        let mut lockfile = Lockfile::read_from_root(root).unwrap().unwrap();
+        assert_eq!(lockfile.package.compiler_requirement, ">=0.20");
+        assert_eq!(lockfile.package.resolver_compiler_version, crate::VERSION);
+        let node = lockfile.root.dependencies.get("math").unwrap().clone();
+        assert!(node.contains("compiler=3e3d302e3136"), "{node}");
+        let dependency = lockfile.dependencies.get(&node).unwrap();
+        assert_eq!(dependency.compiler_requirement, ">=0.16");
+        assert_eq!(dependency.resolver_compiler_version, crate::VERSION);
+
+        lockfile.dependencies.get_mut(&node).unwrap().compiler_requirement = "*".to_string();
+        lockfile.write_to_root(root).unwrap();
+        let error = PackageManager::new(root).resolve_locked_dependencies(&ResolutionOptions::default()).unwrap_err();
+        assert!(error.message.contains("compiler requirement '*' does not match Cell.toml '>=0.16'"), "{}", error.message);
+    }
+
+    #[test]
+    fn locked_resolution_revalidates_active_compiler_without_selecting_a_replacement() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        write_path_package(root, "deps/math", "math", "1.2.3");
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+edition = "2026"
+name = "app"
+version = "1.0.0"
+
+[dependencies.math]
+path = "deps/math"
+version = "1.2.3"
+"#,
+        )
+        .unwrap();
+        write_test_lock(root, &ResolutionOptions::default());
+
+        let dependency_manifest = root.join("deps/math/Cell.toml");
+        let future_manifest = std::fs::read_to_string(&dependency_manifest)
+            .unwrap()
+            .replace("version = \"1.2.3\"", "version = \"1.2.3\"\ncellscript_version = \">=999.0.0\"");
+        std::fs::write(&dependency_manifest, future_manifest).unwrap();
+        std::fs::write(root.join("deps/math/src/lib.cell"), "this source must not be parsed").unwrap();
+
+        let manager = PackageManager::new(root);
+        let resolved = manager.resolve_from_path("math", "deps/math").unwrap();
+        let future_node = package_node_id(&resolved, &ResolutionOptions::default(), None);
+        let mut lockfile = Lockfile::read_from_root(root).unwrap().unwrap();
+        let old_node = lockfile.root.dependencies.get("math").unwrap().clone();
+        let mut locked = lockfile.dependencies.remove(&old_node).unwrap();
+        locked.compiler_requirement = resolved.compiler_requirement.clone();
+        locked.manifest_digest = resolved.manifest_digest.clone();
+        locked.source_hash = resolved.source_hash.clone();
+        lockfile.dependencies.insert(future_node.clone(), locked);
+        lockfile.root.dependencies.insert("math".to_string(), future_node.clone());
+        lockfile.write_to_root(root).unwrap();
+
+        let error = PackageManager::new(root).resolve_locked_dependencies(&ResolutionOptions::default()).unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("E2600"));
+        assert_eq!(error.details.as_ref().unwrap()["compiler_requirement"], ">=999.0.0");
+        assert_eq!(error.details.as_ref().unwrap()["phase"], "manifest-before-source");
+        assert_eq!(error.details.as_ref().unwrap()["incoming_edge"]["alias"], "math");
+        assert!(error.message.contains("before loading source"), "{}", error.message);
+        assert_eq!(lockfile.root.dependencies["math"], future_node);
     }
 
     #[test]
@@ -3490,6 +4017,8 @@ version = "0.1.0"
             manifest_digest: format!("manifest-{name}"),
             dependencies,
             build: None,
+            compiler_requirement: "*".to_string(),
+            resolver_compiler_version: crate::VERSION.to_string(),
         }
     }
 
@@ -3504,6 +4033,7 @@ version = "0.1.0"
             namespace: None,
             source_hash: Some(format!("hash-{name}")),
             manifest_digest: format!("manifest-{name}"),
+            compiler_requirement: "*".to_string(),
         }
     }
 
@@ -3724,6 +4254,8 @@ path = "../a"
             namespace: manifest.package.namespace.clone(),
             source_hash: Some(registry::compute_source_hash(root).unwrap()),
             compiler_source_hash: None,
+            compiler_requirement: manifest.package.cellscript_version.clone(),
+            resolver_compiler_version: crate::VERSION.to_string(),
         };
         lockfile.replace_with_resolution(&manager, &manifest, options).unwrap();
         lockfile.write_to_root(root).unwrap();
@@ -3908,6 +4440,59 @@ branch = "main"
         };
         assert_eq!(repinned_revision, &second_revision);
         assert_ne!(repinned_revision, &first_revision);
+    }
+
+    #[test]
+    fn git_package_rejects_incompatible_compiler_before_source_loading() {
+        if std::process::Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let dependency_repo = root.join("future-git");
+        write_path_package(root, "future-git", "future_git", "1.0.0");
+        let manifest_path = dependency_repo.join("Cell.toml");
+        let manifest = std::fs::read_to_string(&manifest_path)
+            .unwrap()
+            .replace("version = \"1.0.0\"", "version = \"1.0.0\"\ncellscript_version = \">=999.0.0\"");
+        std::fs::write(&manifest_path, manifest).unwrap();
+        std::fs::write(dependency_repo.join("src/lib.cell"), "this source must not be parsed").unwrap();
+        for arguments in [
+            vec!["init", "-q"],
+            vec!["config", "user.email", "tests@cellscript.dev"],
+            vec!["config", "user.name", "CellScript Tests"],
+            vec!["add", "."],
+            vec!["commit", "-q", "-m", "future compiler package"],
+        ] {
+            let status = std::process::Command::new("git").args(arguments).current_dir(&dependency_repo).status().unwrap();
+            assert!(status.success());
+        }
+        std::fs::write(
+            root.join("Cell.toml"),
+            format!(
+                r#"
+[package]
+edition = "2026"
+name = "app"
+version = "1.0.0"
+
+[dependencies.future]
+package = "future_git"
+git = "{}"
+"#,
+                dependency_repo.display()
+            ),
+        )
+        .unwrap();
+
+        let error = PackageManager::new(root).resolve_dependencies().unwrap_err();
+
+        assert_eq!(error.code.as_deref(), Some("E2600"));
+        let incompatible = &error.details.as_ref().unwrap()["incompatible_packages"][0];
+        assert_eq!(incompatible["package"], "future_git");
+        assert_eq!(incompatible["incoming_edge"]["from_package"], "app");
+        assert_eq!(incompatible["incoming_edge"]["alias"], "future");
+        assert!(incompatible["message"].as_str().unwrap().contains("before loading source"));
     }
 
     #[test]
@@ -4324,6 +4909,8 @@ path = "deps/math"
                 manifest_digest: "manifest-stale".to_string(),
                 dependencies: BTreeMap::new(),
                 build: None,
+                compiler_requirement: "*".to_string(),
+                resolver_compiler_version: crate::VERSION.to_string(),
             },
         );
 
@@ -4384,6 +4971,8 @@ path = "deps/math"
                 manifest_digest: "manifest-old".to_string(),
                 dependencies: BTreeMap::new(),
                 build: None,
+                compiler_requirement: "*".to_string(),
+                resolver_compiler_version: crate::VERSION.to_string(),
             },
         );
 

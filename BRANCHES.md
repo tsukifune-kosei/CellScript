@@ -38,6 +38,12 @@ Playground parity are implemented, and the six-family temporal business corpus
 uses typed HeaderDep and Since operations. Full candidate gates and independent
 review remain before issue #12 and the release gate can close.
 
+The issue #18 package-compiler prerequisite is implemented through enforced
+`[package].cellscript_version` SemVer ranges, aggregated root/transitive
+pre-source diagnostics, compiler-aware Registry selection, and `Cell.lock` v4.
+Compiler compatibility remains separate from Edition, target/profile,
+metadata/checker schema, and exact reproducible compiler identity.
+
 Until this branch passes those criteria, treat it as development work, use
 `0.26b` only as its experimental implementation baseline, and retain 0.25 as
 the predecessor release contract. Do not publish a 0.26 tag solely to preserve

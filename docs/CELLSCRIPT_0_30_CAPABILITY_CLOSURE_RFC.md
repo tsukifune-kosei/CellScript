@@ -87,6 +87,13 @@ remain explicit, external resolvers no longer look up an inherited label, and
 canonical lock node IDs bind the complete selection. ProtocolBundle work can
 therefore consume a frozen dependency graph without treating environment names
 as deployment identity.
+Issue #18's compiler-compatibility prerequisite is also implemented: the root
+and all discovered transitive manifests are checked against the active
+compiler before source loading, path/Git/Registry incompatibilities use stable
+E2600 diagnostics with aggregated incoming-edge JSON, Registry resolution
+selects only compatible releases, and lockfile v4 binds and revalidates the
+range separately from exact build-compiler evidence. Versions 1 through 3 are
+migrated only by explicit repinning.
 
 The goal is business-scenario coverage comparable to hand-written Rust CKB
 Scripts for a defined, bounded portfolio. It is not unrestricted Rust language
@@ -136,7 +143,7 @@ form a complete 0.30 business-capability plan.
 | Timelocks, epochs, timestamps, and `Since` | [#12](https://github.com/CellScript-Labs/CellScript/issues/12) | Covered for typed temporal domains. It does not own the rest of the transaction-view and syscall surface. |
 | Digest-committed substate and authenticated openings | [#13](https://github.com/CellScript-Labs/CellScript/issues/13) | Covered for commitments and opening correspondence. It must share the entry witness envelope with output plans and verifier proofs. |
 | Honest capability and product-completeness claims | [#14](https://github.com/CellScript-Labs/CellScript/issues/14) | Covered as a governance rule. It is not an implementation owner for the missing capabilities. |
-| Reproducible workspace, resolver, compiler-requirement, build-plan, and upgrade behavior | [#15](https://github.com/CellScript-Labs/CellScript/issues/15), [#16](https://github.com/CellScript-Labs/CellScript/issues/16), [#17](https://github.com/CellScript-Labs/CellScript/issues/17), [#18](https://github.com/CellScript-Labs/CellScript/issues/18), [#19](https://github.com/CellScript-Labs/CellScript/issues/19), [#20](https://github.com/CellScript-Labs/CellScript/issues/20) | Covered by separate toolchain owners. #17's chain-identity propagation and frozen-lock contract are implemented on the 0.30 branch; the remaining package/build/upgrade owners still gate complete composition. |
+| Reproducible workspace, resolver, compiler-requirement, build-plan, and upgrade behavior | [#15](https://github.com/CellScript-Labs/CellScript/issues/15), [#16](https://github.com/CellScript-Labs/CellScript/issues/16), [#17](https://github.com/CellScript-Labs/CellScript/issues/17), [#18](https://github.com/CellScript-Labs/CellScript/issues/18), [#19](https://github.com/CellScript-Labs/CellScript/issues/19), [#20](https://github.com/CellScript-Labs/CellScript/issues/20) | Covered by separate toolchain owners. #17's chain-identity propagation and frozen-lock contract and #18's compiler-requirement/Registry-selection/lock-v4 contract are implemented on the 0.30 branch; workspace/build-plan/upgrade owners still gate complete composition. |
 | Typed zero-knowledge verifier contracts | [#22](https://github.com/CellScript-Labs/CellScript/issues/22) | Covered as research and typed external-verifier composition. A circuit DSL is outside the 0.30 core. |
 | Stable public value-generics surface | [#23](https://github.com/CellScript-Labs/CellScript/issues/23) | Covered as a language-design owner. It must close before public 0.30 package APIs are frozen. |
 | Typed CKB transaction views and runtime adapters | [#24](https://github.com/CellScript-Labs/CellScript/issues/24) | Newly owned for 0.30. It unifies admitted Cell/input/header/witness/Script/hash/source operations without a raw syscall escape hatch. |
@@ -423,8 +430,8 @@ adding an untracked general-purpose escape hatch.
 
 - Complete #9, #10, and #11 in dependency order.
 - Close the relevant #15-#20 package, environment, build, and upgrade
-  prerequisites. The #17 environment-selection prerequisite is implemented;
-  workspace/build-plan/compiler-requirement/upgrade closure remains.
+  prerequisites. The #17 environment-selection and #18 compiler-requirement
+  prerequisites are implemented; workspace/build-plan/upgrade closure remains.
 - Generate complete builders and execute multi-Script transaction fixtures.
 
 ### Stage 3: business parity and economics

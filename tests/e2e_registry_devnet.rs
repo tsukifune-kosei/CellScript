@@ -365,6 +365,7 @@ fn init_source_repo(repo_dir: &Path, name: &str, version: &str, namespace: &str)
         yanked_reason: None,
         replaced_by: None,
         audit: None,
+        compiler_requirement: "*".to_string(),
     };
     RegistryIndex::append_version(repo_dir, name, namespace, version_entry).unwrap();
 
@@ -552,6 +553,8 @@ fn e2e_publish_install_verify_offline_git() {
         namespace: Some("cellscript".to_string()),
         source_hash: Some(compute_source_hash(&consumer_dir).unwrap()),
         compiler_source_hash: None,
+        compiler_requirement: "*".to_string(),
+        resolver_compiler_version: cellscript::VERSION.to_string(),
     };
     lockfile.dependencies.insert(
         "token".to_string(),
@@ -570,6 +573,8 @@ fn e2e_publish_install_verify_offline_git() {
             manifest_digest: "sha256:test-token-manifest".to_string(),
             dependencies: BTreeMap::new(),
             build: None,
+            compiler_requirement: "*".to_string(),
+            resolver_compiler_version: cellscript::VERSION.to_string(),
         },
     );
     lockfile.write_to_root(&consumer_dir).unwrap();
@@ -627,6 +632,7 @@ fn e2e_multi_package_dependency_chain() {
         yanked_reason: None,
         replaced_by: None,
         audit: None,
+        compiler_requirement: "*".to_string(),
     };
     RegistryIndex::append_version(&lib_b_repo, "lib-b", "cellscript", version_entry_b).unwrap();
 
@@ -697,6 +703,8 @@ fn e2e_multi_package_dependency_chain() {
         namespace: Some("cellscript".to_string()),
         source_hash: None,
         compiler_source_hash: None,
+        compiler_requirement: "*".to_string(),
+        resolver_compiler_version: cellscript::VERSION.to_string(),
     };
     lockfile.dependencies.insert(
         "lib-a".to_string(),
@@ -715,6 +723,8 @@ fn e2e_multi_package_dependency_chain() {
             manifest_digest: "sha256:test-lib-a-manifest".to_string(),
             dependencies: BTreeMap::new(),
             build: None,
+            compiler_requirement: "*".to_string(),
+            resolver_compiler_version: cellscript::VERSION.to_string(),
         },
     );
     lockfile.dependencies.insert(
@@ -734,6 +744,8 @@ fn e2e_multi_package_dependency_chain() {
             manifest_digest: "sha256:test-lib-b-manifest".to_string(),
             dependencies: BTreeMap::new(),
             build: None,
+            compiler_requirement: "*".to_string(),
+            resolver_compiler_version: cellscript::VERSION.to_string(),
         },
     );
     lockfile.write_to_root(&consumer_dir).unwrap();
@@ -803,6 +815,7 @@ fn publish_version_with_deps(
         yanked_reason: None,
         replaced_by: None,
         audit: None,
+        compiler_requirement: "*".to_string(),
     };
     RegistryIndex::append_version(repo_dir, name, namespace, version_entry).unwrap();
     // Initialise git on first publish (init_source_repo already does this for
@@ -1078,6 +1091,7 @@ fn e2e_version_upgrade_yank_semver() {
         yanked_reason: None,
         replaced_by: None,
         audit: None,
+        compiler_requirement: "*".to_string(),
     };
     RegistryIndex::append_version(&repo, "amm", "cellscript", v010).unwrap();
 
@@ -1110,6 +1124,7 @@ fn e2e_version_upgrade_yank_semver() {
         yanked_reason: None,
         replaced_by: None,
         audit: None,
+        compiler_requirement: "*".to_string(),
     };
     RegistryIndex::append_version(&repo, "amm", "cellscript", v020).unwrap();
 
@@ -1140,6 +1155,7 @@ fn e2e_version_upgrade_yank_semver() {
         yanked_reason: None,
         replaced_by: None,
         audit: None,
+        compiler_requirement: "*".to_string(),
     };
     RegistryIndex::append_version(&repo, "amm", "cellscript", v030).unwrap();
 
@@ -1182,6 +1198,7 @@ fn e2e_version_upgrade_yank_semver() {
             report_hash: Some("0xsecurity_advisory_hash".to_string()),
             acceptance_gate: Some("failed".to_string()),
         }),
+        compiler_requirement: "*".to_string(),
     };
     RegistryIndex::append_version(&repo, "amm", "cellscript", v020_yanked).unwrap();
 
@@ -1349,6 +1366,8 @@ fn e2e_headless_deploy_deployed_toml_three_layer_identity() {
         namespace: Some("cellscript".to_string()),
         source_hash: Some(source_hash.clone()),
         compiler_source_hash: None,
+        compiler_requirement: "*".to_string(),
+        resolver_compiler_version: cellscript::VERSION.to_string(),
     };
     lockfile.package_build = Some(LockedBuildInfo {
         edition: cellscript::CURRENT_EDITION,
@@ -1545,6 +1564,8 @@ fn e2e_headless_deploy_with_cell_deps_and_multi_network() {
         namespace: Some("cellscript".to_string()),
         source_hash: Some(source_hash),
         compiler_source_hash: None,
+        compiler_requirement: "*".to_string(),
+        resolver_compiler_version: cellscript::VERSION.to_string(),
     };
     lockfile.package_build = Some(LockedBuildInfo {
         edition: cellscript::CURRENT_EDITION,
@@ -1627,6 +1648,8 @@ fn e2e_fail_closed_three_layer_identity_verification() {
         namespace: Some("cellscript".to_string()),
         source_hash: Some(source_hash.clone()),
         compiler_source_hash: None,
+        compiler_requirement: "*".to_string(),
+        resolver_compiler_version: cellscript::VERSION.to_string(),
     };
     lockfile.package_build = Some(LockedBuildInfo {
         edition: cellscript::CURRENT_EDITION,
@@ -2384,6 +2407,8 @@ action ping(value: u64) -> u64 {
         namespace: Some("cellscript".to_string()),
         source_hash: Some(source_hash),
         compiler_source_hash: None,
+        compiler_requirement: "*".to_string(),
+        resolver_compiler_version: cellscript::VERSION.to_string(),
     };
     lockfile.package_build = Some(LockedBuildInfo {
         edition: cellscript::CURRENT_EDITION,
@@ -2500,6 +2525,7 @@ action verify(amount: u64) -> u64 {
         yanked_reason: None,
         replaced_by: None,
         audit: None,
+        compiler_requirement: "*".to_string(),
     };
     RegistryIndex::append_version(&app_repo, "app-contract", "cellscript", version_entry_app).unwrap();
 
@@ -2637,6 +2663,8 @@ action verify(amount: u64) -> u64 {
         namespace: Some("cellscript".to_string()),
         source_hash: Some(hash_app.clone()),
         compiler_source_hash: None,
+        compiler_requirement: "*".to_string(),
+        resolver_compiler_version: cellscript::VERSION.to_string(),
     };
     lockfile.package_build = Some(LockedBuildInfo {
         edition: cellscript::CURRENT_EDITION,
@@ -2917,6 +2945,7 @@ fn e2e_registry_json_append_update_idempotency() {
         yanked_reason: None,
         replaced_by: None,
         audit: None,
+        compiler_requirement: "*".to_string(),
     };
     RegistryIndex::append_version(&repo, "pkg", "ns", v1).unwrap();
 
@@ -2943,6 +2972,7 @@ fn e2e_registry_json_append_update_idempotency() {
         yanked_reason: None,
         replaced_by: None,
         audit: None,
+        compiler_requirement: "*".to_string(),
     };
     RegistryIndex::append_version(&repo, "pkg", "ns", v2).unwrap();
 
@@ -2968,6 +2998,7 @@ fn e2e_registry_json_append_update_idempotency() {
         yanked_reason: None,
         replaced_by: None,
         audit: Some(RegistryAuditInfo { report_hash: Some("0xaudit_hash".to_string()), acceptance_gate: Some("failed".to_string()) }),
+        compiler_requirement: "*".to_string(),
     };
     RegistryIndex::append_version(&repo, "pkg", "ns", v1_updated).unwrap();
 
@@ -3045,6 +3076,8 @@ fn e2e_package_manager_registry_resolution_with_local_git() {
         namespace: Some("cellscript".to_string()),
         source_hash: None,
         compiler_source_hash: None,
+        compiler_requirement: "*".to_string(),
+        resolver_compiler_version: cellscript::VERSION.to_string(),
     };
     lockfile.dependencies.insert(
         "math-lib".to_string(),
@@ -3063,6 +3096,8 @@ fn e2e_package_manager_registry_resolution_with_local_git() {
             manifest_digest: "sha256:test-math-manifest".to_string(),
             dependencies: BTreeMap::new(),
             build: None,
+            compiler_requirement: "*".to_string(),
+            resolver_compiler_version: cellscript::VERSION.to_string(),
         },
     );
     lockfile.root.manifest_digest = cellscript::package::compute_manifest_digest(&consumer_dir).unwrap();

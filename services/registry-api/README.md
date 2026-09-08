@@ -444,7 +444,10 @@ the job record; transport, timeout, malformed-output, and store failures remain
 retryable infrastructure errors.
 
 For CellScript source, the verifier compiles the authenticated snapshot using
-the current real compiler. For generic artifact bundles it validates the
+the current real compiler. Source publication requires both
+`compiler_requirement`, copied from `[package].cellscript_version`, and the
+exact build `cellscript_version`; the resolver uses the former while
+reproducible build evidence owns the latter. For generic artifact bundles it validates the
 coordinate/profile and required objects, recomputes all hashes, and emits the
 profile-specific verification level. Generic CKB bundles remain `hash_bound`.
 A CKB bundle that supplies the complete compile metadata, lowering record, and

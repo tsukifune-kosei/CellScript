@@ -1,23 +1,27 @@
-version = 3
-schema = "cellscript-lock-v0.24-graph-v1"
+version = 4
+schema = "cellscript-lock-v0.30-compiler-requirement-v1"
 
 [package]
 edition = "2026"
 name = "amm_pool"
 version = "0.1.0"
 source_hash = "3931af98c3db3e68e166ddd4f7f367679ddbc1144243d9475a60f62348e760c6"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
 [root]
 manifest_digest = "sha256:f3899870aed3db9e1fbfe237b0425f90f5fcbd2953d7d929da9833f136191d06"
 
 [root.dependencies]
-token = "token@0.1.0|path:../token|env=default|features=default"
+token = "token@0.1.0|path:../token|compiler=2a|env=default|features=default"
 
-[dependencies."token@0.1.0|path:../token|env=default|features=default"]
+[dependencies."token@0.1.0|path:../token|compiler=2a|env=default|features=default"]
 name = "token"
 version = "0.1.0"
 source_hash = "d5ecb3241eeb97983005b9622cbe7a9540cbdec133ec22105c07955f99c7b889"
 manifest_digest = "sha256:3adaae2b8a70a8a49246c28c95a6bd3686fefaed383dfb598c7d35da2a2ad4f9"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
-[dependencies."token@0.1.0|path:../token|env=default|features=default".source.Path]
+[dependencies."token@0.1.0|path:../token|compiler=2a|env=default|features=default".source.Path]
 path = "../token"

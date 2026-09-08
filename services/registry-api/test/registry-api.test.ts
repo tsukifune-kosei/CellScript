@@ -458,6 +458,7 @@ async function publishPayload(keyId: string): Promise<PublishPayload> {
         tag: "v1.2.3",
         source_hash: `0x${"ab".repeat(32)}`,
         cellscript_version: "0.23.0",
+        compiler_requirement: ">=0.23.0",
         edition: "2026",
         compatibility_profile_hash: "ef".repeat(32),
         interface_hash: ckbBlake2bHex(canonicalJson({
@@ -496,6 +497,7 @@ async function ckbExecutablePublishPayload(keyId: string): Promise<PublishPayloa
   payload.registry_entry.artifact = payload.artifact;
   const release = payload.registry_entry.versions[0];
   delete release.cellscript_version;
+  delete release.compiler_requirement;
   delete release.edition;
   delete release.compatibility_profile_hash;
   delete release.interface_hash;
@@ -1008,6 +1010,25 @@ describe("registry api", () => {
     expect(secondValidated.registry_entry.versions[0].edition).toBe("2026");
     expect(secondValidated.registry_entry.versions[0].compatibility_profile_hash)
       .not.toBe(firstValidated.registry_entry.versions[0].compatibility_profile_hash);
+  });
+
+  it("requires separate source compiler compatibility and exact build compiler fields", async () => {
+    const payload = await publishPayload("compiler-requirement-test");
+    const validated = validatePublishPayload(payload, DEFAULT_REGISTRY_ORIGIN, now);
+    expect(validated.registry_entry.versions[0].compiler_requirement).toBe(">=0.23.0");
+    expect(validated.registry_entry.versions[0].cellscript_version).toBe("0.23.0");
+
+    const missing = structuredClone(payload);
+    delete missing.registry_entry.versions[0].compiler_requirement;
+    expect(() => validatePublishPayload(missing, DEFAULT_REGISTRY_ORIGIN, now)).toThrow(/compiler_requirement/);
+
+    const malformedRequirement = structuredClone(payload);
+    malformedRequirement.registry_entry.versions[0].compiler_requirement = "not-semver";
+    expect(() => validatePublishPayload(malformedRequirement, DEFAULT_REGISTRY_ORIGIN, now)).toThrow(/bounded SemVer requirement/);
+
+    const malformedBuildCompiler = structuredClone(payload);
+    malformedBuildCompiler.registry_entry.versions[0].cellscript_version = "not-semver";
+    expect(() => validatePublishPayload(malformedBuildCompiler, DEFAULT_REGISTRY_ORIGIN, now)).toThrow(/valid SemVer/);
   });
 
   it("accepts the versioned typed temporal interface and rejects contract drift", async () => {

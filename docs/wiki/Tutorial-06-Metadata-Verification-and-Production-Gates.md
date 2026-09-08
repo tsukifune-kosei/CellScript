@@ -717,8 +717,9 @@ the Lock Script implements the decoder correctly and is not a security audit.
 Do not promote `schema-and-suffix-bound` into semantic, VM, or chain-execution
 evidence.
 
-Package resolution is an earlier, separate gate. `Cell.lock` v3 binds the
-exact `Cell.toml` digest, dependency graph edges, dependency manifests,
+Package resolution is an earlier, separate gate. `Cell.lock` v4 binds the
+exact `Cell.toml` digest, root and dependency compiler requirements, the
+resolving compiler release, dependency graph edges, dependency manifests,
 whole-tree hashes, exact Git/Registry source pins, feature/test modes, and CKB
 environment genesis identity. Build/check/test never perform mutable version
 selection. A changed manifest or source requires explicit `cellc lock` or

@@ -86,6 +86,9 @@ High-value active references include:
 - [CELLSCRIPT_0_30_CKB_RUNTIME_VIEW_MATRIX.md](CELLSCRIPT_0_30_CKB_RUNTIME_VIEW_MATRIX.md)
   for typed CKB transaction-view fields, bounded syscall families, stable
   failures, executable evidence, and the remaining issue #24 work
+- [CELLSCRIPT_COMPILER_REQUIREMENTS.md](CELLSCRIPT_COMPILER_REQUIREMENTS.md)
+  for the enforced package SemVer range, dependency preflight diagnostics,
+  Registry selection, and `Cell.lock` v4 evidence
 - [CELLSCRIPT_AUTHORING_TARGET.md](CELLSCRIPT_AUTHORING_TARGET.md) for the
   adopted 2026-style authoring direction, shared-policy multi-action contracts,
   schema review, authorization boundaries, and required acceptance examples

@@ -1,11 +1,13 @@
-version = 3
-schema = "cellscript-lock-v0.24-graph-v1"
+version = 4
+schema = "cellscript-lock-v0.30-compiler-requirement-v1"
 
 [package]
 edition = "2027"
 name = "lock-script-2027"
 version = "0.1.0"
 source_hash = "5a24190b6850b777d7121f26f7b6fbed3a6fe7348a052db3642d2c6ce8605949"
+compiler_requirement = "*"
+resolver_compiler_version = "0.26.0"
 
 [root]
 manifest_digest = "sha256:3384cf010161718ba90618516896888faa082346ffc034b30a2b96c8cdd8b49a"
