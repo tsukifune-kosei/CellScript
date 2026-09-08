@@ -256,7 +256,7 @@ fn run_anchor(mutation: Mutation) -> AnchorResult {
         "partial_fill",
         &[EntryWitnessArg::U64(12), EntryWitnessArg::Address(always_success_lock.calc_script_hash().unpack())],
     );
-    let witnesses = vec![entry_witness(authorization_payload), entry_witness(order_payload), Bytes::new(), policy_payload];
+    let witnesses = [entry_witness(authorization_payload), entry_witness(order_payload), Bytes::new(), policy_payload];
     let witness_bytes = witnesses.iter().map(Bytes::len).sum();
     let occupied_capacity_shannons = outputs
         .iter()
