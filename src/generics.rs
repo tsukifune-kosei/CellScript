@@ -156,6 +156,71 @@ pub(crate) fn decode_monomorph_name(name: &str) -> Option<(String, Vec<String>)>
     Some((base.to_string(), split_top_level(&canonical, ',')?))
 }
 
+/// Derive the abilities guaranteed by a generic value declaration's field
+/// contract. Type parameters contribute only their declared constraints, so
+/// the result is stable before any concrete monomorphization is selected.
+pub(crate) fn derive_template_value_abilities<'a>(
+    params: &[TypeParam],
+    fields: impl IntoIterator<Item = &'a Type>,
+) -> Vec<ValueAbility> {
+    let constraints = params
+        .iter()
+        .map(|param| (param.name.as_str(), param.constraints.iter().copied().collect::<HashSet<_>>()))
+        .collect::<HashMap<_, _>>();
+    let mut fields = fields.into_iter().peekable();
+    let Some(first) = fields.next() else {
+        return ValueAbility::FIXED_VALUE_PROFILE.to_vec();
+    };
+    let mut derived = guaranteed_template_type_abilities(first, &constraints);
+    for field in fields {
+        let field_abilities = guaranteed_template_type_abilities(field, &constraints);
+        derived.retain(|ability| field_abilities.contains(ability));
+    }
+    derived.remove(&ValueAbility::Cell);
+    let mut derived = derived.into_iter().collect::<Vec<_>>();
+    derived.sort_unstable();
+    derived
+}
+
+fn guaranteed_template_type_abilities(ty: &Type, constraints: &HashMap<&str, HashSet<ValueAbility>>) -> HashSet<ValueAbility> {
+    let fixed_value = || ValueAbility::FIXED_VALUE_PROFILE.into_iter().collect();
+    match ty {
+        Type::U8
+        | Type::U16
+        | Type::U32
+        | Type::I32
+        | Type::U64
+        | Type::U128
+        | Type::Bool
+        | Type::Unit
+        | Type::Address
+        | Type::Hash => fixed_value(),
+        Type::Array(item, _) => guaranteed_template_type_abilities(item, constraints),
+        Type::Tuple(items) => {
+            let mut items = items.iter();
+            let Some(first) = items.next() else {
+                return fixed_value();
+            };
+            let mut abilities = guaranteed_template_type_abilities(first, constraints);
+            for item in items {
+                let item_abilities = guaranteed_template_type_abilities(item, constraints);
+                abilities.retain(|ability| item_abilities.contains(ability));
+            }
+            abilities
+        }
+        Type::Ref(_) | Type::MutRef(_) => [ValueAbility::Copy, ValueAbility::Drop, ValueAbility::NonLinear].into_iter().collect(),
+        Type::Named(name) => constraints.get(name.as_str()).cloned().unwrap_or_else(|| match name.as_str() {
+            "usize" | "isize" => fixed_value(),
+            "String" | "Vec" => {
+                [ValueAbility::Copy, ValueAbility::Drop, ValueAbility::Store, ValueAbility::Serializable, ValueAbility::NonLinear]
+                    .into_iter()
+                    .collect()
+            }
+            _ => HashSet::new(),
+        }),
+    }
+}
+
 impl Monomorphizer {
     fn new(module: &Module) -> Result<Self> {
         let mut this = Self {
@@ -200,10 +265,17 @@ impl Monomorphizer {
                     this.concrete_struct_fields.insert(def.name.clone(), def.fields.iter().map(|field| field.ty.clone()).collect());
                 }
                 Item::Struct(def) => {
+                    let mut def = def.clone();
                     Self::validate_type_params("struct", &def.name, &def.type_params, def.span)?;
+                    if module.visibility_of(&def.name).is_exported() {
+                        Self::validate_public_layout_params("struct", &def.name, &def.type_params)?;
+                    }
+                    if def.abilities.is_empty() {
+                        def.abilities = derive_template_value_abilities(&def.type_params, def.fields.iter().map(|field| &field.ty));
+                    }
                     Self::validate_declared_abilities("struct", &def.name, &def.abilities, def.span)?;
                     Self::validate_phantom_layout_usage(&def.name, &def.type_params, def.fields.iter().map(|field| &field.ty))?;
-                    this.structs.insert(def.name.clone(), def.clone());
+                    this.structs.insert(def.name.clone(), def);
                 }
                 Item::Enum(def) if def.type_params.is_empty() => {
                     this.concrete_enum_abilities.insert(def.name.clone(), def.abilities.clone());
@@ -211,14 +283,24 @@ impl Monomorphizer {
                         .insert(def.name.clone(), def.variants.iter().flat_map(|variant| variant.fields.iter().cloned()).collect());
                 }
                 Item::Enum(def) => {
+                    let mut def = def.clone();
                     Self::validate_type_params("enum", &def.name, &def.type_params, def.span)?;
+                    if module.visibility_of(&def.name).is_exported() {
+                        Self::validate_public_layout_params("enum", &def.name, &def.type_params)?;
+                    }
+                    if def.abilities.is_empty() {
+                        def.abilities = derive_template_value_abilities(
+                            &def.type_params,
+                            def.variants.iter().flat_map(|variant| variant.fields.iter()),
+                        );
+                    }
                     Self::validate_declared_abilities("enum", &def.name, &def.abilities, def.span)?;
                     Self::validate_phantom_layout_usage(
                         &def.name,
                         &def.type_params,
                         def.variants.iter().flat_map(|variant| variant.fields.iter()),
                     )?;
-                    this.enums.insert(def.name.clone(), def.clone());
+                    this.enums.insert(def.name.clone(), def);
                 }
                 Item::Function(def) if !def.type_params.is_empty() => {
                     Self::validate_type_params("function", &def.name, &def.type_params, def.span)?;
@@ -317,12 +399,12 @@ impl Monomorphizer {
         let interface_templates = module
             .items
             .iter()
-            .filter(|item| {
-                matches!(item, Item::Struct(def) if !def.type_params.is_empty())
-                    || matches!(item, Item::Enum(def) if !def.type_params.is_empty())
-                    || matches!(item, Item::Function(def) if !def.type_params.is_empty())
+            .filter_map(|item| match item {
+                Item::Struct(def) if !def.type_params.is_empty() => self.structs.get(&def.name).cloned().map(Item::Struct),
+                Item::Enum(def) if !def.type_params.is_empty() => self.enums.get(&def.name).cloned().map(Item::Enum),
+                Item::Function(def) if !def.type_params.is_empty() => self.functions.get(&def.name).cloned().map(Item::Function),
+                _ => None,
             })
-            .cloned()
             .collect::<Vec<_>>();
         let mut items = Vec::with_capacity(module.items.len());
         for item in &module.items {
@@ -396,6 +478,29 @@ impl Monomorphizer {
                 ),
                 span,
             ));
+        }
+        Ok(())
+    }
+
+    fn validate_public_layout_params(kind: &str, name: &str, params: &[TypeParam]) -> Result<()> {
+        for param in params.iter().filter(|param| !param.phantom) {
+            let missing = [ValueAbility::Fixed, ValueAbility::Serializable, ValueAbility::NonLinear]
+                .into_iter()
+                .filter(|ability| !param.constraints.contains(ability))
+                .map(ValueAbility::as_str)
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                return Err(generic_declaration_error(
+                    format!(
+                        "public generic {} '{}' parameter '{}' must preserve the fixed value layout boundary; add 'fixed_value' or the missing constraint(s): {}",
+                        kind,
+                        name,
+                        param.name,
+                        missing.join(", ")
+                    ),
+                    param.span,
+                ));
+            }
         }
         Ok(())
     }

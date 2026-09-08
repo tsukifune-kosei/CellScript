@@ -19,6 +19,14 @@ acceptance portfolio are tracked in the
 [0.30 capability closure RFC](CELLSCRIPT_0_30_CAPABILITY_CLOSURE_RFC.md); neither
 the release name nor this development evidence changes a compatibility identity.
 
+Issue #23 selects the public-generics Proposal A for 0.30. Public value
+templates and pure functions remain importable across packages, `fixed_value`
+normalizes the common six-ability contract, omitted aggregate abilities are
+derived from fields, and the compiler, Registry, artifact checker, CLI, LSP,
+editor, and browser metadata path share one canonical interface model. This
+closes one language-design slice; it does not close the remaining 0.30
+business-capability workstreams.
+
 The first implementation step restores familiar authoring over the shared
 declaration, type, value, and statement grammar. Ordinary action/lock bodies
 may omit `verification`; the formatter currently emits the established explicit
@@ -82,7 +90,7 @@ bounded 0.26 collection cannot be downgraded to a fixed-role preview.
 |---|---|
 | Modules and interfaces | Imports and aliases, qualified names, project resolution, public/package/private visibility, stable interface extraction and compatibility diagnostics. |
 | Declarations | Resources, shared Cells, receipts, structs, enums, constants, invariants, flows, helpers, actions and locks; attributes and documentation survive. |
-| Types and generics | Scalars, fixed bytes, tuples/arrays, value abilities, phantom identity, bounded monomorphization, imported generic instantiation and unsupported-layout rejection. |
+| Types and generics | Scalars, fixed bytes, tuples/arrays, canonical `fixed_value` normalization, derived aggregate abilities, phantom identity, bounded monomorphization, imported public generic instantiation and unsupported-layout rejection. |
 | Policies | Capabilities and entailment, identity and destruction policies, type/hash declarations, capacity floors, validity and effect annotations. |
 | Values and control flow | Checked arithmetic, wide integers, bitwise/shifts, casts, calls, assignments, aggregates, nested patterns/guards, branching, loops, labels, early returns and borrow regions. |
 | Entry roles | Existing value, witness, input/output, protected, lock-args and read-only sources, rich ABI marshalling and named outputs; provenance is not authorization. |

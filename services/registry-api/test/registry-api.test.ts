@@ -571,6 +571,33 @@ describe("CellScript public interface admission", () => {
     })).toThrow(/changed incompatibly/);
   });
 
+  it("accepts pure generic-constraint relaxation and rejects tightening or shape drift", () => {
+    const genericCallable = {
+      identity: "cellscript::demo::identity",
+      kind: "function",
+      type_parameters: [{
+        name: "T",
+        phantom: false,
+        constraints: ["copy", "drop", "store", "fixed", "serializable", "non_linear"],
+      }],
+      params: [{ name: "value", type: "T", source: "default", mutable: false, reference: false }],
+      return_type: "T",
+      outputs: [],
+      effect: "Pure",
+      entry_witness_abi: null,
+      builder_contract_hash: "33".repeat(32),
+    };
+    const oldInterface = { ...baseInterface, callables: [genericCallable] };
+    const relaxed = structuredClone(oldInterface);
+    relaxed.callables[0]!.type_parameters[0]!.constraints.pop();
+    expect(() => validateInterfaceUpgrade(oldInterface, relaxed)).not.toThrow();
+    expect(() => validateInterfaceUpgrade(relaxed, oldInterface)).toThrow(/generic constraints changed incompatibly/);
+
+    const changedPhantom = structuredClone(oldInterface);
+    changedPhantom.callables[0]!.type_parameters[0]!.phantom = true;
+    expect(() => validateInterfaceUpgrade(oldInterface, changedPhantom)).toThrow(/generic constraints changed incompatibly/);
+  });
+
   it("uses strict SemVer precedence and explicit compatibility lines", () => {
     expect(compareVersions("1.10.0", "1.9.9")).toBeGreaterThan(0);
     expect(compareVersions("2.0.0-rc.1", "2.0.0-beta.11")).toBeGreaterThan(0);
@@ -1068,6 +1095,15 @@ describe("registry api", () => {
       ...published.interface,
       schema: "cellscript-package-interface-v3",
       version: 3,
+      types: [{
+        identity: "cellscript::demo::Pair",
+        type_parameters: [{
+          name: "T",
+          phantom: false,
+          constraints: ["copy", "drop", "store", "fixed", "serializable", "non_linear"],
+        }],
+        value_abilities: ["copy", "drop", "store", "fixed", "serializable", "non_linear"],
+      }],
       runtime_contract: { temporal },
     };
     published.interface = interfaceV3;
@@ -1082,6 +1118,22 @@ describe("registry api", () => {
     driftedTemporal.since_abi = "unchecked";
     drifted.registry_entry.versions[0].interface_hash = ckbBlake2bHex(canonicalJson(driftedInterface));
     expect(() => validatePublishPayload(drifted, DEFAULT_REGISTRY_ORIGIN, now)).toThrow(/temporal.since_abi/);
+
+    const reordered = structuredClone(payload);
+    const reorderedInterface = reordered.registry_entry.versions[0].interface as Record<string, unknown>;
+    const reorderedType = (reorderedInterface.types as Array<Record<string, unknown>>)[0]!;
+    const reorderedParameter = (reorderedType.type_parameters as Array<Record<string, unknown>>)[0]!;
+    reorderedParameter.constraints = ["drop", "copy", "store", "fixed", "serializable", "non_linear"];
+    reordered.registry_entry.versions[0].interface_hash = ckbBlake2bHex(canonicalJson(reorderedInterface));
+    expect(() => validatePublishPayload(reordered, DEFAULT_REGISTRY_ORIGIN, now)).toThrow(/canonically ordered/);
+
+    const unsafeLayout = structuredClone(payload);
+    const unsafeInterface = unsafeLayout.registry_entry.versions[0].interface as Record<string, unknown>;
+    const unsafeType = (unsafeInterface.types as Array<Record<string, unknown>>)[0]!;
+    const unsafeParameter = (unsafeType.type_parameters as Array<Record<string, unknown>>)[0]!;
+    unsafeParameter.constraints = ["copy", "drop", "store", "fixed", "serializable"];
+    unsafeLayout.registry_entry.versions[0].interface_hash = ckbBlake2bHex(canonicalJson(unsafeInterface));
+    expect(() => validatePublishPayload(unsafeLayout, DEFAULT_REGISTRY_ORIGIN, now)).toThrow(/layout boundary/);
   });
 
   it("reports readiness only when production bindings are configured", async () => {

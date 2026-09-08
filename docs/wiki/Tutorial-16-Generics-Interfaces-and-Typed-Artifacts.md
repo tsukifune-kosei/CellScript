@@ -1,21 +1,21 @@
 # Tutorial 16: Generics, Public Interfaces, and Typed Artifacts
 
-This tutorial covers the 0.25 reusable-value and package boundary. It shows how
-to write a bounded generic value, choose visibility, inspect the canonical
-interface, compare an upgrade, and check the typed record bound to an ELF.
+This tutorial covers the stabilized 0.30 reusable-value and package boundary.
+It shows how to write a bounded generic value, choose visibility, inspect the
+canonical interface, compare an upgrade, and check the typed record bound to an
+ELF.
 
 ## 1. Write A Fixed Generic Value
 
 ```cellscript
 module tutorial::pairs
 
-public struct Pair<T: copy + drop + store + fixed + serializable + non_linear>
-    has copy, drop, store, fixed, serializable, non_linear {
+public struct Pair<T: fixed_value> {
     left: T
     right: T
 }
 
-public fn swap<T: copy + drop + store + fixed + serializable + non_linear>(pair: Pair<T>) -> Pair<T> {
+public fn swap<T: fixed_value>(pair: Pair<T>) -> Pair<T> {
     return Pair<T> { left: pair.right, right: pair.left }
 }
 
@@ -24,11 +24,19 @@ private fn internal_identity(value: u64) -> u64 {
 }
 ```
 
+`fixed_value` is the source shorthand for the canonical expanded constraint set
+`copy + drop + store + fixed + serializable + non_linear`. Machine-readable
+interfaces always contain the expanded list. When a generic struct or enum
+omits `has`, the compiler derives its abilities from the field contract; the
+formatter therefore removes an equivalent redundant `has` clause.
+
 CellScript monomorphizes concrete value uses before IR lowering. The compiler
 records every instantiation and applies fixed nesting, count, and identity-size
 budgets. Ordinary generic containers cannot hide a Cell-backed value.
-Public templates may be imported from dependencies; specializations remain in
-the owning module and do not become public-interface entries in the consumer.
+Public generic layouts require every non-phantom type parameter to be fixed,
+serializable, and non-linear. Public templates may be imported from
+dependencies; specializations remain in the owning module and do not become
+public-interface entries in the consumer.
 
 Value abilities are not Cell authority. `copy`, `drop`, `fixed`,
 `serializable`, and `non_linear` describe ordinary values; `create`, `consume`,
@@ -72,6 +80,8 @@ records the exact CFG jump checked against the final machine artifact.
 ## 4. Emit And Compare Interfaces
 
 ```bash
+cellc interface .
+cellc interface . --json
 cellc interface . --output target/current.interface.json
 cellc interface-diff \
   --old target/released.interface.json \
@@ -79,9 +89,16 @@ cellc interface-diff \
   --json
 ```
 
+The default `interface` view is a concise human summary. Use `--json` or
+`--output` for the complete canonical record used by automation and the
+Registry. `fixed_value` and its fully expanded spelling produce the same
+interface hash.
+
 Read the six compatibility dimensions independently: source API, serialized
 layout, runtime ABI, effects/capabilities, builder contract, and deployment
-contract. A breaking report exits with `E2501`.
+contract. Removing constraints from a type parameter is a compatible
+relaxation. Adding constraints, changing parameter shape or order, or changing
+phantom status is breaking. A breaking report exits with `E2501`.
 
 ## 5. Review A `same except` Schema Change
 
@@ -134,18 +151,19 @@ cellc build --target riscv64-elf --target-profile ckb
 cellc verify-artifact build/main.elf --json
 ```
 
-Metadata schema 61 includes:
+Metadata schema 71 includes:
 
 - `public_interface` and `interface_hash`;
 - `typed_semantics` and `typed_semantics_hash`;
 - generic instantiation records; and
 - the existing verified lowering and source-map bindings for ELF output.
 
-The independent checker validates exact typed constants and operations and
-recomputes layout/identity, definite-definition joins, ownership/borrow state,
-and the machine ABI link. It does not reconstruct semantics from source. It
-uses `V2419` for an invalid typed semantic record and `V2420` for a typed-to-
-machine mismatch.
+The independent checker recomputes the canonical public-interface hash,
+validates the complete generic parameter records and exact typed constants and
+operations, and recomputes layout/identity, definite-definition joins,
+ownership/borrow state, and the machine ABI link. It does not reconstruct
+semantics from source. It uses `V2419` for an invalid typed semantic record and
+`V2420` for a typed-to-machine mismatch.
 
 This still does not mean the checker ran CKB-VM or observed a deployment. Keep
 compiler, independent-checker, CKB-VM, deployment, commitment, and mainnet
@@ -154,7 +172,8 @@ evidence distinct.
 ## 7. Inspect It In The Playground
 
 The browser compiler remains metadata-only: it emits no ELF. The Playground
-now highlights generics, abilities, visibility, bitwise/shift operations, and
+accepts the `fixed_value` profile and highlights generics, abilities,
+visibility, bitwise/shift operations, and
 loop control. Its default size-bounded compiler returns an authoring summary
 for Cell Flow, actions, and types. Generate the complete public-interface and
 typed-semantics records with native `cellc`; the browser summary is not a

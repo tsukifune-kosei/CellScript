@@ -6,7 +6,7 @@ resource Token has consume {
     amount: u64,
 }
 
-enum Boxed<T> {
+private enum Boxed<T> {
     Empty,
     Some(T),
 }

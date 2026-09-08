@@ -6,6 +6,7 @@
 //! recorded as separate compatibility dimensions.
 
 use crate::ast::{self, Item, TypeParam};
+use crate::error::{CompileError, Result};
 use crate::{ckb_blake2b256, CompileMetadata};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -400,6 +401,90 @@ pub fn hash(interface: &PackageInterface) -> String {
     hash_serializable(interface)
 }
 
+/// Validate the dependency-facing generic portion of a canonical package
+/// interface without consulting source AST or monomorphized compiler state.
+///
+/// Version 2 remains readable for historical diffs. Version 3 records the
+/// selected public-value-generic boundary in expanded machine form, so every
+/// consumer can enforce the same closed ability vocabulary and layout rules.
+pub fn validate(interface: &PackageInterface) -> Result<()> {
+    if interface.schema == "cellscript-package-interface-v2" && interface.version == 2 {
+        return Ok(());
+    }
+    if interface.schema != INTERFACE_SCHEMA || interface.version != INTERFACE_SCHEMA_VERSION {
+        return Err(invalid_interface(format!("unsupported public interface schema '{}'/{}", interface.schema, interface.version)));
+    }
+
+    validate_sorted_unique_identities(interface.types.iter().map(|item| item.identity.as_str()), "type")?;
+    validate_sorted_unique_identities(interface.constants.iter().map(|item| item.identity.as_str()), "constant")?;
+    validate_sorted_unique_identities(interface.callables.iter().map(|item| item.identity.as_str()), "callable")?;
+    for item in &interface.types {
+        validate_interface_type_parameters(&item.type_parameters, &format!("{}.type_parameters", item.identity), true)?;
+        validate_interface_abilities(&item.value_abilities, &format!("{}.value_abilities", item.identity))?;
+    }
+    for item in &interface.callables {
+        validate_interface_type_parameters(&item.type_parameters, &format!("{}.type_parameters", item.identity), false)?;
+    }
+    Ok(())
+}
+
+fn validate_sorted_unique_identities<'a>(identities: impl Iterator<Item = &'a str>, kind: &str) -> Result<()> {
+    let mut previous = None::<&str>;
+    for identity in identities {
+        if identity.is_empty() || previous.is_some_and(|previous| previous >= identity) {
+            return Err(invalid_interface(format!(
+                "public interface {kind} identities must be non-empty, unique, and canonically ordered"
+            )));
+        }
+        previous = Some(identity);
+    }
+    Ok(())
+}
+
+fn validate_interface_type_parameters(params: &[InterfaceTypeParameter], label: &str, layout_type: bool) -> Result<()> {
+    let mut names = BTreeSet::new();
+    for param in params {
+        let valid_name = !param.name.is_empty()
+            && param.name.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+            && param.name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+        if !valid_name || !names.insert(param.name.as_str()) {
+            return Err(invalid_interface(format!("{label} has an invalid or duplicate parameter '{}'", param.name)));
+        }
+        validate_interface_abilities(&param.constraints, &format!("{label}.{}.constraints", param.name))?;
+        if layout_type
+            && !param.phantom
+            && ["fixed", "serializable", "non_linear"]
+                .into_iter()
+                .any(|required| !param.constraints.iter().any(|constraint| constraint == required))
+        {
+            return Err(invalid_interface(format!(
+                "{label}.{} must preserve the fixed, serializable, non_linear public layout boundary",
+                param.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_interface_abilities(abilities: &[String], label: &str) -> Result<()> {
+    let canonical = ast::ValueAbility::ALL
+        .into_iter()
+        .filter(|ability| abilities.iter().any(|candidate| candidate == ability.as_str()))
+        .map(|ability| ability.as_str())
+        .collect::<Vec<_>>();
+    if canonical.len() != abilities.len() || !abilities.iter().map(String::as_str).eq(canonical) {
+        return Err(invalid_interface(format!("{label} must contain unique, known value abilities in canonical order")));
+    }
+    if abilities.iter().any(|ability| ability == "cell") && abilities.iter().any(|ability| ability == "non_linear") {
+        return Err(invalid_interface(format!("{label} cannot combine cell and non_linear")));
+    }
+    Ok(())
+}
+
+fn invalid_interface(message: impl Into<String>) -> CompileError {
+    CompileError::without_span(message)
+}
+
 pub fn compare(old: &PackageInterface, new: &PackageInterface) -> InterfaceCompatibilityReport {
     const DIMENSIONS: [&str; 6] = ["source_api", "serialized_layout", "runtime_abi", "effects_capabilities", "builder", "deployment"];
     let mut changes = Vec::new();
@@ -549,8 +634,25 @@ fn compare_types(old: &PackageInterface, new: &PackageInterface, changes: &mut V
             push_breaking(changes, "ICOMP1001", "source_api", identity, "exported type was removed or made non-public");
             continue;
         };
-        if old_type.kind != new_type.kind || old_type.type_parameters != new_type.type_parameters {
-            push_breaking(changes, "ICOMP1002", "source_api", identity, "type kind or generic constraints changed");
+        if old_type.kind != new_type.kind {
+            push_breaking(changes, "ICOMP1002", "source_api", identity, "exported type kind changed");
+        }
+        match compare_type_parameters(&old_type.type_parameters, &new_type.type_parameters) {
+            TypeParameterChange::Same => {}
+            TypeParameterChange::Relaxed => push_compatible(
+                changes,
+                "ICOMP1104",
+                "source_api",
+                identity,
+                "generic constraints were relaxed while the remaining interface contract stayed independently checked",
+            ),
+            TypeParameterChange::Breaking => push_breaking(
+                changes,
+                "ICOMP1002",
+                "source_api",
+                identity,
+                "generic parameter shape or constraints changed incompatibly",
+            ),
         }
         if old_type.layout_identity != new_type.layout_identity || old_type.type_identity != new_type.type_identity {
             push_breaking(
@@ -585,13 +687,26 @@ fn compare_callables(old: &PackageInterface, new: &PackageInterface, changes: &m
             continue;
         };
         if old_item.kind != new_item.kind
-            || old_item.type_parameters != new_item.type_parameters
             || old_item.params != new_item.params
             || old_item.return_type != new_item.return_type
             || old_item.outputs != new_item.outputs
         {
             push_breaking(changes, "ICOMP1004", "source_api", identity, "callable signature changed");
             push_breaking(changes, "ICOMP3002", "runtime_abi", identity, "entry or call ABI changed");
+        }
+        match compare_type_parameters(&old_item.type_parameters, &new_item.type_parameters) {
+            TypeParameterChange::Same => {}
+            TypeParameterChange::Relaxed => push_compatible(
+                changes,
+                "ICOMP1104",
+                "source_api",
+                identity,
+                "generic constraints were relaxed while the remaining interface contract stayed independently checked",
+            ),
+            TypeParameterChange::Breaking => {
+                push_breaking(changes, "ICOMP1004", "source_api", identity, "generic callable parameters changed incompatibly");
+                push_breaking(changes, "ICOMP3002", "runtime_abi", identity, "generic call contract changed incompatibly");
+            }
         }
         if old_item.entry_witness_abi != new_item.entry_witness_abi {
             push_breaking(changes, "ICOMP3003", "runtime_abi", identity, "entry witness ABI changed");
@@ -606,6 +721,36 @@ fn compare_callables(old: &PackageInterface, new: &PackageInterface, changes: &m
     for identity in new_items.keys().filter(|identity| !old_items.contains_key(*identity)) {
         push_compatible(changes, "ICOMP1102", "source_api", identity, "exported callable was added");
         push_compatible(changes, "ICOMP5101", "builder", identity, "builder for a new exported callable was added");
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypeParameterChange {
+    Same,
+    Relaxed,
+    Breaking,
+}
+
+fn compare_type_parameters(old: &[InterfaceTypeParameter], new: &[InterfaceTypeParameter]) -> TypeParameterChange {
+    if old.len() != new.len() {
+        return TypeParameterChange::Breaking;
+    }
+    let mut relaxed = false;
+    for (old, new) in old.iter().zip(new) {
+        if old.name != new.name || old.phantom != new.phantom {
+            return TypeParameterChange::Breaking;
+        }
+        let old_constraints = old.constraints.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        let new_constraints = new.constraints.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        if !new_constraints.is_subset(&old_constraints) {
+            return TypeParameterChange::Breaking;
+        }
+        relaxed |= old_constraints != new_constraints;
+    }
+    if relaxed {
+        TypeParameterChange::Relaxed
+    } else {
+        TypeParameterChange::Same
     }
 }
 
@@ -682,6 +827,60 @@ fn use_it() -> u64 { return id<u64>(7) }
         assert_eq!(hash(&first), hash(&second));
         assert!(first.types.iter().all(|item| item.name != "Hidden"));
         assert!(first.types.iter().any(|item| item.name == "Box" && !item.type_parameters.is_empty()));
+    }
+
+    #[test]
+    fn fixed_value_profile_and_expanded_spelling_share_one_interface_identity() {
+        let compact = interface(
+            r#"
+module api
+public struct Pair<T: fixed_value> { left: T, right: T }
+public fn first<T: fixed_value>(pair: Pair<T>) -> T { pair.left }
+"#,
+        );
+        let expanded = interface(
+            r#"
+module api
+public struct Pair<T: non_linear + fixed + serializable + copy + store + drop>
+    has copy, drop, store, fixed, serializable, non_linear { left: T, right: T }
+public fn first<T: copy + drop + store + fixed + serializable + non_linear>(pair: Pair<T>) -> T { pair.left }
+"#,
+        );
+        assert_eq!(compact, expanded);
+        assert_eq!(hash(&compact), hash(&expanded));
+        let fixed_value = ["copy", "drop", "store", "fixed", "serializable", "non_linear"].map(str::to_string);
+        assert_eq!(compact.types[0].type_parameters[0].constraints, fixed_value);
+        assert_eq!(compact.types[0].value_abilities, fixed_value);
+        validate(&compact).unwrap();
+    }
+
+    #[test]
+    fn public_interface_validation_rejects_noncanonical_or_unsafe_generic_shapes() {
+        let interface = interface("module api\npublic struct Pair<T: fixed_value> { left: T, right: T }\n");
+
+        let mut reordered = interface.clone();
+        reordered.types[0].type_parameters[0].constraints.swap(0, 1);
+        assert!(validate(&reordered).unwrap_err().message.contains("canonical order"));
+
+        let mut unsafe_layout = interface;
+        unsafe_layout.types[0].type_parameters[0].constraints.pop();
+        assert!(validate(&unsafe_layout).unwrap_err().message.contains("public layout boundary"));
+    }
+
+    #[test]
+    fn generic_constraint_diffs_distinguish_relaxing_from_tightening() {
+        let baseline = interface("module api\npublic fn id<T: fixed_value>(value: T) -> T { value }\n");
+        let mut relaxed = baseline.clone();
+        relaxed.callables[0].type_parameters[0].constraints.pop();
+        let relaxed_report = compare(&baseline, &relaxed);
+        assert!(relaxed_report.compatible);
+        assert!(relaxed_report.changes.iter().any(|change| change.code == "ICOMP1104" && change.classification == "compatible"));
+
+        let mut tightened = relaxed.clone();
+        tightened.callables[0].type_parameters[0].constraints.push("non_linear".to_string());
+        let tightened_report = compare(&relaxed, &tightened);
+        assert!(!tightened_report.compatible);
+        assert!(tightened_report.changes.iter().any(|change| change.code == "ICOMP1004" && change.dimension == "source_api"));
     }
 
     #[test]

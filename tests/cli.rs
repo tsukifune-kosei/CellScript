@@ -8109,6 +8109,32 @@ fn cellc_explain_subcommand_reports_public_interface_breaking_error() {
 }
 
 #[test]
+fn cellc_interface_defaults_to_compact_human_output_and_keeps_complete_json() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("api.cell");
+    std::fs::write(
+        &source,
+        "module api\npublic struct Pair<T: fixed_value> { left: T, right: T }\npublic fn first<T: fixed_value>(pair: Pair<T>) -> T { pair.left }\n",
+    )
+    .unwrap();
+
+    let human = cellc_command().args(["interface", source.to_str().unwrap()]).output().unwrap();
+    assert!(human.status.success(), "{}", String::from_utf8_lossy(&human.stderr));
+    let human = String::from_utf8(human.stdout).unwrap();
+    assert!(human.contains("public struct Pair<T: fixed_value>"), "{human}");
+    assert!(human.contains("public function first<T: fixed_value>"), "{human}");
+    assert!(!human.trim_start().starts_with('{'), "{human}");
+
+    let json = cellc_command().args(["--json", "interface", source.to_str().unwrap()]).output().unwrap();
+    assert!(json.status.success(), "{}", String::from_utf8_lossy(&json.stderr));
+    let json: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(
+        json["interface"]["types"][0]["type_parameters"][0]["constraints"],
+        serde_json::json!(["copy", "drop", "store", "fixed", "serializable", "non_linear"])
+    );
+}
+
+#[test]
 fn cellc_explain_subcommand_reports_package_compiler_error() {
     let output = Command::new(env!("CARGO_BIN_EXE_cellc")).args(["explain", "E2600", "--json"]).output().unwrap();
     assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));

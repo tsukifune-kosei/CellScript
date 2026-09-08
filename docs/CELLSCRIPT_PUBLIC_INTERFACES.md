@@ -35,6 +35,10 @@ consumer or Registry upgrade must preserve:
 Edition 2026 keeps the historical public-by-default behavior for an item with
 no modifier. New reusable packages should spell visibility explicitly so a
 future edition migration does not silently change the exported surface.
+The 0.30 line selects restricted dependency-facing value generics and the
+closed `fixed_value` profile; the normative syntax, derivation, compatibility,
+and migration rules are in
+[CellScript Public Value Generics](CELLSCRIPT_PUBLIC_VALUE_GENERICS.md).
 
 On the experimental `0.26b` branch, the bounded native Edition 2027
 `type_script` entry lowers to the existing action interface while its semantic
@@ -55,8 +59,7 @@ migration gate.
 ```cellscript
 module example::math
 
-public struct Pair<T: copy + drop + store + fixed + serializable + non_linear>
-    has copy, drop, store, fixed, serializable, non_linear {
+public struct Pair<T: fixed_value> {
     left: T
     right: T
 }
@@ -86,13 +89,17 @@ classify.
 For a source file or package:
 
 ```bash
+cellc interface path/to/package
 cellc interface path/to/package --json
 cellc interface path/to/package --output target/package.interface.json
 ```
 
-The JSON envelope contains both `interface` and `interface_hash`. The hash is
-computed over canonical JSON; reordering source declarations does not change
-the identity after the compiler's canonical sort.
+Without `--json` or `--output`, the command prints a compact exported-signature
+view and abbreviates the exact six-ability profile as `fixed_value`. The JSON
+envelope and output file contain both `interface` and `interface_hash`, with all
+constraints expanded. The hash is computed over canonical JSON; reordering
+source declarations or replacing the expanded profile with its compact source
+spelling does not change the identity after normalization.
 
 ## Compare Two Releases
 
@@ -107,7 +114,7 @@ The report classifies changes across six independent dimensions:
 
 | Dimension | Examples of breaking changes |
 | --- | --- |
-| `source_api` | removing an export; changing a type parameter, parameter, return type, or output |
+| `source_api` | removing an export; changing a type parameter, parameter, return type, or output; tightening a generic constraint |
 | `serialized_layout` | changing fields, variants, offsets, fixed sizes, or type identity |
 | `runtime_abi` | changing an entry ABI, witness placement, target, or versioned VM contract |
 | `effects_capabilities` | changing callable effects, value abilities, or Cell lifecycle capabilities |
@@ -117,6 +124,10 @@ The report classifies changes across six independent dimensions:
 A breaking report exits with stable compiler code `E2501`. Additive exports are
 reported as compatible changes; they still change `interface_hash`, so a
 consumer can choose whether it accepts a new exact identity.
+Relaxing a generic constraint is source-compatible only when the serialized
+layout, runtime ABI, effects/capabilities, builder, and deployment dimensions
+remain independently compatible. Changing parameter count, name, order, or
+phantom status and tightening any constraint are breaking.
 
 The v3 reader accepts a v2 JSON interface with an empty default temporal
 contract so `interface-diff` can compare an older release. Moving from that
@@ -124,6 +135,8 @@ empty contract to the v3 typed contract is a `runtime_abi` and deployment
 break. Changing an exported callable from raw `u64` to a temporal domain is
 also a `source_api` and call-ABI break. Registry publication validates the
 canonical v3 temporal fields instead of trusting an arbitrary interface hash.
+It also requires the closed value-ability vocabulary in canonical order and the
+fixed, serializable, non-linear public generic layout boundary.
 
 ## Registry Admission
 
@@ -134,7 +147,9 @@ with the greatest predecessor on the same compatibility line. A new major
 version (or new `0.minor` line before 1.0) may intentionally break the old
 interface; an incompatible change within a line is rejected. The standalone
 Registry verifier also checks that the stored interface and `interface_hash`
-agree.
+agree. For ELF bundles, the parser-free artifact checker recomputes the public
+interface hash and validates the expanded public generic record before
+accepting its typed instantiations.
 
 This is package compatibility evidence, not proof that an artifact is safe or
 deployed. Registry verification, the typed semantic checker, CKB-VM execution,

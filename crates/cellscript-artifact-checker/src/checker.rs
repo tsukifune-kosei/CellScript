@@ -545,6 +545,7 @@ fn validate_metadata_binding(
             "compile metadata typed semantics or interface identity differs from the lowering record",
         ));
     }
+    validate_public_interface_metadata(metadata, &record.module, &typed.interface_hash)?;
     let runtime_trusted = metadata
         .get("runtime")
         .and_then(|runtime| runtime.get("trusted_external_verifiers"))
@@ -1524,6 +1525,126 @@ fn runtime_syscall_allows_source(syscall: &str, source: &str) -> bool {
 
 fn metadata_binding_error(message: impl Into<String>) -> CheckerError {
     CheckerError::new(CheckerRejectionCode::V2410MetadataBindingMismatch, message)
+}
+
+fn validate_public_interface_metadata(metadata: &Value, module: &str, expected_hash: &str) -> Result<(), CheckerError> {
+    let interface = metadata
+        .get("public_interface")
+        .and_then(Value::as_object)
+        .ok_or_else(|| metadata_binding_error("compile metadata has no canonical public_interface object"))?;
+    if interface.get("schema").and_then(Value::as_str) != Some("cellscript-package-interface-v3")
+        || interface.get("version").and_then(Value::as_u64) != Some(3)
+        || interface.get("module").and_then(Value::as_str) != Some(module)
+    {
+        return Err(metadata_binding_error("compile metadata public interface has an invalid schema, version, or module identity"));
+    }
+    let canonical = canonical_json_value(&Value::Object(interface.clone()));
+    let canonical_bytes = serde_json::to_vec(&canonical)
+        .map_err(|error| metadata_binding_error(format!("failed to serialize canonical public interface: {error}")))?;
+    let actual_hash = hex_encode(&ckb_blake2b256(&canonical_bytes));
+    if actual_hash != expected_hash {
+        return Err(metadata_binding_error("compile metadata public interface does not match its interface_hash"));
+    }
+
+    let types = validate_public_interface_items(interface.get("types"), "type")?;
+    validate_public_interface_items(interface.get("constants"), "constant")?;
+    let callables = validate_public_interface_items(interface.get("callables"), "callable")?;
+    for item in types {
+        let identity = item.get("identity").and_then(Value::as_str).unwrap_or("<unknown>");
+        validate_public_type_parameters(item.get("type_parameters"), &format!("{identity}.type_parameters"), true)?;
+        validate_public_value_abilities(item.get("value_abilities"), &format!("{identity}.value_abilities"))?;
+    }
+    for item in callables {
+        let identity = item.get("identity").and_then(Value::as_str).unwrap_or("<unknown>");
+        validate_public_type_parameters(item.get("type_parameters"), &format!("{identity}.type_parameters"), false)?;
+    }
+    Ok(())
+}
+
+fn canonical_json_value(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => {
+            let mut keys = object.keys().collect::<Vec<_>>();
+            keys.sort_unstable();
+            let mut canonical = serde_json::Map::new();
+            for key in keys {
+                canonical.insert(key.clone(), canonical_json_value(&object[key]));
+            }
+            Value::Object(canonical)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonical_json_value).collect()),
+        other => other.clone(),
+    }
+}
+
+fn validate_public_interface_items<'a>(
+    value: Option<&'a Value>,
+    kind: &str,
+) -> Result<Vec<&'a serde_json::Map<String, Value>>, CheckerError> {
+    let items =
+        value.and_then(Value::as_array).ok_or_else(|| metadata_binding_error(format!("public interface {kind}s must be an array")))?;
+    let mut validated = Vec::with_capacity(items.len());
+    let mut previous = None::<&str>;
+    for item in items {
+        let object = item.as_object().ok_or_else(|| metadata_binding_error(format!("public interface {kind} must be an object")))?;
+        let identity = object
+            .get("identity")
+            .and_then(Value::as_str)
+            .filter(|identity| !identity.is_empty())
+            .ok_or_else(|| metadata_binding_error(format!("public interface {kind} has no identity")))?;
+        if previous.is_some_and(|previous| previous >= identity) {
+            return Err(metadata_binding_error(format!("public interface {kind} identities must be unique and canonically ordered")));
+        }
+        previous = Some(identity);
+        validated.push(object);
+    }
+    Ok(validated)
+}
+
+fn validate_public_type_parameters(value: Option<&Value>, label: &str, layout_type: bool) -> Result<(), CheckerError> {
+    let params = value.and_then(Value::as_array).ok_or_else(|| metadata_binding_error(format!("{label} must be an array")))?;
+    let mut names = BTreeSet::new();
+    for param in params {
+        let param = param.as_object().ok_or_else(|| metadata_binding_error(format!("{label} parameter must be an object")))?;
+        let name = param.get("name").and_then(Value::as_str).unwrap_or("");
+        let valid_name = !name.is_empty()
+            && name.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+            && name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+        if !valid_name || !names.insert(name) {
+            return Err(metadata_binding_error(format!("{label} has an invalid or duplicate parameter '{name}'")));
+        }
+        let phantom = param
+            .get("phantom")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| metadata_binding_error(format!("{label}.{name}.phantom must be boolean")))?;
+        let constraints = validate_public_value_abilities(param.get("constraints"), &format!("{label}.{name}.constraints"))?;
+        if layout_type
+            && !phantom
+            && ["fixed", "serializable", "non_linear"].into_iter().any(|required| !constraints.contains(&required))
+        {
+            return Err(metadata_binding_error(format!(
+                "{label}.{name} must preserve the fixed, serializable, non_linear public layout boundary"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_public_value_abilities<'a>(value: Option<&'a Value>, label: &str) -> Result<Vec<&'a str>, CheckerError> {
+    const ORDER: [&str; 7] = ["copy", "drop", "store", "fixed", "serializable", "non_linear", "cell"];
+    let values = value.and_then(Value::as_array).ok_or_else(|| metadata_binding_error(format!("{label} must be an array")))?;
+    let abilities = values
+        .iter()
+        .map(|value| value.as_str().ok_or_else(|| metadata_binding_error(format!("{label} must contain only value abilities"))))
+        .collect::<Result<Vec<_>, _>>()?;
+    let canonical = ORDER.into_iter().filter(|ability| abilities.contains(ability)).collect::<Vec<_>>();
+    if canonical != abilities {
+        return Err(metadata_binding_error(format!("{label} must contain unique, known value abilities in canonical order")));
+    }
+    if abilities.contains(&"cell") && abilities.contains(&"non_linear") {
+        return Err(metadata_binding_error(format!("{label} cannot combine cell and non_linear")));
+    }
+    Ok(abilities)
 }
 
 fn validate_typed_semantics(record: &VerifiedLoweringRecord) -> Result<(), CheckerError> {
@@ -6037,6 +6158,11 @@ fn map_elf_error(error: ElfParseError) -> CheckerError {
 mod tests {
     use super::*;
 
+    fn public_interface_hash(interface: &Value) -> String {
+        let canonical = canonical_json_value(interface);
+        hex_encode(&ckb_blake2b256(&serde_json::to_vec(&canonical).unwrap()))
+    }
+
     #[test]
     fn canonical_parser_rejects_whitespace_and_unknown_fields() {
         let budgets = CheckerBudgets::default();
@@ -6063,6 +6189,42 @@ mod tests {
         let mut pretty = serde_json::to_vec_pretty(&map).unwrap();
         pretty.push(b'\n');
         assert_eq!(parse_source_map(&pretty, &budgets).unwrap_err().code, CheckerRejectionCode::V2402NonCanonicalJson);
+    }
+
+    #[test]
+    fn independent_checker_enforces_canonical_public_value_generics() {
+        let interface = serde_json::json!({
+            "schema": "cellscript-package-interface-v3",
+            "version": 3,
+            "module": "api",
+            "types": [{
+                "identity": "api::Pair",
+                "type_parameters": [{
+                    "name": "T",
+                    "phantom": false,
+                    "constraints": ["copy", "drop", "store", "fixed", "serializable", "non_linear"]
+                }],
+                "value_abilities": ["copy", "drop", "store", "fixed", "serializable", "non_linear"]
+            }],
+            "constants": [],
+            "callables": []
+        });
+        let hash = public_interface_hash(&interface);
+        let metadata = serde_json::json!({ "public_interface": interface });
+        validate_public_interface_metadata(&metadata, "api", &hash).unwrap();
+
+        let mut compact_machine_form = metadata.clone();
+        compact_machine_form["public_interface"]["types"][0]["type_parameters"][0]["constraints"] = serde_json::json!(["fixed_value"]);
+        let compact_hash = public_interface_hash(&compact_machine_form["public_interface"]);
+        let error = validate_public_interface_metadata(&compact_machine_form, "api", &compact_hash).unwrap_err();
+        assert!(error.message.contains("canonical order"), "{}", error.message);
+
+        let mut unsafe_layout = metadata;
+        unsafe_layout["public_interface"]["types"][0]["type_parameters"][0]["constraints"] =
+            serde_json::json!(["copy", "drop", "store", "fixed", "serializable"]);
+        let unsafe_hash = public_interface_hash(&unsafe_layout["public_interface"]);
+        let error = validate_public_interface_metadata(&unsafe_layout, "api", &unsafe_hash).unwrap_err();
+        assert!(error.message.contains("public layout boundary"), "{}", error.message);
     }
 
     #[test]

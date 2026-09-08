@@ -111,12 +111,21 @@ impl Formatter {
             Item::Struct(struct_def) => {
                 self.format_type_id_attr(struct_def.type_id.as_ref());
                 let name = format!("{}{}", struct_def.name, format_type_params(&struct_def.type_params));
+                let derived = crate::generics::derive_template_value_abilities(
+                    &struct_def.type_params,
+                    struct_def.fields.iter().map(|field| &field.ty),
+                );
+                let abilities = if !struct_def.type_params.is_empty() && struct_def.abilities == derived {
+                    &[][..]
+                } else {
+                    struct_def.abilities.as_slice()
+                };
                 self.format_type_def(
                     "struct",
                     &name,
                     &struct_def.fields,
                     None,
-                    Some(&struct_def.abilities),
+                    Some(abilities),
                     None,
                     struct_def.default_hash_type.as_ref(),
                     struct_def.capacity_floor.as_ref(),
@@ -136,7 +145,11 @@ impl Formatter {
             }
             Item::Enum(enum_def) => {
                 let mut header = format!("enum {}{}", enum_def.name, format_type_params(&enum_def.type_params));
-                if !enum_def.abilities.is_empty() {
+                let derived = crate::generics::derive_template_value_abilities(
+                    &enum_def.type_params,
+                    enum_def.variants.iter().flat_map(|variant| variant.fields.iter()),
+                );
+                if !enum_def.abilities.is_empty() && (enum_def.type_params.is_empty() || enum_def.abilities != derived) {
                     header.push_str(&format!(" has {}", format_value_abilities(&enum_def.abilities)));
                 }
                 self.push_line(&format!("{} {{", header));
@@ -1224,7 +1237,11 @@ fn format_type_params(params: &[TypeParam]) -> String {
             value.push_str(&param.name);
             if !param.constraints.is_empty() {
                 value.push_str(": ");
-                value.push_str(&param.constraints.iter().map(|ability| ability.as_str()).collect::<Vec<_>>().join(" + "));
+                if ValueAbility::is_fixed_value_profile(&param.constraints) {
+                    value.push_str(ValueAbility::FIXED_VALUE_PROFILE_NAME);
+                } else {
+                    value.push_str(&param.constraints.iter().map(|ability| ability.as_str()).collect::<Vec<_>>().join(" + "));
+                }
             }
             value
         })
@@ -1940,6 +1957,30 @@ action verify() -> u64 {
         assert!(formatted.contains("struct Tagged<phantom Tag, T: copy + fixed + serializable + non_linear>"));
         assert!(formatted.contains("fn identity<T: copy + drop>(value: T) -> T"));
         assert!(formatted.contains("identity<u64>(42)"));
+        let reparsed = parser::parse(&lexer::lex(&formatted).unwrap()).unwrap();
+        assert_eq!(formatted, format_default(&reparsed).unwrap());
+    }
+
+    #[test]
+    fn formatter_canonicalizes_the_fixed_value_profile_and_derived_abilities() {
+        let source = r#"
+module fmt::fixed_value
+
+public struct Pair<T: non_linear + serializable + fixed + store + drop + copy>
+    has copy, drop, store, fixed, serializable, non_linear {
+    left: T,
+    right: T,
+}
+
+public fn identity<T: copy + drop + store + fixed + serializable + non_linear>(value: T) -> T {
+    value
+}
+"#;
+        let module = parser::parse(&lexer::lex(source).unwrap()).unwrap();
+        let formatted = format_default(&module).unwrap();
+        assert!(formatted.contains("public struct Pair<T: fixed_value> {"), "unexpected format:\n{formatted}");
+        assert!(!formatted.contains("Pair<T: fixed_value> has"), "derived abilities must not be repeated:\n{formatted}");
+        assert!(formatted.contains("public fn identity<T: fixed_value>"));
         let reparsed = parser::parse(&lexer::lex(&formatted).unwrap()).unwrap();
         assert_eq!(formatted, format_default(&reparsed).unwrap());
     }

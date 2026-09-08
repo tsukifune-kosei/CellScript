@@ -2,6 +2,16 @@
 
 ## 0.30 - Capability closure development branch
 
+- Stabilize public value generics under issue #23 Proposal A. The new
+  `fixed_value` profile normalizes the six ordinary fixed-value abilities,
+  generic aggregates derive omitted abilities from their fields, public
+  cross-package templates retain bounded monomorphization, and equivalent
+  spellings produce the same canonical interface hash. `cellc interface`
+  defaults to a concise human view while `--json` and `--output` retain the
+  complete record; compatibility analysis, Registry admission, the independent
+  artifact checker, LSP, VS Code, and the browser metadata compiler validate the
+  same generic parameter contract.
+
 - Add transactional package and workspace upgrades through
   `cellscript-upgrade-plan-v1`. `cellc update-plan` and the default `cellc
   update` resolve candidates in memory, preserve unrelated package-scoped

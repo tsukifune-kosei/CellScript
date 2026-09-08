@@ -167,6 +167,10 @@ The checker independently recomputes and validates:
 
 - schema versions, unknown-field rejection, canonical JSON, counts, ordering,
   uniqueness, and domain-separated hashes;
+- canonical public-interface identity, including sorted exported type,
+  constant, and callable records; complete public generic parameters; expanded
+  ability constraints; phantom status; and the fixed, serializable, non-linear
+  minimum for exported value layouts;
 - entry, block, CFG, reachability, call-depth, recursion, frame, stack-slot,
   typed ABI, capability, and ProofPlan relationships;
 - typed semantic schemas, exact constants and operation detail, canonical type

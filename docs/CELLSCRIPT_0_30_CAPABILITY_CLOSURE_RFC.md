@@ -152,7 +152,7 @@ form a complete 0.30 business-capability plan.
 | Honest capability and product-completeness claims | [#14](https://github.com/CellScript-Labs/CellScript/issues/14) | Covered as a governance rule. It is not an implementation owner for the missing capabilities. |
 | Reproducible workspace, resolver, compiler-requirement, build-plan, and upgrade behavior | [#15](https://github.com/CellScript-Labs/CellScript/issues/15), [#16](https://github.com/CellScript-Labs/CellScript/issues/16), [#17](https://github.com/CellScript-Labs/CellScript/issues/17), [#18](https://github.com/CellScript-Labs/CellScript/issues/18), [#19](https://github.com/CellScript-Labs/CellScript/issues/19), [#20](https://github.com/CellScript-Labs/CellScript/issues/20) | Implemented on the 0.30 branch: canonical workspace graphs, single-package-coordinate resolution, chain-identity-safe environments, enforced compiler requirements and Registry selection, stable resolve/build inspection schemas, and hashed transactional upgrade plans with reverse-dependent compilation and explicit apply. This closes the toolchain composition prerequisite without making a release or deployment claim. |
 | Typed zero-knowledge verifier contracts | [#22](https://github.com/CellScript-Labs/CellScript/issues/22) | Covered as research and typed external-verifier composition. A circuit DSL is outside the 0.30 core. |
-| Stable public value-generics surface | [#23](https://github.com/CellScript-Labs/CellScript/issues/23) | Covered as a language-design owner. It must close before public 0.30 package APIs are frozen. |
+| Stable public value-generics surface | [#23](https://github.com/CellScript-Labs/CellScript/issues/23) | Proposal A is implemented on `0.30`: public cross-package value templates and pure functions, `fixed_value` normalization, field-derived aggregate abilities, canonical interface hashing and compatibility, Registry/checker validation, and product-surface parity. Gate evidence remains required before the issue is declared closed. |
 | Typed CKB transaction views and runtime adapters | [#24](https://github.com/CellScript-Labs/CellScript/issues/24) | Newly owned for 0.30. It unifies admitted Cell/input/header/witness/Script/hash/source operations without a raw syscall escape hatch. |
 | Cryptographic and authorization-domain contracts | [#25](https://github.com/CellScript-Labs/CellScript/issues/25) | Newly owned for 0.30. It separates native primitives, exact external verifiers, message domains, and Script/value identities. |
 | Rust-comparable business acceptance corpus | [#26](https://github.com/CellScript-Labs/CellScript/issues/26) | Newly owned for 0.30. It freezes the cross-feature portfolio, matched Rust fixtures, adversarial cases, and evidence layers. |
@@ -428,7 +428,8 @@ adding an untracked general-purpose escape hatch.
 
 - Complete the remaining authoring relations and graph-wide consumption of
   focused schema acknowledgements.
-- Complete #7, #8, #12, and #23 for the admitted corpus.
+- Complete #7, #8, and #12 for the admitted corpus; #23 is implemented pending
+  its required `dev`, `ci`, and `backend` gate evidence.
 - Implement the typed CKB runtime-view issue and cryptographic capability issue.
 - Extend typed semantics, ProofPlan, source maps, lowering records, runtime
   errors, and independent mutations together.

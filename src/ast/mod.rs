@@ -200,6 +200,8 @@ pub enum ValueAbility {
 
 impl ValueAbility {
     pub const REGISTRY_VERSION: u32 = 1;
+    pub const FIXED_VALUE_PROFILE_NAME: &'static str = "fixed_value";
+    pub const FIXED_VALUE_PROFILE: [Self; 6] = [Self::Copy, Self::Drop, Self::Store, Self::Fixed, Self::Serializable, Self::NonLinear];
 
     pub const ALL: [Self; 7] = [Self::Copy, Self::Drop, Self::Store, Self::Fixed, Self::Serializable, Self::NonLinear, Self::Cell];
 
@@ -217,6 +219,12 @@ impl ValueAbility {
 
     pub fn from_source_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|ability| ability.as_str() == name)
+    }
+
+    pub fn is_fixed_value_profile(abilities: &[Self]) -> bool {
+        let mut canonical = abilities.to_vec();
+        canonical.sort_unstable();
+        canonical == Self::FIXED_VALUE_PROFILE
     }
 }
 

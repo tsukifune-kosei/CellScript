@@ -394,6 +394,7 @@ pub struct InterfaceArgs {
     pub output: Option<PathBuf>,
     pub target: Option<String>,
     pub target_profile: Option<String>,
+    pub json: bool,
 }
 
 #[derive(Debug, Default)]
@@ -2540,9 +2541,10 @@ impl CommandExecutor {
                 primitive_compat: None,
             },
         )?;
+        let interface = &result.metadata.public_interface;
         let value = serde_json::json!({
             "interface_hash": result.metadata.interface_hash,
-            "interface": result.metadata.public_interface,
+            "interface": interface,
         });
         let json = serde_json::to_string_pretty(&value)
             .map_err(|error| crate::error::CompileError::without_span(format!("failed to serialize public interface: {error}")))?;
@@ -2554,8 +2556,10 @@ impl CommandExecutor {
             println!("{}", "Public interface generated".green());
             println!("  Hash: {}", result.metadata.interface_hash);
             println!("  Output: {}", output_path.display());
-        } else {
+        } else if args.json {
             println!("{json}");
+        } else {
+            print!("{}", render_public_interface_human(interface, &result.metadata.interface_hash));
         }
         Ok(())
     }
@@ -7816,13 +7820,99 @@ fn read_or_compile_interface(path: &Path) -> Result<crate::interface::PackageInt
             crate::error::CompileError::without_span(format!("failed to parse interface '{}': {error}", path.display()))
         })?;
         let interface_value = value.get("interface").cloned().unwrap_or(value);
-        return serde_json::from_value(interface_value).map_err(|error| {
+        let interface = serde_json::from_value(interface_value).map_err(|error| {
             crate::error::CompileError::without_span(format!("invalid public interface '{}': {error}", path.display()))
-        });
+        })?;
+        crate::interface::validate(&interface)?;
+        return Ok(interface);
     }
     let input = Utf8Path::from_path(path)
         .ok_or_else(|| crate::error::CompileError::without_span(format!("path '{}' is not valid UTF-8", path.display())))?;
     Ok(compile_path(input, CompileOptions::default())?.metadata.public_interface)
+}
+
+fn render_public_interface_human(interface: &crate::interface::PackageInterface, interface_hash: &str) -> String {
+    let mut output =
+        format!("package {}\ninterface {}\nruntime {}\n", interface.module, interface_hash, interface.runtime_contract.target_profile);
+    if interface.types.is_empty() && interface.constants.is_empty() && interface.callables.is_empty() {
+        output.push_str("exports (none)\n");
+        return output;
+    }
+    output.push_str("exports\n");
+    for item in &interface.types {
+        output.push_str(&format!(
+            "  {} {} {}{}  [layout {}]\n",
+            item.visibility,
+            item.kind,
+            item.name,
+            render_interface_type_parameters(&item.type_parameters),
+            item.layout_identity
+        ));
+    }
+    for item in &interface.constants {
+        output.push_str(&format!("  {} const {}: {}\n", item.visibility, item.name, item.r#type));
+    }
+    for item in &interface.callables {
+        let params = item.params.iter().map(render_interface_param).collect::<Vec<_>>().join(", ");
+        let returns = if !item.outputs.is_empty() {
+            format!(" -> ({})", item.outputs.iter().map(render_interface_param).collect::<Vec<_>>().join(", "))
+        } else {
+            item.return_type.as_ref().map(|ty| format!(" -> {ty}")).unwrap_or_default()
+        };
+        output.push_str(&format!(
+            "  {} {} {}{}({}){}\n",
+            item.visibility,
+            item.kind,
+            item.name,
+            render_interface_type_parameters(&item.type_parameters),
+            params,
+            returns
+        ));
+    }
+    output
+}
+
+fn render_interface_type_parameters(params: &[crate::interface::InterfaceTypeParameter]) -> String {
+    if params.is_empty() {
+        return String::new();
+    }
+    let fixed_value = ["copy", "drop", "store", "fixed", "serializable", "non_linear"];
+    let params = params
+        .iter()
+        .map(|param| {
+            let mut rendered = if param.phantom { format!("phantom {}", param.name) } else { param.name.clone() };
+            if !param.constraints.is_empty() {
+                let constraints = if param.constraints.iter().map(String::as_str).eq(fixed_value) {
+                    crate::ast::ValueAbility::FIXED_VALUE_PROFILE_NAME.to_string()
+                } else {
+                    param.constraints.join(" + ")
+                };
+                rendered.push_str(": ");
+                rendered.push_str(&constraints);
+            }
+            rendered
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("<{params}>")
+}
+
+fn render_interface_param(param: &crate::interface::InterfaceParam) -> String {
+    let mut rendered = String::new();
+    if param.mutable {
+        rendered.push_str("mut ");
+    }
+    if param.reference {
+        rendered.push('&');
+    }
+    if param.source != "default" {
+        rendered.push_str(&param.source);
+        rendered.push(' ');
+    }
+    rendered.push_str(&param.name);
+    rendered.push_str(": ");
+    rendered.push_str(&param.r#type);
+    rendered
 }
 
 fn read_json_value(path: &Path) -> Result<serde_json::Value> {
@@ -16255,9 +16345,9 @@ impl CliParser {
             .subcommand(
                 ClapCommand::new("interface")
                     .display_order(32)
-                    .about("Emit the canonical public package interface and its CKB hash")
+                    .about("Show the public package interface and its canonical CKB hash")
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
-                    .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write the interface JSON to a file"))
+                    .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write the complete canonical interface JSON to a file"))
                     .arg(Arg::new("target").long("target").short('t').value_name("TARGET").help("Target architecture"))
                     .arg(Arg::new("target-profile").long("target-profile").value_name("PROFILE").help("Target profile: ckb or ckb-type-hash")),
             )
@@ -17911,6 +18001,7 @@ impl CliParser {
                 output: m.get_one::<String>("output").map(PathBuf::from),
                 target: m.get_one::<String>("target").cloned(),
                 target_profile: m.get_one::<String>("target-profile").cloned(),
+                json: json_output(m),
             }),
             Some(("interface-diff", m)) => Command::InterfaceDiff(InterfaceDiffArgs {
                 old: m.get_one::<String>("old").map(PathBuf::from).expect("required old interface"),

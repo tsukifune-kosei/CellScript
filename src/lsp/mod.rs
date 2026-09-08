@@ -1168,6 +1168,7 @@ impl LspServer {
             ),
             ("verification", "verification\n    $0"),
             ("validity", "validity\n    require ${1:field} ${2:>} ${3:0}"),
+            ("fixed_value", "fixed_value"),
             ("require_block", "require {\n    ${1:condition}\n}"),
             ("preserve", "preserve ${1:output} from ${2:input} {\n    ${3:field}\n}"),
             ("std::cell::same_lock", "std::cell::same_lock(${1:output}, ${2:input})"),
@@ -2756,7 +2757,11 @@ fn generic_params_hover(params: &[TypeParam]) -> String {
                 let mut value = if param.phantom { format!("phantom {}", param.name) } else { param.name.clone() };
                 if !param.constraints.is_empty() {
                     value.push_str(": ");
-                    value.push_str(&param.constraints.iter().map(|ability| ability.as_str()).collect::<Vec<_>>().join(" + "));
+                    if ValueAbility::is_fixed_value_profile(&param.constraints) {
+                        value.push_str(ValueAbility::FIXED_VALUE_PROFILE_NAME);
+                    } else {
+                        value.push_str(&param.constraints.iter().map(|ability| ability.as_str()).collect::<Vec<_>>().join(" + "));
+                    }
                 }
                 value
             })
@@ -3180,6 +3185,7 @@ mod tests {
         assert!(!keywords.iter().any(|k| k.label == "move"));
         assert!(keywords.iter().any(|k| k.label == "require"));
         assert!(keywords.iter().any(|k| k.label == "validity"));
+        assert!(keywords.iter().any(|k| k.label == "fixed_value"));
         assert!(keywords.iter().any(|k| k.label == "forall"));
         assert!(keywords.iter().any(|k| k.label == "count"));
         assert!(keywords.iter().any(|k| k.label == "consume_each"));
@@ -3203,6 +3209,17 @@ mod tests {
         assert!(types.iter().any(|item| item.label == "SighashAllDigest"));
         assert!(types.iter().any(|item| item.label == "AbsoluteBlockSince"));
         assert!(types.iter().any(|item| item.label == "RelativeTimestampSince"));
+    }
+
+    #[test]
+    fn generic_hover_uses_the_canonical_fixed_value_profile() {
+        let params = [TypeParam {
+            name: "T".to_string(),
+            constraints: ValueAbility::FIXED_VALUE_PROFILE.to_vec(),
+            phantom: false,
+            span: Span::default(),
+        }];
+        assert_eq!(generic_params_hover(&params), "<T: fixed_value>");
     }
 
     #[test]

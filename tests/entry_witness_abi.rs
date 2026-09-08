@@ -278,14 +278,12 @@ action verify_add(witness wide: u128, witness delta: u64, witness expected: u128
 const GENERIC_VALUE_ENTRY: &str = r#"
 module entry_witness_generic_values
 
-struct Pair<T: copy + drop + store + fixed + serializable + non_linear>
-    has copy, drop, store, fixed, serializable, non_linear
-{
+struct Pair<T: fixed_value> {
     left: T,
     right: T,
 }
 
-fn first<T: copy + drop + store + fixed + serializable + non_linear>(pair: Pair<T>) -> T {
+fn first<T: fixed_value>(pair: Pair<T>) -> T {
     return pair.left
 }
 

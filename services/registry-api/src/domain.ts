@@ -820,6 +820,10 @@ export function validateInterfaceUpgrade(previous: unknown, candidate: unknown):
       if (canonicalJson(oldComparable) !== canonicalJson(newComparable)) {
         throw new ApiError(409, "incompatible_public_interface", `${key} export '${identity}' changed incompatibly`);
       }
+      if ((key === "types" || key === "callables")
+        && compareInterfaceTypeParameters(oldItem["type_parameters"], newItem["type_parameters"]) === "breaking") {
+        throw new ApiError(409, "incompatible_public_interface", `${key} export '${identity}' generic constraints changed incompatibly`);
+      }
     }
   }
   for (const key of ["runtime_contract", "deployment_contract_hash"] as const) {
@@ -883,6 +887,61 @@ function validatePublicInterfaceVersion(publicInterface: Record<string, unknown>
   if (canonicalJson(temporal["domains"]) !== canonicalJson(expectedDomains)) {
     throw new ApiError(400, "invalid_public_interface", "runtime_contract.temporal.domains is not canonical");
   }
+  validatePublicInterfaceGenerics(publicInterface);
+}
+
+const VALUE_ABILITY_ORDER = ["copy", "drop", "store", "fixed", "serializable", "non_linear", "cell"] as const;
+
+function canonicalValueAbilities(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.some((ability) => typeof ability !== "string")) {
+    throw new ApiError(400, "invalid_public_interface", `${label} must be an array of value abilities`);
+  }
+  const abilities = value as string[];
+  const canonical = VALUE_ABILITY_ORDER.filter((ability) => abilities.includes(ability));
+  if (canonical.length !== abilities.length || canonicalJson(canonical) !== canonicalJson(abilities)) {
+    throw new ApiError(400, "invalid_public_interface", `${label} must be unique, known, and canonically ordered`);
+  }
+  if (abilities.includes("cell") && abilities.includes("non_linear")) {
+    throw new ApiError(400, "invalid_public_interface", `${label} cannot combine cell and non_linear`);
+  }
+  return abilities;
+}
+
+function validateTypeParameters(value: unknown, label: string, layoutType: boolean): void {
+  if (!Array.isArray(value)) {
+    throw new ApiError(400, "invalid_public_interface", `${label} must be an array`);
+  }
+  const names = new Set<string>();
+  for (const rawParameter of value) {
+    const parameter = assertPlainObject(rawParameter, "invalid_public_interface");
+    const name = requireString(parameter, "name");
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || names.has(name)) {
+      throw new ApiError(400, "invalid_public_interface", `${label} has an invalid or duplicate parameter '${name}'`);
+    }
+    names.add(name);
+    if (typeof parameter["phantom"] !== "boolean") {
+      throw new ApiError(400, "invalid_public_interface", `${label}.${name}.phantom must be boolean`);
+    }
+    const constraints = canonicalValueAbilities(parameter["constraints"], `${label}.${name}.constraints`);
+    if (layoutType && !parameter["phantom"]
+      && !["fixed", "serializable", "non_linear"].every((ability) => constraints.includes(ability))) {
+      throw new ApiError(
+        400,
+        "invalid_public_interface",
+        `${label}.${name} must preserve the fixed, serializable, non_linear layout boundary`,
+      );
+    }
+  }
+}
+
+function validatePublicInterfaceGenerics(publicInterface: Record<string, unknown>): void {
+  for (const item of interfaceItems(publicInterface["types"], "types").values()) {
+    validateTypeParameters(item["type_parameters"], `${requireString(item, "identity")}.type_parameters`, true);
+    canonicalValueAbilities(item["value_abilities"], `${requireString(item, "identity")}.value_abilities`);
+  }
+  for (const item of interfaceItems(publicInterface["callables"], "callables").values()) {
+    validateTypeParameters(item["type_parameters"], `${requireString(item, "identity")}.type_parameters`, false);
+  }
 }
 
 function interfaceItems(value: unknown, label: string): Map<string, Record<string, unknown>> {
@@ -905,7 +964,6 @@ function interfaceCompatibilityShape(kind: "types" | "constants" | "callables", 
   if (kind === "types") {
     return {
       kind: item["kind"],
-      type_parameters: item["type_parameters"],
       value_abilities: item["value_abilities"],
       cell_capabilities: item["cell_capabilities"],
       layout_identity: item["layout_identity"],
@@ -915,7 +973,6 @@ function interfaceCompatibilityShape(kind: "types" | "constants" | "callables", 
   if (kind === "callables") {
     return {
       kind: item["kind"],
-      type_parameters: item["type_parameters"],
       params: item["params"],
       return_type: item["return_type"] ?? null,
       outputs: item["outputs"],
@@ -925,6 +982,26 @@ function interfaceCompatibilityShape(kind: "types" | "constants" | "callables", 
     };
   }
   return { type: item["type"] };
+}
+
+function compareInterfaceTypeParameters(oldValue: unknown, newValue: unknown): "same" | "relaxed" | "breaking" {
+  if (!Array.isArray(oldValue) || !Array.isArray(newValue) || oldValue.length !== newValue.length) return "breaking";
+  let relaxed = false;
+  for (let index = 0; index < oldValue.length; index += 1) {
+    const oldParameter = assertPlainObject(oldValue[index], "invalid_previous_public_interface");
+    const newParameter = assertPlainObject(newValue[index], "invalid_public_interface");
+    if (oldParameter["name"] !== newParameter["name"] || oldParameter["phantom"] !== newParameter["phantom"]) return "breaking";
+    const oldConstraints = oldParameter["constraints"];
+    const newConstraints = newParameter["constraints"];
+    if (!Array.isArray(oldConstraints) || !Array.isArray(newConstraints)
+      || oldConstraints.some((value) => typeof value !== "string")
+      || newConstraints.some((value) => typeof value !== "string")) return "breaking";
+    const oldSet = new Set(oldConstraints as string[]);
+    const newSet = new Set(newConstraints as string[]);
+    if ([...newSet].some((constraint) => !oldSet.has(constraint))) return "breaking";
+    relaxed ||= oldSet.size !== newSet.size;
+  }
+  return relaxed ? "relaxed" : "same";
 }
 
 function validateHash(value: string, field: string, code: string): void {

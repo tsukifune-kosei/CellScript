@@ -489,6 +489,12 @@ binding failures. The compiler, syntax audit, editor extension, and Playground
 must agree on generics, abilities, patterns, visibility, bitwise/shift syntax,
 borrows, and labeled loop control before the branch can claim gate closure.
 
+On the 0.30 line, issue #23 adds `fixed_value` source normalization, derived
+aggregate abilities, cross-package public templates, canonical generic
+interface compatibility, Registry admission, and independent interface-hash
+validation to that parity obligation. Its acceptance requires all three
+`dev`, `ci`, and `backend` modes.
+
 ### Nightly 0.22 compiler evidence
 
 The `nightly-0.22` line adds compile-time callable-effect contracts and

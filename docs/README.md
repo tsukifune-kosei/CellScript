@@ -101,6 +101,9 @@ High-value active references include:
 - [CELLSCRIPT_AUTHORING_IMPLEMENTATION.md](CELLSCRIPT_AUTHORING_IMPLEMENTATION.md)
   for the complete implementation goal, 2026 parity requirements, current
   evidence, and remaining production acceptance work
+- [CELLSCRIPT_PUBLIC_VALUE_GENERICS.md](CELLSCRIPT_PUBLIC_VALUE_GENERICS.md)
+  for the accepted restricted public-generic decision, `fixed_value` profile,
+  structural derivation, interface compatibility, and migration contract
 - [CELLSCRIPT_SCHEMA_ACKNOWLEDGEMENTS.md](CELLSCRIPT_SCHEMA_ACKNOWLEDGEMENTS.md)
   for the versioned `same except` schema-change plan, explicit new-field rule,
   review receipt, stale verification, and deployment boundary

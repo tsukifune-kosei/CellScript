@@ -650,19 +650,26 @@ impl<'a> Parser<'a> {
             if self.check(&TokenKind::Colon) {
                 self.advance();
                 loop {
-                    let Some(ability) = ValueAbility::from_source_name(&self.current().text) else {
+                    let source_name = self.current().text.as_str();
+                    let expanded = if source_name == ValueAbility::FIXED_VALUE_PROFILE_NAME {
+                        ValueAbility::FIXED_VALUE_PROFILE.to_vec()
+                    } else if let Some(ability) = ValueAbility::from_source_name(source_name) {
+                        vec![ability]
+                    } else {
                         return Err(CompileError::new(
-                            "expected value constraint: copy, drop, store, fixed, serializable, non_linear, or cell",
+                            "expected value constraint: fixed_value, copy, drop, store, fixed, serializable, non_linear, or cell",
                             self.current().span,
                         ));
                     };
-                    if constraints.contains(&ability) {
-                        return Err(CompileError::new(
-                            format!("duplicate '{}' constraint on type parameter '{}'", ability.as_str(), name),
-                            self.current().span,
-                        ));
+                    for ability in expanded {
+                        if constraints.contains(&ability) {
+                            return Err(CompileError::new(
+                                format!("duplicate '{}' constraint on type parameter '{}'", ability.as_str(), name),
+                                self.current().span,
+                            ));
+                        }
+                        constraints.push(ability);
                     }
-                    constraints.push(ability);
                     self.advance();
                     if self.check(&TokenKind::Plus) {
                         self.advance();
@@ -670,6 +677,7 @@ impl<'a> Parser<'a> {
                         break;
                     }
                 }
+                constraints.sort_unstable();
             }
             params.push(TypeParam { name, constraints, phantom, span: start });
             if self.check(&TokenKind::Comma) {
@@ -720,6 +728,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
+        abilities.sort_unstable();
         Ok(abilities)
     }
 
@@ -4193,6 +4202,33 @@ fn after() -> (u64, u64) { return (0, 0) }
             "module generic_nested\nfn f() -> u64 { return choose<Box<u64>>(1) }",
         ] {
             parse(&lex(source).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn fixed_value_profile_expands_to_the_canonical_closed_ability_set() {
+        let module = parse(
+            &lex("module profile\nstruct Pair<T: fixed_value> { left: T, right: T }\nfn id<T: non_linear + fixed + copy + serializable + store + drop>(value: T) -> T { value }")
+                .unwrap(),
+        )
+        .unwrap();
+        let Item::Struct(pair) = &module.items[0] else { panic!("expected struct") };
+        let Item::Function(id) = &module.items[1] else { panic!("expected function") };
+        assert_eq!(pair.type_params[0].constraints, ValueAbility::FIXED_VALUE_PROFILE);
+        assert_eq!(id.type_params[0].constraints, ValueAbility::FIXED_VALUE_PROFILE);
+
+        let error = parse(&lex("module duplicate\nfn id<T: fixed_value + copy>(value: T) -> T { value }").unwrap()).unwrap_err();
+        assert!(error.message.contains("duplicate 'copy' constraint"), "unexpected error: {error}");
+
+        for source in [
+            "module cells\nresource Vault<T: fixed_value> { value: u64 }",
+            "module actions\naction verify<T: fixed_value>() { verification }",
+            "module locks\nlock verify<T: fixed_value>() -> bool { true }",
+        ] {
+            assert!(
+                parse(&lex(source).unwrap()).is_err(),
+                "generic Cell-backed declarations and entries must remain rejected: {source}"
+            );
         }
     }
 

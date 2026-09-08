@@ -2,14 +2,12 @@
 // audit: generic_identity=cellscript::audit::seed_generic_value::Pair<u64>
 module cellscript::audit::seed_generic_value
 
-struct Pair<T: copy + drop + store + fixed + serializable + non_linear>
-    has copy, drop, store, fixed, serializable, non_linear
-{
+struct Pair<T: fixed_value> {
     left: T,
     right: T,
 }
 
-fn first<T: copy + drop + store + fixed + serializable + non_linear>(pair: Pair<T>) -> T {
+fn first<T: fixed_value>(pair: Pair<T>) -> T {
     pair.left
 }
 

@@ -232,7 +232,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v51-0.30-dev9-script-hash";
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v52-0.30-dev10-public-value-generics";
 pub const METADATA_SCHEMA_VERSION: u32 = 71;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -1289,6 +1289,7 @@ pub fn validate_compile_metadata(metadata: &CompileMetadata, artifact_format: Ar
                 "compile metadata public interface has an invalid schema, version, or module identity",
             ));
         }
+        interface::validate(&metadata.public_interface)?;
         if metadata.public_interface.runtime_contract.temporal != interface::temporal_contract(&metadata.target_profile.since_abi) {
             return Err(CompileError::without_span("compile metadata public interface has an invalid typed CKB temporal contract"));
         }
@@ -36083,13 +36084,12 @@ version = "0.1.0"
             r#"
 module generic_dep::pairs
 
-public struct Pair<T: copy + drop + store + fixed + serializable + non_linear>
-    has copy, drop, store, fixed, serializable, non_linear {
+public struct Pair<T: fixed_value> {
     left: T,
     right: T,
 }
 
-public fn swap<T: copy + drop + store + fixed + serializable + non_linear>(pair: Pair<T>) -> Pair<T> {
+public fn swap<T: fixed_value>(pair: Pair<T>) -> Pair<T> {
     return Pair<T> { left: pair.right, right: pair.left }
 }
 "#,
@@ -38162,7 +38162,7 @@ enum Bytes { None, Some(Vec<u8>) }
                 r#"
 module payload::generic
 resource Token has consume { amount: u64 }
-enum Boxed<T> { Empty, Some(T) }
+private enum Boxed<T> { Empty, Some(T) }
 fn hide(input: Token) -> Boxed<Token> { Boxed::Some<Token>(input) }
 "#,
                 "cannot be hidden in ordinary generic layout",
@@ -38436,6 +38436,17 @@ action verify() -> u64 {
 
     #[test]
     fn generic_kernel_rejects_phantom_layout_use_and_hidden_cells() {
+        let unsafe_public = compile(
+            r#"
+module generics::unsafe_public
+public struct Box<T: copy + drop> { value: T }
+"#,
+            CompileOptions::default(),
+        )
+        .unwrap_err();
+        assert_eq!(unsafe_public.code.as_deref(), Some("E2110"));
+        assert!(unsafe_public.message.contains("add 'fixed_value'"));
+
         let phantom = compile(
             r#"
 module generics::bad_phantom
@@ -38451,7 +38462,7 @@ struct Bad<phantom T> { value: T }
             r#"
 module generics::hidden_cell
 resource Token has consume { amount: u64 }
-struct Box<T> { value: T }
+private struct Box<T> { value: T }
 fn hide(value: Token) -> Box<Token> { Box<Token> { value } }
 "#,
             CompileOptions::default(),

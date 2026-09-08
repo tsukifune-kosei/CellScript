@@ -387,6 +387,24 @@ mod tests {
     }
 
     #[test]
+    fn wasm_playground_accepts_the_canonical_public_value_generic_surface() {
+        let source = r#"
+module browser_generics
+public struct Pair<T: fixed_value> { left: T, right: T }
+public fn first<T: fixed_value>(pair: Pair<T>) -> T { pair.left }
+action verify() -> u64 {
+    verification
+        let pair: Pair<u64> = Pair<u64> { left: 42, right: 0 }
+        return first<u64>(pair)
+}
+"#;
+        let result: serde_json::Value = serde_json::from_str(&compile_metadata_json(source, "2026", None)).unwrap();
+        assert!(result.get("error").is_none(), "unexpected wasm compile error: {result}");
+        assert_eq!(result["module"], "browser_generics");
+        assert!(result["native_records_omitted"].as_array().unwrap().iter().any(|record| record == "generic_instantiations"));
+    }
+
+    #[test]
     fn wasm_summary_exposes_deferred_runtime_in_locks_and_helpers() {
         let fixtures = [
             (

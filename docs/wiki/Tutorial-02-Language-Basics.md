@@ -54,7 +54,7 @@ syntax forms you will see in the examples:
 | `create out = T { ... }` | Constraint on a named proposed output Cell. |
 | `require condition, "message"` | Action or lock verifier guard with an optional message. |
 | `let mut xs: Vec<Hash> = []` | Typed empty local `Vec<T>` literal. |
-| `struct Pair<T: fixed + serializable + non_linear>` | Fixed-width non-Cell value template. |
+| `struct Pair<T: fixed_value>` | Fixed-width non-Cell value template. |
 | `fn identity<T: copy + drop>(value: T) -> T` | Value-generic helper with explicit constraints. |
 | `Option::Some<u64>(value)` | Built-in generic optional value through the ordinary enum kernel. |
 
@@ -248,14 +248,12 @@ pure functions. It specializes every used template before type checking and IR
 lowering, so the backend sees only deterministic concrete types.
 
 ```cellscript
-struct Pair<T: copy + drop + store + fixed + serializable + non_linear>
-    has copy, drop, store, fixed, serializable, non_linear
-{
+struct Pair<T: fixed_value> {
     left: T
     right: T
 }
 
-fn first<T: copy + drop + fixed + serializable + non_linear>(pair: Pair<T>) -> T {
+fn first<T: fixed_value>(pair: Pair<T>) -> T {
     return pair.left
 }
 ```
@@ -263,6 +261,13 @@ fn first<T: copy + drop + fixed + serializable + non_linear>(pair: Pair<T>) -> T
 Function type arguments may be explicit (`first<u64>(pair)`) or inferred from
 typed arguments when there is one unambiguous substitution. Struct and enum
 construction stays explicit so source review always shows the layout identity.
+
+`fixed_value` is the canonical source shorthand for
+`copy + drop + store + fixed + serializable + non_linear`. Public interfaces
+store the expanded constraint list, so the shorthand and expanded spelling
+have the same interface hash. For generic structs and enums, an omitted `has`
+clause is derived from the fields; `cellc fmt` removes a redundant clause that
+exactly repeats the derived abilities.
 
 Value abilities are a separate vocabulary from Cell lifecycle capabilities:
 
@@ -279,6 +284,11 @@ Ordinary generic structs and enums require non-phantom arguments to be fixed,
 serializable, and non-linear. `Pair<Token>` is therefore rejected when `Token`
 is a `resource`, `shared`, or `receipt`; use an explicit bounded Cell primitive
 and its ownership rules instead.
+
+Exported generic layouts apply the same minimum to their declared type
+parameters. Use `fixed_value` for the usual public value-container contract.
+The complete visibility, normalization, compatibility, and migration rules are
+defined in [Public Value Generics](../CELLSCRIPT_PUBLIC_VALUE_GENERICS.md).
 
 A phantom parameter affects type identity without occupying serialized bytes:
 
