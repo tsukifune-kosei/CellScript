@@ -26,7 +26,7 @@ path-escaping evidence fails the gate.
 | Temporal | Absolute/relative locks, vesting, epochs, timestamps, blocks, headers, and `Since` | typed runtime-view and iCKB CKB-VM fixtures |
 | Authorization | Standard signing, multisig, issuer and Script identity, post-signing mutation rejection | bundled multisig-v2, SDK signing, policy lifecycle, and sighash fixtures |
 | Committed state | Authenticated opening, successor commitment, shared witness ownership, stale/root/index failures | bounded hash/Merkle CKB-VM cases, schema acknowledgements, and matched schema-roll reference |
-| Multi-Script composition | At least three artifacts, interacting Type and Lock groups, ProtocolBundle conflicts and exact identities | `business_corpus.rs`, ProtocolBundle CLI and adapter tests |
+| Multi-Script composition | At least four artifacts, interacting Type and Lock groups, persistent action dispatch, ProtocolBundle conflicts and exact identities | `business_corpus.rs`, ProtocolBundle CLI and adapter tests |
 | External verifier | Exact-identity EXEC or SPAWN/WAIT with explicit trusted boundary and substitution failures | `trusted_external.rs` and exact-handle CKB-VM cases |
 
 The companion transaction inventory
@@ -37,24 +37,31 @@ constructs each canonical Molecule transaction.
 ## Same-transaction anchor
 
 The current executable anchor is an authenticated two-order settlement. One
-CKB transaction runs three independently compiled CellScript ELFs and four
+CKB transaction runs four independently compiled CellScript ELFs and five
 actual Script groups:
 
 1. an authorization Lock validates the protected fungible input;
 2. a fungible Type Script enforces amount conservation;
-3. an order Type Script consumes two GroupInput orders and checks a two-element
+3. a persistent order-state Type Script dispatches the `partial_fill`, `settle`,
+   and `cancel` actions through one full Script identity;
+4. an order Type Script consumes two GroupInput orders and checks a two-element
    output Plan against GroupOutput order, data, Lock, Type, and capacity; and
-4. the order policy binds an exact CellDep data hash.
+5. that settlement Script binds an exact CellDep data hash.
 
 The CKB-VM test rejects a wrong authorization credential, fungible inflation,
-partial-settlement mismatch, and dependency substitution. Its pinned resource
-record is 26,588 cycles, 9,384 combined ELF bytes, a 5,376-byte largest checked
-stack frame, 160 witness bytes, a 1,023-byte transaction, and 24.6 CKB occupied
+partial-settlement mismatch, persistent-state substitution, and dependency
+substitution. Its pinned resource
+record is 40,412 cycles, 15,560 combined ELF bytes, a 5,376-byte largest checked
+stack frame, 305 witness bytes, a 1,407-byte transaction, and 32.8 CKB occupied
 capacity. Budgets in
 [`tests/fixtures/capability_anchor_cases.json`](../tests/fixtures/capability_anchor_cases.json)
 fail on regression.
 
-The anchor establishes real same-transaction Script interaction. The existing
+The stateful companion test verifies `partial_fill`, registers its output under
+the exact transaction OutPoint, then consumes that output with `settle`; it also
+executes `cancel` and rejects an invalid full fill. The anchor therefore
+establishes both same-transaction Script interaction and prior-output
+continuity. The existing
 ProtocolBundle and generated-builder suites independently cover artifact
 admission, role/index/witness/CellDep conflict handling, canonical transaction
 materialization, signing handoff, and exact transaction identity. A later
@@ -70,7 +77,7 @@ layers separately. `passed`, `not-applicable`, `pending`, and
 never treated as evidence for a higher layer.
 
 The inventory remains `candidate` because selected-network node admission and
-deployment identities, the stateful multi-action anchor lifecycle, and
+deployment identities, exact ProtocolBundle-to-anchor construction, and
 independent review are still pending. `check-business-corpus --release` rejects
 that state. Stable versioning, tags, package publication, editor/browser
 publication, and network deployment remain outside this candidate record.

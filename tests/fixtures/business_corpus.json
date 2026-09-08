@@ -4,9 +4,10 @@
       "wrong_authorization_credential",
       "fungible_amount_inflation",
       "partial_settlement_amount_mismatch",
+      "persistent_policy_state_substitution",
       "authenticated_dependency_substitution"
     ],
-    "artifacts": 3,
+    "artifacts": 4,
     "builder_evidence": [
       "tests/cli.rs",
       "src/cli/commands.rs"
@@ -14,7 +15,9 @@
     "execution_test": "tests/business_corpus.rs",
     "id": "authenticated-partial-settlement",
     "positive_cases": [
-      "settle_two_orders"
+      "settle_two_orders",
+      "partial_fill_then_settle",
+      "cancel_live_order"
     ],
     "protocol_bundle_evidence": [
       "tests/cli.rs",
@@ -26,11 +29,13 @@
       "bounded_output_plan",
       "fungible_conservation",
       "lock_authorization",
-      "multiple_type_and_lock_groups"
+      "multiple_type_and_lock_groups",
+      "persistent_multi_action_policy"
     ],
-    "script_groups": 4,
+    "script_groups": 5,
     "sources": [
       "tests/fixtures/capability_anchor_order.cell",
+      "tests/fixtures/capability_anchor_policy.cell",
       "tests/fixtures/capability_anchor_token.cell",
       "tests/fixtures/capability_anchor_authorization.cell"
     ],
@@ -72,6 +77,7 @@
     "tests/fixtures/capability_anchor_authorization.cell",
     "tests/fixtures/capability_anchor_cases.json",
     "tests/fixtures/capability_anchor_order.cell",
+    "tests/fixtures/capability_anchor_policy.cell",
     "tests/fixtures/capability_anchor_token.cell",
     "tests/fixtures/cost_corpus/Cargo.lock",
     "tests/fixtures/cost_corpus/nft_lock.cell",
@@ -764,13 +770,17 @@
           "status": "not-applicable"
         },
         "stateful": {
-          "paths": [],
-          "status": "pending"
+          "paths": [
+            "tests/business_corpus.rs"
+          ],
+          "status": "passed"
         }
       },
       "id": "multi_script_composition",
       "positive_cases": [
-        "three_artifact_same_transaction",
+        "four_artifact_same_transaction",
+        "partial_fill_then_settle",
+        "cancel_live_order",
         "protocol_bundle_materialization"
       ],
       "reference": {
@@ -788,12 +798,14 @@
         "same-transaction CKB-VM execution"
       ],
       "scenarios": [
-        "three independent artifacts",
+        "four independent artifacts",
         "interacting Type and Lock groups",
+        "persistent partial-fill settle cancel policy",
         "ProtocolBundle conflict resolution"
       ],
       "sources": [
         "tests/fixtures/capability_anchor_order.cell",
+        "tests/fixtures/capability_anchor_policy.cell",
         "tests/fixtures/capability_anchor_token.cell",
         "tests/fixtures/capability_anchor_authorization.cell"
       ],
@@ -898,7 +910,7 @@
       ]
     }
   ],
-  "inventory_sha256": "0x40e59df53cc2089d7c3cd72753d2894b5b5f907800634b96f40fa6f1f00f5634",
+  "inventory_sha256": "0xd338a35d201515a09c99a9373e17524bdf901f423fda868d0b23d13fa9dbdafd",
   "release_requirements": {
     "backend": "pending",
     "ci": "pending",

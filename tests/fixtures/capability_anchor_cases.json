@@ -2,12 +2,13 @@
   "schema": "cellscript-capability-anchor-fixture-v1",
   "source_files": [
     "tests/fixtures/capability_anchor_order.cell",
+    "tests/fixtures/capability_anchor_policy.cell",
     "tests/fixtures/capability_anchor_token.cell",
     "tests/fixtures/capability_anchor_authorization.cell"
   ],
   "policy_data_hex": "0x63656c6c7363726970742d302e33302d616e63686f722d706f6c696379",
-  "artifacts": 3,
-  "script_groups": 4,
+  "artifacts": 4,
+  "script_groups": 5,
   "positive_case": "settle_two_orders",
   "adversarial_cases": [
     {
@@ -23,24 +24,28 @@
       "mutation": "order_amount"
     },
     {
+      "name": "persistent_policy_state_substitution",
+      "mutation": "policy_state"
+    },
+    {
       "name": "authenticated_dependency_substitution",
       "mutation": "dependency"
     }
   ],
   "measured": {
-    "cycles": 26588,
-    "combined_elf_bytes": 9384,
+    "cycles": 40412,
+    "combined_elf_bytes": 15560,
     "max_stack_frame_bytes": 5376,
-    "witness_bytes": 160,
-    "transaction_bytes": 1023,
-    "occupied_capacity_shannons": 24600000000
+    "witness_bytes": 305,
+    "transaction_bytes": 1407,
+    "occupied_capacity_shannons": 32800000000
   },
   "budgets": {
-    "max_cycles": 30000,
-    "max_combined_elf_bytes": 10000,
+    "max_cycles": 45000,
+    "max_combined_elf_bytes": 16000,
     "max_stack_frame_bytes": 6000,
-    "max_witness_bytes": 192,
-    "max_transaction_bytes": 1200,
-    "max_occupied_capacity_shannons": 25000000000
+    "max_witness_bytes": 320,
+    "max_transaction_bytes": 1500,
+    "max_occupied_capacity_shannons": 33000000000
   }
 }

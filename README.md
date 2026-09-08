@@ -1029,7 +1029,7 @@ tiers, offline checker, and adapter materialization boundary are specified in
 [CellScript ProtocolBundle v1](docs/CELLSCRIPT_PROTOCOL_BUNDLE.md).
 
 The finite eight-family portfolio used for 0.30 Rust-comparable
-application-layer claims, including the three-artifact same-transaction CKB-VM
+application-layer claims, including the four-artifact same-transaction CKB-VM
 anchor and its remaining release blockers, is defined in the
 [CellScript 0.30 business corpus](docs/CELLSCRIPT_0_30_BUSINESS_CORPUS.md).
 Successful reports with concrete input, output-data, and witness fields can be

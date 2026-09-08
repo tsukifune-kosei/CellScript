@@ -34,13 +34,14 @@ const REQUIRED_LAYERS: [&str; 10] = [
     "simulator",
     "stateful",
 ];
-const REQUIRED_ANCHOR_CAPABILITIES: [&str; 6] = [
+const REQUIRED_ANCHOR_CAPABILITIES: [&str; 7] = [
     "authenticated_cell_dep",
     "bounded_group_inputs",
     "bounded_output_plan",
     "fungible_conservation",
     "lock_authorization",
     "multiple_type_and_lock_groups",
+    "persistent_multi_action_policy",
 ];
 const REQUIRED_RELEASE_GATES: [&str; 7] = ["backend", "ci", "deployment", "dev", "independent_review", "node_admission", "release"];
 
@@ -227,9 +228,9 @@ fn validate(root: &Path, corpus: &Corpus, release: bool) -> Result<()> {
     }
 
     if corpus.anchor.id != "authenticated-partial-settlement"
-        || corpus.anchor.artifacts < 3
-        || corpus.anchor.script_groups < 3
-        || corpus.anchor.sources.len() < 3
+        || corpus.anchor.artifacts < 4
+        || corpus.anchor.script_groups < 5
+        || corpus.anchor.sources.len() < 4
     {
         bail!("business corpus anchor does not meet the multi-artifact composition boundary");
     }

@@ -1,0 +1,26 @@
+module acceptance::capability_anchor_policy
+
+shared OrderState has store, consume {
+    remaining: u64
+}
+
+action partial_fill(input before: OrderState, witness filled: u64, witness owner: Address) {
+    verification
+        require filled > 0
+        require before.remaining > filled
+        let remaining = before.remaining - filled
+        consume before
+        create OrderState { remaining: remaining } with_lock(owner)
+}
+
+action settle(input before: OrderState) {
+    verification
+        require before.remaining > 0
+        consume before
+}
+
+action cancel(input before: OrderState) {
+    verification
+        require before.remaining > 0
+        consume before
+}

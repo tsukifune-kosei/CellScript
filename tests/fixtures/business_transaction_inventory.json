@@ -33,7 +33,7 @@
       "fixture_owners": ["tests/crypto_primitives.rs", "tests/examples.rs", "tests/schema_acknowledgement.rs"]
     },
     "multi_script_composition": {
-      "positive": ["three_artifact_same_transaction", "protocol_bundle_materialization"],
+      "positive": ["four_artifact_same_transaction", "partial_fill_then_settle", "cancel_live_order", "protocol_bundle_materialization"],
       "adversarial": ["authorization_substitution", "type_state_substitution", "output_substitution", "cell_dep_substitution", "role_conflict"],
       "fixture_owners": ["tests/business_corpus.rs", "tests/cli.rs"]
     },

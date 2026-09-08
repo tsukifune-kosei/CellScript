@@ -1,6 +1,12 @@
 //! Canonical same-transaction CKB-VM composition anchor for the 0.30 corpus.
 
-use cellscript::{strip_vm_abi_trailer, CompileOptions, EntryWitnessArg};
+use cellscript::{
+    artifact::{
+        compile_artifact, encode_policy_action_record, ArtifactAction, ArtifactContext, ArtifactDeclaration, ArtifactDispatch,
+    },
+    strip_vm_abi_trailer, CompileOptions, EntryWitnessArg, ExecutableSurfacePolicy,
+};
+use cellscript_ckb_adapter::policy_witness::{encode_policy_witness_bundle, PolicyScriptRole, PolicyWitnessRecord};
 use ckb_testtool::{
     builtin::ALWAYS_SUCCESS,
     ckb_hash::blake2b_256,
@@ -15,6 +21,7 @@ use ckb_testtool::{
 use serde::Deserialize;
 
 const ORDER_SOURCE: &str = include_str!("fixtures/capability_anchor_order.cell");
+const POLICY_SOURCE: &str = include_str!("fixtures/capability_anchor_policy.cell");
 const TOKEN_SOURCE: &str = include_str!("fixtures/capability_anchor_token.cell");
 const AUTHORIZATION_SOURCE: &str = include_str!("fixtures/capability_anchor_authorization.cell");
 const POLICY_DATA: &[u8] = b"cellscript-0.30-anchor-policy";
@@ -27,6 +34,7 @@ enum Mutation {
     AuthorizationCredential,
     TokenAmount,
     OrderAmount,
+    PolicyState,
     Dependency,
 }
 
@@ -90,6 +98,25 @@ fn compile(source: &str) -> cellscript::CompileResult {
     cellscript::compile(source, options()).unwrap_or_else(|error| panic!("anchor source must compile: {error}\n{source}"))
 }
 
+fn compile_order_policy() -> cellscript::CompileResult {
+    compile_artifact(
+        POLICY_SOURCE,
+        CompileOptions { target: Some("riscv64-elf".to_string()), ..CompileOptions::default() },
+        ArtifactDeclaration {
+            name: "PersistentOrder".to_string(),
+            context: ArtifactContext::TypeGroup { resource: "OrderState".to_string() },
+            dispatch: ArtifactDispatch::PolicyWitnessV1,
+            actions: [(10, "partial_fill"), (20, "settle"), (30, "cancel")]
+                .into_iter()
+                .map(|(tag, action)| ArtifactAction { tag, action: action.to_string() })
+                .collect(),
+            common_checks: Vec::new(),
+        },
+        ExecutableSurfacePolicy::DenyFailClosed,
+    )
+    .unwrap_or_else(|error| panic!("anchor order policy must compile: {error}"))
+}
+
 fn input(context: &mut Context, lock: packed::Script, type_script: packed::Script, amount: u64) -> packed::CellInput {
     let output = packed::CellOutput::new_builder()
         .capacity::<packed::Uint64>(100_000_000_000u64.pack())
@@ -110,6 +137,25 @@ fn output(lock: packed::Script, type_script: packed::Script) -> packed::CellOutp
 
 fn entry_witness(payload: Vec<u8>) -> Bytes {
     packed::WitnessArgs::new_builder().input_type(Some(Bytes::from(payload)).pack()).build().as_bytes()
+}
+
+fn policy_witness(
+    compiled: &cellscript::CompileResult,
+    type_script: &packed::Script,
+    action: &str,
+    args: &[EntryWitnessArg],
+) -> Bytes {
+    let selected = encode_policy_action_record(&compiled.metadata, &type_script.calc_script_hash().unpack(), action, args)
+        .expect("selected persistent order policy action");
+    entry_witness(
+        encode_policy_witness_bundle(&[PolicyWitnessRecord {
+            role: PolicyScriptRole::Type,
+            script_hash: selected.script_hash,
+            tag: selected.tag,
+            args: selected.args,
+        }])
+        .expect("canonical persistent order policy witness bundle"),
+    )
 }
 
 fn plan(owner: [u8; 32], amounts: [u64; 2]) -> Vec<u8> {
@@ -134,20 +180,23 @@ fn run_anchor(mutation: Mutation) -> AnchorResult {
     );
 
     let order = compile(ORDER_SOURCE);
+    let policy = compile_order_policy();
     let token = compile(TOKEN_SOURCE);
     let authorization = compile(AUTHORIZATION_SOURCE);
     assert_eq!(order.metadata.typed_semantics.foundation.entry_contract.exact_entry, "action:settle");
+    assert_eq!(policy.metadata.typed_semantics.foundation.entry_contract.exact_entry, "wrapper:_cellscript_entry");
     assert_eq!(token.metadata.typed_semantics.foundation.entry_contract.exact_entry, "action:preserve");
     assert_eq!(authorization.metadata.typed_semantics.foundation.entry_contract.exact_entry, "lock:authorize");
-    for artifact in [&order, &token, &authorization] {
+    for artifact in [&order, &policy, &token, &authorization] {
         artifact.validate().expect("each anchor artifact must pass independent validation");
     }
 
     let order_elf = strip_vm_abi_trailer(&order.artifact_bytes);
+    let policy_elf = strip_vm_abi_trailer(&policy.artifact_bytes);
     let token_elf = strip_vm_abi_trailer(&token.artifact_bytes);
     let authorization_elf = strip_vm_abi_trailer(&authorization.artifact_bytes);
-    let elf_bytes = order_elf.len() + token_elf.len() + authorization_elf.len();
-    let max_stack_frame_bytes = [&order, &token, &authorization]
+    let elf_bytes = order_elf.len() + policy_elf.len() + token_elf.len() + authorization_elf.len();
+    let max_stack_frame_bytes = [&order, &policy, &token, &authorization]
         .into_iter()
         .flat_map(|artifact| artifact.verified_lowering_record.iter().flat_map(|record| &record.entries))
         .map(|entry| entry.frame_size_bytes)
@@ -158,6 +207,7 @@ fn run_anchor(mutation: Mutation) -> AnchorResult {
     context.set_capture_debug(true);
     let always_success_out_point = context.deploy_cell(ALWAYS_SUCCESS.clone());
     let order_out_point = context.deploy_cell(Bytes::copy_from_slice(order_elf));
+    let policy_out_point = context.deploy_cell(Bytes::copy_from_slice(policy_elf));
     let token_out_point = context.deploy_cell(Bytes::copy_from_slice(token_elf));
     let authorization_out_point = context.deploy_cell(Bytes::copy_from_slice(authorization_elf));
     let dependency_data = if matches!(mutation, Mutation::Dependency) {
@@ -169,6 +219,7 @@ fn run_anchor(mutation: Mutation) -> AnchorResult {
 
     let always_success_lock = context.build_script(&always_success_out_point, Bytes::new()).unwrap();
     let order_type = context.build_script(&order_out_point, Bytes::new()).unwrap();
+    let policy_type = context.build_script(&policy_out_point, Bytes::new()).unwrap();
     let token_type = context.build_script(&token_out_point, Bytes::new()).unwrap();
     let authorization_lock = context.build_script(&authorization_out_point, Bytes::new()).unwrap();
 
@@ -176,15 +227,18 @@ fn run_anchor(mutation: Mutation) -> AnchorResult {
         input(&mut context, authorization_lock.clone(), token_type.clone(), 50),
         input(&mut context, always_success_lock.clone(), order_type.clone(), 10),
         input(&mut context, always_success_lock.clone(), order_type.clone(), 20),
+        input(&mut context, always_success_lock.clone(), policy_type.clone(), 30),
     ];
     let outputs = vec![
         output(authorization_lock, token_type),
         output(always_success_lock.clone(), order_type.clone()),
-        output(always_success_lock.clone(), order_type),
+        output(always_success_lock.clone(), policy_type.clone()),
+        output(always_success_lock.clone(), order_type.clone()),
     ];
-    let output_amounts: [u64; 3] = [
+    let output_amounts: [u64; 4] = [
         if matches!(mutation, Mutation::TokenAmount) { 51 } else { 50 },
         if matches!(mutation, Mutation::OrderAmount) { 13 } else { 12 },
+        if matches!(mutation, Mutation::PolicyState) { 19 } else { 18 },
         18,
     ];
     let outputs_data = output_amounts.into_iter().map(|amount| Bytes::copy_from_slice(&amount.to_le_bytes())).collect::<Vec<_>>();
@@ -195,8 +249,14 @@ fn run_anchor(mutation: Mutation) -> AnchorResult {
     let order_plan = plan(always_success_lock.calc_script_hash().unpack(), [12, 18]);
     let order_payload = order.metadata.actions[0]
         .entry_witness_args(&[EntryWitnessArg::Bytes(order_plan)])
-        .expect("bounded output plan entry payload");
-    let witnesses = vec![entry_witness(authorization_payload), entry_witness(order_payload), Bytes::new()];
+        .expect("bounded settlement output plan entry payload");
+    let policy_payload = policy_witness(
+        &policy,
+        &policy_type,
+        "partial_fill",
+        &[EntryWitnessArg::U64(12), EntryWitnessArg::Address(always_success_lock.calc_script_hash().unpack())],
+    );
+    let witnesses = vec![entry_witness(authorization_payload), entry_witness(order_payload), Bytes::new(), policy_payload];
     let witness_bytes = witnesses.iter().map(Bytes::len).sum();
     let occupied_capacity_shannons = outputs
         .iter()
@@ -222,20 +282,21 @@ fn run_anchor(mutation: Mutation) -> AnchorResult {
 }
 
 #[test]
-fn canonical_anchor_executes_three_cellscript_artifacts_in_one_transaction() {
+fn canonical_anchor_executes_four_cellscript_artifacts_in_one_transaction() {
     let fixture = fixture();
     assert_eq!(fixture.schema, "cellscript-capability-anchor-fixture-v1");
     assert_eq!(
         fixture.source_files,
         [
             "tests/fixtures/capability_anchor_order.cell",
+            "tests/fixtures/capability_anchor_policy.cell",
             "tests/fixtures/capability_anchor_token.cell",
             "tests/fixtures/capability_anchor_authorization.cell",
         ]
     );
     assert_eq!(fixture.policy_data_hex, format!("0x{}", hex::encode(POLICY_DATA)));
-    assert_eq!(fixture.artifacts, 3);
-    assert_eq!(fixture.script_groups, 4);
+    assert_eq!(fixture.artifacts, 4);
+    assert_eq!(fixture.script_groups, 5);
     assert_eq!(fixture.positive_case, "settle_two_orders");
     let result = run_anchor(Mutation::None);
     let cycles = result.verification.expect("the canonical same-transaction anchor must pass");
@@ -269,9 +330,88 @@ fn canonical_anchor_executes_three_cellscript_artifacts_in_one_transaction() {
 }
 
 #[test]
+fn persistent_order_policy_uses_prior_outputs_for_partial_fill_settle_and_cancel() {
+    let policy = compile_order_policy();
+    let policy_elf = strip_vm_abi_trailer(&policy.artifact_bytes);
+    let mut context = Context::new_with_deterministic_rng();
+    let always_success_out_point = context.deploy_cell(ALWAYS_SUCCESS.clone());
+    let policy_out_point = context.deploy_cell(Bytes::copy_from_slice(policy_elf));
+    let lock = context.build_script(&always_success_out_point, Bytes::new()).unwrap();
+    let type_script = context.build_script(&policy_out_point, Bytes::new()).unwrap();
+    let state_cell = output(lock.clone(), type_script.clone());
+    let initial_data = Bytes::copy_from_slice(&30u64.to_le_bytes());
+    let successor_data = Bytes::copy_from_slice(&18u64.to_le_bytes());
+
+    let initial = context.create_cell(state_cell.clone(), initial_data.clone());
+    let partial_fill = context.complete_tx(
+        TransactionBuilder::default()
+            .input(packed::CellInput::new_builder().previous_output(initial).build())
+            .output(state_cell.clone())
+            .output_data(successor_data.clone().pack())
+            .witness(
+                policy_witness(
+                    &policy,
+                    &type_script,
+                    "partial_fill",
+                    &[EntryWitnessArg::U64(12), EntryWitnessArg::Address(lock.calc_script_hash().unpack())],
+                )
+                .pack(),
+            )
+            .build(),
+    );
+    context.verify_tx(&partial_fill, MAX_CYCLES).expect("partial fill policy step must pass");
+    let successor = packed::OutPoint::new(partial_fill.hash(), 0);
+    context.create_cell_with_out_point(successor.clone(), state_cell.clone(), successor_data.clone());
+    assert_eq!(context.get_cell(&successor), Some((state_cell.clone(), successor_data)));
+
+    let terminal_output =
+        packed::CellOutput::new_builder().capacity::<packed::Uint64>(100_000_000_000u64.pack()).lock(lock.clone()).build();
+    let settle = context.complete_tx(
+        TransactionBuilder::default()
+            .input(packed::CellInput::new_builder().previous_output(successor.clone()).build())
+            .output(terminal_output.clone())
+            .output_data(Bytes::new().pack())
+            .witness(policy_witness(&policy, &type_script, "settle", &[]).pack())
+            .build(),
+    );
+    assert_eq!(settle.inputs().get(0).unwrap().previous_output(), successor);
+    context.verify_tx(&settle, MAX_CYCLES).expect("settle must consume the verified partial-fill output");
+
+    let cancel_input = context.create_cell(state_cell.clone(), initial_data.clone());
+    let cancel = context.complete_tx(
+        TransactionBuilder::default()
+            .input(packed::CellInput::new_builder().previous_output(cancel_input).build())
+            .output(terminal_output)
+            .output_data(Bytes::new().pack())
+            .witness(policy_witness(&policy, &type_script, "cancel", &[]).pack())
+            .build(),
+    );
+    context.verify_tx(&cancel, MAX_CYCLES).expect("cancel terminal action must pass");
+
+    let invalid_input = context.create_cell(state_cell.clone(), initial_data);
+    let invalid_fill = context.complete_tx(
+        TransactionBuilder::default()
+            .input(packed::CellInput::new_builder().previous_output(invalid_input).build())
+            .output(state_cell)
+            .output_data(Bytes::copy_from_slice(&0u64.to_le_bytes()).pack())
+            .witness(
+                policy_witness(
+                    &policy,
+                    &type_script,
+                    "partial_fill",
+                    &[EntryWitnessArg::U64(30), EntryWitnessArg::Address(lock.calc_script_hash().unpack())],
+                )
+                .pack(),
+            )
+            .build(),
+    );
+    context.verify_tx(&invalid_fill, MAX_CYCLES).expect_err("a non-partial fill must reject");
+}
+
+#[test]
 fn canonical_anchor_rejects_each_role_and_dependency_substitution() {
     let fixture = fixture();
-    assert_eq!(fixture.adversarial_cases.len(), 4);
+    assert_eq!(fixture.adversarial_cases.len(), 5);
     for case in fixture.adversarial_cases {
         assert!(run_anchor(case.mutation).verification.is_err(), "{} ({:?}) must fail the full transaction", case.name, case.mutation);
     }
