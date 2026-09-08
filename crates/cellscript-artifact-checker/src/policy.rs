@@ -1,8 +1,8 @@
 //! Parser-free checks for the bounded, single-resource policy dispatch record.
 //!
 //! These checks bind the selector, exports, fixed Cell roles and common-check
-//! declarations to the typed record. They do not prove that machine dispatch
-//! selects the declared branch or that common checks dominate machine success.
+//! declarations to the typed record. The bundle checker separately decodes the
+//! bounded policy wrapper and adapters to bind those records to machine dispatch.
 
 use crate::schema::*;
 use crate::{canonical_hash, CheckerError, CheckerRejectionCode};
@@ -142,7 +142,7 @@ fn validate_builder_parameters(
     Ok(())
 }
 
-fn builder_parameter_projection(
+pub(crate) fn builder_parameter_projection(
     param: &TypedSemanticParam,
     entry: &TypedSemanticEntry,
     typed: &TypedSemanticRecord,

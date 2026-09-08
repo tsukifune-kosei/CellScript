@@ -34,7 +34,7 @@ classes, legacy migration nodes, and layered semantic identities. Typed
 semantics v8 additionally binds exact trusted-external verifier declarations
 to ordered CellDep data-hash checks and delegation calls while retaining an
 explicit no-proof-of-internals flag. Lowering
-record v7 embeds that record and binds it to the final machine layout. Every
+record v8 embeds that record and binds it to the final machine layout. Every
 typed block is accounted for;
 optimized/elided typed blocks have an explicit empty machine-block list, while
 materialized blocks carry exact typed-block hashes. Source-map v2 binds source
@@ -117,10 +117,18 @@ terminates the current VM process; it does not bypass a spawning parent's
 explicit status-handling contract. No older ELF acquires this guarantee by
 updating metadata.
 
-The current policy checks do not independently prove the machine scanner's
-selector-to-adapter dataflow or common-check dominance. Direct CKB-VM tests
-exercise these runtime paths; that evidence is distinct from independent
-machine-level dispatch verification. See the
+Version 8 also specializes the bounded `policy-witness-v1` machine contract.
+The checker decodes the wrapper's exact witness fallback syscalls, canonical
+`CSPOLv1` envelope and one-to-eight-record DynVec scan, Molecule offsets,
+strict key ordering, Type-role/current-Script-hash selector, single-match
+guard, declared tag branches, ordered common calls with nonzero rejection,
+unknown-tag failure, selected argument forwarding, private bounded adapter
+copy, typed-parameter-derived outgoing stack reservation, exact action call,
+frame restoration, and error-25 termination. This
+binds the typed policy record to the emitted selector and adapters. It does
+not prove the semantic meaning of an action predicate, arbitrary callee memory
+effects, or deployment authentication; direct CKB-VM and deployment evidence
+remain separate. See the
 [policy witness ABI](CELLSCRIPT_POLICY_WITNESS_ABI.md) for the bounded entry
 contract and the [implementation checklist](CELLSCRIPT_AUTHORING_IMPLEMENTATION.md)
 for outstanding completion work.
@@ -177,7 +185,9 @@ The checker independently recomputes and validates:
   relocation state;
 - the bounded RV64 instruction set emitted by CellScript, canonical direct
   calls, aligned branch/call targets, machine terminators, stack-pointer
-  adjustments, return-path stack restoration, and declared syscalls;
+  adjustments, return-path stack restoration, declared syscalls, and the
+  specialized HeaderDep, constructed-Script-hash, and policy-dispatch machine
+  contracts;
 - every mapped block digest and every source-map range against final ELF bytes;
   and
 - compiler, source, profile, deployable artifact, semantic layers,

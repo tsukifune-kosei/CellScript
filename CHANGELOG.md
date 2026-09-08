@@ -465,6 +465,35 @@
   Advance the artifact cache identity to
   `project-source-set-v51-0.30-dev9-script-hash`.
 
+- Bind the bounded `policy-witness-v1` selector and action adapters to decoded
+  machine instructions in the standalone artifact checker. Lowering record v8
+  verification now requires the exact GroupInput/empty-group/GroupOutput
+  witness selection, `CSPOLv1` envelope and one-to-eight-record canonical
+  DynVec scan, strict record ordering, Type-role/current-Script-hash match,
+  single selected record, declared tag order, common-check dominance, unknown
+  tag rejection, selected argument forwarding, 4,096-byte private adapter
+  copy, typed-parameter-derived outgoing stack frame, exact action call, and
+  error-25 termination. Both editions and
+  optimization levels 0-3 pass the valid matrix; hash-rebound instruction
+  mutations across every stage reject with `V2420`. This strengthens
+  validation of existing v8 bundles and does not change generated artifact or
+  cache identity. Action predicate meaning, arbitrary callee dataflow, and
+  deployment authentication remain separate evidence boundaries.
+
+- Repair two stale CLI gate boundaries encountered by the 0.30 backend audit.
+  `cellc test` now matches `expect-error` text through aggregate related
+  diagnostics instead of seeing only the top-level diagnostic count, and the
+  atomic-swap action-plan fixture now requires its current
+  checked-runtime/verifier-covered selector state rather than the older
+  runtime-resolution gap. Refresh the checked-in language-example cardinality
+  for the added zero-lock sighash example and give the schema-71 NFT metadata
+  envelope 768 KiB, retaining about seven percent headroom over its measured
+  735,136-byte compact output. Rebind the iCKB differential matrix to the
+  bounded typed-witness backend with a single-process 220-case replay and a
+  second read-only 220-case replay; the 22 affected probe artifacts and their
+  transaction-context hashes change while acceptance, rejection, failure-mode,
+  original-binary, and normalized-fixture evidence remains stable.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

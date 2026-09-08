@@ -57,7 +57,12 @@ builders, CKB-VM execution, and the standalone checker. Lowering record v8 now
 binds the five HeaderDep field contracts to their final syscall, selector,
 width, offset, and terminal-error instructions. It also binds canonical
 constructed-Script hashing to the 53-byte Molecule prefix, fixed args bound,
-hash-type set, byte-copy loops, Blake2b target, and error 72. Remaining work includes
+hash-type set, byte-copy loops, Blake2b target, and error 72. The same version
+now independently binds the bounded policy witness fallback, canonical
+one-to-eight-record scan, Type/current-Script-hash selection, common-check
+dominance, declared tag targets, selected argument forwarding and exact action
+adapters to decoded machine instructions. Action predicate meaning and
+deployment authentication remain separate evidence. Remaining work includes
 complete builder parity, measurement, and release evidence. Owner-tagged
 bounded raw/lock/entry/output_type witness views now
 close the variable witness-value row with literal 65,536-byte bounds, exact

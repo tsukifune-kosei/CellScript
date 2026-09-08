@@ -55,8 +55,8 @@ multi-entry source modules, makes the action/lock `verification` marker
 optional, and accepts branch-local `replace before -> after` successor
 relations with schema-resolved `same except` expansion, explicit
 lock/capacity/identity treatments and source-level path completeness,
-including relations in each branch of an `if` (`exact_hash` stays reserved
-fail-closed pending the Script-hash value contract). It also exposes bounded
+including relations in each branch of an `if`. `exact_hash` now consumes the
+dedicated complete `ScriptHash` value contract. It also exposes bounded
 real-contract byte/span/preimage primitives and exact u8/hex EXEC plus hex
 SPAWN/WAIT adapters. External calls remain fail-closed by default; an admitted
 call must use a `trusted_*` intrinsic, pin a compile-time CellDep data hash, and
@@ -67,7 +67,7 @@ See `docs/CELLSCRIPT_TRUSTED_EXTERNAL_VERIFIERS.md`. A separate bounded
 Type-policy artifact path now dispatches explicitly tagged actions from full
 Script-hash keyed witness records. An authenticated issuer lifecycle now
 executes locally in CKB-VM under one persistent policy; complete product and
-chain closure, independent machine dispatch proof, executable
+chain closure, executable
 branch-alternative successors, remaining relation policies and schema
 acknowledgement remain implementation work. The branch retains the bounded native
 `type_script` and

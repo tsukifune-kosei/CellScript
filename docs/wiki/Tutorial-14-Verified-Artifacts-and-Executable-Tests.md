@@ -37,7 +37,10 @@ silently change core meaning while a changed enforced condition does.
 The explicit Type-policy dispatch record also binds variant tags, resource
 layout, fixed group roles, ordered common checks and the outer witness ABI.
 Independent projection checks and direct VM execution are separate evidence;
-the current checker does not prove the machine selector-to-adapter dataflow.
+the lowering-record-v8 checker also decodes the bounded witness scanner,
+selector, common-check dominance, tag branches, argument forwarding and exact
+action adapters. Action predicate meaning and deployment authentication remain
+separate evidence.
 
 ## Build the Four-File Bundle
 

@@ -268,6 +268,7 @@ pub fn check_bundle_values(
     validate_stack_discipline(record, &elf, terminal_sink)?;
     validate_syscalls(record, &elf)?;
     validate_script_hash_machine_contract(record, &elf)?;
+    validate_policy_dispatch_machine_contract(record, &elf)?;
     validate_source_map(source_map, record, artifact, &elf)?;
 
     Ok(CheckerReport {
@@ -4549,6 +4550,952 @@ fn script_hash_machine_error(message: impl Into<String>) -> CheckerError {
     )
 }
 
+const POLICY_WRAPPER_ENTRY_ID: &str = "wrapper:_cellscript_entry";
+const POLICY_ENTRY_FRAME_BYTES: u32 = 4_192;
+const POLICY_ADAPTER_FRAME_BYTES: u32 = 5_376;
+const POLICY_ARGS_POINTER_OFFSET: i32 = 4_144;
+const POLICY_ARGS_LENGTH_OFFSET: i32 = 4_152;
+const POLICY_TAG_OFFSET: i32 = 4_160;
+const POLICY_FOUND_OFFSET: i32 = 4_168;
+const POLICY_RA_OFFSET: i32 = 4_184;
+const POLICY_HASH_BUFFER_OFFSET: i32 = 4_112;
+const POLICY_RECORD_FIXED_BYTES: i32 = 61;
+const POLICY_TYPE_ROLE: i32 = 1;
+const POLICY_WITNESS_MAGIC: &[u8; 8] = b"CSPOLv1\0";
+const ENTRY_WITNESS_MAGIC: &[u8; 8] = b"CSARGv1\0";
+const CKB_LOAD_SCRIPT_HASH: u64 = 2_062;
+const CKB_LOAD_WITNESS: u64 = 2_074;
+const CKB_LOAD_CELL_BY_FIELD: u64 = 2_081;
+const CKB_GROUP_FLAG: u64 = 0x0100_0000_0000_0000;
+const CKB_GROUP_INPUT: u64 = CKB_GROUP_FLAG | 1;
+const CKB_GROUP_OUTPUT: u64 = CKB_GROUP_FLAG | 2;
+
+fn validate_policy_dispatch_machine_contract(record: &VerifiedLoweringRecord, elf: &ParsedElf) -> Result<(), CheckerError> {
+    let EntryDispatchContract::PolicyWitnessV1(contract) = &record.typed_semantics.foundation.entry_contract.dispatch else {
+        return Ok(());
+    };
+    let wrapper = record
+        .entries
+        .iter()
+        .find(|entry| entry.id == POLICY_WRAPPER_ENTRY_ID)
+        .ok_or_else(|| policy_machine_error("missing policy entry wrapper"))?;
+    if wrapper.kind != EntryKind::Wrapper
+        || wrapper.name != "_cellscript_entry"
+        || wrapper.frame_size_bytes != POLICY_ENTRY_FRAME_BYTES
+        || wrapper.outgoing_argument_bytes != 0
+        || record
+            .blocks
+            .iter()
+            .filter(|block| block.owner_entry == POLICY_WRAPPER_ENTRY_ID)
+            .any(|block| block.frame_size_bytes != POLICY_ENTRY_FRAME_BYTES)
+    {
+        return Err(policy_machine_error("policy entry wrapper frame or entry contract changed"));
+    }
+
+    let fail = unique_policy_block(record, POLICY_WRAPPER_ENTRY_ID, ".Lpolicy_witness_fail_")?;
+    let done = unique_policy_block(record, POLICY_WRAPPER_ENTRY_ID, ".Lpolicy_entry_done_")?;
+    let record_loop = unique_policy_block(record, POLICY_WRAPPER_ENTRY_ID, ".Lpolicy_record_")?;
+    let args_valid = unique_policy_block(record, POLICY_WRAPPER_ENTRY_ID, ".Lpolicy_record_args_valid_")?;
+    let key_loop = unique_policy_block(record, POLICY_WRAPPER_ENTRY_ID, ".Lpolicy_key_order_loop_")?;
+    let ordered = unique_policy_block(record, POLICY_WRAPPER_ENTRY_ID, ".Lpolicy_key_ordered_")?;
+    let hash_loop = unique_policy_block(record, POLICY_WRAPPER_ENTRY_ID, ".Lpolicy_current_hash_loop_")?;
+    let next_record = unique_policy_block(record, POLICY_WRAPPER_ENTRY_ID, ".Lpolicy_next_record_")?;
+
+    validate_policy_entry_syscalls(record, elf, fail)?;
+    validate_policy_envelope_machine_contract(record, elf, fail)?;
+    validate_policy_dynvec_machine_contract(elf, record_loop, fail)?;
+    validate_policy_record_layout_machine_contract(record, elf, args_valid, fail)?;
+    validate_policy_key_order_machine_contract(elf, args_valid, key_loop, ordered, fail)?;
+    validate_policy_selector_machine_contract(elf, record_loop, ordered, hash_loop, next_record, fail)?;
+    validate_policy_tag_dispatch_machine_contract(record, elf, contract, next_record, fail, done)?;
+    validate_policy_action_adapters(record, elf, contract)?;
+
+    if !machine_error_jumps_to_abort(record, elf, fail.range.start, 25) {
+        return Err(policy_machine_error("policy rejection no longer terminates with entry-witness error 25"));
+    }
+    let done_words = instructions_from(elf, done.range.start, 8)?;
+    if !matches_large_stack_load(done_words, 0, 1, POLICY_RA_OFFSET)
+        || !matches_large_sp_adjust(done_words, 4, POLICY_ENTRY_FRAME_BYTES as i32)
+        || done_words.get(7).is_none_or(|instruction| instruction.word != 0x0000_8067)
+    {
+        return Err(policy_machine_error("policy completion no longer restores the exact wrapper frame"));
+    }
+    Ok(())
+}
+
+fn unique_policy_block<'a>(
+    record: &'a VerifiedLoweringRecord,
+    owner: &str,
+    label_prefix: &str,
+) -> Result<&'a LoweringBlock, CheckerError> {
+    let mut matches = record.blocks.iter().filter(|block| {
+        block.owner_entry == owner && block.machine_label.as_deref().is_some_and(|label| generated_label(label, label_prefix))
+    });
+    let block =
+        matches.next().ok_or_else(|| policy_machine_error(format!("missing machine block '{label_prefix}*' for '{owner}'")))?;
+    if matches.next().is_some() {
+        return Err(policy_machine_error(format!("ambiguous machine block '{label_prefix}*' for '{owner}'")));
+    }
+    Ok(block)
+}
+
+fn generated_label(label: &str, prefix: &str) -> bool {
+    label.strip_prefix(prefix).is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn policy_machine_error(message: impl Into<String>) -> CheckerError {
+    CheckerError::new(
+        CheckerRejectionCode::V2420TypedMachineBindingInvalid,
+        format!("policy dispatch machine contract: {}", message.into()),
+    )
+}
+
+fn instruction_at(elf: &ParsedElf, address: u64) -> Result<&crate::elf::DecodedInstruction, CheckerError> {
+    elf.instructions
+        .iter()
+        .find(|instruction| instruction.address == address)
+        .ok_or_else(|| policy_machine_error(format!("missing instruction at {address:#x}")))
+}
+
+fn instructions_from(elf: &ParsedElf, address: u64, count: usize) -> Result<&[crate::elf::DecodedInstruction], CheckerError> {
+    let start = elf
+        .instructions
+        .binary_search_by_key(&address, |instruction| instruction.address)
+        .map_err(|_| policy_machine_error(format!("missing instruction range at {address:#x}")))?;
+    elf.instructions
+        .get(start..start.saturating_add(count))
+        .ok_or_else(|| policy_machine_error(format!("truncated instruction range at {address:#x}")))
+}
+
+fn flow_targets(elf: &ParsedElf, address: u64, target: u64) -> bool {
+    elf.control_flow.iter().any(|edge| edge.address == address && edge.target == target)
+}
+
+fn block_for_address(record: &VerifiedLoweringRecord, address: u64) -> Option<&LoweringBlock> {
+    record.blocks.iter().find(|block| block.range.contains(address))
+}
+
+fn validate_policy_entry_syscalls(record: &VerifiedLoweringRecord, elf: &ParsedElf, fail: &LoweringBlock) -> Result<(), CheckerError> {
+    let wrapper_blocks = record.blocks.iter().filter(|block| block.owner_entry == POLICY_WRAPPER_ENTRY_ID).collect::<Vec<_>>();
+    let mut sites = elf
+        .syscall_addresses
+        .iter()
+        .copied()
+        .filter(|address| wrapper_blocks.iter().any(|block| block.range.contains(*address)))
+        .collect::<Vec<_>>();
+    sites.sort_unstable();
+    if sites.len() != 4 {
+        return Err(policy_machine_error(
+            "policy selector must use exactly two witness loads, one empty-group probe, and one current Script hash load",
+        ));
+    }
+    let expected = [
+        (CKB_LOAD_WITNESS, CKB_GROUP_INPUT, None),
+        (CKB_LOAD_CELL_BY_FIELD, CKB_GROUP_INPUT, Some(0_u64)),
+        (CKB_LOAD_WITNESS, CKB_GROUP_OUTPUT, None),
+        (CKB_LOAD_SCRIPT_HASH, 0, None),
+    ];
+    for (address, (syscall, source, field)) in sites.iter().copied().zip(expected) {
+        let block =
+            block_for_address(record, address).ok_or_else(|| policy_machine_error("policy syscall is outside machine coverage"))?;
+        if register_constant_before(elf, block, address, 17) != Some(syscall)
+            || register_constant_before(elf, block, address, 12) != Some(0)
+            || (syscall != CKB_LOAD_SCRIPT_HASH
+                && (register_constant_before(elf, block, address, 13) != Some(0)
+                    || register_constant_before(elf, block, address, 14) != Some(source)))
+            || field.is_some_and(|field| register_constant_before(elf, block, address, 15) != Some(field))
+        {
+            return Err(policy_machine_error("policy witness/current-Script selector syscall ABI changed"));
+        }
+    }
+    if !is_beq(instruction_at(elf, sites[0] + 4)?.word, 10, 0)
+        || !is_addi(instruction_at(elf, sites[1] + 4)?.word, 5, 0, 1)
+        || !is_beq(instruction_at(elf, sites[1] + 8)?.word, 10, 5)
+        || !is_jal_zero(instruction_at(elf, sites[1] + 12)?.word)
+        || !flow_targets(elf, sites[1] + 12, fail.range.start)
+        || !is_bne(instruction_at(elf, sites[2] + 4)?.word, 10, 0)
+        || !flow_targets(elf, sites[2] + 4, fail.range.start)
+        || !is_bne(instruction_at(elf, sites[3] + 4)?.word, 10, 0)
+        || !flow_targets(elf, sites[3] + 4, fail.range.start)
+    {
+        return Err(policy_machine_error("policy syscall status/fallback control flow changed"));
+    }
+    let output_only = unique_policy_block(record, POLICY_WRAPPER_ENTRY_ID, ".Lpolicy_output_only_")?;
+    let loaded = unique_policy_block(record, POLICY_WRAPPER_ENTRY_ID, ".Lpolicy_witness_loaded_")?;
+    if !flow_targets(elf, sites[0] + 4, loaded.range.start) || !flow_targets(elf, sites[1] + 8, output_only.range.start) {
+        return Err(policy_machine_error("policy GroupOutput fallback is no longer gated by an empty GroupInput"));
+    }
+    Ok(())
+}
+
+fn validate_policy_envelope_machine_contract(
+    record: &VerifiedLoweringRecord,
+    elf: &ParsedElf,
+    fail: &LoweringBlock,
+) -> Result<(), CheckerError> {
+    let copied = unique_policy_block(record, POLICY_WRAPPER_ENTRY_ID, ".Lentry_witness_v2_copy_done_")?;
+    let current_hash_syscall = elf
+        .syscall_addresses
+        .iter()
+        .copied()
+        .find(|address| {
+            block_for_address(record, *address).is_some_and(|block| block.owner_entry == POLICY_WRAPPER_ENTRY_ID)
+                && block_for_address(record, *address).and_then(|block| register_constant_before(elf, block, *address, 17))
+                    == Some(CKB_LOAD_SCRIPT_HASH)
+        })
+        .ok_or_else(|| policy_machine_error("missing current Script hash syscall"))?;
+    let mut has_minimum = false;
+    let mut has_maximum = false;
+    for instruction in elf
+        .instructions
+        .iter()
+        .filter(|instruction| copied.range.start <= instruction.address && instruction.address < current_hash_syscall)
+    {
+        let Some(block) = block_for_address(record, instruction.address) else { continue };
+        if is_bltu(instruction.word, 5, 6)
+            && register_constant_before(elf, block, instruction.address, 6) == Some(77)
+            && flow_targets(elf, instruction.address, fail.range.start)
+        {
+            has_minimum = true;
+        }
+        if is_bltu(instruction.word, 6, 5)
+            && register_constant_before(elf, block, instruction.address, 6) == Some(4_076)
+            && flow_targets(elf, instruction.address, fail.range.start)
+        {
+            has_maximum = true;
+        }
+    }
+    if !has_minimum || !has_maximum {
+        return Err(policy_machine_error("policy witness bundle 77..4076-byte bounds changed"));
+    }
+    let magic_start = elf
+        .instructions
+        .iter()
+        .find(|instruction| {
+            copied.range.start <= instruction.address
+                && instruction.address < current_hash_syscall
+                && is_lbu(instruction.word, 5, 2, 8)
+        })
+        .map(|instruction| instruction.address)
+        .ok_or_else(|| policy_machine_error("missing policy witness magic check"))?;
+    for (index, byte) in POLICY_WITNESS_MAGIC.iter().copied().enumerate() {
+        let address = magic_start + (index as u64) * 12;
+        if !is_lbu(instruction_at(elf, address)?.word, 5, 2, 8 + index as i32)
+            || !is_addi(instruction_at(elf, address + 4)?.word, 6, 0, i32::from(byte))
+            || !is_bne(instruction_at(elf, address + 8)?.word, 5, 6)
+            || !flow_targets(elf, address + 8, fail.range.start)
+        {
+            return Err(policy_machine_error("canonical CSPOLv1 witness magic changed"));
+        }
+    }
+    let after_hash = instructions_from(elf, current_hash_syscall + 4, 7)?;
+    if !is_bne(after_hash[0].word, 10, 0)
+        || !flow_targets(elf, after_hash[0].address, fail.range.start)
+        || !matches_large_stack_load(after_hash, 1, 5, 4_104)
+        || !is_addi(after_hash[5].word, 6, 0, 32)
+        || !is_bne(after_hash[6].word, 5, 6)
+        || !flow_targets(elf, after_hash[6].address, fail.range.start)
+    {
+        return Err(policy_machine_error("current Script hash exact-width check changed"));
+    }
+    Ok(())
+}
+
+fn validate_policy_record_layout_machine_contract(
+    record: &VerifiedLoweringRecord,
+    elf: &ParsedElf,
+    args_valid: &LoweringBlock,
+    fail: &LoweringBlock,
+) -> Result<(), CheckerError> {
+    let start = elf
+        .instructions
+        .iter()
+        .find(|instruction| {
+            instruction.address < args_valid.range.start
+                && block_for_address(record, instruction.address).is_some_and(|block| block.owner_entry == POLICY_WRAPPER_ENTRY_ID)
+                && is_add(instruction.word, 15, 14, 5)
+        })
+        .map(|instruction| instruction.address)
+        .ok_or_else(|| policy_machine_error("missing policy record base calculation"))?;
+    let words = instructions_from(elf, start, 102)?;
+    if !matches_u32_le_load(words, 1, 28, 15, 0, 29)
+        || !is_bne(words[11].word, 7, 28)
+        || !flow_targets(elf, words[11].address, fail.range.start)
+    {
+        return Err(policy_machine_error("policy record total-size validation changed"));
+    }
+    let mut cursor = 12;
+    for (offset, expected) in [(4, 20), (8, 21), (12, 53), (16, 57)] {
+        if !matches_u32_le_load(words, cursor, 28, 15, offset, 29)
+            || !is_addi(words[cursor + 10].word, 29, 0, expected)
+            || !is_bne(words[cursor + 11].word, 28, 29)
+            || !flow_targets(elf, words[cursor + 11].address, fail.range.start)
+        {
+            return Err(policy_machine_error("policy record Molecule table offsets changed"));
+        }
+        cursor += 12;
+    }
+    if !matches_u32_le_load(words, cursor, 28, 15, 57, 29)
+        || !is_addi(words[cursor + 10].word, 7, 7, -POLICY_RECORD_FIXED_BYTES)
+        || !is_bne(words[cursor + 11].word, 7, 28)
+        || !flow_targets(elf, words[cursor + 11].address, fail.range.start)
+    {
+        return Err(policy_machine_error("policy record args length binding changed"));
+    }
+    cursor += 12;
+    if !is_lbu(words[cursor].word, 5, 15, 20)
+        || !is_addi(words[cursor + 1].word, 6, 0, 2)
+        || !is_bgeu(words[cursor + 2].word, 5, 6)
+        || !flow_targets(elf, words[cursor + 2].address, fail.range.start)
+        || !is_beq(words[cursor + 3].word, 28, 0)
+        || !flow_targets(elf, words[cursor + 3].address, args_valid.range.start)
+        || !is_addi(words[cursor + 4].word, 29, 0, ENTRY_WITNESS_MAGIC.len() as i32)
+        || !is_bltu(words[cursor + 5].word, 28, 29)
+        || !flow_targets(elf, words[cursor + 5].address, fail.range.start)
+    {
+        return Err(policy_machine_error("policy record role or empty/CSARG args framing changed"));
+    }
+    cursor += 6;
+    for (index, byte) in ENTRY_WITNESS_MAGIC.iter().copied().enumerate() {
+        if !is_lbu(words[cursor].word, 5, 15, POLICY_RECORD_FIXED_BYTES + index as i32)
+            || !is_addi(words[cursor + 1].word, 6, 0, i32::from(byte))
+            || !is_bne(words[cursor + 2].word, 5, 6)
+            || !flow_targets(elf, words[cursor + 2].address, fail.range.start)
+        {
+            return Err(policy_machine_error("selected policy record no longer requires canonical CSARGv1 framing"));
+        }
+        cursor += 3;
+    }
+    if words[cursor - 1].address + 4 != args_valid.range.start {
+        return Err(policy_machine_error("policy record validation admits an unchecked path before key ordering"));
+    }
+    Ok(())
+}
+
+fn validate_policy_dynvec_machine_contract(
+    elf: &ParsedElf,
+    record_loop: &LoweringBlock,
+    fail: &LoweringBlock,
+) -> Result<(), CheckerError> {
+    let start =
+        record_loop.range.start.checked_sub(160).ok_or_else(|| policy_machine_error("policy DynVec scanner prefix underflows"))?;
+    let words = instructions_from(elf, start, 40)?;
+    if !matches_large_stack_store(words, 0, 0, POLICY_FOUND_OFFSET)
+        || !is_addi(words[4].word, 14, 2, 16)
+        || !is_ld(words[5].word, 6, 2, 0)
+        || !is_addi(words[6].word, 6, 6, -8)
+        || !matches_u32_le_load(words, 7, 5, 14, 0, 29)
+        || !is_bne(words[17].word, 5, 6)
+        || !flow_targets(elf, words[17].address, fail.range.start)
+        || !is_add(words[18].word, 17, 14, 5)
+        || !matches_u32_le_load(words, 19, 6, 14, 4, 29)
+        || !is_addi(words[29].word, 7, 0, 8)
+        || !is_bltu(words[30].word, 6, 7)
+        || !flow_targets(elf, words[30].address, fail.range.start)
+        || !is_addi(words[31].word, 7, 0, 36)
+        || !is_bltu(words[32].word, 7, 6)
+        || !flow_targets(elf, words[32].address, fail.range.start)
+        || !is_addi(words[33].word, 7, 0, 3)
+        || !is_and(words[34].word, 7, 6, 7)
+        || !is_bne(words[35].word, 7, 0)
+        || !flow_targets(elf, words[35].address, fail.range.start)
+        || !is_bltu(words[36].word, 5, 6)
+        || !flow_targets(elf, words[36].address, fail.range.start)
+        || !is_add(words[37].word, 13, 14, 6)
+        || !is_addi(words[38].word, 12, 14, 4)
+        || !is_addi(words[39].word, 16, 0, 0)
+        || words[39].address + 4 != record_loop.range.start
+    {
+        return Err(policy_machine_error("bounded one-to-eight-record canonical DynVec scanner changed"));
+    }
+    Ok(())
+}
+
+fn validate_policy_key_order_machine_contract(
+    elf: &ParsedElf,
+    args_valid: &LoweringBlock,
+    key_loop: &LoweringBlock,
+    ordered: &LoweringBlock,
+    fail: &LoweringBlock,
+) -> Result<(), CheckerError> {
+    let prefix = instructions_from(elf, args_valid.range.start, 4)?;
+    if !is_beq(prefix[0].word, 16, 0)
+        || !flow_targets(elf, prefix[0].address, ordered.range.start)
+        || !is_addi(prefix[1].word, 5, 16, 0)
+        || !is_addi(prefix[2].word, 6, 15, 20)
+        || !is_addi(prefix[3].word, 7, 0, 33)
+        || prefix[3].address + 4 != key_loop.range.start
+    {
+        return Err(policy_machine_error("policy record key-order initialization changed"));
+    }
+    let loop_words = instructions_from(elf, key_loop.range.start, 9)?;
+    if !is_lbu(loop_words[0].word, 28, 5, 0)
+        || !is_lbu(loop_words[1].word, 29, 6, 0)
+        || !is_bltu(loop_words[2].word, 28, 29)
+        || !flow_targets(elf, loop_words[2].address, ordered.range.start)
+        || !is_bltu(loop_words[3].word, 29, 28)
+        || !flow_targets(elf, loop_words[3].address, fail.range.start)
+        || !is_addi(loop_words[4].word, 5, 5, 1)
+        || !is_addi(loop_words[5].word, 6, 6, 1)
+        || !is_addi(loop_words[6].word, 7, 7, -1)
+        || !is_bne(loop_words[7].word, 7, 0)
+        || !flow_targets(elf, loop_words[7].address, key_loop.range.start)
+        || !is_jal_zero(loop_words[8].word)
+        || !flow_targets(elf, loop_words[8].address, fail.range.start)
+    {
+        return Err(policy_machine_error("policy record keys are no longer strictly ordered and duplicate-rejecting"));
+    }
+    Ok(())
+}
+
+fn validate_policy_selector_machine_contract(
+    elf: &ParsedElf,
+    record_loop: &LoweringBlock,
+    ordered: &LoweringBlock,
+    hash_loop: &LoweringBlock,
+    next_record: &LoweringBlock,
+    fail: &LoweringBlock,
+) -> Result<(), CheckerError> {
+    let ordered_words = instructions_from(elf, ordered.range.start, 9)?;
+    if !is_addi(ordered_words[0].word, 16, 15, 20)
+        || !is_lbu(ordered_words[1].word, 5, 15, 20)
+        || !is_addi(ordered_words[2].word, 6, 0, POLICY_TYPE_ROLE)
+        || !is_bne(ordered_words[3].word, 5, 6)
+        || !flow_targets(elf, ordered_words[3].address, next_record.range.start)
+        || !is_addi(ordered_words[4].word, 5, 15, 21)
+        || !matches_large_stack_address(ordered_words, 5, 6, POLICY_HASH_BUFFER_OFFSET)
+        || !is_addi(ordered_words[8].word, 7, 0, 32)
+        || ordered_words[8].address + 4 != hash_loop.range.start
+    {
+        return Err(policy_machine_error("policy selector no longer binds Type role and the complete current Script hash"));
+    }
+    let words = instructions_from(elf, hash_loop.range.start, 56)?;
+    if !is_lbu(words[0].word, 28, 5, 0)
+        || !is_lbu(words[1].word, 29, 6, 0)
+        || !is_bne(words[2].word, 28, 29)
+        || !flow_targets(elf, words[2].address, next_record.range.start)
+        || !is_addi(words[3].word, 5, 5, 1)
+        || !is_addi(words[4].word, 6, 6, 1)
+        || !is_addi(words[5].word, 7, 7, -1)
+        || !is_bne(words[6].word, 7, 0)
+        || !flow_targets(elf, words[6].address, hash_loop.range.start)
+        || !matches_large_stack_load(words, 7, 5, POLICY_FOUND_OFFSET)
+        || !is_bne(words[11].word, 5, 0)
+        || !flow_targets(elf, words[11].address, fail.range.start)
+        || !is_addi(words[12].word, 5, 0, 1)
+        || !matches_large_stack_store(words, 13, 5, POLICY_FOUND_OFFSET)
+        || !matches_u32_le_load(words, 17, 5, 15, 53, 29)
+        || !matches_large_stack_store(words, 27, 5, POLICY_TAG_OFFSET)
+        || !matches_u32_le_load(words, 31, 5, 15, 57, 29)
+        || !matches_large_stack_store(words, 41, 5, POLICY_ARGS_LENGTH_OFFSET)
+        || !is_addi(words[45].word, 5, 15, POLICY_RECORD_FIXED_BYTES)
+        || !matches_large_stack_store(words, 46, 5, POLICY_ARGS_POINTER_OFFSET)
+        || words[49].address + 4 != next_record.range.start
+    {
+        return Err(policy_machine_error("policy selector tag/args extraction or single-match guard changed"));
+    }
+    let next = instructions_from(elf, next_record.range.start, 6)?;
+    if !is_bltu(next[0].word, 12, 13)
+        || !flow_targets(elf, next[0].address, record_loop.range.start)
+        || !matches_large_stack_load(next, 1, 5, POLICY_FOUND_OFFSET)
+        || !is_beq(next[5].word, 5, 0)
+        || !flow_targets(elf, next[5].address, fail.range.start)
+    {
+        return Err(policy_machine_error("policy scanner no longer validates every record and requires exactly one matching Script"));
+    }
+    Ok(())
+}
+
+fn validate_policy_tag_dispatch_machine_contract(
+    record: &VerifiedLoweringRecord,
+    elf: &ParsedElf,
+    contract: &crate::PolicyWitnessContract,
+    next_record: &LoweringBlock,
+    fail: &LoweringBlock,
+    done: &LoweringBlock,
+) -> Result<(), CheckerError> {
+    if contract.variants.is_empty() {
+        return Err(policy_machine_error("policy machine contract has no declared variants"));
+    }
+    let mut variants = record
+        .blocks
+        .iter()
+        .filter(|block| {
+            block.owner_entry == POLICY_WRAPPER_ENTRY_ID
+                && block.machine_label.as_deref().is_some_and(|label| label.starts_with(".Lpolicy_variant_"))
+        })
+        .collect::<Vec<_>>();
+    variants.sort_by_key(|block| block.range.start);
+    if variants.len() != contract.variants.len() {
+        return Err(policy_machine_error("machine variant count differs from the typed policy"));
+    }
+    let variant_addresses = variants.iter().map(|block| block.range.start).collect::<BTreeSet<_>>();
+    let tag_set = contract.variants.iter().map(|variant| u64::from(variant.tag)).collect::<BTreeSet<_>>();
+    let mut branches = Vec::new();
+    for instruction in elf.instructions.iter().filter(|instruction| {
+        next_record.range.start <= instruction.address && instruction.address < fail.range.start && is_beq(instruction.word, 5, 6)
+    }) {
+        let Some(block) = block_for_address(record, instruction.address) else { continue };
+        let Some(tag) = register_constant_before(elf, block, instruction.address, 6) else { continue };
+        let Some(flow) = elf.control_flow.iter().find(|flow| flow.address == instruction.address) else { continue };
+        if tag_set.contains(&tag) {
+            branches.push((instruction.address, tag, flow.target));
+        }
+    }
+    branches.sort_by_key(|branch| branch.0);
+    let has_common = !contract.common_checks.is_empty();
+    let expected_count = contract.variants.len() * if has_common { 2 } else { 1 };
+    if branches.len() != expected_count {
+        return Err(policy_machine_error("declared tag comparisons are missing or duplicated in machine dispatch"));
+    }
+    let expected_tags = contract.variants.iter().map(|variant| u64::from(variant.tag)).collect::<Vec<_>>();
+    let dispatch_offset = if has_common { contract.variants.len() } else { 0 };
+    if branches[dispatch_offset..].iter().map(|branch| branch.1).collect::<Vec<_>>() != expected_tags {
+        return Err(policy_machine_error("machine dispatch tag order differs from the canonical policy variants"));
+    }
+    for ((_, _, target), variant_block) in branches[dispatch_offset..].iter().zip(&variants) {
+        if *target != variant_block.range.start {
+            return Err(policy_machine_error("a policy tag branches to the wrong action adapter"));
+        }
+    }
+    let dispatch_start = block_for_address(record, branches[dispatch_offset].0)
+        .ok_or_else(|| policy_machine_error("dispatch branch is outside machine blocks"))?
+        .range
+        .start;
+    let dispatch_prefix = instructions_from(elf, dispatch_start, 4)?;
+    if !matches_large_stack_load(dispatch_prefix, 0, 5, POLICY_TAG_OFFSET) {
+        return Err(policy_machine_error("action dispatch no longer reads the selected record tag"));
+    }
+    let last_dispatch =
+        branches.last().map(|branch| branch.0).ok_or_else(|| policy_machine_error("policy machine dispatch has no tag branches"))?;
+    if !is_jal_zero(instruction_at(elf, last_dispatch + 4)?.word) || !flow_targets(elf, last_dispatch + 4, fail.range.start) {
+        return Err(policy_machine_error("unknown policy action tags no longer reject"));
+    }
+
+    if has_common {
+        let declared = unique_policy_block(record, POLICY_WRAPPER_ENTRY_ID, ".Lpolicy_declared_tag_")?;
+        if branches[..dispatch_offset].iter().map(|branch| branch.1).collect::<Vec<_>>() != expected_tags
+            || branches[..dispatch_offset].iter().any(|branch| branch.2 != declared.range.start)
+        {
+            return Err(policy_machine_error("common checks are no longer guarded by the complete declared tag set"));
+        }
+        validate_only_branches_enter(
+            record,
+            declared,
+            &branches[..dispatch_offset].iter().map(|branch| branch.0).collect::<Vec<_>>(),
+        )?;
+        let first_common_branch = branches[0].0;
+        let common_guard_start = block_for_address(record, first_common_branch)
+            .ok_or_else(|| policy_machine_error("common-check tag guard is outside machine blocks"))?
+            .range
+            .start;
+        let guard_prefix = instructions_from(elf, common_guard_start, 4)?;
+        if !matches_large_stack_load(guard_prefix, 0, 5, POLICY_TAG_OFFSET) {
+            return Err(policy_machine_error("common checks no longer read the selected record tag"));
+        }
+        let last_guard = branches[dispatch_offset - 1].0;
+        if !is_jal_zero(instruction_at(elf, last_guard + 4)?.word) || !flow_targets(elf, last_guard + 4, fail.range.start) {
+            return Err(policy_machine_error("unknown tags can bypass common-check rejection"));
+        }
+        let expected_targets =
+            contract.common_checks.iter().map(|entry_id| entry_start(record, entry_id)).collect::<Result<Vec<_>, _>>()?;
+        let mut calls = elf
+            .control_flow
+            .iter()
+            .filter(|flow| {
+                declared.range.start <= flow.address && flow.address < dispatch_start && expected_targets.contains(&flow.target)
+            })
+            .collect::<Vec<_>>();
+        calls.sort_by_key(|flow| flow.address);
+        if calls.len() != expected_targets.len() || calls.iter().map(|flow| flow.target).collect::<Vec<_>>() != expected_targets {
+            return Err(policy_machine_error("ordered common-check calls differ from the typed policy"));
+        }
+        for call in calls {
+            if call.address < 4
+                || !is_auipc(instruction_at(elf, call.address - 4)?.word, 1)
+                || !is_jalr_call(instruction_at(elf, call.address)?.word)
+                || !is_bne(instruction_at(elf, call.address + 4)?.word, 10, 0)
+                || !flow_targets(elf, call.address + 4, done.range.start)
+            {
+                return Err(policy_machine_error("common-check failure no longer dominates action dispatch"));
+            }
+        }
+        validate_only_fallthrough_enters(record, dispatch_start)?;
+    } else if record.blocks.iter().any(|block| {
+        block.owner_entry == POLICY_WRAPPER_ENTRY_ID
+            && block.machine_label.as_deref().is_some_and(|label| label.starts_with(".Lpolicy_declared_tag_"))
+    }) {
+        return Err(policy_machine_error("payload declares no common checks but the machine has a common-check dispatch block"));
+    } else {
+        validate_only_fallthrough_enters(record, dispatch_start)?;
+    }
+
+    let mut adapters = record
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == EntryKind::Runtime && entry.name.starts_with(".Lpolicy_action_adapter_"))
+        .collect::<Vec<_>>();
+    adapters.sort_by_key(|entry| entry_start(record, &entry.id).unwrap_or(u64::MAX));
+    if adapters.len() != variants.len() {
+        return Err(policy_machine_error("policy action adapter count differs from the declared variant count"));
+    }
+    for ((variant_block, adapter), variant) in variants.iter().zip(adapters).zip(&contract.variants) {
+        let words = instructions_from(elf, variant_block.range.start, 11)?;
+        let adapter_start = entry_start(record, &adapter.id)?;
+        if !matches_large_stack_load(words, 0, 10, POLICY_ARGS_POINTER_OFFSET)
+            || !matches_large_stack_load(words, 4, 11, POLICY_ARGS_LENGTH_OFFSET)
+            || !is_auipc(words[8].word, 1)
+            || !is_jalr_call(words[9].word)
+            || !flow_targets(elf, words[9].address, adapter_start)
+            || !is_jal_zero(words[10].word)
+            || !flow_targets(elf, words[10].address, done.range.start)
+            || !variant_addresses.contains(&variant_block.range.start)
+            || entry_start(record, &variant.entry_id).is_err()
+        {
+            return Err(policy_machine_error(format!(
+                "tag {} no longer forwards the selected args to its exact adapter",
+                variant.tag
+            )));
+        }
+        let branch_address = branches[dispatch_offset..]
+            .iter()
+            .find(|branch| branch.2 == variant_block.range.start)
+            .map(|branch| branch.0)
+            .ok_or_else(|| policy_machine_error("policy variant has no unique declared tag branch"))?;
+        validate_only_branch_enters(record, variant_block, branch_address)?;
+    }
+    Ok(())
+}
+
+fn validate_policy_action_adapters(
+    record: &VerifiedLoweringRecord,
+    elf: &ParsedElf,
+    contract: &crate::PolicyWitnessContract,
+) -> Result<(), CheckerError> {
+    let mut adapters = record
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == EntryKind::Runtime && entry.name.starts_with(".Lpolicy_action_adapter_"))
+        .collect::<Vec<_>>();
+    adapters.sort_by_key(|entry| entry_start(record, &entry.id).unwrap_or(u64::MAX));
+    if adapters.len() != contract.variants.len() {
+        return Err(policy_machine_error("policy adapter cardinality changed"));
+    }
+    let all_action_starts =
+        contract.variants.iter().map(|variant| entry_start(record, &variant.entry_id)).collect::<Result<BTreeSet<_>, _>>()?;
+    for (adapter, variant) in adapters.into_iter().zip(&contract.variants) {
+        let entry = record
+            .typed_semantics
+            .entries
+            .iter()
+            .find(|entry| entry.id == variant.entry_id)
+            .ok_or_else(|| policy_machine_error("policy variant has no typed action entry"))?;
+        let expected_outgoing = policy_outgoing_argument_bytes(entry, &record.typed_semantics)?;
+        let expected_record_frame = POLICY_ADAPTER_FRAME_BYTES
+            .checked_add(expected_outgoing)
+            .ok_or_else(|| policy_machine_error("policy adapter recorded frame overflows u32"))?;
+        if adapter.frame_size_bytes != expected_record_frame || adapter.outgoing_argument_bytes != 0 {
+            return Err(policy_machine_error(format!(
+                "policy positional adapter frame contract changed: frame {}, outgoing {}, expected frame {expected_record_frame}, outgoing 0",
+                adapter.frame_size_bytes, adapter.outgoing_argument_bytes
+            )));
+        }
+        let blocks = record.blocks.iter().filter(|block| block.owner_entry == adapter.id).collect::<Vec<_>>();
+        if blocks.iter().any(|block| block.frame_size_bytes != expected_record_frame || block.outgoing_argument_bytes != 0) {
+            return Err(policy_machine_error("policy positional adapter blocks disagree on frame size"));
+        }
+        let base = entry_start(record, &adapter.id)?;
+        let prologue = instructions_from(elf, base, 9)?;
+        if !matches_large_sp_adjust(prologue, 0, -(POLICY_ADAPTER_FRAME_BYTES as i32))
+            || !matches_large_stack_store(prologue, 3, 1, POLICY_ADAPTER_FRAME_BYTES as i32 - 8)
+        {
+            return Err(policy_machine_error("policy adapter prologue no longer owns a bounded private copy frame"));
+        }
+        let fail = unique_policy_block(record, &adapter.id, ".Lentry_witness_fail_")?;
+        let done = unique_policy_block(record, &adapter.id, ".Lentry_witness_done_")?;
+        let has_payload = entry.params.iter().any(|param| matches!(param.source.as_str(), "default" | "witness"));
+        if has_payload {
+            let copy = unique_policy_block(record, &adapter.id, ".Lpolicy_args_copy_")?;
+            let prefix_address =
+                copy.range.start.checked_sub(24).ok_or_else(|| policy_machine_error("policy adapter copy prefix underflows"))?;
+            let prefix = instructions_from(elf, prefix_address, 6)?;
+            if !is_lui(prefix[0].word, 5, 0x0000_1000)
+                || !is_bltu(prefix[1].word, 5, 11)
+                || !flow_targets(elf, prefix[1].address, fail.range.start)
+                || !is_sd(prefix[2].word, 11, 2, 0)
+                || !is_addi(prefix[3].word, 5, 10, 0)
+                || !is_addi(prefix[4].word, 6, 2, 8)
+                || !is_addi(prefix[5].word, 7, 0, 0)
+            {
+                return Err(policy_machine_error("policy adapter no longer bounds and privately copies selected args"));
+            }
+            let copied = unique_policy_block(record, &adapter.id, ".Lpolicy_args_copied_")?;
+            let loop_words = instructions_from(elf, copy.range.start, 7)?;
+            if !is_bgeu(loop_words[0].word, 7, 11)
+                || !flow_targets(elf, loop_words[0].address, copied.range.start)
+                || !is_add(loop_words[1].word, 28, 5, 7)
+                || !is_lbu(loop_words[2].word, 29, 28, 0)
+                || !is_add(loop_words[3].word, 28, 6, 7)
+                || !is_sb(loop_words[4].word, 29, 28, 0)
+                || !is_addi(loop_words[5].word, 7, 7, 1)
+                || !is_jal_zero(loop_words[6].word)
+                || !flow_targets(elf, loop_words[6].address, copy.range.start)
+            {
+                return Err(policy_machine_error("policy adapter selected-args copy loop changed"));
+            }
+        } else if !is_bne(prologue[7].word, 11, 0)
+            || !flow_targets(elf, prologue[7].address, fail.range.start)
+            || !is_sd(prologue[8].word, 0, 2, 0)
+        {
+            return Err(policy_machine_error("payload-free policy adapter no longer requires empty args"));
+        }
+
+        let target = entry_start(record, &variant.entry_id)?;
+        let mut action_calls = elf
+            .control_flow
+            .iter()
+            .filter(|flow| blocks.iter().any(|block| block.range.contains(flow.address)) && all_action_starts.contains(&flow.target))
+            .collect::<Vec<_>>();
+        action_calls.sort_by_key(|flow| flow.address);
+        if action_calls.len() != 1 || action_calls[0].target != target {
+            return Err(policy_machine_error(format!(
+                "tag {} adapter no longer calls exactly action '{}'",
+                variant.tag, variant.entry_id
+            )));
+        }
+        let call = action_calls[0];
+        if call.address < 4
+            || !is_auipc(instruction_at(elf, call.address - 4)?.word, 1)
+            || !is_jalr_call(instruction_at(elf, call.address)?.word)
+            || !machine_error_jumps_to_abort(record, elf, fail.range.start, 25)
+        {
+            return Err(policy_machine_error("policy adapter call/failure completion changed"));
+        }
+        let completion = if expected_outgoing == 0 {
+            call.address + 4
+        } else {
+            let outgoing = i32::try_from(expected_outgoing)
+                .map_err(|_| policy_machine_error("policy adapter outgoing argument frame exceeds i32"))?;
+            let reserve_bytes = sp_adjust_instruction_bytes(-outgoing);
+            let reserve = call
+                .address
+                .checked_sub(4 + reserve_bytes)
+                .ok_or_else(|| policy_machine_error("policy adapter outgoing argument reservation underflows"))?;
+            if !matches_sp_adjust_at(elf, reserve, -outgoing)? || reserve + reserve_bytes != call.address - 4 {
+                return Err(policy_machine_error("policy adapter outgoing argument frame changed"));
+            }
+            let restore = call.address + 4;
+            if !matches_sp_adjust_at(elf, restore, outgoing)? {
+                return Err(policy_machine_error("policy adapter outgoing argument frame changed"));
+            }
+            restore + sp_adjust_instruction_bytes(outgoing)
+        };
+        if !is_jal_zero(instruction_at(elf, completion)?.word) || !flow_targets(elf, completion, done.range.start) {
+            return Err(policy_machine_error("policy adapter call no longer completes through its exact done block"));
+        }
+        let done_words = instructions_from(elf, done.range.start, 8)?;
+        if !matches_large_stack_load(done_words, 0, 1, POLICY_ADAPTER_FRAME_BYTES as i32 - 8)
+            || !matches_large_sp_adjust(done_words, 4, POLICY_ADAPTER_FRAME_BYTES as i32)
+            || done_words[7].word != 0x0000_8067
+        {
+            return Err(policy_machine_error("policy adapter completion no longer restores its private frame"));
+        }
+    }
+    Ok(())
+}
+
+fn policy_outgoing_argument_bytes(entry: &TypedSemanticEntry, typed: &TypedSemanticRecord) -> Result<u32, CheckerError> {
+    let mut argument_count = 0usize;
+    for param in &entry.params {
+        let projection = crate::policy::builder_parameter_projection(param, entry, typed)?;
+        let schema_pointer = projection.get("schema_pointer_abi").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        let fixed_pointer = projection.get("fixed_byte_pointer_abi").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        let type_hash = projection.get("type_hash_pointer_abi").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        argument_count = argument_count.saturating_add(if schema_pointer {
+            2 + usize::from(type_hash) * 2
+        } else if fixed_pointer {
+            2
+        } else {
+            1
+        });
+    }
+    let bytes = argument_count.saturating_sub(8).saturating_mul(8);
+    u32::try_from(if bytes == 0 { 0 } else { bytes.next_multiple_of(16) })
+        .map_err(|_| policy_machine_error("policy adapter outgoing argument frame exceeds u32"))
+}
+
+fn entry_start(record: &VerifiedLoweringRecord, entry_id: &str) -> Result<u64, CheckerError> {
+    let entry = record
+        .entries
+        .iter()
+        .find(|entry| entry.id == entry_id)
+        .ok_or_else(|| policy_machine_error(format!("missing lowering entry '{entry_id}'")))?;
+    record
+        .blocks
+        .iter()
+        .find(|block| block.id == entry.entry_block)
+        .map(|block| block.range.start)
+        .ok_or_else(|| policy_machine_error(format!("missing entry block for '{entry_id}'")))
+}
+
+fn validate_only_fallthrough_enters(record: &VerifiedLoweringRecord, target: u64) -> Result<(), CheckerError> {
+    let block = block_for_address(record, target).ok_or_else(|| policy_machine_error("dispatch target is outside machine blocks"))?;
+    let preceding = target
+        .checked_sub(4)
+        .and_then(|address| block_for_address(record, address))
+        .ok_or_else(|| policy_machine_error("dispatch target has no adjacent predecessor block"))?;
+    let incoming = record.edges.iter().filter(|edge| edge.to == block.id).collect::<Vec<_>>();
+    if incoming.len() != 1 || incoming[0].from != preceding.id || incoming[0].kind != EdgeKind::ConditionalFallthrough {
+        return Err(policy_machine_error("action dispatch has a machine path that bypasses a common check"));
+    }
+    Ok(())
+}
+
+fn validate_only_branches_enter(
+    record: &VerifiedLoweringRecord,
+    target: &LoweringBlock,
+    branch_addresses: &[u64],
+) -> Result<(), CheckerError> {
+    let sources = branch_addresses
+        .iter()
+        .map(|address| {
+            block_for_address(record, *address)
+                .map(|block| block.id.as_str())
+                .ok_or_else(|| policy_machine_error("declared-tag branch is outside machine blocks"))
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let incoming = record.edges.iter().filter(|edge| edge.to == target.id).collect::<Vec<_>>();
+    if sources.len() != branch_addresses.len()
+        || incoming.len() != sources.len()
+        || incoming.iter().any(|edge| edge.kind != EdgeKind::ConditionalTaken || !sources.contains(edge.from.as_str()))
+    {
+        return Err(policy_machine_error("common checks have an entry path outside the declared tag branches"));
+    }
+    Ok(())
+}
+
+fn validate_only_branch_enters(
+    record: &VerifiedLoweringRecord,
+    target: &LoweringBlock,
+    branch_address: u64,
+) -> Result<(), CheckerError> {
+    let source =
+        block_for_address(record, branch_address).ok_or_else(|| policy_machine_error("variant branch is outside machine blocks"))?;
+    let incoming = record.edges.iter().filter(|edge| edge.to == target.id).collect::<Vec<_>>();
+    if incoming.len() != 1 || incoming[0].from != source.id || incoming[0].kind != EdgeKind::ConditionalTaken {
+        return Err(policy_machine_error("a policy variant has an undeclared machine entry path"));
+    }
+    Ok(())
+}
+
+fn matches_u32_le_load(
+    words: &[crate::elf::DecodedInstruction],
+    start: usize,
+    dest: u32,
+    base: u32,
+    offset: i32,
+    scratch: u32,
+) -> bool {
+    words.get(start..start + 10).is_some_and(|words| {
+        is_lbu(words[0].word, dest, base, offset)
+            && is_lbu(words[1].word, scratch, base, offset + 1)
+            && is_slli(words[2].word, scratch, scratch, 8)
+            && is_or(words[3].word, dest, dest, scratch)
+            && is_lbu(words[4].word, scratch, base, offset + 2)
+            && is_slli(words[5].word, scratch, scratch, 16)
+            && is_or(words[6].word, dest, dest, scratch)
+            && is_lbu(words[7].word, scratch, base, offset + 3)
+            && is_slli(words[8].word, scratch, scratch, 24)
+            && is_or(words[9].word, dest, dest, scratch)
+    })
+}
+
+fn matches_large_stack_address(words: &[crate::elf::DecodedInstruction], start: usize, dest: u32, offset: i32) -> bool {
+    let Some((upper, lower)) = split_large_immediate(offset) else { return false };
+    words.get(start..start + 3).is_some_and(|words| {
+        is_lui(words[0].word, dest, upper) && is_addi(words[1].word, dest, dest, lower) && is_add(words[2].word, dest, 2, dest)
+    })
+}
+
+fn matches_large_stack_load(words: &[crate::elf::DecodedInstruction], start: usize, dest: u32, offset: i32) -> bool {
+    matches_large_stack_address(words, start, 31, offset)
+        && words.get(start + 3).is_some_and(|instruction| is_ld(instruction.word, dest, 31, 0))
+}
+
+fn matches_large_stack_store(words: &[crate::elf::DecodedInstruction], start: usize, source: u32, offset: i32) -> bool {
+    matches_large_stack_address(words, start, 31, offset)
+        && words.get(start + 3).is_some_and(|instruction| is_sd(instruction.word, source, 31, 0))
+}
+
+fn matches_large_sp_adjust(words: &[crate::elf::DecodedInstruction], start: usize, delta: i32) -> bool {
+    let Some((upper, lower)) = split_large_immediate(delta) else { return false };
+    words.get(start..start + 3).is_some_and(|words| {
+        is_lui(words[0].word, 31, upper) && is_addi(words[1].word, 31, 31, lower) && is_add(words[2].word, 2, 2, 31)
+    })
+}
+
+fn sp_adjust_instruction_bytes(delta: i32) -> u64 {
+    if (-2_048..=2_047).contains(&delta) {
+        4
+    } else {
+        12
+    }
+}
+
+fn matches_sp_adjust_at(elf: &ParsedElf, address: u64, delta: i32) -> Result<bool, CheckerError> {
+    if (-2_048..=2_047).contains(&delta) {
+        Ok(is_addi(instruction_at(elf, address)?.word, 2, 2, delta))
+    } else {
+        Ok(matches_large_sp_adjust(instructions_from(elf, address, 3)?, 0, delta))
+    }
+}
+
+fn split_large_immediate(value: i32) -> Option<(u32, i32)> {
+    let upper = value.checked_add(2_048)?.div_euclid(4_096).checked_mul(4_096)?;
+    let lower = value.checked_sub(upper)?;
+    Some((upper as u32 & 0xffff_f000, lower))
+}
+
+fn register_constant_before(elf: &ParsedElf, block: &LoweringBlock, address: u64, register: usize) -> Option<u64> {
+    let mut values = [None; 32];
+    values[0] = Some(0);
+    for instruction in
+        elf.instructions.iter().filter(|instruction| block.range.start <= instruction.address && instruction.address < address)
+    {
+        update_constant_registers(&mut values, instruction.word);
+    }
+    values.get(register).copied().flatten()
+}
+
+fn update_constant_registers(values: &mut [Option<u64>; 32], word: u32) {
+    let opcode = word & 0x7f;
+    let rd = ((word >> 7) & 0x1f) as usize;
+    if rd == 0 {
+        return;
+    }
+    let rs1 = ((word >> 15) & 0x1f) as usize;
+    let rs2 = ((word >> 20) & 0x1f) as usize;
+    let function = (word >> 12) & 0x7;
+    let value = match opcode {
+        0x37 => Some(((word & 0xffff_f000) as i32 as i64) as u64),
+        0x13 if function == 0 => values[rs1].map(|value| value.wrapping_add_signed((word as i32 >> 20) as i64)),
+        0x13 if function == 1 && (word >> 26) & 0x3f == 0 => values[rs1].map(|value| value.wrapping_shl((word >> 20) & 0x3f)),
+        0x13 if function == 5 && (word >> 26) & 0x3f == 0 => values[rs1].map(|value| value >> ((word >> 20) & 0x3f)),
+        0x33 if (word >> 25) & 0x7f == 0 && function == 0 => {
+            values[rs1].zip(values[rs2]).map(|(left, right)| left.wrapping_add(right))
+        }
+        0x33 if (word >> 25) & 0x7f == 0x20 && function == 0 => {
+            values[rs1].zip(values[rs2]).map(|(left, right)| left.wrapping_sub(right))
+        }
+        0x33 if (word >> 25) & 0x7f == 0 && function == 6 => values[rs1].zip(values[rs2]).map(|(left, right)| left | right),
+        0x33 if (word >> 25) & 0x7f == 0 && function == 7 => values[rs1].zip(values[rs2]).map(|(left, right)| left & right),
+        _ => None,
+    };
+    if matches!(opcode, 0x03 | 0x13 | 0x17 | 0x33 | 0x37 | 0x67 | 0x6f) {
+        values[rd] = value;
+    }
+}
+
 #[derive(Clone, Copy)]
 struct HeaderDepSyscallContract {
     name: &'static str,
@@ -4769,6 +5716,24 @@ fn is_add(word: u32, rd: u32, rs1: u32, rs2: u32) -> bool {
         && (word >> 20) & 0x1f == rs2
 }
 
+fn is_or(word: u32, rd: u32, rs1: u32, rs2: u32) -> bool {
+    word & 0x7f == 0x33
+        && (word >> 25) & 0x7f == 0
+        && (word >> 12) & 0x7 == 6
+        && (word >> 7) & 0x1f == rd
+        && (word >> 15) & 0x1f == rs1
+        && (word >> 20) & 0x1f == rs2
+}
+
+fn is_and(word: u32, rd: u32, rs1: u32, rs2: u32) -> bool {
+    word & 0x7f == 0x33
+        && (word >> 25) & 0x7f == 0
+        && (word >> 12) & 0x7 == 7
+        && (word >> 7) & 0x1f == rd
+        && (word >> 15) & 0x1f == rs1
+        && (word >> 20) & 0x1f == rs2
+}
+
 fn is_sltu(word: u32, rd: u32, rs1: u32, rs2: u32) -> bool {
     word & 0x7f == 0x33
         && (word >> 25) & 0x7f == 0
@@ -4813,6 +5778,15 @@ fn is_srli(word: u32, rd: u32, rs1: u32, shift: u32) -> bool {
         && (word >> 20) & 0x3f == shift
 }
 
+fn is_slli(word: u32, rd: u32, rs1: u32, shift: u32) -> bool {
+    word & 0x7f == 0x13
+        && (word >> 12) & 0x7 == 1
+        && (word >> 26) & 0x3f == 0
+        && (word >> 7) & 0x1f == rd
+        && (word >> 15) & 0x1f == rs1
+        && (word >> 20) & 0x3f == shift
+}
+
 fn is_auipc(word: u32, rd: u32) -> bool {
     word & 0x7f == 0x17 && (word >> 7) & 0x1f == rd
 }
@@ -4827,6 +5801,14 @@ fn is_beq(word: u32, rs1: u32, rs2: u32) -> bool {
 
 fn is_bne(word: u32, rs1: u32, rs2: u32) -> bool {
     is_branch(word, 1, rs1, rs2)
+}
+
+fn is_bltu(word: u32, rs1: u32, rs2: u32) -> bool {
+    is_branch(word, 6, rs1, rs2)
+}
+
+fn is_bgeu(word: u32, rs1: u32, rs2: u32) -> bool {
+    is_branch(word, 7, rs1, rs2)
 }
 
 fn is_branch(word: u32, function: u32, rs1: u32, rs2: u32) -> bool {

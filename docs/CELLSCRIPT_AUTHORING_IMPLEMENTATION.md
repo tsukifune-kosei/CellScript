@@ -52,7 +52,7 @@ are not implementation of a required supported feature.
 | Exact artifact entry | Codegen, semantic metadata, CLI execution and explicit entry scoping agree, including selected actions calling other retained actions. | Shared selection, terminal scalar/Unit helper failure and VM regressions implemented; policy Cell-bearing and complex-ABI callee closure remains pending. |
 | Resolved physical bindings | One typed per-binding source/ordinal/identity plan drives codegen, provenance, roles and independent checks; mixed Cell/read/witness/Script.args layouts cannot disagree. | Fixed-Cell runtime plan and typed projection checks implemented; full ABI and machine-dataflow closure remain pending. |
 | One deployed multi-action policy | Declared action set and explicit versioned dispatch bind selectors, payloads, common checks, artifact identity and builders. | Bounded fixed-role Type policy implemented in compiler/VM, metadata/expansion and package/builders; full consumer and deployment closure remains pending. |
-| Dispatch rejection | Reject unknown/duplicate/ambiguous tags, wrong versions, malformed/oversized/trailing payload, branch confusion and missing policy checks. | Focused real VM negatives implemented for the bounded envelope and all four fixed cardinalities; independent machine dispatch verification remains pending. |
+| Dispatch rejection | Reject unknown/duplicate/ambiguous tags, wrong versions, malformed/oversized/trailing payload, branch confusion and missing policy checks. | Focused real VM negatives cover the bounded envelope and all four fixed cardinalities. Lowering record v8 independently binds its canonical scanner, one selected Type/current-Script-hash record, declared tag targets, ordered common-check dominance, argument forwarding, exact adapters and fail-closed completion to machine instructions. |
 | Lock authorization | Actual transaction-bound credential proof; reject copied owner values, missing/invalid proof and signed-transaction tampering. | Real multisig spending and the issuer-authorized mint/transfer/merge/burn VM lifecycle are implemented with credential and post-signing tamper negatives; the precise source-level Script identity/authorization API and chain evidence remain pending. |
 | Script identity API | Distinguish address decoding, full Script construction/hash comparison and signature verification; wrong-domain values fail typing or checked conversion. | Partially implemented: typed transaction views expose complete hashes as `ScriptHash`; `ckb::script_hash(Hash)` is an explicit domain conversion; `script::args`, `script::new`, and `script::hash` construct and hash a canonical complete Script with at most 459 args bytes; authoring `exact_hash` rejects `Address` and raw `Hash`; fixed `ExactScriptHandle` values bind an admitted artifact/deployment receipt to a selected full Lock/Type Script hash or verifier CellDep data hash; the deployment-line foundation hash-links Type-hash exact versions under derived six-dimensional compatibility and active/yanked policy; `ckb-type-hash` keeps generated Type-hash artifacts in a distinct checked profile; standard TYPE_ID admission/code Cell evidence, exact admission transitions, and node-backed pre-signing resolution bind ProtocolBundle use; and fixed `DeploymentLineHandle` helpers enforce the active admission commitment, exact code, and selected Script identity in CKB-VM. Address parsing, generic interface-compatible handles, unbounded/dynamic Script args, and signature verification remain pending. |
 | Orthogonal obligations | Compose lifecycle, identity, asset accounting, capacity and authorization without double counting; scope and authenticated external guarantees remain distinct. | Executable relation sugar produces the same typed obligation set as its spelled-out 2026 form for data, capacity, identity and exact-lock treatment. Bounded trusted-external EXEC/SPAWN now binds exact CellDep data identity and scoped guarantee claims under a separate evidence tier; broader constructor composition remains pending. |
@@ -60,7 +60,7 @@ are not implementation of a required supported feature.
 | Token lifecycle | Execute generated Token Type Script under one persistent policy through authorized mint, transfer, merge and burn, with positive/negative VM and chain evidence. | Real CKB-VM coverage executes the complete issuer-authorized lifecycle under identical policy bytes, using earlier verified outputs as later inputs, across both editions and optimization levels 0-3; node admission, chain confirmation and deployment evidence remain pending. |
 | Schema-change lifecycle | Add `approval_nonce`, require reviewed reset on transfer, reject unchanged preservation and stale acknowledgement; retain old deployed-byte meaning. | Implemented for one explicitly selected local concrete `same except` relation: unchanged implicit preservation yields `SACK1001`; `approval_nonce = 0` is production-executable and receipt-eligible; tampered or changed relation receipts reject. Every schema delta remains marked as requiring a separate state migration, and issue #20 integration is pending. |
 | Remaining business corpus | NFT capacity adjustment, fungible splits/merges, partial order, authenticated dependencies and interacting Script groups. | Pending. |
-| Independent artifact checking | Version and validate any new records, recompute identities, bind selected entries/relations/dispatch to machine evidence, and add adversarial mutations. | Typed policy, declaration/ABI and builder parameter projection checks implemented. Trusted-external records are independently bound to an ordered same-CellDep hash-check/delegation sequence with mutation negatives. Lowering record v8 binds the five typed HeaderDep reads and canonical constructed-Script hashing to their exact bounded machine sequences. Independent policy selector/adapter machine proof remains pending. |
+| Independent artifact checking | Version and validate any new records, recompute identities, bind selected entries/relations/dispatch to machine evidence, and add adversarial mutations. | Typed policy, declaration/ABI and builder parameter projection checks implemented. Trusted-external records are independently bound to an ordered same-CellDep hash-check/delegation sequence with mutation negatives. Lowering record v8 binds the five typed HeaderDep reads, canonical constructed-Script hashing, and the bounded policy selector/adapter path to exact machine sequences. Rebound mutations cover every policy stage; arbitrary callee semantics and deployment authentication remain separate evidence. |
 | Language services and products | Parser, recovering diagnostics, formatter, LSP, editor, native CLI, WASM, package loading, public interfaces and builders agree. | Shared parser diagnostics, formatter round-trip, syntax matrix and VS Code snippet cover `replace`; trusted external calls use ordinary call formatting plus LSP completions and package-manifest loading. Typed temporal domains now have interface, builder, editor and Playground parity, and the canonical bounded-summary WASM is 544,037 bytes gzip. Complete product closure for the remaining 0.30 workstreams remains pending. |
 | Reproducibility and compatibility | Source/cache/profile versions, package locks, mixed editions, interfaces and deployment changes are explicit and reproducible. | Source/cache identity advanced; later ABI/dispatch/schema migration pending. |
 | Production acceptance | Applicable `dev`, `ci`, `backend` and clean-source release evidence, exact artifacts, runtime negatives, cycle/size/capacity measurements and required independent review. | The relation and economic backend tranches pass their focused VM, parity, checker and cost-corpus suites. Clean-source production acceptance passes 43 action cases, 17 Lock cases and all 26 stateful scenarios / 46 committed steps after the three-layer identity rebind. The canonical WASM rebuild passes its budget; `ci`, release and independent-review evidence remain pending. |
@@ -298,7 +298,9 @@ The first implementation has deliberately bounded executable scope:
   `require predicate(...)`; simply returning false is not an authorization
   check. Common checks are not exported variants. The independent checker
   validates their retained call contracts and excludes physical Cell effects,
-  unsupported operations and cycles; full machine dispatch proof is pending.
+  unsupported operations and cycles. Lowering record v8 additionally requires
+  the declared-tag guard, ordered common calls, nonzero-to-done rejection and
+  action dispatch to appear in that exact order in the decoded machine.
 
 The [policy ABI](CELLSCRIPT_POLICY_WITNESS_ABI.md) uses a bounded canonical
 Molecule envelope keyed by Script role and complete Script hash. It validates
@@ -313,10 +315,12 @@ Metadata schema 71, `cellscript-typed-semantics-v8` and
 resource layout, variant payload schemas, fixed counts and ordered common
 checks. Runtime metadata also binds `cellscript-ckb-runtime-view-v1`, the
 closed typed CKB view contract used by 0.30 runtime field access. Lowering
-record v7 retains separate terminal-failure sites and requires the exact new
+record v8 retains separate terminal-failure sites and requires the exact new
 nested versions. The parser-free checker also derives builder encoding flags
-and parameter order/source/type from the typed record. This is not independent
-proof of machine scanner/adapter dataflow or deployment authentication.
+and parameter order/source/type from the typed record. Its specialized policy
+check binds the canonical scanner, selector, tag branches, selected argument
+range and exact action adapters to machine instructions. It does not prove
+arbitrary action semantics or deployment authentication.
 
 Typed semantics v8 additionally records versioned trusted external verifier
 dependencies. That record is admissible only when emitted code checks the
@@ -372,16 +376,18 @@ WASM-feature path retains bounded policy metadata without serializing native
 typed/machine evidence; it is not a browser ELF compiler. A public browser
 policy-selection binding and editor integration remain product work.
 
-The next independent machine-proof increment must begin at the actual ELF entry
-and derive instruction successors/call returns, not trust source labels or
-declared reachability. It must bind canonical witness parsing to the selected
-tag and argument range, numeric tag branches to actual adapter targets, ordered
-common calls to unchanged nonzero rejection, and adapter pointer/length/copy
-and decoding behavior to the typed parameter contract. Callee memory effects
-and predicate semantics remain separate obligations: proving a call dominates
-dispatch does not prove what that call checks. Fixed, dynamic and enum payload
-families need explicit verification coverage without silently removing accepted
-language features to obtain a simpler proof.
+The bounded independent machine proof begins at the actual ELF entry and uses
+decoded control flow and call targets rather than trusting source labels or
+declared reachability. It binds canonical witness parsing to the selected tag
+and argument range, numeric tag branches to actual adapter targets, ordered
+common calls to unchanged nonzero rejection, and adapter pointer/length/private
+copy plus typed-derived outgoing stack behavior to the selected action. Valid
+matrices cover both editions,
+optimization levels 0-3, payload and payload-free actions, no-common-check
+policies and extreme tags; rebound machine mutations cover every stage. Callee
+memory effects, parameter decoding inside the action, and predicate semantics
+remain separate obligations: proving a call dominates dispatch does not prove
+what that call checks.
 
 ## Next implementation boundaries
 

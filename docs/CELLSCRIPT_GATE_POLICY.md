@@ -333,6 +333,17 @@ The same lowering record version binds `script::hash` to its typed
 the exact 53-byte Molecule prefix and offsets, all four admitted hash types,
 the bounded Blake2b call, error 72, and hash-rebound checker mutations.
 
+Lowering record v8 also binds the bounded `policy-witness-v1` wrapper and
+adapters to decoded machine instructions. `dev`, `ci`, and `backend` require
+the canonical input/output fallback, `CSPOLv1` bounds and one-to-eight-record
+DynVec scan, strict record ordering, Type/current-Script-hash single selection,
+declared tag order, common-check dominance, unknown-tag rejection, selected
+argument forwarding, private 4,096-byte adapter copy, typed-derived outgoing
+stack reservation, exact action call, and error-25 termination. The valid
+matrix spans both editions and optimization
+levels 0-3; mutations alter each stage, rebind block and bundle identities, and
+must still reject with `V2420`.
+
 Metadata schema 71 additionally binds
 `cellscript-ckb-sighash-all-zero-lock-v1`. Reviewers must check the current
 input Script-group scope, complete first-lock zero transform, witness order,
