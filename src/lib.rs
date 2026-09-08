@@ -8152,6 +8152,28 @@ pub fn compile_path_with_artifact_name<P: AsRef<Utf8Path>>(
     compile_file_with_entry_scope(&resolved, options, Some(CompileEntryScope::Artifact(declaration)), policy)
 }
 
+thread_local! {
+    static INCREMENTAL_CACHE_SUPPRESSION_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Run an in-memory analysis compile without reading, writing, touching, or
+/// pruning the persistent incremental cache.
+pub(crate) fn without_incremental_cache<T>(operation: impl FnOnce() -> T) -> T {
+    INCREMENTAL_CACHE_SUPPRESSION_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
+    struct RestoreIncrementalCache;
+    impl Drop for RestoreIncrementalCache {
+        fn drop(&mut self) {
+            INCREMENTAL_CACHE_SUPPRESSION_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+        }
+    }
+    let _restore = RestoreIncrementalCache;
+    operation()
+}
+
+fn incremental_cache_enabled() -> bool {
+    INCREMENTAL_CACHE_SUPPRESSION_DEPTH.with(|depth| depth.get() == 0)
+}
+
 fn resolve_named_artifact(path: &Utf8Path, name: &str) -> Result<artifact::ArtifactDeclaration> {
     let package_root =
         find_package_root(path)?.ok_or_else(|| CompileError::without_span("--artifact requires a package Cell.toml declaration"))?;
@@ -8183,6 +8205,7 @@ fn compile_file_with_entry_scope<P: AsRef<Utf8Path>>(
     // Incremental compilation: skip recompilation if cache hit and source unchanged.
     // Cache is only used for default entry scope (no --entry-action / --entry-lock).
     if entry_scope.is_none()
+        && incremental_cache_enabled()
         && let Some(cached) = incremental_cache_hit(&path, &cache_units, &options)
     {
         validate_executable_surface(&cached.metadata, executable_surface_policy)?;
@@ -8215,7 +8238,7 @@ fn compile_file_with_entry_scope<P: AsRef<Utf8Path>>(
     // Incremental compilation: store successful compilation result in cache.
     // Entry-scoped compiles use the same public options as default compiles,
     // so they must not write the default cache key.
-    if entry_scope.is_none() {
+    if entry_scope.is_none() && incremental_cache_enabled() {
         incremental_cache_store(&path, &cache_units, &options, &result);
     }
 

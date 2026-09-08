@@ -717,14 +717,19 @@ the Lock Script implements the decoder correctly and is not a security audit.
 Do not promote `schema-and-suffix-bound` into semantic, VM, or chain-execution
 evidence.
 
-Package resolution is an earlier, separate gate. `Cell.lock` v4 binds the
+Package resolution is an earlier, separate gate. `Cell.lock` v5 binds the
 exact `Cell.toml` digest, root and dependency compiler requirements, the
 resolving compiler release, dependency graph edges, dependency manifests,
 whole-tree hashes, exact Git/Registry source pins, feature/test modes, and CKB
 environment genesis identity. Build/check/test never perform mutable version
-selection. A changed manifest or source requires explicit `cellc lock` or
-`cellc update`; `--frozen` additionally forbids network access and lockfile
-writes. The Registry's versioned profile catalog allows only
+selection. A changed manifest or source requires explicit `cellc lock`, or a
+`cellc update-plan` receipt followed by `cellc update --apply-plan`;
+`--frozen` additionally forbids network access and lockfile writes. The
+transactional receipt recompiles reverse dependents and keeps source API,
+serialized layout, runtime ABI, effects/capabilities, builder, deployment, and
+upgrade authorization as separate evidence. Applying it changes only the
+listed locks and never supplies deployment or TYPE_ID authorization. The
+Registry's versioned profile catalog allows only
 `cellscript_source` to enter this graph. Executable, reproducible, TCB, and copy
 artifacts retain their separate evidence and consumption paths.
 

@@ -14,7 +14,7 @@ deciding whether a change is ready.
 
 | Mode | When to run | Evidence boundary |
 |---|---|---|
-| `dev` | Local development before pushing | Native source-policy enforcement; Rust formatting; canonical CellScript example formatting; all workspace-package Rust checks (including the standalone artifact checker and `cellscript-tools`); checker mutation/Myelin handoff tests; exact-handle CKB-VM/transaction-validation tests; deployment-line receipt/value tests; simulator package scenarios; frozen/offline canonical workspace-diamond plus resolve-graph/build-plan schema checks; both Registry verifiers and their compiler-dependency boundaries; reproducible Registry Type Script build and CKB-VM tests; strict backend quick audit, syntax-combination quick audit, parity-gated skill-pack freshness, README-linked CellScript doc Status freshness, local markdown link check, whitespace diff check |
+| `dev` | Local development before pushing | Native source-policy enforcement; Rust formatting; canonical CellScript example formatting; all workspace-package Rust checks (including the standalone artifact checker and `cellscript-tools`); checker mutation/Myelin handoff tests; exact-handle CKB-VM/transaction-validation tests; deployment-line receipt/value tests; simulator package scenarios; frozen/offline canonical workspace-diamond plus resolve-graph/build-plan and transactional-upgrade schema checks, including byte-identical source locks; both Registry verifiers and their compiler-dependency boundaries; reproducible Registry Type Script build and CKB-VM tests; strict backend quick audit, syntax-combination quick audit, parity-gated skill-pack freshness, README-linked CellScript doc Status freshness, local markdown link check, whitespace diff check |
 | `ci` | Pull requests, pushes, and routine merge readiness | Node 22 and native source-policy enforcement; all compiler/checker/adapter/tool tests and clippy; simulator plus CKB-VM package scenarios; standalone-checker dependency and mutation evidence; reproducible Registry Type Script identity plus CKB-VM tests and clippy; Registry API typecheck/tests with compiler-backed and least-privilege artifact workers, Node bundles, and dry-run Worker build; full website behavior/build regression suite; strict backend CI audit; package verification; parity-gated skill-pack/doc freshness; local-link and script syntax checks |
 | `backend` | Changes touching IR, codegen, assembler, ABI, ELF, or RISC-V behavior | Compiler, artifact-checker, and Fiber checks/tests/clippy; checker dependency boundary; simulator plus CKB-VM package scenarios; native source-policy enforcement; and strict backend full audit, including stateful CKB scenarios |
 | `release` | Nightly/stable release candidates and any production CKB claim | Clean tagged source plus `ci`, a fresh size-gated website WASM rebuild, tooling/docs and VS Code checks, pinned-CKB acceptance harnesses, public builder-contract generation, and mandatory stateful scenario/action coverage |
@@ -37,6 +37,17 @@ use; and bounded external resolvers normalizing to immutable sources without
 running during locked builds. Registry API checks also validate the complete
 `cellscript-registry-profile-catalog-v1` and prove that only CellScript source
 profiles are dependency-resolving.
+
+Transactional package changes additionally preserve
+`cellscript-upgrade-plan-v1`: planning must leave source locks byte-identical,
+package-scoped selection must retain unrelated node records, and apply must
+reject unknown schemas, tampered plan hashes, stale old locks, source
+substitution, downgrade, feature/environment drift, broken interface or layout
+evidence, stale builders, and unproven deployment authorization. The receipt
+links the resolve-graph and build-plan v1 schemas and records old/new build-unit
+and ProtocolBundle input identities. Apply may replace only the planned
+`Cell.lock` files; `Deployed.toml`, publication, signing, deployment, and state
+migration remain separate gates.
 
 The same Registry matrix covers
 `cellscript-registry-ls-idl-interface-v1`: raw ABI schema and size budgets,

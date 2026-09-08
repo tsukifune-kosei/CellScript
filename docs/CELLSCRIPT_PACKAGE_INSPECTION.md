@@ -25,7 +25,8 @@ Inspection always consumes existing authoritative `Cell.lock` files and is
 effectively offline, even when `--offline` is omitted. It never invokes an
 external resolver, updates a lock, writes build outputs, or refreshes cache
 recency. A query that needs a missing source cache or mutable selection fails
-and directs the operator to an explicit `cellc lock` or `cellc update` step.
+and directs the operator to an explicit `cellc lock` or transactional
+`cellc update-plan` step.
 
 The graph records:
 

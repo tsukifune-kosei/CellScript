@@ -65,6 +65,16 @@ side-effect free; build results validate the same unit identity. Package audit,
 LSP/VS Code, and both routine gates use the shared schemas. `cellc metadata`
 continues to mean compiled-program metadata.
 
+Issue #20 is implemented through `cellscript-upgrade-plan-v1`. Candidate locks
+are resolved and compiled in memory, exact graph changes and reverse-dependent
+interface/build evidence are retained, and `cellc update` remains read-only
+unless `--apply-plan` names a reviewed receipt. Apply checks plan and compiler
+identity, exact old lock bytes, policy acknowledgements, canonical candidates,
+and confined paths before replacing member locks. It never edits deployment
+records or supplies deployment authorization. This closes the #15-#20
+workspace/resolver/toolchain composition prerequisite on the branch; it does
+not by itself satisfy the broader 0.30 product or Rust-comparable release gate.
+
 Until this branch passes those criteria, treat it as development work, use
 `0.26b` only as its experimental implementation baseline, and retain 0.25 as
 the predecessor release contract. Do not publish a 0.26 tag solely to preserve

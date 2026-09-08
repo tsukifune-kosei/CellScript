@@ -88,7 +88,13 @@ High-value active references include:
   failures, executable evidence, and the remaining issue #24 work
 - [CELLSCRIPT_COMPILER_REQUIREMENTS.md](CELLSCRIPT_COMPILER_REQUIREMENTS.md)
   for the enforced package SemVer range, dependency preflight diagnostics,
-  Registry selection, and `Cell.lock` v4 evidence
+  Registry selection, and `Cell.lock` v5 evidence
+- [CELLSCRIPT_WORKSPACE_GRAPH.md](CELLSCRIPT_WORKSPACE_GRAPH.md) and
+  [CELLSCRIPT_PACKAGE_INSPECTION.md](CELLSCRIPT_PACKAGE_INSPECTION.md) for the
+  canonical member graph and stable resolve/build inspection schemas
+- [CELLSCRIPT_TRANSACTIONAL_UPGRADES.md](CELLSCRIPT_TRANSACTIONAL_UPGRADES.md)
+  for candidate resolution, graph/interface/build evidence, policy
+  acknowledgements, stale-plan rejection, and explicit lock-only apply
 - [CELLSCRIPT_AUTHORING_TARGET.md](CELLSCRIPT_AUTHORING_TARGET.md) for the
   adopted 2026-style authoring direction, shared-policy multi-action contracts,
   schema review, authorization boundaries, and required acceptance examples

@@ -2,6 +2,20 @@
 
 ## 0.30 - Capability closure development branch
 
+- Add transactional package and workspace upgrades through
+  `cellscript-upgrade-plan-v1`. `cellc update-plan` and the default `cellc
+  update` resolve candidates in memory, preserve unrelated package-scoped
+  nodes, diff exact nodes and edges, compile every reverse dependent, and keep
+  source API, serialized layout, runtime ABI, effects/capabilities, builder,
+  deployment, ProtocolBundle inputs, and upgrade authorization as separate
+  evidence. Only `cellc update --apply-plan` mutates locks after plan/compiler
+  hash, exact old bytes, canonical candidate, confined path, hard-blocker, and
+  acknowledgement checks. Per-file synced renames and runtime rollback cover
+  multi-member apply; the command never edits `Deployed.toml`, deploys,
+  publishes, signs, or performs state migration. CLI/LSP/VS Code, v1 fixtures,
+  package-scoped and stale/tamper negative tests, and dev/CI schema checks share
+  the same contract.
+
 - Add negotiated, read-only `cellscript-resolve-graph-v1` and
   `cellscript-build-plan-v1` inspection through `cellc resolve-graph` and
   `cellc build-plan`. The schemas retain roots, aliases, edge provenance,
@@ -74,7 +88,8 @@
   verifier-checked successor assignments. Every schema delta still reports a
   separate state-migration requirement, and the workflow does not mutate
   `Cell.lock`, `Deployed.toml`, or deployment authorization. Graph-wide
-  upgrade-plan consumption remains under issue #20.
+  transactional upgrade plans now consume the graph-wide evidence under issue
+  #20 while keeping the focused acknowledgement receipt independently useful.
 
 - Introduce the first authoring-level CKB Script identity contract. Edition
   2027 successor relations now accept `lock = exact_hash(script_hash)` and

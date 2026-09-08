@@ -188,7 +188,8 @@ This is a dependency-resolution and source-tool compatibility change, not a
 new source edition: Edition 2026, the compatibility profile, `Deployed.toml`,
 receipt, and generated-builder identities remain independently versioned.
 Build/check/test reject older locks; only explicit `cellc lock` or
-`cellc update` may repin them.
+`cellc update-plan` may propose a repin and `cellc update --apply-plan` may
+apply the reviewed receipt.
 
 ## API Boundary
 

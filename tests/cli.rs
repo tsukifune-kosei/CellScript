@@ -12576,8 +12576,11 @@ fn inspection_v1_fixtures_remain_deserializable() {
     let graph: cellscript::package::inspection::ResolveGraph =
         serde_json::from_str(include_str!("fixtures/resolve_graph_v1.json")).unwrap();
     let plan: cellscript::package::inspection::BuildPlan = serde_json::from_str(include_str!("fixtures/build_plan_v1.json")).unwrap();
+    let upgrade: cellscript::package::upgrade::UpgradePlan =
+        serde_json::from_str(include_str!("fixtures/upgrade_plan_v1.json")).unwrap();
     assert_eq!(graph.schema, cellscript::package::inspection::RESOLVE_GRAPH_SCHEMA);
     assert_eq!(plan.schema, cellscript::package::inspection::BUILD_PLAN_SCHEMA);
+    assert_eq!(upgrade.schema, cellscript::package::upgrade::UPGRADE_PLAN_SCHEMA);
 }
 
 #[test]
@@ -12698,6 +12701,229 @@ fn cellc_inspection_rejects_unknown_schema_versions() {
         let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert!(report["diagnostics"][0]["message"].as_str().unwrap().contains("unsupported inspection schema version 2"));
     }
+}
+
+#[test]
+fn cellc_update_plan_is_deterministic_read_only_and_applies_only_explicitly() {
+    let dir = tempfile::tempdir().unwrap();
+    let package = write_workspace_member(dir.path(), "app", "app", &[]);
+    lock_package(&package);
+    let lock_before = std::fs::read(package.join("Cell.lock")).unwrap();
+    let plan_path = package.join("upgrade-plan.json");
+
+    let protected_output =
+        cellc_command().current_dir(&package).args(["update-plan", "--offline", "--output", "Cell.lock", "--json"]).output().unwrap();
+    assert!(!protected_output.status.success());
+    let protected_report: serde_json::Value = serde_json::from_slice(&protected_output.stdout).unwrap();
+    assert_eq!(protected_report["diagnostics"][0]["code"], "E2800");
+    assert_eq!(std::fs::read(package.join("Cell.lock")).unwrap(), lock_before);
+
+    let plan_once = cellc_command()
+        .current_dir(&package)
+        .args(["update-plan", "--offline", "--output", plan_path.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(plan_once.status.success(), "stdout: {}", String::from_utf8_lossy(&plan_once.stdout));
+    let first_bytes = std::fs::read(&plan_path).unwrap();
+    assert_eq!(std::fs::read(package.join("Cell.lock")).unwrap(), lock_before);
+    assert!(!package.join(".cell").exists());
+
+    let plan_twice = cellc_command()
+        .current_dir(&package)
+        .args(["update", "--offline", "--output", plan_path.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(plan_twice.status.success(), "stdout: {}", String::from_utf8_lossy(&plan_twice.stdout));
+    assert_eq!(std::fs::read(&plan_path).unwrap(), first_bytes);
+    assert_eq!(std::fs::read(package.join("Cell.lock")).unwrap(), lock_before);
+    assert!(!package.join(".cell").exists());
+
+    let plan: serde_json::Value = serde_json::from_slice(&first_bytes).unwrap();
+    assert_eq!(plan["schema"], "cellscript-upgrade-plan-v1");
+    assert_eq!(plan["schema_version"], 1);
+    assert_eq!(plan["resolve_graph_schema"], "cellscript-resolve-graph-v1");
+    assert_eq!(plan["build_plan_schema"], "cellscript-build-plan-v1");
+    assert_eq!(plan["apply_status"], "ready");
+    assert_eq!(plan["reverse_dependents"][0]["build_unit_schema"], "cellscript-build-plan-v1");
+    assert!(plan["reverse_dependents"][0]["old_build_unit_id"].as_str().unwrap().starts_with("build-unit:"));
+    assert!(plan["reverse_dependents"][0]["new_build_unit_id"].as_str().unwrap().starts_with("build-unit:"));
+    assert_eq!(plan["reverse_dependents"][0]["old_build_unit"]["id"], plan["reverse_dependents"][0]["old_build_unit_id"]);
+    assert_eq!(plan["reverse_dependents"][0]["new_build_unit"]["id"], plan["reverse_dependents"][0]["new_build_unit_id"]);
+    assert!(plan["reverse_dependents"][0]["old_protocol_bundle_input_hash"].as_str().unwrap().starts_with("sha256:"));
+    assert!(plan["reverse_dependents"][0]["new_protocol_bundle_input_hash"].as_str().unwrap().starts_with("sha256:"));
+    assert_eq!(
+        plan["policy"].as_array().unwrap().iter().map(|dimension| dimension["dimension"].as_str().unwrap()).collect::<Vec<_>>(),
+        [
+            "source_semver",
+            "source_api",
+            "serialized_layout",
+            "runtime_abi",
+            "effects_capabilities",
+            "builder",
+            "deployment",
+            "upgrade_authorization"
+        ]
+    );
+    assert_eq!(plan["mutates_deployed_manifest"], false);
+    assert_eq!(plan["performs_deployment"], false);
+
+    let apply = cellc_command()
+        .current_dir(&package)
+        .args(["update", "--apply-plan", plan_path.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(apply.status.success(), "stdout: {}", String::from_utf8_lossy(&apply.stdout));
+    let applied: serde_json::Value = serde_json::from_slice(&apply.stdout).unwrap();
+    assert_eq!(applied["status"], "applied");
+    assert_eq!(std::fs::read_to_string(package.join("Cell.lock")).unwrap(), plan["locks"][0]["new_lock_content"]);
+    assert!(!package.join("Deployed.toml").exists());
+}
+
+#[test]
+fn cellc_update_apply_rejects_stale_and_hash_tampered_plans() {
+    let dir = tempfile::tempdir().unwrap();
+    let package = write_workspace_member(dir.path(), "app", "app", &[]);
+    lock_package(&package);
+    let plan_path = package.join("upgrade-plan.json");
+    let generated = cellc_command()
+        .current_dir(&package)
+        .args(["update-plan", "--offline", "--output", plan_path.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(generated.status.success(), "stdout: {}", String::from_utf8_lossy(&generated.stdout));
+
+    let mut current = std::fs::read_to_string(package.join("Cell.lock")).unwrap();
+    current.push('\n');
+    std::fs::write(package.join("Cell.lock"), &current).unwrap();
+    let stale = cellc_command()
+        .current_dir(&package)
+        .args(["update", "--apply-plan", plan_path.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(!stale.status.success());
+    let stale_report: serde_json::Value = serde_json::from_slice(&stale.stdout).unwrap();
+    assert_eq!(stale_report["diagnostics"][0]["code"], "E2802");
+    assert!(stale_report["diagnostics"][0]["message"].as_str().unwrap().contains("stale upgrade plan"));
+    assert_eq!(std::fs::read_to_string(package.join("Cell.lock")).unwrap(), current);
+
+    let mut tampered: serde_json::Value = serde_json::from_slice(&std::fs::read(&plan_path).unwrap()).unwrap();
+    tampered["new_graph_hash"] = serde_json::Value::String("sha256:tampered".to_string());
+    std::fs::write(&plan_path, serde_json::to_vec_pretty(&tampered).unwrap()).unwrap();
+    let invalid = cellc_command()
+        .current_dir(&package)
+        .args(["update", "--apply-plan", plan_path.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    let invalid_report: serde_json::Value = serde_json::from_slice(&invalid.stdout).unwrap();
+    assert_eq!(invalid_report["diagnostics"][0]["code"], "E2802");
+    assert!(invalid_report["diagnostics"][0]["message"].as_str().unwrap().contains("plan hash mismatch"));
+}
+
+#[test]
+fn cellc_package_scoped_update_preserves_unrelated_nodes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let left = write_workspace_member(root, "left", "left", &[]);
+    let right = write_workspace_member(root, "right", "right", &[]);
+    let app = write_workspace_member(root, "app", "app", &[("left", "../left"), ("right", "../right")]);
+    lock_package(&app);
+    let old_lock_bytes = std::fs::read(app.join("Cell.lock")).unwrap();
+    let old: cellscript::package::Lockfile = toml::from_str(std::str::from_utf8(&old_lock_bytes).unwrap()).unwrap();
+    let old_right = old
+        .dependencies
+        .iter()
+        .find(|(_, dependency)| dependency.name == "right")
+        .map(|(node, dependency)| (node.clone(), serde_json::to_value(dependency).unwrap()))
+        .unwrap();
+
+    let left_manifest = std::fs::read_to_string(left.join("Cell.toml")).unwrap().replace("version = \"1.0.0\"", "version = \"1.1.0\"");
+    std::fs::write(left.join("Cell.toml"), left_manifest).unwrap();
+    let plan_path = app.join("left-upgrade.json");
+    let output = cellc_command()
+        .current_dir(&app)
+        .args(["update-plan", "--package", "left", "--offline", "--output", plan_path.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "stdout: {}", String::from_utf8_lossy(&output.stdout));
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let changes = plan["locks"][0]["node_changes"].as_array().unwrap();
+    assert!(changes.iter().any(|change| change["coordinate"] == "left" && change["classification"] == "upgraded"));
+    assert!(!changes.iter().any(|change| change["coordinate"] == "right"));
+    let new_lock: cellscript::package::Lockfile = serde_json::from_value(plan["locks"][0]["new_lock"].clone()).unwrap();
+    let new_right = new_lock.dependencies.get(&old_right.0).unwrap();
+    assert_eq!(serde_json::to_value(new_right).unwrap(), old_right.1);
+    assert_eq!(std::fs::read(app.join("Cell.lock")).unwrap(), old_lock_bytes);
+
+    let unacknowledged =
+        cellc_command().current_dir(&app).args(["update", "--apply-plan", plan_path.to_str().unwrap(), "--json"]).output().unwrap();
+    assert!(!unacknowledged.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&unacknowledged.stdout).unwrap();
+    assert_eq!(report["diagnostics"][0]["code"], "E2801");
+    assert_eq!(std::fs::read(app.join("Cell.lock")).unwrap(), old_lock_bytes);
+
+    let applied = cellc_command()
+        .current_dir(&app)
+        .args(["update", "--apply-plan", plan_path.to_str().unwrap(), "--acknowledge", "UPG3001", "--json"])
+        .output()
+        .unwrap();
+    assert!(applied.status.success(), "stdout: {}", String::from_utf8_lossy(&applied.stdout));
+    assert_eq!(std::fs::read_to_string(app.join("Cell.lock")).unwrap(), plan["locks"][0]["new_lock_content"]);
+    assert!(right.join("Cell.toml").exists());
+}
+
+#[test]
+fn cellc_update_plan_includes_package_workspace_root_and_members() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        "[package]\nedition = \"2026\"\nname = \"root_package\"\nversion = \"1.0.0\"\n\n[workspace]\nmembers = [\"member\"]\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("src/main.cell"), "module root_package\n\naction run() -> u64 {\n    verification\n        1\n}\n")
+        .unwrap();
+    let member = write_workspace_member(root, "member", "member", &[]);
+    lock_package(root);
+    lock_package(&member);
+
+    let output = cellc_command().current_dir(root).args(["update-plan", "--offline", "--json"]).output().unwrap();
+    assert!(output.status.success(), "stdout: {}", String::from_utf8_lossy(&output.stdout));
+    let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let members = plan["locks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|transaction| transaction["member"].as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(members, std::collections::BTreeSet::from(["member", "root_package"]));
+    assert_eq!(plan["reverse_dependents"].as_array().unwrap().len(), 2);
+    assert!(!root.join(".cell").exists());
+    assert!(!member.join(".cell").exists());
+}
+
+#[test]
+fn cellc_update_plan_rejects_unknown_schema_and_precise_path_substitution() {
+    let dir = tempfile::tempdir().unwrap();
+    let dependency = write_workspace_member(dir.path(), "dependency", "dependency", &[]);
+    let app = write_workspace_member(dir.path(), "app", "app", &[("dependency", "../dependency")]);
+    lock_package(&app);
+
+    let schema = cellc_command().current_dir(&app).args(["update-plan", "--schema-version", "2", "--json"]).output().unwrap();
+    assert!(!schema.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&schema.stdout).unwrap();
+    assert_eq!(report["diagnostics"][0]["code"], "E2800");
+
+    let precise = cellc_command()
+        .current_dir(&app)
+        .args(["update-plan", "--package", "dependency", "--precise", "1.0.0", "--offline", "--json"])
+        .output()
+        .unwrap();
+    assert!(!precise.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&precise.stdout).unwrap();
+    assert!(report["diagnostics"][0]["message"].as_str().unwrap().contains("immutable path or git source"));
+    assert!(dependency.join("Cell.toml").exists());
 }
 
 // ── Incremental compilation e2e tests ────────────────────────────────────────

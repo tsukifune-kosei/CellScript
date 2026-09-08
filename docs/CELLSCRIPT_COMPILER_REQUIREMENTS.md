@@ -92,7 +92,8 @@ when source location and package version stay constant.
 Locked and frozen builds re-read each manifest, revalidate its requirement
 against the active compiler, compare it with the locked requirement, recompute
 the requirement-bound node ID, and never select a replacement version. A
-changed requirement requires an explicit `cellc update`.
+changed requirement requires an explicit `cellc update-plan` followed by a
+reviewed `cellc update --apply-plan`.
 
 The v5 root also declares
 `resolver_model = "single-package-coordinate-v1"`; compiler requirements are
@@ -100,8 +101,9 @@ therefore carried inside the same explicit one-instance-per-coordinate graph
 contract.
 
 Normal build, check, and test commands reject lock versions 1 through 4. An
-explicit `cellc lock` or `cellc update` may migrate them by resolving a fresh
-v5 graph. This is an intentional repin: it does not infer missing requirement
+explicit `cellc lock` may replace them directly, or `cellc update-plan` may
+resolve a fresh v5 graph for review before `cellc update --apply-plan` writes
+it. This is an intentional repin: it does not infer missing requirement
 evidence into the old lock.
 
 ## Independent Compatibility Axes

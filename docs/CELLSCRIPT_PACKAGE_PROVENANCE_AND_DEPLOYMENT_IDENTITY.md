@@ -539,8 +539,9 @@ Resolution is deterministic and conservative:
 
 A source change is explicit only after the owning manifests or selected
 environment overrides name the same replacement on every incoming edge and an
-explicit `cellc lock` or `cellc update` writes the new graph. Aliases do not
-authorize substitutions. Supporting multiple versions of one coordinate would
+explicit `cellc lock` writes the new graph, or a reviewed `cellc update-plan`
+is applied with `cellc update --apply-plan`. Aliases do not authorize
+substitutions. Supporting multiple versions of one coordinate would
 require a new resolver model, lock schema, and package-qualified source-module
 identity; v5 rejects such graphs instead of silently introducing that future
 semantic change.

@@ -230,10 +230,25 @@ pub fn validate_schema_version(version: u32) -> Result<()> {
 }
 
 pub fn resolve_graph(input: &Path, selected_package: Option<&str>, requested_options: &ResolutionOptions) -> Result<ResolveGraph> {
+    resolve_graph_with_mode(input, selected_package, requested_options, false)
+}
+
+/// Inspect one package even when its manifest also owns a workspace. Upgrade
+/// planning uses this for the root package's independently authoritative lock.
+pub(crate) fn resolve_package_graph(input: &Path, requested_options: &ResolutionOptions) -> Result<ResolveGraph> {
+    resolve_graph_with_mode(input, None, requested_options, true)
+}
+
+fn resolve_graph_with_mode(
+    input: &Path,
+    selected_package: Option<&str>,
+    requested_options: &ResolutionOptions,
+    force_package: bool,
+) -> Result<ResolveGraph> {
     let root = find_manifest_root(input)?;
     let source = std::fs::read_to_string(root.join("Cell.toml"))?;
     let value: toml::Value = toml::from_str(&source)?;
-    let is_workspace = value.get("workspace").is_some();
+    let is_workspace = !force_package && value.get("workspace").is_some();
     let mut effective_options = requested_options.clone();
     effective_options.offline = true;
     let selection = selection_provenance(requested_options, &effective_options);
@@ -409,9 +424,8 @@ pub fn resolve_graph(input: &Path, selected_package: Option<&str>, requested_opt
     if !requested_options.offline {
         warnings.push(InspectionWarning {
             code: "read-only-lock-selection".to_string(),
-            message:
-                "inspection forced offline and consumed existing Cell.lock state; run `cellc update` explicitly for mutable resolution"
-                    .to_string(),
+            message: "inspection forced offline and consumed existing Cell.lock state; run `cellc update-plan` and explicitly apply the reviewed plan for mutable resolution"
+                .to_string(),
         });
     }
     let build_order = build_order
@@ -669,8 +683,13 @@ fn read_lock_snapshot(workspace_root: &Path, root_id: &str, package_root: &Path)
     if !path.exists() {
         return Ok(None);
     }
-    let content = std::fs::read_to_string(&path)?;
-    let document = Lockfile::read_from_root(package_root)?.ok_or_else(|| CompileError::without_span("Cell.lock disappeared"))?;
+    let (content, document) = if let Some(document) = super::active_lockfile_override(package_root)? {
+        (toml::to_string_pretty(&document)?, document)
+    } else {
+        let content = std::fs::read_to_string(&path)?;
+        let document = Lockfile::read_from_root(package_root)?.ok_or_else(|| CompileError::without_span("Cell.lock disappeared"))?;
+        (content, document)
+    };
     Ok(Some(ResolveLockSnapshot {
         root: root_id.to_string(),
         path: normalized_path(workspace_root, &path)?,

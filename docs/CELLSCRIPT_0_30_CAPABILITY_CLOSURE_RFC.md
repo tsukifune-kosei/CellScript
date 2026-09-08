@@ -150,7 +150,7 @@ form a complete 0.30 business-capability plan.
 | Timelocks, epochs, timestamps, and `Since` | [#12](https://github.com/CellScript-Labs/CellScript/issues/12) | Covered for typed temporal domains. It does not own the rest of the transaction-view and syscall surface. |
 | Digest-committed substate and authenticated openings | [#13](https://github.com/CellScript-Labs/CellScript/issues/13) | Covered for commitments and opening correspondence. It must share the entry witness envelope with output plans and verifier proofs. |
 | Honest capability and product-completeness claims | [#14](https://github.com/CellScript-Labs/CellScript/issues/14) | Covered as a governance rule. It is not an implementation owner for the missing capabilities. |
-| Reproducible workspace, resolver, compiler-requirement, build-plan, and upgrade behavior | [#15](https://github.com/CellScript-Labs/CellScript/issues/15), [#16](https://github.com/CellScript-Labs/CellScript/issues/16), [#17](https://github.com/CellScript-Labs/CellScript/issues/17), [#18](https://github.com/CellScript-Labs/CellScript/issues/18), [#19](https://github.com/CellScript-Labs/CellScript/issues/19), [#20](https://github.com/CellScript-Labs/CellScript/issues/20) | Covered by separate toolchain owners. #15's canonical workspace graph, #16's single-package-coordinate resolver, #17's chain-identity propagation/frozen-lock contract, #18's compiler-requirement/Registry-selection contract, and #19's stable resolve/build inspection schemas are implemented on the 0.30 branch; transactional upgrade still gates complete composition. |
+| Reproducible workspace, resolver, compiler-requirement, build-plan, and upgrade behavior | [#15](https://github.com/CellScript-Labs/CellScript/issues/15), [#16](https://github.com/CellScript-Labs/CellScript/issues/16), [#17](https://github.com/CellScript-Labs/CellScript/issues/17), [#18](https://github.com/CellScript-Labs/CellScript/issues/18), [#19](https://github.com/CellScript-Labs/CellScript/issues/19), [#20](https://github.com/CellScript-Labs/CellScript/issues/20) | Implemented on the 0.30 branch: canonical workspace graphs, single-package-coordinate resolution, chain-identity-safe environments, enforced compiler requirements and Registry selection, stable resolve/build inspection schemas, and hashed transactional upgrade plans with reverse-dependent compilation and explicit apply. This closes the toolchain composition prerequisite without making a release or deployment claim. |
 | Typed zero-knowledge verifier contracts | [#22](https://github.com/CellScript-Labs/CellScript/issues/22) | Covered as research and typed external-verifier composition. A circuit DSL is outside the 0.30 core. |
 | Stable public value-generics surface | [#23](https://github.com/CellScript-Labs/CellScript/issues/23) | Covered as a language-design owner. It must close before public 0.30 package APIs are frozen. |
 | Typed CKB transaction views and runtime adapters | [#24](https://github.com/CellScript-Labs/CellScript/issues/24) | Newly owned for 0.30. It unifies admitted Cell/input/header/witness/Script/hash/source operations without a raw syscall escape hatch. |
@@ -437,8 +437,9 @@ adding an untracked general-purpose escape hatch.
 
 - Complete #9, #10, and #11 in dependency order.
 - Close the relevant #15-#20 package, environment, build, and upgrade
-  prerequisites. The #17 environment-selection and #18 compiler-requirement
-  prerequisites are implemented; workspace/build-plan/upgrade closure remains.
+  prerequisites. The branch now implements the complete #15-#20 toolchain
+  composition, including transactional upgrade-plan generation and explicit
+  stale-safe apply.
 - Generate complete builders and execute multi-Script transaction fixtures.
 
 ### Stage 3: business parity and economics

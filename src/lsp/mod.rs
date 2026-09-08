@@ -1869,6 +1869,11 @@ impl LspServer {
                 edit: None,
             });
             actions.push(CodeAction {
+                title: "Plan dependency changes with `cellc update-plan --offline`".to_string(),
+                kind: "quickfix".to_string(),
+                edit: None,
+            });
+            actions.push(CodeAction {
                 title: "Use `--target riscv64-asm` until executable stateful lowering is implemented".to_string(),
                 kind: "quickfix".to_string(),
                 edit: None,
@@ -3748,6 +3753,7 @@ action update(amount: u64) -> u64 {
         assert!(actions.iter().any(|action| action.title.contains("cellc metadata")));
         assert!(actions.iter().any(|action| action.title.contains("cellc resolve-graph")));
         assert!(actions.iter().any(|action| action.title.contains("cellc build-plan")));
+        assert!(actions.iter().any(|action| action.title.contains("cellc update-plan")));
         assert!(actions.iter().any(|action| action.title.contains("riscv64-asm")));
         assert!(actions.iter().all(|action| action.edit.is_none()));
     }

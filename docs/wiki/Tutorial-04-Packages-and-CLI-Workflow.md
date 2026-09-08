@@ -118,8 +118,9 @@ resolution with `E2601` before `Cell.lock` is written.
 Feature roots are exact in the current resolver: it does not merge `features =
 ["audit"]` from one parent with `features = ["metrics"]` from another. Align
 the declarations deliberately. Likewise, changing a Registry dependency to a
-path checkout requires every incoming edge to name that path and an explicit
-`cellc lock` or `cellc update`; an alias alone is not an override.
+path checkout requires every incoming edge to name that path and either an
+explicit `cellc lock` or a reviewed transactional upgrade; an alias alone is
+not an override.
 
 `Cell.lock` v5 records
 `resolver_model = "single-package-coordinate-v1"`. Locked and frozen commands
@@ -177,9 +178,10 @@ cellc build --production
 cellc build --json
 ```
 
-Dependency builds are lock-authoritative. Run `cellc lock` or `cellc update`
-when dependency selection is intended; `build`, `check`, and `test` otherwise
-consume only the existing graph. `--locked` makes that assertion explicit,
+Dependency builds are lock-authoritative. Run `cellc lock` for direct lock
+creation, or `cellc update-plan` followed by `cellc update --apply-plan` for a
+reviewed dependency change; `build`, `check`, and `test` otherwise consume only
+the existing graph. `--locked` makes that assertion explicit,
 `--frozen` also disables network access and every lockfile write, and
 `--offline` permits only already materialized exact source pins.
 
@@ -251,6 +253,38 @@ environment identity, source hashes, and stale lock nodes. `build-plan` adds
 entry, target/profile, compatibility, VM/codec, expected outputs, direct units,
 and cache status. A later `cellc build --json` reports the same unit identity.
 See [Package Resolve Graph And Build Plan](../CELLSCRIPT_PACKAGE_INSPECTION.md).
+
+## Plan And Apply Dependency Upgrades
+
+Use the transactional planner when an existing package or workspace lock must
+change:
+
+```bash
+cellc update-plan . --offline --output target/upgrade-plan.json
+cellc update-plan . --package math --precise 2.4.1 \
+  --output target/math-upgrade.json
+cellc update --apply-plan target/upgrade-plan.json
+```
+
+The first two commands resolve the candidate in memory and leave every
+`Cell.lock` byte-identical. The receipt contains exact old/new lock hashes,
+node and edge changes, reverse-dependent compilation, independent API/layout/
+runtime/effects/builder/deployment results, ProtocolBundle input identities,
+and deployment-authorization status. Package-scoped updates preserve unrelated
+node records exactly.
+
+Apply rejects a tampered plan, a different compiler version, a changed old
+lock, an escaping or symlink path, a non-canonical candidate lock, or a missing
+policy acknowledgement. Supply required codes only after review:
+
+```bash
+cellc update --apply-plan target/upgrade-plan.json \
+  --acknowledge UPG2003,UPG3102
+```
+
+Only the planned lockfiles are replaced. This workflow never edits
+`Deployed.toml`, signs, deploys, publishes, proves TYPE_ID authority, or runs a
+state migration. See [Transactional Upgrade Plans](../CELLSCRIPT_TRANSACTIONAL_UPGRADES.md).
 
 ## Execute Package Scenarios
 
@@ -480,8 +514,9 @@ Remove it:
 cellc remove my_lib
 ```
 
-`add`, `install`, `update`, and normal dependency removal refresh the lockfile so
-direct and transitive local path dependencies stay consistent.
+`add`, `install`, and normal dependency removal refresh the lockfile so direct
+and transitive local path dependencies stay consistent. `update` instead emits
+a plan unless `--apply-plan` names a reviewed receipt.
 
 `Cell.lock` v5 is a graph rather than a flat list. It declares the
 `single-package-coordinate-v1` resolver model and binds the exact root
@@ -490,9 +525,9 @@ compiler requirements, the compiler release that resolved the graph, outgoing
 alias-to-node edges, feature/test modes, and named CKB environments. Local
 projects should commit it to version control: the lockfile is reviewed build
 input, not a local cache, and normal build/check/test commands do not silently
-repin it. Locks from versions 1 through 4 require an explicit `cellc lock` or
-`cellc update` migration. Dependency aliases can differ from declared package
-names:
+repin it. Locks from versions 1 through 4 require an explicit `cellc lock`, or
+an upgrade plan followed by explicit apply. Dependency aliases can differ from
+declared package names:
 
 ```toml
 [dependencies.math]
@@ -663,8 +698,8 @@ debugging dependency resolution.
 
 ## Registry Commands
 
-Registry source-package installation and registry-backed `update` are supported
-for the CellScript source-package profile. The preferred interactive first-use
+Registry source-package installation and registry-backed `update-plan` are
+supported for the CellScript source-package profile. The preferred interactive first-use
 path is `cellc publish --authorise`: it creates a 15-minute browser session,
 authorises a wallet-rooted delegated key, and resumes the publish after the
 Registry returns the matching key ID. `--no-open` supports remote terminals.

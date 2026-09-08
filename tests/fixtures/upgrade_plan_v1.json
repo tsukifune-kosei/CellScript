@@ -1,0 +1,32 @@
+{
+  "schema": "cellscript-upgrade-plan-v1",
+  "schema_version": 1,
+  "compiler_version": "0.26.0",
+  "plan_hash": "sha256:fixture",
+  "workspace_root": ".",
+  "resolve_graph_schema": "cellscript-resolve-graph-v1",
+  "build_plan_schema": "cellscript-build-plan-v1",
+  "selection": {
+    "package": null,
+    "precise": null,
+    "scope": "test",
+    "features": [],
+    "all_features": true,
+    "default_features": true,
+    "environment": null,
+    "offline": true
+  },
+  "old_graph_hash": "sha256:old",
+  "new_graph_hash": "sha256:new",
+  "locks": [],
+  "reverse_dependents": [],
+  "policy": [],
+  "migration_artifacts_required": [],
+  "required_gates": ["./scripts/cellscript_gate.sh dev"],
+  "diagnostics": [],
+  "required_acknowledgements": [],
+  "acknowledgements": [],
+  "apply_status": "ready",
+  "mutates_deployed_manifest": false,
+  "performs_deployment": false
+}

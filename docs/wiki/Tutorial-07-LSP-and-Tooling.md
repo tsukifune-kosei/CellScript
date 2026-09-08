@@ -324,16 +324,18 @@ The package manager supports:
 - `cellc info`
 - `cellc package verify`
 - `cellc registry verify`
-- manifest-bound `Cell.lock` v3 graph checks for local, Git, and Registry
+- manifest-bound `Cell.lock` v5 graph checks for local, Git, and Registry
   dependencies, feature/test modes, and named CKB environments
 
 Use the top-level `cellc path/to/file.cell` form for one-off file compilation.
 Use `cellc build` for package builds.
 
-`cellc lock`, local `cellc install --path`, registry source-package
-`cellc install`, and `cellc update` are explicit lockfile workflows for
-packages that can be resolved and source-hash verified. Normal build/check/test
-consume that graph; `--frozen` adds offline, no-write behavior. For an
+`cellc lock`, local `cellc install --path`, and registry source-package
+`cellc install` are direct lockfile workflows for packages that can be resolved
+and source-hash verified. `cellc update-plan` and the default `cellc update`
+emit a read-only transactional receipt; `cellc update --apply-plan` is the
+explicit reviewed mutation step. Normal build/check/test consume that graph;
+`--frozen` adds offline, no-write behavior. For an
 interactive first Registry write,
 `cellc publish --authorise` obtains a wallet-rooted delegated capability and
 resumes the publish; later `cellc publish` calls use the active scoped key.

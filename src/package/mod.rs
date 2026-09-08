@@ -11,6 +11,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub mod inspection;
 pub mod registry;
+#[cfg(feature = "cli")]
+pub mod upgrade;
 pub mod workspace;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -442,6 +444,7 @@ impl Default for ResolutionOptions {
 
 thread_local! {
     static RESOLUTION_OPTIONS_STACK: RefCell<Vec<ResolutionOptions>> = const { RefCell::new(Vec::new()) };
+    static LOCKFILE_OVERRIDE_STACK: RefCell<Vec<(PathBuf, Lockfile)>> = const { RefCell::new(Vec::new()) };
 }
 
 pub fn with_resolution_options<T>(options: ResolutionOptions, operation: impl FnOnce() -> T) -> T {
@@ -464,6 +467,34 @@ pub(crate) fn active_resolution_options(scope: DependencyScope) -> ResolutionOpt
         options.scope = scope;
         options
     })
+}
+
+/// Execute a compiler operation against an in-memory candidate lockfile.
+///
+/// Upgrade planning uses this boundary to compile the old and candidate graphs
+/// without ever replacing the authoritative `Cell.lock` on disk.
+pub fn with_lockfile_override<T>(root: &Path, lockfile: Lockfile, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    let root = std::fs::canonicalize(root).map_err(|error| {
+        CompileError::without_span(format!("failed to canonicalize lockfile override root '{}': {error}", root.display()))
+    })?;
+    LOCKFILE_OVERRIDE_STACK.with(|stack| stack.borrow_mut().push((root, lockfile)));
+    struct PopLockfileOverride;
+    impl Drop for PopLockfileOverride {
+        fn drop(&mut self) {
+            LOCKFILE_OVERRIDE_STACK.with(|stack| {
+                stack.borrow_mut().pop();
+            });
+        }
+    }
+    let _guard = PopLockfileOverride;
+    operation()
+}
+
+pub(crate) fn active_lockfile_override(root: &Path) -> Result<Option<Lockfile>> {
+    let root = std::fs::canonicalize(root)
+        .map_err(|error| CompileError::without_span(format!("failed to canonicalize package root '{}': {error}", root.display())))?;
+    Ok(LOCKFILE_OVERRIDE_STACK
+        .with(|stack| stack.borrow().iter().rev().find(|(candidate, _)| candidate == &root).map(|(_, lockfile)| lockfile.clone())))
 }
 
 pub struct PackageManager {
@@ -1231,14 +1262,22 @@ dist/
 
     pub fn resolve_dependencies_with_options(&mut self, options: &ResolutionOptions) -> Result<()> {
         let manifest = self.read_manifest()?;
-        self.validate_manifest_package_contract(&manifest)?;
-        let root_environment = root_environment_context(&manifest, options)?;
+        self.resolve_dependencies_from_manifest_with_options(&manifest, options)
+    }
+
+    pub(crate) fn resolve_dependencies_from_manifest_with_options(
+        &mut self,
+        manifest: &PackageManifest,
+        options: &ResolutionOptions,
+    ) -> Result<()> {
+        self.validate_manifest_package_contract(manifest)?;
+        let root_environment = root_environment_context(manifest, options)?;
         self.resolved.clear();
         self.root_dependencies.clear();
         self.selected_coordinates.clear();
 
         let result = (|| {
-            let dependencies = self.selected_dependencies(&manifest, options, true)?;
+            let dependencies = self.selected_dependencies(manifest, options, true)?;
             let mut compiler_errors = Vec::new();
             for (alias, dep) in dependencies {
                 let mut stack_ids = Vec::new();
@@ -1307,7 +1346,7 @@ dist/
             return Ok(());
         }
 
-        let lockfile = Lockfile::read_from_root(&self.root)?.ok_or_else(|| {
+        let lockfile = active_lockfile_override(&self.root)?.or(Lockfile::read_from_root(&self.root)?).ok_or_else(|| {
             CompileError::without_span(
                 "Cell.toml declares dependencies but Cell.lock is missing; run 'cellc lock' or 'cellc update' explicitly",
             )
@@ -3143,7 +3182,7 @@ impl Lockfile {
 
     pub fn update_from_resolved(&mut self, resolved: &BTreeMap<String, ResolvedPackage>) {
         for (node_id, package) in resolved {
-            let locked = LockedDependency {
+            let mut locked = LockedDependency {
                 name: package.name.clone(),
                 namespace: package.namespace.clone(),
                 version: package.version.clone(),
@@ -3165,6 +3204,11 @@ impl Lockfile {
                 compiler_requirement: package.compiler_requirement.clone(),
                 resolver_compiler_version: crate::VERSION.to_string(),
             };
+            if let Some(previous) = self.dependencies.get(node_id)
+                && locked_dependency_build_identity(previous, &locked)
+            {
+                locked.build = previous.build.clone();
+            }
             self.dependencies.insert(node_id.clone(), locked);
         }
     }
@@ -3583,6 +3627,16 @@ fn locked_source_display(source: &LockedSource) -> String {
         LockedSource::Git { url, revision } => format!("git '{}#{}'", url, revision),
         LockedSource::Registry { registry, namespace, version, .. } => format!("registry {}/{}@{}", registry, namespace, version),
     }
+}
+
+fn locked_dependency_build_identity(left: &LockedDependency, right: &LockedDependency) -> bool {
+    left.name == right.name
+        && left.namespace == right.namespace
+        && left.version == right.version
+        && serde_json::to_value(&left.source).ok() == serde_json::to_value(&right.source).ok()
+        && left.source_hash == right.source_hash
+        && left.manifest_digest == right.manifest_digest
+        && left.compiler_requirement == right.compiler_requirement
 }
 
 fn package_source_display(source: &PackageSource) -> String {

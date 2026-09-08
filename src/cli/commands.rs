@@ -139,7 +139,8 @@ pub enum Command {
     RegistryEdit(RegistryEditArgs),
     Certify(CertifyArgs),
     Lock(PackageLockArgs),
-    Update,
+    UpdatePlan(UpdatePlanArgs),
+    Update(UpdateArgs),
     Info(InfoArgs),
     Login(LoginArgs),
     AuthLogin(AuthCapabilityArgs),
@@ -269,6 +270,29 @@ pub struct InfoArgs {
 #[derive(Debug, Default)]
 pub struct PackageLockArgs {
     pub json: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct UpdatePlanArgs {
+    pub input: Option<PathBuf>,
+    pub output: Option<PathBuf>,
+    pub package: Option<String>,
+    pub precise: Option<String>,
+    pub scope: String,
+    pub features: Vec<String>,
+    pub all_features: bool,
+    pub no_default_features: bool,
+    pub environment: Option<String>,
+    pub offline: bool,
+    pub acknowledgements: Vec<String>,
+    pub schema_version: u32,
+    pub json: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct UpdateArgs {
+    pub plan: Option<PathBuf>,
+    pub planning: UpdatePlanArgs,
 }
 
 #[derive(Debug, Default)]
@@ -1037,7 +1061,8 @@ impl CommandExecutor {
             Command::Publish(args) => Self::publish(args),
             Command::Install(args) => Self::install(args),
             Command::Lock(args) => Self::lock(args),
-            Command::Update => Self::update(),
+            Command::UpdatePlan(args) => Self::update_plan(args),
+            Command::Update(args) => Self::update(args),
             Command::Info(args) => Self::info(args),
             Command::Login(args) => Self::login(args),
             Command::AuthLogin(args) | Command::AuthCapabilityCreate(args) => Self::auth_capability(args),
@@ -5021,26 +5046,100 @@ impl CommandExecutor {
         }
     }
 
-    fn update() -> Result<()> {
-        refresh_lockfile_from_manifest(std::path::Path::new("."))?;
-        let lockfile = Lockfile::read_from_root(std::path::Path::new("."))?.expect("lockfile was just written");
-        if lockfile.dependencies.is_empty() {
-            println!("{}", "No dependencies to update".green());
+    fn update_plan(args: UpdatePlanArgs) -> Result<()> {
+        if args.schema_version != crate::package::upgrade::UPGRADE_PLAN_SCHEMA_VERSION {
+            return Err(crate::error::CompileError::without_span(format!(
+                "unsupported upgrade plan schema version {}; supported version: {}",
+                args.schema_version,
+                crate::package::upgrade::UPGRADE_PLAN_SCHEMA_VERSION
+            ))
+            .with_code("E2800"));
+        }
+        let scope = match args.scope.as_str() {
+            "runtime" => crate::package::DependencyScope::Runtime,
+            "test" => crate::package::DependencyScope::Test,
+            other => {
+                return Err(crate::error::CompileError::without_span(format!(
+                    "unsupported update scope '{other}'; expected runtime or test"
+                ))
+                .with_code("E2800"));
+            }
+        };
+        let all_features = args.all_features || (args.features.is_empty() && !args.no_default_features);
+        let options = crate::package::upgrade::UpgradeOptions {
+            package: args.package,
+            precise: args.precise,
+            scope,
+            features: args.features.into_iter().collect(),
+            all_features,
+            no_default_features: args.no_default_features,
+            environment: args.environment,
+            offline: args.offline,
+            acknowledgements: args.acknowledgements.into_iter().collect(),
+        };
+        let input = args.input.unwrap_or_else(|| PathBuf::from("."));
+        let plan = crate::package::upgrade::create_upgrade_plan(&input, &options)?;
+        let json = serde_json::to_string_pretty(&plan)
+            .map_err(|error| crate::error::CompileError::without_span(format!("failed to serialize upgrade plan: {error}")))?;
+        if let Some(output) = args.output.as_ref() {
+            if matches!(output.file_name().and_then(|name| name.to_str()), Some("Cell.lock" | "Deployed.toml"))
+                || std::fs::symlink_metadata(output).is_ok_and(|metadata| metadata.file_type().is_symlink())
+            {
+                return Err(crate::error::CompileError::without_span(format!(
+                    "upgrade plan output '{}' must not target a lock, deployment manifest, or symlink",
+                    output.display()
+                ))
+                .with_code("E2800"));
+            }
+            if let Some(parent) = output.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(output, format!("{json}\n"))?;
+        }
+        if args.json || args.output.is_none() {
+            println!("{json}");
         } else {
-            println!("{}", format!("Updated {} dependency nodes", lockfile.dependencies.len()).green());
-            for (node_id, package) in &lockfile.dependencies {
-                let source = match &package.source {
-                    crate::package::LockedSource::Path { path } => format!("path: {}", path),
-                    crate::package::LockedSource::Git { url, revision } => format!("git: {}#{}", url, revision),
-                    crate::package::LockedSource::Registry { registry, namespace, version, .. } => {
-                        format!("registry: {}/{}@{}", registry, namespace, version)
-                    }
-                };
-                println!("  {} {} v{} ({})", node_id, package.name, package.version, source);
+            println!("{}", "Transactional upgrade plan generated".green());
+            println!("  Hash: {}", plan.plan_hash);
+            println!("  Apply status: {}", plan.apply_status);
+            println!("  Lockfiles: {}", plan.locks.len());
+            println!("  Reverse-dependent builds: {}", plan.reverse_dependents.len());
+            if !plan.required_acknowledgements.is_empty() {
+                println!("  Required acknowledgements: {}", plan.required_acknowledgements.join(", "));
+            }
+            if let Some(output) = args.output.as_ref() {
+                println!("  Output: {}", output.display());
             }
         }
-
         Ok(())
+    }
+
+    fn update(args: UpdateArgs) -> Result<()> {
+        let Some(plan_path) = args.plan else {
+            return Self::update_plan(args.planning);
+        };
+        let plan = crate::package::upgrade::read_upgrade_plan(&plan_path)?;
+        let acknowledgements = args.planning.acknowledgements.into_iter().collect();
+        let applied = crate::package::upgrade::apply_upgrade_plan(&plan, &acknowledgements)?;
+        CommandOutcome {
+            machine: serde_json::json!({
+                "status": "applied",
+                "schema": crate::package::upgrade::UPGRADE_PLAN_SCHEMA,
+                "plan_hash": plan.plan_hash,
+                "plan": plan_path,
+                "lockfiles": applied,
+                "deployed_manifest_mutated": false,
+                "deployment_performed": false,
+            }),
+            human_lines: vec![
+                "Transactional upgrade applied".green().to_string(),
+                format!("  Plan: {}", plan_path.display()),
+                format!("  Lockfiles: {}", applied.len()),
+            ],
+        }
+        .emit(args.planning.json)
     }
 
     fn lock(args: PackageLockArgs) -> Result<()> {
@@ -15599,6 +15698,135 @@ fn json_output(matches: &clap::ArgMatches) -> bool {
     matches.get_flag("json") || matches.get_one::<String>("message-format").is_some_and(|format| format == "json")
 }
 
+fn update_clap_command(name: &'static str, about: &'static str, allow_apply: bool) -> clap::Command {
+    use clap::{Arg, ArgAction, Command as ClapCommand};
+
+    let planning_conflict = allow_apply.then_some("apply-plan");
+    let mut command = ClapCommand::new(name)
+        .about(about)
+        .arg(
+            Arg::new("input")
+                .value_name("INPUT")
+                .conflicts_with_all(planning_conflict)
+                .help("Package, workspace, Cell.toml, or contained source path"),
+        )
+        .arg(
+            Arg::new("output")
+                .long("output")
+                .short('o')
+                .value_name("FILE")
+                .conflicts_with_all(planning_conflict)
+                .help("Write the canonical upgrade plan JSON"),
+        )
+        .arg(
+            Arg::new("package")
+                .long("package")
+                .short('p')
+                .value_name("PACKAGE")
+                .conflicts_with_all(planning_conflict)
+                .help("Update only this dependency alias or package coordinate and its required closure"),
+        )
+        .arg(
+            Arg::new("precise")
+                .long("precise")
+                .value_name("VERSION")
+                .requires("package")
+                .conflicts_with_all(planning_conflict)
+                .help("Select this exact SemVer for the direct dependency selected by --package"),
+        )
+        .arg(
+            Arg::new("scope")
+                .long("scope")
+                .value_name("SCOPE")
+                .value_parser(["runtime", "test"])
+                .default_value("test")
+                .conflicts_with_all(planning_conflict)
+                .help("Resolve runtime dependencies or runtime plus test dependencies"),
+        )
+        .arg(
+            Arg::new("features")
+                .long("features")
+                .value_delimiter(',')
+                .num_args(1..)
+                .value_name("FEATURES")
+                .conflicts_with_all(planning_conflict)
+                .help("Resolve the candidate with these feature roots"),
+        )
+        .arg(
+            Arg::new("all-features")
+                .long("all-features")
+                .action(ArgAction::SetTrue)
+                .conflicts_with_all(planning_conflict)
+                .help("Resolve all feature roots"),
+        )
+        .arg(
+            Arg::new("no-default-features")
+                .long("no-default-features")
+                .action(ArgAction::SetTrue)
+                .conflicts_with_all(planning_conflict)
+                .help("Do not activate the default feature root"),
+        )
+        .arg(
+            Arg::new("environment")
+                .long("environment")
+                .value_name("NAME")
+                .conflicts_with_all(planning_conflict)
+                .help("Update only this declared CKB dependency environment"),
+        )
+        .arg(
+            Arg::new("offline")
+                .long("offline")
+                .action(ArgAction::SetTrue)
+                .conflicts_with_all(planning_conflict)
+                .help("Resolve and compile only from existing local caches"),
+        )
+        .arg(
+            Arg::new("schema-version")
+                .long("schema-version")
+                .value_name("VERSION")
+                .default_value("1")
+                .value_parser(clap::value_parser!(u32))
+                .conflicts_with_all(planning_conflict)
+                .help("Negotiate the upgrade plan schema version"),
+        )
+        .arg(
+            Arg::new("acknowledge")
+                .long("acknowledge")
+                .value_name("CODE")
+                .value_delimiter(',')
+                .num_args(1..)
+                .action(ArgAction::Append)
+                .help("Acknowledge a named policy diagnostic after reviewing the plan"),
+        );
+    if allow_apply {
+        command = command.arg(
+            Arg::new("apply-plan")
+                .long("apply-plan")
+                .value_name("FILE")
+                .help("Verify and atomically apply this previously reviewed upgrade plan"),
+        );
+    }
+    command
+}
+
+fn update_plan_args_from_matches(matches: &clap::ArgMatches) -> UpdatePlanArgs {
+    UpdatePlanArgs {
+        input: matches.get_one::<String>("input").map(PathBuf::from),
+        output: matches.get_one::<String>("output").map(PathBuf::from),
+        package: matches.get_one::<String>("package").cloned(),
+        precise: matches.get_one::<String>("precise").cloned(),
+        scope: matches.get_one::<String>("scope").cloned().unwrap_or_else(|| "test".to_string()),
+        features: matches.get_many::<String>("features").map(|values| values.cloned().collect()).unwrap_or_default(),
+        all_features: matches.get_flag("all-features"),
+        no_default_features: matches.get_flag("no-default-features"),
+        environment: matches.get_one::<String>("environment").cloned(),
+        offline: matches.get_flag("offline"),
+        acknowledgements: matches.get_many::<String>("acknowledge").map(|values| values.cloned().collect()).unwrap_or_default(),
+        schema_version: matches.get_one::<u32>("schema-version").copied().unwrap_or(1),
+        json: json_output(matches),
+    }
+}
+
 pub struct CliParser;
 
 impl CliParser {
@@ -17051,7 +17279,16 @@ impl CliParser {
                     ),
             )
             .subcommand(ClapCommand::new("lock").about("Resolve and write the complete Cell.lock dependency graph"))
-            .subcommand(ClapCommand::new("update").about("Explicitly repin dependencies and rewrite Cell.lock"))
+            .subcommand(update_clap_command(
+                "update-plan",
+                "Resolve, compile, and classify a transactional dependency upgrade without changing Cell.lock",
+                false,
+            ))
+            .subcommand(update_clap_command(
+                "update",
+                "Plan an upgrade by default, or verify and atomically apply --apply-plan",
+                true,
+            ))
             .subcommand(
                 ClapCommand::new("info")
                     .about("Show package information")
@@ -17399,6 +17636,16 @@ impl CliParser {
                     .about("Package integrity commands")
                     .subcommand_required(true)
                     .subcommand(ClapCommand::new("lock").about("Resolve and write the complete Cell.lock dependency graph"))
+                    .subcommand(update_clap_command(
+                        "update-plan",
+                        "Resolve, compile, and classify a transactional dependency upgrade without changing Cell.lock",
+                        false,
+                    ))
+                    .subcommand(update_clap_command(
+                        "update",
+                        "Plan an upgrade by default, or verify and atomically apply --apply-plan",
+                        true,
+                    ))
                     .subcommand(ClapCommand::new("verify").about("Verify package integrity against Cell.lock and source tree")),
             )
             .subcommand(
@@ -18195,7 +18442,11 @@ impl CliParser {
                 allow_quarantined: m.get_flag("allow-quarantined"),
             }),
             Some(("lock", m)) => Command::Lock(PackageLockArgs { json: json_output(m) }),
-            Some(("update", _)) => Command::Update,
+            Some(("update-plan", m)) => Command::UpdatePlan(update_plan_args_from_matches(m)),
+            Some(("update", m)) => Command::Update(UpdateArgs {
+                plan: m.get_one::<String>("apply-plan").map(PathBuf::from),
+                planning: update_plan_args_from_matches(m),
+            }),
             Some(("info", m)) => Command::Info(InfoArgs { json: json_output(m) }),
             Some(("login", m)) => {
                 warn_legacy_alias("login", "auth capability create", false);
@@ -18229,6 +18480,11 @@ impl CliParser {
             }),
             Some(("package", m)) => match m.subcommand() {
                 Some(("lock", lock)) => Command::Lock(PackageLockArgs { json: json_output(lock) }),
+                Some(("update-plan", update)) => Command::UpdatePlan(update_plan_args_from_matches(update)),
+                Some(("update", update)) => Command::Update(UpdateArgs {
+                    plan: update.get_one::<String>("apply-plan").map(PathBuf::from),
+                    planning: update_plan_args_from_matches(update),
+                }),
                 Some(("verify", verify)) => Command::PackageVerify(PackageVerifyArgs { json: json_output(verify) }),
                 _ => unreachable!(),
             },
