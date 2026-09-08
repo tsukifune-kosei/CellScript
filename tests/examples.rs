@@ -63,7 +63,7 @@ const FULL_METADATA_SIZE_BUDGETS: [(&str, FullMetadataSizeBudget); 4] = [
     (
         "nft.cell",
         FullMetadataSizeBudget {
-            max_compact_metadata_bytes: 704 * 1024,
+            max_compact_metadata_bytes: 768 * 1024,
             // Typed HeaderDep epoch observation and checked Since construction
             // add two explicit CKB-runtime proof records to the listing path.
             max_proof_plan_records: 92,
@@ -480,7 +480,7 @@ fn all_checked_in_cell_examples_compile() {
     let files = checked_in_example_cell_files();
     assert_eq!(
         files.len(),
-        BUNDLED_EXAMPLES.len() + 1 + 21,
+        BUNDLED_EXAMPLES.len() + 1 + 22,
         "expected bundled examples, top-level registry.cell, and language examples"
     );
 

@@ -14773,11 +14773,10 @@ fn evaluate_compile_test_result(
         }
         (true, Ok(_)) => Err(crate::error::CompileError::without_span(format!("{}: expected compile failure, got success", path))),
         (true, Err(error)) => {
-            let message = error.to_string();
             let missing = expectation
                 .expected_errors
                 .iter()
-                .filter(|expected| !message.contains(expected.as_str()))
+                .filter(|expected| !compile_error_contains_text(&error, expected))
                 .cloned()
                 .collect::<Vec<_>>();
             if missing.is_empty() {
@@ -14787,11 +14786,15 @@ fn evaluate_compile_test_result(
                     "{}: expected error text not found: {}; actual error: {}",
                     path,
                     missing.join(", "),
-                    message
+                    error
                 )))
             }
         }
     }
+}
+
+fn compile_error_contains_text(error: &crate::error::CompileError, expected: &str) -> bool {
+    error.message.contains(expected) || error.related.iter().any(|related| compile_error_contains_text(related, expected))
 }
 
 fn validate_compile_test_metadata(

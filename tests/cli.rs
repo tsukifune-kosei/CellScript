@@ -9898,7 +9898,7 @@ target_profile = "ckb"
             && layout["consensus_checked"] == false
     }));
 
-    // 5. action build surfaces runtime-required scan selectors for the consume/create actions.
+    // 5. action build surfaces verifier-covered runtime selectors for the consume/create actions.
     let action_build = Command::new(env!("CARGO_BIN_EXE_cellc"))
         .current_dir(root)
         .arg("action")
@@ -9912,9 +9912,11 @@ target_profile = "ckb"
     let plan: serde_json::Value = serde_json::from_slice(&action_build.stdout).unwrap();
     let scan_selectors = &plan["action_scan_selectors"];
     assert_eq!(scan_selectors["schema"], "cellscript-action-scan-selectors-v0.21");
+    assert_eq!(scan_selectors["status"], "compile-checked-runtime-selectors");
+    assert_eq!(scan_selectors["runtime_required_selector_count"], 0);
     assert!(
-        scan_selectors["runtime_required_selector_count"].as_u64().unwrap() >= 1,
-        "claim_with_preimage should declare at least one runtime-required selector: {scan_selectors}"
+        scan_selectors["checked_runtime_selector_count"].as_u64().unwrap() >= 1,
+        "claim_with_preimage should declare at least one checked runtime selector: {scan_selectors}"
     );
 }
 
