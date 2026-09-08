@@ -115,6 +115,7 @@ impl std::fmt::Display for SimulateResult {
 
 pub struct SimulateInterpreter {
     env: HashMap<String, SimValue>,
+    bounded_collection_limits: HashMap<String, usize>,
     trace: Vec<TraceEvent>,
     functions: HashMap<String, (Vec<Param>, Vec<Stmt>)>,
     has_cell_ops: bool,
@@ -164,7 +165,15 @@ impl SimulateInterpreter {
             }
         }
 
-        Self { env: HashMap::new(), trace: Vec::new(), functions, has_cell_ops: false, steps: 0, max_steps }
+        Self {
+            env: HashMap::new(),
+            bounded_collection_limits: HashMap::new(),
+            trace: Vec::new(),
+            functions,
+            has_cell_ops: false,
+            steps: 0,
+            max_steps,
+        }
     }
 
     pub fn simulate_action(&mut self, name: &str, args: &[SimValue]) -> Result<SimulateResult, SimulateError> {
@@ -181,6 +190,9 @@ impl SimulateInterpreter {
 
         for (param, arg) in params.iter().zip(args.iter()) {
             self.env.insert(param.name.clone(), arg.clone());
+            if let Some(collection) = parse_bounded_collection_type(&param.ty) {
+                self.bounded_collection_limits.insert(param.name.clone(), collection.max_elements);
+            }
         }
 
         let result = self.exec_stmts(&body)?;
@@ -200,16 +212,22 @@ impl SimulateInterpreter {
             self.functions.get(name).cloned().ok_or_else(|| SimulateError::UndefinedFunction { name: name.to_string() })?;
 
         let saved_env = self.env.clone();
+        let saved_collection_limits = self.bounded_collection_limits.clone();
         self.env.clear();
+        self.bounded_collection_limits.clear();
 
         for (param, arg) in params.iter().zip(args.iter()) {
             self.env.insert(param.name.clone(), arg.clone());
+            if let Some(collection) = parse_bounded_collection_type(&param.ty) {
+                self.bounded_collection_limits.insert(param.name.clone(), collection.max_elements);
+            }
         }
 
         let result = self.exec_stmts(&body)?;
         let value = self.finish_entry_flow(result)?;
 
         self.env = saved_env;
+        self.bounded_collection_limits = saved_collection_limits;
 
         Ok(value)
     }
@@ -449,7 +467,7 @@ impl SimulateInterpreter {
                     let error = crate::runtime_errors::CellScriptRuntimeError::AssertionFailed;
                     Err(SimulateError::RuntimeError { code: error.code(), name: error.name().to_string() })
                 } else {
-                    Ok(SimValue::Bool(true))
+                    Ok(SimValue::Unit)
                 }
             }
             Expr::Block(stmts) => {
@@ -496,14 +514,22 @@ impl SimulateInterpreter {
             }
             Expr::Match(_match) => Ok(SimValue::Simulated { ty: "match".to_string(), description: "match expression".to_string() }),
             Expr::Assign(assign) => {
-                let value = self.eval_expr(&assign.value)?;
+                let rhs = self.eval_expr(&assign.value)?;
+                let value = match (&assign.op, assign.target.as_ref()) {
+                    (AssignOp::AddAssign, Expr::Identifier(name)) => {
+                        let previous =
+                            self.env.get(name).cloned().ok_or_else(|| SimulateError::UndefinedVariable { name: name.clone() })?;
+                        self.eval_binary(&BinaryOp::Add, &previous, &rhs)?
+                    }
+                    _ => rhs,
+                };
                 if let Expr::Identifier(name) = assign.target.as_ref() {
                     self.env.insert(name.clone(), value.clone());
                 }
                 Ok(value)
             }
             Expr::RequireBlock(require_block) => {
-                let mut result = Ok(SimValue::Bool(true));
+                let mut result = Ok(SimValue::Unit);
                 for expr in &require_block.expressions {
                     result = self.eval_expr(expr);
                     if result.is_err() {
@@ -600,6 +626,10 @@ impl SimulateInterpreter {
             _ => return Ok(SimValue::Simulated { ty: "call".to_string(), description: "indirect call".to_string() }),
         };
 
+        if func_name == "__cellscript_consume_each" {
+            return self.eval_bounded_consume_each(call);
+        }
+
         if matches!(
             func_name.as_str(),
             "witness::count"
@@ -657,6 +687,65 @@ impl SimulateInterpreter {
         }
 
         Ok(SimValue::Simulated { ty: "call_result".to_string(), description: format!("{}()", func_name) })
+    }
+
+    fn eval_bounded_consume_each(&mut self, call: &CallExpr) -> Result<SimValue, SimulateError> {
+        let [Expr::Identifier(binding), Expr::Identifier(collection_binding), Expr::Block(body)] = call.args.as_slice() else {
+            return Err(SimulateError::Unsupported {
+                description: "consume_each has an invalid internal bounded-collection shape".to_string(),
+            });
+        };
+        let collection = self
+            .env
+            .get(collection_binding)
+            .cloned()
+            .ok_or_else(|| SimulateError::UndefinedVariable { name: collection_binding.clone() })?;
+        let SimValue::Array(items) = collection else {
+            return Err(SimulateError::TypeError {
+                expected: "BoundedCellSet simulation array".to_string(),
+                got: collection.to_string(),
+            });
+        };
+        let max_elements = self.bounded_collection_limits.get(collection_binding).copied().ok_or_else(|| {
+            SimulateError::Unsupported { description: format!("consume_each collection '{collection_binding}' has no declared bound") }
+        })?;
+        if items.len() > max_elements {
+            let error = crate::runtime_errors::CellScriptRuntimeError::CollectionBoundsInvalid;
+            return Err(SimulateError::RuntimeError { code: error.code(), name: error.name().to_string() });
+        }
+
+        self.has_cell_ops = true;
+        let previous = self.env.get(binding).cloned();
+        for item in items {
+            self.bump_steps()?;
+            self.trace.push(TraceEvent::Consume { description: item.to_string() });
+            self.env.insert(binding.clone(), item);
+            for stmt in body {
+                let flow = match self.exec_stmt(stmt) {
+                    Ok(flow) => flow,
+                    Err(error) => {
+                        self.restore_binding(binding, previous);
+                        return Err(error);
+                    }
+                };
+                if flow.is_some_and(|flow| matches!(flow, SimValue::LoopBreak(_) | SimValue::LoopContinue(_))) {
+                    self.restore_binding(binding, previous);
+                    return Err(SimulateError::Unsupported {
+                        description: "loop control is not supported inside consume_each".to_string(),
+                    });
+                }
+            }
+        }
+        self.restore_binding(binding, previous);
+        Ok(SimValue::Unit)
+    }
+
+    fn restore_binding(&mut self, binding: &str, previous: Option<SimValue>) {
+        if let Some(previous) = previous {
+            self.env.insert(binding.to_string(), previous);
+        } else {
+            self.env.remove(binding);
+        }
     }
 
     fn bind_pattern(&mut self, pattern: &BindingPattern, value: SimValue) {
@@ -788,6 +877,89 @@ action classify(x: u64) -> u64 {
         let mut interp = SimulateInterpreter::new(&module, 1000);
         let result = interp.simulate_action("classify", &[SimValue::Integer(15)]).unwrap();
         assert_eq!(result.return_value, SimValue::Integer(1));
+    }
+
+    fn bounded_token(amount: u128) -> SimValue {
+        SimValue::Struct { name: "Token".to_string(), fields: vec![("amount".to_string(), SimValue::Integer(amount))] }
+    }
+
+    #[test]
+    fn simulate_bounded_consume_each_observes_cardinality_and_every_predicate() {
+        let source = r#"
+module bounded_sim
+
+resource Token has store, consume { amount: u64 }
+
+action verify(input inputs: BoundedCellSet<Token, 2>, witness minimum: u64) -> u64 {
+    verification
+        let mut total: u64 = 0
+        consume_each token in inputs {
+            require token.amount >= minimum
+            total += token.amount
+        }
+        require total <= 4
+        return 0
+}
+"#;
+        let module = parse_module(source);
+        for values in [vec![], vec![bounded_token(1)], vec![bounded_token(1), bounded_token(2)]] {
+            let expected_count = values.len();
+            let mut interp = SimulateInterpreter::new(&module, 1000);
+            let result = interp
+                .simulate_action("verify", &[SimValue::Array(values), SimValue::Integer(1)])
+                .expect("0..=N valid elements must simulate");
+            assert_eq!(result.return_value, SimValue::Integer(0));
+            assert_eq!(
+                result.trace.iter().filter(|event| matches!(event, TraceEvent::Consume { .. })).count(),
+                expected_count,
+                "every selected element must be consumed exactly once"
+            );
+        }
+    }
+
+    #[test]
+    fn simulate_bounded_consume_each_fails_closed_above_the_declared_bound() {
+        let source = r#"
+module bounded_sim
+
+resource Token has store, consume { amount: u64 }
+
+action verify(input inputs: BoundedCellSet<Token, 2>) -> u64 {
+    verification
+        consume_each token in inputs { require token.amount > 0 }
+        return 0
+}
+"#;
+        let module = parse_module(source);
+        let mut interp = SimulateInterpreter::new(&module, 1000);
+        let error = interp
+            .simulate_action("verify", &[SimValue::Array(vec![bounded_token(1), bounded_token(2), bounded_token(3)])])
+            .expect_err("N+1 elements must fail closed");
+        assert!(matches!(error, SimulateError::RuntimeError { code: 21, .. }));
+    }
+
+    #[test]
+    fn simulate_bounded_consume_each_rejects_predicate_failure_at_every_position() {
+        let source = r#"
+module bounded_sim
+
+resource Token has store, consume { amount: u64 }
+
+action verify(input inputs: BoundedCellSet<Token, 3>) -> u64 {
+    verification
+        consume_each token in inputs { require token.amount > 0 }
+        return 0
+}
+"#;
+        let module = parse_module(source);
+        for amounts in [[0, 1, 1], [1, 0, 1], [1, 1, 0]] {
+            let mut interp = SimulateInterpreter::new(&module, 1000);
+            let values = amounts.into_iter().map(bounded_token).collect();
+            let error = interp
+                .simulate_action("verify", &[SimValue::Array(values)])
+                .expect_err("a false predicate must reject the full collection");
+            assert!(matches!(error, SimulateError::RuntimeError { code: 5, .. }));
+        }
     }
 
     #[test]

@@ -1,0 +1,101 @@
+{
+  "schema": "cellscript-bounded-group-input-fixture-v1",
+  "source": "tests/fixtures/bounded_group_input.cell",
+  "entry": "verify",
+  "max_elements": 3,
+  "element_width_bytes": 16,
+  "selection": "exact-current-type-script-group-input",
+  "order": "canonical-group-relative-input-order",
+  "logical_identity_policy": "application-defined-not-enforced-by-collection-selection",
+  "resource_evidence": {
+    "maximum_source": "tests/fixtures/bounded_group_input_max.cell",
+    "maximum_elements": 1024,
+    "measurement_backend": "ckb-testtool-full-transaction-context",
+    "max_elf_bytes": 4096,
+    "max_cycles": 3000000
+  },
+  "cases": [
+    {
+      "name": "zero",
+      "inputs": [],
+      "expected_exit": 0
+    },
+    {
+      "name": "one",
+      "inputs": [
+        { "scope": "group", "data_hex": "01000000000000000a00000000000000" }
+      ],
+      "expected_exit": 0
+    },
+    {
+      "name": "maximum_n",
+      "inputs": [
+        { "scope": "group", "data_hex": "01000000000000000a00000000000000" },
+        { "scope": "group", "data_hex": "02000000000000001400000000000000" },
+        { "scope": "group", "data_hex": "03000000000000001e00000000000000" }
+      ],
+      "expected_exit": 0
+    },
+    {
+      "name": "above_maximum_n_plus_one",
+      "inputs": [
+        { "scope": "group", "data_hex": "01000000000000000100000000000000" },
+        { "scope": "group", "data_hex": "02000000000000000100000000000000" },
+        { "scope": "group", "data_hex": "03000000000000000100000000000000" },
+        { "scope": "group", "data_hex": "04000000000000000100000000000000" }
+      ],
+      "expected_exit": 21
+    },
+    {
+      "name": "malformed_group_element",
+      "inputs": [
+        { "scope": "group", "data_hex": "01000000" }
+      ],
+      "expected_exit": 4
+    },
+    {
+      "name": "predicate_false_first",
+      "inputs": [
+        { "scope": "group", "data_hex": "01000000000000000000000000000000" },
+        { "scope": "group", "data_hex": "02000000000000000100000000000000" },
+        { "scope": "group", "data_hex": "03000000000000000100000000000000" }
+      ],
+      "expected_exit": 5
+    },
+    {
+      "name": "predicate_false_middle",
+      "inputs": [
+        { "scope": "group", "data_hex": "01000000000000000100000000000000" },
+        { "scope": "group", "data_hex": "02000000000000000000000000000000" },
+        { "scope": "group", "data_hex": "03000000000000000100000000000000" }
+      ],
+      "expected_exit": 5
+    },
+    {
+      "name": "predicate_false_last",
+      "inputs": [
+        { "scope": "group", "data_hex": "01000000000000000100000000000000" },
+        { "scope": "group", "data_hex": "02000000000000000100000000000000" },
+        { "scope": "group", "data_hex": "03000000000000000000000000000000" }
+      ],
+      "expected_exit": 5
+    },
+    {
+      "name": "wrong_type_and_outside_group_are_excluded",
+      "inputs": [
+        { "scope": "outside_group", "data_hex": "ff" },
+        { "scope": "group", "data_hex": "07000000000000000b00000000000000" },
+        { "scope": "outside_group", "data_hex": "00000000000000000000000000000000" }
+      ],
+      "expected_exit": 0
+    },
+    {
+      "name": "duplicate_application_identity_is_collection_neutral",
+      "inputs": [
+        { "scope": "group", "data_hex": "09000000000000000a00000000000000" },
+        { "scope": "group", "data_hex": "09000000000000001400000000000000" }
+      ],
+      "expected_exit": 0
+    }
+  ]
+}

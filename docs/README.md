@@ -104,6 +104,10 @@ High-value active references include:
 - [CELLSCRIPT_PUBLIC_VALUE_GENERICS.md](CELLSCRIPT_PUBLIC_VALUE_GENERICS.md)
   for the accepted restricted public-generic decision, `fixed_value` profile,
   structural derivation, interface compatibility, and migration contract
+- [CELLSCRIPT_BOUNDED_GROUP_INPUT_CONTRACT.md](CELLSCRIPT_BOUNDED_GROUP_INPUT_CONTRACT.md)
+  for the accepted bounded dynamic Type Script `GroupInput` semantics,
+  fail-closed boundary, independent machine checks, shared fixtures, and
+  maximum-resource budget
 - [CELLSCRIPT_SCHEMA_ACKNOWLEDGEMENTS.md](CELLSCRIPT_SCHEMA_ACKNOWLEDGEMENTS.md)
   for the versioned `same except` schema-change plan, explicit new-field rule,
   review receipt, stale verification, and deployment boundary

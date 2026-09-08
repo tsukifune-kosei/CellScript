@@ -1,0 +1,17 @@
+module acceptance::bounded_group_input_v1
+
+resource Token has store, consume {
+    logical_id: u64
+    amount: u64
+}
+
+action verify(input inputs: BoundedCellSet<Token, 3>) -> u64 {
+    verification
+        let mut total: u64 = 0
+        consume_each token in inputs {
+            require token.amount > 0
+            total += token.amount
+        }
+        require total <= 300
+        return 0
+}

@@ -37,6 +37,10 @@ pub(crate) const SOURCE_PROVENANCE_PATHS: &[&str] = &[
     "crates/cellscript-tools/src/ckb_acceptance.rs",
     "crates/cellscript-tools/src/ckb_acceptance_live.rs",
     "crates/cellscript-tools/src/production_evidence.rs",
+    "tests/bounded_group_input.rs",
+    "tests/fixtures/bounded_group_input.cell",
+    "tests/fixtures/bounded_group_input_v1.json",
+    "tests/fixtures/bounded_group_input_max.cell",
 ];
 
 pub(crate) const EXPECTED_EXAMPLES: &[&str] =
@@ -1013,6 +1017,126 @@ fn validate_stateful_scenarios(onchain: &Map<String, Value>) -> Result<()> {
     )
 }
 
+fn validate_bounded_group_input_binding(
+    report_root: &Map<String, Value>,
+    report: &Map<String, Value>,
+    repo_root: &Path,
+) -> Result<()> {
+    let context = "onchain.bounded_group_input_acceptance";
+    require_field(
+        report,
+        "fixture_sha256",
+        json!(format!("0x{}", file_sha256(&repo_root.join("tests/fixtures/bounded_group_input_v1.json"))?)),
+        context,
+    )?;
+
+    let build_index = object(report_root.get("cellscript_build_reports").unwrap_or(&Value::Null), "cellscript_build_reports")?;
+    let rows = array(build_index.get("reports"), "cellscript_build_reports.reports")?;
+    let bounded_rows = rows
+        .iter()
+        .filter(|row| {
+            row.get("name") == Some(&json!("bounded-group-input-v1:verify"))
+                && row.get("kind") == Some(&json!("bounded-group-input-stateful-acceptance"))
+                && row.get("entry") == Some(&json!("verify"))
+        })
+        .collect::<Vec<_>>();
+    require(
+        bounded_rows.len() == 1,
+        format!(
+            "cellscript_build_reports.reports must contain exactly one bounded-group-input-v1:verify stateful acceptance artifact, got {}",
+            bounded_rows.len()
+        ),
+    )?;
+    let row = object(bounded_rows[0], "bounded GroupInput build report")?;
+    require_field(report, "artifact", row.get("artifact_path").cloned().unwrap_or(Value::Null), context)?;
+    require_field(report, "artifact_ckb_data_hash_blake2b", row.get("deployable_elf_hash").cloned().unwrap_or(Value::Null), context)
+}
+
+fn validate_bounded_group_input_acceptance(
+    report_root: &Map<String, Value>,
+    onchain: &Map<String, Value>,
+    repo_root: &Path,
+) -> Result<()> {
+    let context = "onchain.bounded_group_input_acceptance";
+    let report = object(onchain.get("bounded_group_input_acceptance").unwrap_or(&Value::Null), context)?;
+    for (key, expected) in [
+        ("schema", json!("cellscript-bounded-group-input-stateful-acceptance-v1")),
+        ("status", json!(EXPECTED_STATUS)),
+        ("fixture_schema", json!("cellscript-bounded-group-input-fixture-v1")),
+        ("selection", json!("exact-current-type-script-group-input")),
+        ("order", json!("canonical-group-relative-input-order")),
+        ("logical_identity_policy", json!("application-defined-not-enforced-by-collection-selection")),
+    ] {
+        require_field(report, key, expected, context)?;
+    }
+    hex_hash(report.get("fixture_sha256"), &format!("{context}.fixture_sha256"))?;
+    hex_hash(report.get("artifact_ckb_data_hash_blake2b"), &format!("{context}.artifact_ckb_data_hash_blake2b"))?;
+    nonempty_string(report.get("artifact"), &format!("{context}.artifact"))?;
+    validate_bounded_group_input_binding(report_root, report, repo_root)?;
+    let expected = [
+        ("zero", 0_i64, 0_usize),
+        ("one", 0, 1),
+        ("maximum_n", 0, 3),
+        ("above_maximum_n_plus_one", 21, 4),
+        ("malformed_group_element", 4, 1),
+        ("predicate_false_first", 5, 3),
+        ("predicate_false_middle", 5, 3),
+        ("predicate_false_last", 5, 3),
+        ("wrong_type_and_outside_group_are_excluded", 0, 1),
+        ("duplicate_application_identity_is_collection_neutral", 0, 2),
+    ];
+    require_field(report, "case_count", json!(expected.len()), context)?;
+    let runs = array(report.get("runs"), &format!("{context}.runs"))?;
+    require(runs.len() == expected.len(), "bounded GroupInput acceptance run count changed")?;
+    for (index, ((name, exit, selected), value)) in expected.iter().zip(runs).enumerate() {
+        let run_context = format!("{context}.runs[{index}]");
+        let run = object(value, &run_context)?;
+        for (key, expected) in [
+            ("name", json!(name)),
+            ("status", json!(EXPECTED_STATUS)),
+            ("expected_exit", json!(exit)),
+            ("observed_exit", json!(exit)),
+            ("selected_group_input_count", json!(selected)),
+        ] {
+            require_field(run, key, expected, &run_context)?;
+        }
+        let seed = object(run.get("seed").unwrap_or(&Value::Null), &format!("{run_context}.seed"))?;
+        require_field(seed, "status", json!("committed"), &format!("{run_context}.seed"))?;
+        let seed_commit = object(seed.get("commit").unwrap_or(&Value::Null), &format!("{run_context}.seed.commit"))?;
+        hex_hash(seed_commit.get("tx_hash"), &format!("{run_context}.seed.commit.tx_hash"))?;
+        if *exit == 0 && *name == "zero" {
+            require_field(run, "execution", json!("committed-output-only-type-group"), &run_context)?;
+            require_field(seed, "output_only_zero_group_execution", json!(true), &format!("{run_context}.seed"))?;
+        } else if *exit == 0 {
+            require_field(run, "execution", json!("committed-input-type-group"), &run_context)?;
+            require_field(run, "all_seeded_inputs_dead", json!(true), &run_context)?;
+            let measurements = object(run.get("measurements").unwrap_or(&Value::Null), &format!("{run_context}.measurements"))?;
+            positive(measurements.get("measured_cycles"), &format!("{run_context}.measurements.measured_cycles"))?;
+            positive(
+                measurements.get("consensus_serialized_tx_size_bytes"),
+                &format!("{run_context}.measurements.consensus_serialized_tx_size_bytes"),
+            )?;
+            let commit = object(run.get("commit").unwrap_or(&Value::Null), &format!("{run_context}.commit"))?;
+            hex_hash(commit.get("tx_hash"), &format!("{run_context}.commit.tx_hash"))?;
+        } else {
+            require_field(run, "execution", json!("rejected-input-type-group"), &run_context)?;
+            require_field(run, "all_seeded_inputs_remain_live", json!(true), &run_context)?;
+            let rejection = object(run.get("rejection").unwrap_or(&Value::Null), &format!("{run_context}.rejection"))?;
+            require_field(rejection, "matched_expected", json!(true), &format!("{run_context}.rejection"))?;
+            let expected_rejection =
+                object(rejection.get("expected").unwrap_or(&Value::Null), &format!("{run_context}.rejection.expected"))?;
+            for (key, expected) in [
+                ("data_hash", report.get("artifact_ckb_data_hash_blake2b").cloned().unwrap_or(Value::Null)),
+                ("error_code", json!(exit)),
+                ("source", json!("Inputs[0].Type")),
+            ] {
+                require_field(expected_rejection, key, expected, &format!("{run_context}.rejection.expected"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_action_runs(report: &Map<String, Value>) -> Result<()> {
     let runs = all_action_runs(report)?;
     require(
@@ -1131,7 +1255,7 @@ fn validate_lock_runs(onchain: &Map<String, Value>) -> Result<()> {
     Ok(())
 }
 
-fn validate_onchain_gate(report: &Map<String, Value>) -> Result<()> {
+fn validate_onchain_gate(report: &Map<String, Value>, repo_root: &Path) -> Result<()> {
     let onchain = object(report.get("onchain").unwrap_or(&Value::Null), "onchain")?;
     for (key, expected) in [
         ("status", json!(EXPECTED_STATUS)),
@@ -1225,6 +1349,7 @@ fn validate_onchain_gate(report: &Map<String, Value>) -> Result<()> {
     }
     require_empty(final_gate, "failures", "final_production_hardening_gate")?;
     validate_stateful_scenarios(onchain)?;
+    validate_bounded_group_input_acceptance(report, onchain, repo_root)?;
     validate_action_runs(report)?;
     validate_lock_runs(onchain)
 }
@@ -1246,9 +1371,73 @@ pub fn run(repo_root: &Path, report: &Path, explicit_repo_root: Option<&Path>, c
             &source_root,
             report_path.parent().context("production evidence report has no parent directory")?,
         )?;
-        validate_onchain_gate(report_object)?;
+        validate_onchain_gate(report_object, &source_root)?;
     }
     let mode = if compile_only { "compile-only " } else { "" };
     println!("valid CKB CellScript {mode}production evidence: {}", report_path.display());
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bounded_binding_fixture() -> (Map<String, Value>, Map<String, Value>, PathBuf) {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let fixture_sha256 = format!(
+            "0x{}",
+            file_sha256(&repo_root.join("tests/fixtures/bounded_group_input_v1.json")).expect("bounded fixture digest")
+        );
+        let artifact_hash = format!("0x{}", "11".repeat(32));
+        let report_root = json!({
+            "cellscript_build_reports": {
+                "reports": [{
+                    "name": "bounded-group-input-v1:verify",
+                    "kind": "bounded-group-input-stateful-acceptance",
+                    "entry": "verify",
+                    "artifact_path": "/tmp/bounded_group_input_v1_verify.elf",
+                    "deployable_elf_hash": artifact_hash,
+                }]
+            }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let acceptance = json!({
+            "fixture_sha256": fixture_sha256,
+            "artifact": "/tmp/bounded_group_input_v1_verify.elf",
+            "artifact_ckb_data_hash_blake2b": artifact_hash,
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        (report_root, acceptance, repo_root)
+    }
+
+    #[test]
+    fn bounded_acceptance_binding_rejects_stale_or_spliced_evidence() {
+        let (report_root, acceptance, repo_root) = bounded_binding_fixture();
+        validate_bounded_group_input_binding(&report_root, &acceptance, &repo_root).unwrap();
+
+        let mut changed = acceptance.clone();
+        changed.insert("fixture_sha256".to_string(), json!(format!("0x{}", "22".repeat(32))));
+        assert!(validate_bounded_group_input_binding(&report_root, &changed, &repo_root).is_err());
+
+        let mut changed = acceptance.clone();
+        changed.insert("artifact".to_string(), json!("/tmp/stale.elf"));
+        assert!(validate_bounded_group_input_binding(&report_root, &changed, &repo_root).is_err());
+
+        let mut changed = acceptance.clone();
+        changed.insert("artifact_ckb_data_hash_blake2b".to_string(), json!(format!("0x{}", "33".repeat(32))));
+        assert!(validate_bounded_group_input_binding(&report_root, &changed, &repo_root).is_err());
+
+        let mut changed_root = report_root.clone();
+        let duplicate = changed_root["cellscript_build_reports"]["reports"].as_array().unwrap()[0].clone();
+        changed_root["cellscript_build_reports"]["reports"].as_array_mut().unwrap().push(duplicate);
+        assert!(validate_bounded_group_input_binding(&changed_root, &acceptance, &repo_root).is_err());
+
+        let mut changed_root = report_root;
+        changed_root["cellscript_build_reports"]["reports"] = json!([]);
+        assert!(validate_bounded_group_input_binding(&changed_root, &acceptance, &repo_root).is_err());
+    }
 }

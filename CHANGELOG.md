@@ -2,6 +2,19 @@
 
 ## 0.30 - Capability closure development branch
 
+- Complete issue #7 for the accepted bounded Type-group input contract. Native
+  `input BoundedCellSet<T, N>` authoring selects the current complete Type
+  Script's canonical `GroupInput` array, accepts `0..=N` fixed-width resources,
+  executes each pure predicate and numeric accumulator update exactly once, and
+  discharges every selected linear input. The simulator and CKB-VM share a
+  ten-case corpus; a separate 1024-element fixture guards ELF size and cycles.
+  The standalone checker binds syscall ordinals, buffers, lengths, complete
+  Type/Lock hashes, success/absent results, and predicate machine evidence;
+  rebound mutations fail with V2420. Live CKB acceptance passed all ten cases
+  on 2026-09-08, and production-evidence validation binds that report to the
+  current fixture and unique deployed ELF. Dynamic outputs remain under issue
+  #8.
+
 - Stabilize public value generics under issue #23 Proposal A. The new
   `fixed_value` profile normalizes the six ordinary fixed-value abilities,
   generic aggregates derive omitted abilities from their fields, public

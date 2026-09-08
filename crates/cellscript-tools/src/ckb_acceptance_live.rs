@@ -10,13 +10,14 @@ use serde_json::{json, Map, Value};
 
 use crate::ckb_acceptance::{self, ArtifactRecord, CompileEvidence};
 use crate::ckb_devnet::{
-    always_success_dep, decode_hex, deploy_code, funding_cells, out_point, resolve_ckb_bin, sha256_hex, CkbDevnet,
-    ALWAYS_SUCCESS_CODE_HASH,
+    always_success_dep, always_success_lock, decode_hex, deploy_code, funding_cells, out_point, resolve_ckb_bin, sha256_hex,
+    transaction, CkbDevnet, ALWAYS_SUCCESS_CODE_HASH,
 };
 use crate::evidence_retention::{keep_gate_workdirs, remove_directory_if_present};
 use crate::production_evidence::{ACTION_RUNS, EXPECTED_END_TO_END_STATEFUL_SCENARIOS, EXPECTED_EXAMPLES, LOCKS};
 
 const RECIPES: &str = include_str!("../fixtures/ckb_acceptance/transactions-v0.23.json");
+const BOUNDED_GROUP_INPUT_FIXTURE: &str = include_str!("../../../tests/fixtures/bounded_group_input_v1.json");
 const PINNED_CKB_CXXFLAGS: &str = "-include cstdint";
 const PINNED_CKB_CXX_COMPATIBILITY: &str = "ckb-librocksdb-sys-8.5.4-explicit-cstdint-v1";
 
@@ -634,6 +635,202 @@ fn group_actions(groups: &BTreeMap<String, Vec<Value>>, key: &str) -> Vec<Value>
     groups.get(key).cloned().unwrap_or_default()
 }
 
+fn bounded_group_input_script(artifact: &ArtifactRecord) -> Value {
+    json!({"code_hash":artifact.data_hash,"hash_type":"data2","args":"0x"})
+}
+
+fn seed_bounded_group_input_case(
+    devnet: &mut CkbDevnet,
+    case: &Value,
+    artifact: &ArtifactRecord,
+    deployment: &Value,
+    always_dep: &Value,
+) -> Result<(Value, Vec<Value>)> {
+    const CELL_CAPACITY: u64 = 10_000_000_000;
+    const CHANGE_FLOOR: u64 = 5_000_000_000;
+    let fixture_inputs = case["inputs"].as_array().context("bounded GroupInput case inputs missing")?;
+    let synthetic_zero = fixture_inputs.is_empty();
+    let output_count = fixture_inputs.len().max(1);
+    let needed = u64::try_from(output_count)?
+        .checked_mul(CELL_CAPACITY)
+        .and_then(|value| value.checked_add(CHANGE_FLOOR))
+        .context("bounded GroupInput seed capacity overflow")?;
+    let funding = devnet.collect_spendable(needed)?;
+    let total = funding["total_capacity"].as_u64().context("bounded GroupInput funding total missing")?;
+    let current_type = bounded_group_input_script(artifact);
+    let foreign_type = always_success_lock("0x");
+    let mut outputs = Vec::new();
+    let mut outputs_data = Vec::new();
+    let mut seeded = Vec::new();
+    if synthetic_zero {
+        outputs.push(json!({
+            "capacity":format!("0x{CELL_CAPACITY:x}"),
+            "lock":always_success_lock("0x"),
+            "type":current_type
+        }));
+        outputs_data.push("0x00000000000000000100000000000000".to_string());
+        seeded.push(json!({"index":0,"capacity":CELL_CAPACITY,"scope":"zero-output-only"}));
+    } else {
+        for (index, input) in fixture_inputs.iter().enumerate() {
+            let scope = input["scope"].as_str().context("bounded GroupInput input scope missing")?;
+            let type_script = if scope == "group" { current_type.clone() } else { foreign_type.clone() };
+            outputs.push(json!({
+                "capacity":format!("0x{CELL_CAPACITY:x}"),
+                "lock":always_success_lock("0x"),
+                "type":type_script
+            }));
+            outputs_data.push(format!("0x{}", input["data_hex"].as_str().context("bounded GroupInput data missing")?));
+            seeded.push(json!({"index":index,"capacity":CELL_CAPACITY,"scope":scope}));
+        }
+    }
+    let allocated = u64::try_from(output_count)?.checked_mul(CELL_CAPACITY).context("seed allocation overflow")?;
+    let change = total.checked_sub(allocated).context("bounded GroupInput seed funding is insufficient")?;
+    outputs.push(json!({
+        "capacity":format!("0x{change:x}"),
+        "lock":always_success_lock("0x"),
+        "type":Value::Null
+    }));
+    outputs_data.push("0x".to_string());
+    let tx = transaction(
+        funding_cells(&funding),
+        outputs,
+        outputs_data,
+        vec![always_dep.clone(), deployment["cell_dep"].clone()],
+        vec!["0x".to_string(); funding_cells(&funding).len()],
+        vec![],
+    );
+    let dry_run = devnet.dry_run(&tx)?;
+    let name = case["name"].as_str().context("bounded GroupInput case name missing")?;
+    let commit = devnet.submit_and_commit(&tx, &format!("bounded GroupInput seed {name}"))?;
+    let tx_hash = commit["tx_hash"].as_str().context("bounded GroupInput seed hash missing")?;
+    for cell in &mut seeded {
+        let index = cell["index"].as_u64().context("bounded GroupInput seed index missing")?;
+        devnet.wait_live_cell(tx_hash, index)?;
+        cell["tx_hash"] = json!(tx_hash);
+    }
+    Ok((
+        json!({
+            "status":"committed",
+            "dry_run":dry_run,
+            "commit":commit,
+            "output_only_zero_group_execution":synthetic_zero
+        }),
+        seeded,
+    ))
+}
+
+fn run_bounded_group_input_acceptance(
+    devnet: &mut CkbDevnet,
+    artifact: &ArtifactRecord,
+    deployment: &Value,
+    always_dep: &Value,
+) -> Result<Value> {
+    let fixture: Value = serde_json::from_str(BOUNDED_GROUP_INPUT_FIXTURE)?;
+    if fixture["schema"] != "cellscript-bounded-group-input-fixture-v1" {
+        bail!("unexpected bounded GroupInput fixture schema");
+    }
+    let cases = fixture["cases"].as_array().context("bounded GroupInput fixture cases missing")?;
+    let mut runs = Vec::new();
+    for case in cases {
+        let name = case["name"].as_str().context("bounded GroupInput case name missing")?;
+        let expected_exit = case["expected_exit"].as_i64().context("bounded GroupInput expected exit missing")?;
+        let (seed, seeded) = seed_bounded_group_input_case(devnet, case, artifact, deployment, always_dep)?;
+        if case["inputs"].as_array().is_some_and(Vec::is_empty) {
+            runs.push(json!({
+                "name":name,
+                "status":"passed",
+                "expected_exit":expected_exit,
+                "observed_exit":0,
+                "execution":"committed-output-only-type-group",
+                "seed":seed,
+                "selected_group_input_count":0
+            }));
+            continue;
+        }
+
+        let total = seeded.iter().try_fold(0_u64, |sum, cell| {
+            sum.checked_add(cell["capacity"].as_u64().context("bounded GroupInput seed capacity missing")?)
+                .context("bounded GroupInput spend capacity overflow")
+        })?;
+        let tx = transaction(
+            &seeded,
+            vec![json!({
+                "capacity":format!("0x{total:x}"),
+                "lock":always_success_lock("0x"),
+                "type":Value::Null
+            })],
+            vec!["0x".to_string()],
+            vec![always_dep.clone(), deployment["cell_dep"].clone()],
+            vec!["0x".to_string(); seeded.len()],
+            vec![],
+        );
+        let selected_count = seeded.iter().filter(|cell| cell["scope"] == "group").count();
+        if expected_exit == 0 {
+            let dry_run = devnet.dry_run(&tx)?;
+            let measurements = measured_constraints(&json!({}), &tx, &dry_run)?;
+            let commit = devnet.submit_and_commit(&tx, &format!("bounded GroupInput consume {name}"))?;
+            for cell in &seeded {
+                devnet.wait_dead_cell(
+                    cell["tx_hash"].as_str().context("bounded GroupInput seed hash missing")?,
+                    cell["index"].as_u64().context("bounded GroupInput seed index missing")?,
+                )?;
+            }
+            devnet.wait_live_cell(commit["tx_hash"].as_str().context("bounded GroupInput spend hash missing")?, 0)?;
+            runs.push(json!({
+                "name":name,
+                "status":"passed",
+                "expected_exit":0,
+                "observed_exit":0,
+                "execution":"committed-input-type-group",
+                "selected_group_input_count":selected_count,
+                "seed":seed,
+                "dry_run":dry_run,
+                "measurements":measurements,
+                "commit":commit,
+                "all_seeded_inputs_dead":true
+            }));
+        } else {
+            let rejection = devnet.dry_run_rejects(
+                &tx,
+                &format!("bounded GroupInput reject {name}"),
+                Some("Inputs[0].Type"),
+                Some(&artifact.data_hash),
+                Some(expected_exit),
+            )?;
+            for cell in &seeded {
+                devnet.wait_live_cell(
+                    cell["tx_hash"].as_str().context("bounded GroupInput seed hash missing")?,
+                    cell["index"].as_u64().context("bounded GroupInput seed index missing")?,
+                )?;
+            }
+            runs.push(json!({
+                "name":name,
+                "status":"passed",
+                "expected_exit":expected_exit,
+                "observed_exit":expected_exit,
+                "execution":"rejected-input-type-group",
+                "selected_group_input_count":selected_count,
+                "seed":seed,
+                "rejection":rejection,
+                "all_seeded_inputs_remain_live":true
+            }));
+        }
+    }
+    Ok(json!({
+        "schema":"cellscript-bounded-group-input-stateful-acceptance-v1",
+        "status":"passed",
+        "fixture_schema":fixture["schema"],
+        "fixture_sha256":sha256_hex(BOUNDED_GROUP_INPUT_FIXTURE.as_bytes()),
+        "artifact":artifact.path,
+        "artifact_ckb_data_hash_blake2b":artifact.data_hash,
+        "selection":fixture["selection"],
+        "order":fixture["order"],
+        "logical_identity_policy":fixture["logical_identity_policy"],
+        "case_count":runs.len(),
+        "runs":runs
+    }))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     root: &Path,
@@ -675,6 +872,16 @@ pub(crate) fn run(
         .filter(|artifact| artifact.entry.is_some())
         .map(|artifact| (artifact.name.clone(), artifact.clone()))
         .collect::<BTreeMap<_, _>>();
+    let bounded_group_input_report = if stateful {
+        let artifact =
+            artifact_by_name.get("bounded-group-input-v1:verify").context("bounded GroupInput acceptance artifact missing")?;
+        let deployment = artifact_deployments
+            .get(&artifact.path.to_string_lossy().into_owned())
+            .context("bounded GroupInput acceptance deployment missing")?;
+        run_bounded_group_input_acceptance(&mut devnet, artifact, deployment, &always_dep)?
+    } else {
+        json!({"status":"skipped","reason":"stateful scenarios not requested","runs":[]})
+    };
     let mut replayer = Replayer {
         devnet: &mut devnet,
         fixture: &fixture,
@@ -741,6 +948,7 @@ pub(crate) fn run(
         "amm_action_runs":group_actions(&action_groups,"amm_action_runs"),
         "launch_action_runs":group_actions(&action_groups,"launch_action_runs"),
         "lock_spend_matrix_runs":lock_runs, "stateful_scenarios":stateful_report,
+        "bounded_group_input_acceptance":bounded_group_input_report,
         "all_token_actions_exercised":true, "all_nft_actions_exercised":true,
         "all_timelock_actions_exercised":true, "all_multisig_actions_exercised":true,
         "all_vesting_actions_exercised":true, "all_amm_actions_exercised":true,

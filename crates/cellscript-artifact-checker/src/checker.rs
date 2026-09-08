@@ -268,6 +268,7 @@ pub fn check_bundle_values(
     validate_stack_discipline(record, &elf, terminal_sink)?;
     validate_syscalls(record, &elf)?;
     validate_script_hash_machine_contract(record, &elf)?;
+    validate_bounded_group_input_machine_contract(record, &elf)?;
     validate_policy_dispatch_machine_contract(record, &elf)?;
     validate_source_map(source_map, record, artifact, &elf)?;
 
@@ -4687,9 +4688,453 @@ const ENTRY_WITNESS_MAGIC: &[u8; 8] = b"CSARGv1\0";
 const CKB_LOAD_SCRIPT_HASH: u64 = 2_062;
 const CKB_LOAD_WITNESS: u64 = 2_074;
 const CKB_LOAD_CELL_BY_FIELD: u64 = 2_081;
+const CKB_LOAD_CELL_DATA: u64 = 2_092;
 const CKB_GROUP_FLAG: u64 = 0x0100_0000_0000_0000;
 const CKB_GROUP_INPUT: u64 = CKB_GROUP_FLAG | 1;
 const CKB_GROUP_OUTPUT: u64 = CKB_GROUP_FLAG | 2;
+
+#[derive(Debug)]
+struct BoundedGroupInputMachineContract<'a> {
+    owner: &'a str,
+    maximum: u64,
+    element_width: u64,
+}
+
+fn validate_bounded_group_input_machine_contract(record: &VerifiedLoweringRecord, elf: &ParsedElf) -> Result<(), CheckerError> {
+    let mut contracts = Vec::new();
+    for entry in &record.typed_semantics.entries {
+        for block in &entry.blocks {
+            for operation in &block.operations {
+                if operation.opcode != "bounded-cell-load" {
+                    continue;
+                }
+                let TypedSemanticOperationDetail::Collection { declared_type } = &operation.detail else {
+                    return Err(bounded_group_input_machine_error("bounded Cell load has no collection contract"));
+                };
+                let (element, maximum) = parse_bounded_cell_set_contract(declared_type)
+                    .ok_or_else(|| bounded_group_input_machine_error("bounded Cell load has an invalid declared type"))?;
+                let element_width = record
+                    .typed_semantics
+                    .types
+                    .iter()
+                    .find(|ty| ty.name == element)
+                    .and_then(|ty| ty.encoded_size)
+                    .map(u64::from)
+                    .ok_or_else(|| bounded_group_input_machine_error("bounded Cell element has no fixed encoded width"))?;
+                contracts.push(BoundedGroupInputMachineContract { owner: entry.id.as_str(), maximum, element_width });
+            }
+        }
+    }
+    if contracts.is_empty() {
+        return Ok(());
+    }
+
+    let owners = contracts.iter().map(|contract| contract.owner).collect::<BTreeSet<_>>();
+    for owner in owners {
+        let owner_contracts = contracts.iter().filter(|contract| contract.owner == owner).collect::<Vec<_>>();
+        let loaded = generated_blocks(record, owner, ".Lbounded_cell_loaded_");
+        let count_ok = generated_blocks(record, owner, ".Lbounded_cell_count_ok_");
+        let out_of_bound = generated_blocks(record, owner, ".Lbounded_cell_out_of_bound_");
+        let done = generated_blocks(record, owner, ".Lbounded_cell_load_done_");
+        if loaded.len() != owner_contracts.len()
+            || count_ok.len() != owner_contracts.len()
+            || out_of_bound.len() != owner_contracts.len()
+            || done.len() != owner_contracts.len()
+        {
+            return Err(bounded_group_input_machine_error(format!(
+                "entry '{owner}' does not have one complete machine scan for each typed bounded Cell load"
+            )));
+        }
+        for (index, contract) in owner_contracts.into_iter().enumerate() {
+            validate_one_bounded_group_input_machine_contract(
+                record,
+                elf,
+                contract,
+                loaded[index],
+                count_ok[index],
+                out_of_bound[index],
+                done[index],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn parse_bounded_cell_set_contract(declared_type: &str) -> Option<(&str, u64)> {
+    let body = declared_type.strip_prefix("BoundedCellSet<")?.strip_suffix('>')?;
+    let (element, maximum) = body.rsplit_once(',')?;
+    Some((element.trim(), maximum.trim().parse().ok()?))
+}
+
+fn generated_blocks<'a>(record: &'a VerifiedLoweringRecord, owner: &str, prefix: &str) -> Vec<&'a LoweringBlock> {
+    let mut blocks = record
+        .blocks
+        .iter()
+        .filter(|block| {
+            block.owner_entry == owner && block.machine_label.as_deref().is_some_and(|label| generated_label(label, prefix))
+        })
+        .collect::<Vec<_>>();
+    blocks.sort_by_key(|block| block.range.start);
+    blocks
+}
+
+fn validate_one_bounded_group_input_machine_contract(
+    record: &VerifiedLoweringRecord,
+    elf: &ParsedElf,
+    contract: &BoundedGroupInputMachineContract<'_>,
+    loaded: &LoweringBlock,
+    count_ok: &LoweringBlock,
+    out_of_bound: &LoweringBlock,
+    done: &LoweringBlock,
+) -> Result<(), CheckerError> {
+    if !(loaded.range.start < count_ok.range.start
+        && count_ok.range.start < out_of_bound.range.start
+        && out_of_bound.range.start < done.range.start)
+    {
+        return Err(bounded_group_input_machine_error("bounded Cell scan blocks are not in canonical order"));
+    }
+    let data_site = record
+        .syscall_sites
+        .iter()
+        .filter(|site| site.address < loaded.range.start)
+        .filter(|site| block_for_address(record, site.address).is_some_and(|block| block.owner_entry == contract.owner))
+        .max_by_key(|site| site.address)
+        .ok_or_else(|| bounded_group_input_machine_error("bounded Cell scan has no LOAD_CELL_DATA syscall"))?;
+    let identity_sites = record
+        .syscall_sites
+        .iter()
+        .filter(|site| loaded.range.start < site.address && site.address < done.range.start)
+        .collect::<Vec<_>>();
+    if identity_sites.len() != 3 {
+        return Err(bounded_group_input_machine_error(
+            "bounded Cell scan must contain current-Script, Type-hash, and Lock-hash syscalls",
+        ));
+    }
+    let data_abi = validate_bounded_group_input_syscall(
+        record,
+        elf,
+        data_site.address,
+        CKB_LOAD_CELL_DATA,
+        Some(CKB_GROUP_INPUT),
+        None,
+        Some(512),
+    )?;
+    let current_hash_abi =
+        validate_bounded_group_input_syscall(record, elf, identity_sites[0].address, CKB_LOAD_SCRIPT_HASH, None, None, Some(32))?;
+    let type_hash_abi = validate_bounded_group_input_syscall(
+        record,
+        elf,
+        identity_sites[1].address,
+        CKB_LOAD_CELL_BY_FIELD,
+        Some(CKB_GROUP_INPUT),
+        Some(5),
+        Some(32),
+    )?;
+    let lock_hash_abi = validate_bounded_group_input_syscall(
+        record,
+        elf,
+        identity_sites[2].address,
+        CKB_LOAD_CELL_BY_FIELD,
+        Some(CKB_GROUP_INPUT),
+        Some(3),
+        Some(32),
+    )?;
+    let index_offset = data_abi
+        .index_offset
+        .ok_or_else(|| bounded_group_input_machine_error("LOAD_CELL_DATA does not use the typed loop ordinal"))?;
+    if type_hash_abi.index_offset != Some(index_offset) || lock_hash_abi.index_offset != Some(index_offset) {
+        return Err(bounded_group_input_machine_error(
+            "bounded Cell data, Type hash, and Lock hash syscalls do not use the same typed loop ordinal",
+        ));
+    }
+
+    let data = data_site.address;
+    if !is_beq(bounded_word(elf, data + 4)?, 10, 0)
+        || !flow_targets(elf, data + 4, loaded.range.start)
+        || !is_addi(bounded_word(elf, data + 8)?, 5, 0, 1)
+        || !is_sub(bounded_word(elf, data + 12)?, 6, 10, 5)
+        || !is_beq(bounded_word(elf, data + 16)?, 6, 0)
+        || !flow_targets(elf, data + 16, out_of_bound.range.start)
+        || !jump_targets_runtime_error(record, elf, data + 20, 3)
+    {
+        return Err(bounded_group_input_machine_error(
+            "LOAD_CELL_DATA status no longer distinguishes success, end-of-group, and failure",
+        ));
+    }
+
+    let maximum = i32::try_from(contract.maximum)
+        .map_err(|_| bounded_group_input_machine_error("bounded Cell maximum does not fit its machine immediate"))?;
+    let loaded_words = instructions_from_bounded(elf, loaded.range.start, 4)?;
+    if !is_ld(loaded_words[0].word, 28, 2, index_offset)
+        || !is_addi(loaded_words[1].word, 5, 0, maximum)
+        || !is_sltu(loaded_words[2].word, 6, 28, 5)
+        || !is_bne(loaded_words[3].word, 6, 0)
+        || !flow_targets(elf, loaded_words[3].address, count_ok.range.start)
+        || !jump_targets_runtime_error(record, elf, loaded.range.end, 21)
+    {
+        return Err(bounded_group_input_machine_error("runtime cardinality is not the typed strict index < N contract"));
+    }
+
+    let width = i32::try_from(contract.element_width)
+        .map_err(|_| bounded_group_input_machine_error("bounded Cell width does not fit its machine immediate"))?;
+    let count_words = instructions_from_bounded(elf, count_ok.range.start, 4)?;
+    if !is_ld(count_words[0].word, 10, 2, data_abi.size_offset)
+        || !is_addi(count_words[1].word, 11, 0, width)
+        || !is_sub(count_words[2].word, 10, 10, 11)
+        || !is_beq(count_words[3].word, 10, 0)
+        || !jump_targets_runtime_error(record, elf, count_ok.range.end, 4)
+    {
+        return Err(bounded_group_input_machine_error("bounded Cell data is no longer decoded with the typed exact width"));
+    }
+
+    let type_words = generated_blocks(record, contract.owner, ".Lbounded_cell_type_word_ok_")
+        .into_iter()
+        .filter(|block| loaded.range.start < block.range.start && block.range.start < done.range.start)
+        .collect::<Vec<_>>();
+    if type_words.len() != 4 {
+        return Err(bounded_group_input_machine_error("bounded Cell Type-hash identity must compare all four 64-bit words"));
+    }
+    for (word_index, block) in type_words.into_iter().enumerate() {
+        let start = block.range.start;
+        let byte_offset = i32::try_from(word_index * 8)
+            .map_err(|_| bounded_group_input_machine_error("bounded Cell Type-hash word offset overflowed"))?;
+        if !is_ld(bounded_word(elf, start - 20)?, 5, 2, type_hash_abi.buffer_offset + byte_offset)
+            || !is_ld(bounded_word(elf, start - 16)?, 6, 2, current_hash_abi.buffer_offset + byte_offset)
+            || !is_sub(bounded_word(elf, start - 12)?, 7, 5, 6)
+            || !is_beq(bounded_word(elf, start - 8)?, 7, 0)
+            || !flow_targets(elf, start - 8, start)
+            || !jump_targets_runtime_error(record, elf, start - 4, 17)
+        {
+            return Err(bounded_group_input_machine_error("bounded Cell Type-hash identity comparison is incomplete"));
+        }
+    }
+
+    let lock_distinct = generated_blocks(record, contract.owner, ".Lbounded_cell_lock_is_distinct_")
+        .into_iter()
+        .find(|block| loaded.range.start < block.range.start && block.range.start < done.range.start)
+        .ok_or_else(|| bounded_group_input_machine_error("bounded Cell scan has no Lock/Type role separation"))?;
+    validate_bounded_hash_syscall_result(record, elf, identity_sites[0].address, current_hash_abi.size_offset, 1)?;
+    validate_bounded_hash_syscall_result(record, elf, identity_sites[1].address, type_hash_abi.size_offset, 47)?;
+    validate_bounded_hash_syscall_result(record, elf, identity_sites[2].address, lock_hash_abi.size_offset, 47)?;
+
+    let lock_fold_start = identity_sites[2].address + 32;
+    let lock_fold = instructions_from_bounded(elf, lock_fold_start, 17)?;
+    if !is_ld(lock_fold[0].word, 5, 2, lock_hash_abi.buffer_offset)
+        || !is_ld(lock_fold[1].word, 6, 2, current_hash_abi.buffer_offset)
+        || !is_sub(lock_fold[2].word, 7, 5, 6)
+    {
+        return Err(bounded_group_input_machine_error("bounded Cell Lock/Type comparison does not begin with word zero"));
+    }
+    for word_index in 1..4 {
+        let start = 3 + (word_index - 1) * 4;
+        let byte_offset = i32::try_from(word_index * 8)
+            .map_err(|_| bounded_group_input_machine_error("bounded Cell Lock-hash word offset overflowed"))?;
+        if !is_ld(lock_fold[start].word, 5, 2, lock_hash_abi.buffer_offset + byte_offset)
+            || !is_ld(lock_fold[start + 1].word, 6, 2, current_hash_abi.buffer_offset + byte_offset)
+            || !is_sub(lock_fold[start + 2].word, 5, 5, 6)
+            || !is_or(lock_fold[start + 3].word, 7, 7, 5)
+        {
+            return Err(bounded_group_input_machine_error(
+                "bounded Cell Lock/Type comparison does not fold all corresponding hash words",
+            ));
+        }
+    }
+    if lock_fold[15].address != lock_distinct.range.start - 8
+        || !is_bne(lock_fold[15].word, 7, 0)
+        || !flow_targets(elf, lock_distinct.range.start - 8, lock_distinct.range.start)
+        || lock_fold[16].address != lock_distinct.range.start - 4
+        || !jump_targets_runtime_error(record, elf, lock_fold[16].address, 47)
+    {
+        return Err(bounded_group_input_machine_error(
+            "bounded Cell Lock hash is no longer required to differ from the current Type Script hash",
+        ));
+    }
+
+    let success_words = instructions_from_bounded(elf, lock_distinct.range.start, 5)?;
+    let destination_offset = sd_stack_offset(success_words[1].word, 5)
+        .ok_or_else(|| bounded_group_input_machine_error("bounded Cell success does not store its element pointer"))?;
+    let found_offset = sd_stack_offset(success_words[3].word, 5)
+        .ok_or_else(|| bounded_group_input_machine_error("bounded Cell success does not store its presence bit"))?;
+    if destination_offset == found_offset
+        || !is_addi(success_words[0].word, 5, 2, data_abi.buffer_offset)
+        || !is_addi(success_words[2].word, 5, 0, 1)
+        || !is_jal_zero(success_words[4].word)
+        || !flow_targets(elf, success_words[4].address, done.range.start)
+        || lock_distinct.range.end != out_of_bound.range.start
+    {
+        return Err(bounded_group_input_machine_error(
+            "bounded Cell success no longer returns the loaded element and canonical presence bit",
+        ));
+    }
+
+    let out_words = instructions_from_bounded(elf, out_of_bound.range.start, 2)?;
+    if !is_sd(out_words[0].word, 0, 2, destination_offset)
+        || !is_sd(out_words[1].word, 0, 2, found_offset)
+        || out_of_bound.range.end != done.range.start
+    {
+        return Err(bounded_group_input_machine_error("end-of-group no longer produces the canonical absent element"));
+    }
+    for code in [1, 3, 4, 17, 21, 47] {
+        if !owner_has_abort_error(record, elf, contract.owner, code) {
+            return Err(bounded_group_input_machine_error(format!(
+                "entry '{}' no longer has stable runtime error {code}",
+                contract.owner
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct BoundedGroupInputSyscallAbi {
+    buffer_offset: i32,
+    size_offset: i32,
+    index_offset: Option<i32>,
+}
+
+fn validate_bounded_group_input_syscall(
+    record: &VerifiedLoweringRecord,
+    elf: &ParsedElf,
+    address: u64,
+    syscall: u64,
+    source: Option<u64>,
+    field: Option<u64>,
+    initialized_size: Option<i32>,
+) -> Result<BoundedGroupInputSyscallAbi, CheckerError> {
+    let block = block_for_address(record, address)
+        .ok_or_else(|| bounded_group_input_machine_error("bounded Cell syscall is outside machine coverage"))?;
+    if register_constant_before(elf, block, address, 17) != Some(syscall)
+        || register_constant_before(elf, block, address, 12) != Some(0)
+        || source.is_some_and(|source| register_constant_before(elf, block, address, 14) != Some(source))
+        || field.is_some_and(|field| register_constant_before(elf, block, address, 15) != Some(field))
+    {
+        return Err(bounded_group_input_machine_error(format!("bounded Cell syscall ABI changed at {address:#x}")));
+    }
+    let (a0_address, a0_word) = last_register_definition_before(elf, block, address, 10)
+        .ok_or_else(|| bounded_group_input_machine_error("bounded Cell syscall has no a0 buffer definition"))?;
+    let (_, a1_word) = last_register_definition_before(elf, block, address, 11)
+        .ok_or_else(|| bounded_group_input_machine_error("bounded Cell syscall has no a1 size definition"))?;
+    let buffer_offset = stack_address_offset(a0_word, 10)
+        .ok_or_else(|| bounded_group_input_machine_error("bounded Cell syscall a0 is not a canonical stack buffer"))?;
+    let size_offset = stack_address_offset(a1_word, 11)
+        .ok_or_else(|| bounded_group_input_machine_error("bounded Cell syscall a1 is not a canonical stack size slot"))?;
+    if buffer_offset != size_offset + 8 {
+        return Err(bounded_group_input_machine_error("bounded Cell syscall buffer and size slots are not adjacent"));
+    }
+    if let Some(initialized_size) = initialized_size
+        && (a0_address < block.range.start + 8
+            || !is_addi(bounded_word(elf, a0_address - 8)?, 5, 0, initialized_size)
+            || !is_sd(bounded_word(elf, a0_address - 4)?, 5, 2, size_offset))
+    {
+        return Err(bounded_group_input_machine_error("bounded Cell syscall size slot is not initialized for its canonical buffer"));
+    }
+
+    let index_offset =
+        if source.is_some() {
+            let (a3_address, a3_word) = last_register_definition_before(elf, block, address, 13)
+                .ok_or_else(|| bounded_group_input_machine_error("bounded Cell syscall has no a3 index definition"))?;
+            if !is_addi(a3_word, 13, 28, 0) {
+                return Err(bounded_group_input_machine_error("bounded Cell syscall a3 is not the typed loop ordinal"));
+            }
+            let (_, index_word) = last_register_definition_before(elf, block, a3_address, 28)
+                .ok_or_else(|| bounded_group_input_machine_error("bounded Cell typed loop ordinal has no stack definition"))?;
+            Some(ld_stack_offset(index_word, 28).ok_or_else(|| {
+                bounded_group_input_machine_error("bounded Cell typed loop ordinal is not loaded from its stack slot")
+            })?)
+        } else {
+            None
+        };
+    Ok(BoundedGroupInputSyscallAbi { buffer_offset, size_offset, index_offset })
+}
+
+fn validate_bounded_hash_syscall_result(
+    record: &VerifiedLoweringRecord,
+    elf: &ParsedElf,
+    address: u64,
+    size_offset: i32,
+    status_error: i32,
+) -> Result<(), CheckerError> {
+    if !is_beq(bounded_word(elf, address + 4)?, 10, 0)
+        || !flow_targets(elf, address + 4, address + 12)
+        || !jump_targets_runtime_error(record, elf, address + 8, status_error)
+        || !is_ld(bounded_word(elf, address + 12)?, 10, 2, size_offset)
+        || !is_addi(bounded_word(elf, address + 16)?, 11, 0, 32)
+        || !is_sub(bounded_word(elf, address + 20)?, 10, 10, 11)
+        || !is_beq(bounded_word(elf, address + 24)?, 10, 0)
+        || !flow_targets(elf, address + 24, address + 32)
+        || !jump_targets_runtime_error(record, elf, address + 28, 4)
+    {
+        return Err(bounded_group_input_machine_error(
+            "bounded Cell identity syscall no longer requires success and an exact 32-byte hash",
+        ));
+    }
+    Ok(())
+}
+
+fn last_register_definition_before(elf: &ParsedElf, block: &LoweringBlock, address: u64, register: u32) -> Option<(u64, u32)> {
+    elf.instructions
+        .iter()
+        .filter(|instruction| block.range.start <= instruction.address && instruction.address < address)
+        .rev()
+        .find(|instruction| instruction_writes_register(instruction.word, register))
+        .map(|instruction| (instruction.address, instruction.word))
+}
+
+fn instruction_writes_register(word: u32, register: u32) -> bool {
+    matches!(word & 0x7f, 0x03 | 0x13 | 0x17 | 0x33 | 0x37 | 0x67 | 0x6f) && (word >> 7) & 0x1f == register
+}
+
+fn stack_address_offset(word: u32, register: u32) -> Option<i32> {
+    (word & 0x7f == 0x13 && (word >> 12) & 0x7 == 0 && (word >> 7) & 0x1f == register && (word >> 15) & 0x1f == 2)
+        .then_some((word as i32) >> 20)
+}
+
+fn ld_stack_offset(word: u32, register: u32) -> Option<i32> {
+    (word & 0x7f == 0x03 && (word >> 12) & 0x7 == 0x3 && (word >> 7) & 0x1f == register && (word >> 15) & 0x1f == 2)
+        .then_some((word as i32) >> 20)
+}
+
+fn sd_stack_offset(word: u32, source: u32) -> Option<i32> {
+    if word & 0x7f != 0x23 || (word >> 12) & 0x7 != 0x3 || (word >> 20) & 0x1f != source || (word >> 15) & 0x1f != 2 {
+        return None;
+    }
+    let immediate = (((word >> 25) & 0x7f) << 5) | ((word >> 7) & 0x1f);
+    Some(((immediate as i32) << 20) >> 20)
+}
+
+fn bounded_word(elf: &ParsedElf, address: u64) -> Result<u32, CheckerError> {
+    elf.instructions
+        .iter()
+        .find(|instruction| instruction.address == address)
+        .map(|instruction| instruction.word)
+        .ok_or_else(|| bounded_group_input_machine_error(format!("missing instruction at {address:#x}")))
+}
+
+fn instructions_from_bounded(elf: &ParsedElf, address: u64, count: usize) -> Result<&[crate::elf::DecodedInstruction], CheckerError> {
+    let start = elf
+        .instructions
+        .binary_search_by_key(&address, |instruction| instruction.address)
+        .map_err(|_| bounded_group_input_machine_error(format!("missing instruction range at {address:#x}")))?;
+    elf.instructions
+        .get(start..start.saturating_add(count))
+        .ok_or_else(|| bounded_group_input_machine_error(format!("truncated instruction range at {address:#x}")))
+}
+
+fn jump_targets_runtime_error(record: &VerifiedLoweringRecord, elf: &ParsedElf, address: u64, code: i32) -> bool {
+    let Some(target_address) = elf.control_flow.iter().find(|edge| edge.address == address).map(|edge| edge.target) else {
+        return false;
+    };
+    record.runtime_error_exits.iter().any(|exit| exit.code == code && exit.address == target_address)
+        && bounded_word(elf, address).is_ok_and(is_jal_zero)
+        && machine_error_jumps_to_abort(record, elf, target_address, code)
+}
+
+fn bounded_group_input_machine_error(message: impl Into<String>) -> CheckerError {
+    CheckerError::new(
+        CheckerRejectionCode::V2420TypedMachineBindingInvalid,
+        format!("bounded GroupInput machine contract: {}", message.into()),
+    )
+}
 
 fn validate_policy_dispatch_machine_contract(record: &VerifiedLoweringRecord, elf: &ParsedElf) -> Result<(), CheckerError> {
     let EntryDispatchContract::PolicyWitnessV1(contract) = &record.typed_semantics.foundation.entry_contract.dispatch else {

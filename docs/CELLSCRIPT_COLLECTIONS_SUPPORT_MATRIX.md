@@ -104,6 +104,11 @@ locks, implicit capacity policy, or arbitrary mutation inside a bounded body.
 Those shapes keep the 0.25 fail-closed behavior: production stops with E2105
 and permissive artifacts return runtime error 24.
 
+The accepted 0.30 source-selection, ordering, identity, stable-error,
+independent-checker, shared-fixture, and maximum-resource rules for the input
+half are fixed in the
+[bounded GroupInput contract](CELLSCRIPT_BOUNDED_GROUP_INPUT_CONTRACT.md).
+
 ## Authoring Guidance
 
 Use dynamic vectors for data that is still a single cell field, such as signer

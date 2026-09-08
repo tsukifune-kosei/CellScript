@@ -2264,7 +2264,7 @@ action verify(input inputs: BoundedCellSet<Token, 2>) -> u64 {
     changed.rebind_typed_semantics();
     assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
 
-    let mut changed = valid;
+    let mut changed = valid.clone();
     let (entry_id, typed_block_id) = changed
         .record
         .typed_semantics
@@ -2286,6 +2286,134 @@ action verify(input inputs: BoundedCellSet<Token, 2>) -> u64 {
         .and_then(|entry| entry.typed_blocks.iter_mut().find(|binding| binding.id == typed_block_id))
         .expect("fixture must contain a machine binding for the bounded Cell load");
     binding.machine_block_ids.pop().expect("bounded Cell load must map to machine code");
+    changed.rebind_sidecars();
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let machine_block = |prefix: &str| {
+        valid
+            .record
+            .blocks
+            .iter()
+            .find(|block| block.machine_label.as_deref().is_some_and(|label| label.starts_with(prefix)))
+            .expect("bounded Cell machine block")
+    };
+    let elf = parse_elf(&valid.artifact, CheckerBudgets::default().instructions).unwrap();
+    let word_at = |address| elf.instructions.iter().find(|instruction| instruction.address == address).unwrap().word;
+    let loaded = machine_block(".Lbounded_cell_loaded_");
+    let out_of_bound = machine_block(".Lbounded_cell_out_of_bound_");
+    let lock_distinct = machine_block(".Lbounded_cell_lock_is_distinct_");
+    let data_site = valid
+        .record
+        .syscall_sites
+        .iter()
+        .filter(|site| site.address < loaded.range.start)
+        .max_by_key(|site| site.address)
+        .expect("bounded data syscall")
+        .address;
+    let identity_sites = valid
+        .record
+        .syscall_sites
+        .iter()
+        .filter(|site| loaded.range.start < site.address && site.address < out_of_bound.range.start)
+        .map(|site| site.address)
+        .collect::<Vec<_>>();
+    assert_eq!(identity_sites.len(), 3);
+
+    let mut changed = valid.clone();
+    let count_address = machine_block(".Lbounded_cell_loaded_").range.start + 4;
+    changed.replace_machine_word(count_address, word_at(count_address) ^ (1 << 20));
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let mut changed = valid.clone();
+    let decode_address = machine_block(".Lbounded_cell_count_ok_").range.start + 4;
+    changed.replace_machine_word(decode_address, word_at(decode_address) ^ (1 << 20));
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let mut changed = valid.clone();
+    let identity_address = machine_block(".Lbounded_cell_type_word_ok_").range.start - 12;
+    changed.replace_machine_word(identity_address, word_at(identity_address) ^ (3 << 20));
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let mut changed = valid.clone();
+    let data_index_address = elf
+        .instructions
+        .iter()
+        .rev()
+        .find(|instruction| instruction.address < data_site && instruction.word & 0x7f == 0x13 && (instruction.word >> 7) & 0x1f == 13)
+        .expect("bounded data syscall a3 definition")
+        .address;
+    changed.replace_machine_word(data_index_address, encode_addi(13, 0, 7));
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let mut type_word_blocks = valid
+        .record
+        .blocks
+        .iter()
+        .filter(|block| block.machine_label.as_deref().is_some_and(|label| label.starts_with(".Lbounded_cell_type_word_ok_")))
+        .collect::<Vec<_>>();
+    type_word_blocks.sort_by_key(|block| block.range.start);
+    let repeated_type_word_address = type_word_blocks[1].range.start - 20;
+    let repeated_type_word = word_at(repeated_type_word_address);
+    let mut changed = valid.clone();
+    changed.replace_machine_word(
+        repeated_type_word_address,
+        replace_i_immediate(repeated_type_word, ((repeated_type_word as i32) >> 20) - 8),
+    );
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let mut changed = valid.clone();
+    changed.replace_machine_word(lock_distinct.range.start - 60, encode_addi(7, 0, 1));
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let mut changed = valid.clone();
+    changed.replace_machine_word(identity_sites[1] + 16, encode_addi(11, 0, 31));
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let success_pointer_address = lock_distinct.range.start;
+    let success_pointer = word_at(success_pointer_address);
+    let mut changed = valid.clone();
+    changed.replace_machine_word(success_pointer_address, replace_i_immediate(success_pointer, ((success_pointer as i32) >> 20) + 8));
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let absent_destination_address = out_of_bound.range.start;
+    let absent_destination = word_at(absent_destination_address);
+    let mut changed = valid.clone();
+    changed.replace_machine_word(
+        absent_destination_address,
+        replace_s_immediate(absent_destination, decode_s_immediate(absent_destination) + 8),
+    );
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let mut changed = valid;
+    let (entry_id, predicate_block_id) = changed
+        .record
+        .typed_semantics
+        .entries
+        .iter()
+        .find_map(|entry| {
+            entry
+                .blocks
+                .iter()
+                .find(|block| {
+                    block.operations.iter().any(|operation| {
+                        operation.opcode == "binary"
+                            && matches!(
+                                &operation.detail,
+                                TypedSemanticOperationDetail::BinaryOperator { operator } if operator == "gt"
+                            )
+                    })
+                })
+                .map(|block| (entry.id.clone(), block.id))
+        })
+        .expect("fixture must bind its per-element predicate");
+    let binding = changed
+        .record
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id == entry_id)
+        .and_then(|entry| entry.typed_blocks.iter_mut().find(|binding| binding.id == predicate_block_id))
+        .expect("predicate must have a machine binding");
+    binding.machine_block_ids.clear();
     changed.rebind_sidecars();
     assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
 }
@@ -2549,4 +2677,22 @@ fn encode_jal(offset: i32) -> u32 {
         | (((immediate >> 11) & 1) << 20)
         | (((immediate >> 12) & 0x00ff) << 12)
         | 0x6f
+}
+
+fn encode_addi(rd: u32, rs1: u32, immediate: i32) -> u32 {
+    ((immediate as u32 & 0x0fff) << 20) | (rs1 << 15) | (rd << 7) | 0x13
+}
+
+fn replace_i_immediate(word: u32, immediate: i32) -> u32 {
+    (word & 0x000f_ffff) | ((immediate as u32 & 0x0fff) << 20)
+}
+
+fn decode_s_immediate(word: u32) -> i32 {
+    let immediate = (((word >> 25) & 0x7f) << 5) | ((word >> 7) & 0x1f);
+    ((immediate as i32) << 20) >> 20
+}
+
+fn replace_s_immediate(word: u32, immediate: i32) -> u32 {
+    let immediate = immediate as u32 & 0x0fff;
+    (word & !((0x7f << 25) | (0x1f << 7))) | ((immediate >> 5) << 25) | ((immediate & 0x1f) << 7)
 }

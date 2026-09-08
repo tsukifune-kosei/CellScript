@@ -467,6 +467,23 @@ fn compile_matrix(root: &Path, cellc: &Path, run_dir: &Path) -> Result<Vec<Artif
             )?);
         }
     }
+    let bounded_group_package = run_dir.join("bounded-group-input-package");
+    fs::create_dir_all(bounded_group_package.join("src"))?;
+    fs::copy(root.join("tests/fixtures/bounded_group_input.cell"), bounded_group_package.join("src/main.cell"))?;
+    fs::write(
+        bounded_group_package.join("Cell.toml"),
+        "[package]\nedition = \"2026\"\nname = \"bounded_group_input_acceptance\"\nversion = \"0.1.0\"\n",
+    )?;
+    artifacts.push(compile_artifact(
+        cellc,
+        &bounded_group_package,
+        &artifact_root.join("bounded_group_input_v1_verify.elf"),
+        "bounded-group-input-v1:verify",
+        "bounded-group-input-stateful-acceptance",
+        None,
+        Some("--entry-action"),
+        Some("verify"),
+    )?);
     Ok(artifacts)
 }
 
