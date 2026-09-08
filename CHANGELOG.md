@@ -12,8 +12,9 @@
   Type/Lock hashes, success/absent results, and predicate machine evidence;
   rebound mutations fail with V2420. Live CKB acceptance passed all ten cases
   on 2026-09-08, and production-evidence validation binds that report to the
-  current fixture and unique deployed ELF. Dynamic outputs remain under issue
-  #8.
+  current fixture and unique deployed ELF. The required `dev`, `ci`, and
+  `backend` gates passed on 2026-09-09 at `43e58780`. Dynamic outputs remain
+  under issue #8.
 
 - Stabilize public value generics under issue #23 Proposal A. The new
   `fixed_value` profile normalizes the six ordinary fixed-value abilities,
