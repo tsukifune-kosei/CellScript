@@ -181,7 +181,7 @@ flowchart LR
     M --> D
     D --> K["CKB rule<br/>data2 selects VM version 2<br/>which guarantees the Zbb ISA"]
     K --> V["Every verifier that resolves<br/>the code executes the rotates"]
-    D1["data1 deployment"] -. "does NOT guarantee Zbb<br/>compiler rejects data1 packages" .-> X["unsupported:<br/>new artifact under an old Script"]
+    D1["data1 deployment"] -. "no VM2 syscall family,<br/>no VM2-fusion cycle contract<br/>compiler rejects data1 packages" .-> X["unsupported:<br/>new artifact under an old Script"]
     CHK["Independent checker"] -. "accepts only the exact rotate encodings<br/>and rejects any post-production weakening" .-> M
 ```
 
@@ -262,9 +262,14 @@ ones as executable budgets.
 #### Why Data2 is now mandatory
 
 `rori` and `roriw` are RISC-V Zbb instructions. In CKB, the Script `hash_type`
-selects the CKB-VM instruction version for data-hash deployments; `data1` does
-not guarantee VM2/Zbb, while `data2` does. The compiler therefore emits and
-binds one explicit contract:
+selects the CKB-VM version for data-hash deployments. VM1 (selected by
+`data1`) already includes the B extension, so Zbb alone would decode there;
+the binding requirement is the rest of the VM2 surface: the bounded
+EXEC/SPAWN delegation uses the VM2-only process/pipe syscall family
+(`ExecV2`, `Spawn`, `Wait`, `Pipe`, fd operations), and the recorded cycle
+budgets are measured under VM2's decoder-fusion rules. The compiler therefore
+binds one explicit, uniformly tested VM2 contract instead of splitting
+requirements across VM1 and VM2:
 
 ```text
 minimum_vm_version = 2

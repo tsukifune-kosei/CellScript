@@ -128,11 +128,14 @@ from the beginning:
 ### The VM2 deployment contract (0.26 artifacts)
 
 Starting with the 0.26 economic backend closure, generated artifacts use Zbb
-rotate instructions (`rori`/`roriw`) in their hash cores. Those instructions
-are only guaranteed to decode on CKB VM version 2, and on chain the Script
-`hash_type` selects that version for data-hash deployments: `data2` selects
-VM2 (Zbb guaranteed), while `data1` does not. The compiler therefore emits and
-pins an explicit exact-data contract for `ckb`:
+rotate instructions (`rori`/`roriw`) in their hash cores. On chain the Script
+`hash_type` selects the CKB-VM version for data-hash deployments: `data2`
+selects VM2. (VM1, selected by `data1`, also decodes Zbb — the B extension
+has been part of the VM1 rules since 2021.) The binding requirement is the
+wider VM2 surface: the bounded EXEC/SPAWN delegation needs the VM2-only
+process/pipe syscall family, and the recorded cycle budgets are measured
+under VM2's decoder-fusion rules. The compiler therefore emits and pins an
+explicit exact-data contract for `ckb`:
 
 ```text
 minimum_vm_version = 2
