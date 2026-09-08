@@ -1389,7 +1389,7 @@ pub fn validate_compile_metadata(metadata: &CompileMetadata, artifact_format: Ar
                 "browser metadata target profile does not match the bounded CKB temporal contract",
             ));
         }
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(feature = "wasm"))]
     {
