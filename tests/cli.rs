@@ -8775,8 +8775,21 @@ version = "1.2.3"
     assert!(!drift.status.success());
     assert!(String::from_utf8_lossy(&drift.stderr).contains("source hash mismatch"));
 
-    let update = Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("update").output().unwrap();
+    let plan_path = root.join("upgrade-plan.json");
+    let update =
+        Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("update").arg("--output").arg(&plan_path).output().unwrap();
     assert!(update.status.success(), "stderr: {}", String::from_utf8_lossy(&update.stderr));
+    assert_eq!(std::fs::read(root.join("Cell.lock")).unwrap(), before_frozen);
+    let apply = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("update")
+        .arg("--apply-plan")
+        .arg(&plan_path)
+        .arg("--acknowledge")
+        .arg("UPG3001")
+        .output()
+        .unwrap();
+    assert!(apply.status.success(), "stderr: {}", String::from_utf8_lossy(&apply.stderr));
     let rebuilt = Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("build").arg("--locked").output().unwrap();
     assert!(rebuilt.status.success(), "stderr: {}", String::from_utf8_lossy(&rebuilt.stderr));
 }
