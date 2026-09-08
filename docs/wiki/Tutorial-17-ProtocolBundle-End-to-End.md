@@ -186,6 +186,8 @@ Every generated TypeScript action-builder package exports:
 - `bindProtocolBundleArtifact`;
 - `bindCheckedExactScriptHandle` and
   `exactScriptHandleFromCheckedBundle`;
+- `deploymentLineHandleFromCheckedBundle` and
+  `deploymentLineHandleEvidence` for checked Type-hash lines;
 - `bindClosedProtocolRole`;
 - `createProtocolBundleClient`;
 - the same nine state names;

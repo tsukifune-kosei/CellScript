@@ -393,6 +393,7 @@ const CKB_OUT_POINT_TYPE: &str = "OutPoint";
 const CKB_SCRIPT_VIEW_TYPE: &str = "ScriptView";
 const CKB_SCRIPT_HASH_TYPE: &str = "ScriptHash";
 const CKB_EXACT_SCRIPT_HANDLE_TYPE: &str = crate::script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE;
+const CKB_DEPLOYMENT_LINE_HANDLE_TYPE: &str = crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_TYPE;
 const CKB_SIGHASH_ALL_DIGEST_TYPE: &str = "SighashAllDigest";
 const CKB_EPOCH_NUMBER_TYPE: &str = "EpochNumber";
 const CKB_EPOCH_DURATION_TYPE: &str = "EpochDuration";
@@ -6866,6 +6867,49 @@ impl<'a> TypeChecker<'a> {
                             }
                             Type::Unit
                         }
+                        ("ckb", "require_cell_lock_deployment_line_handle" | "require_cell_type_deployment_line_handle") => {
+                            self.validate_builtin_arity(name, 5, arg_types, call.span)?;
+                            let valid_source = matches!(
+                                &arg_types[0],
+                                Type::Named(view)
+                                    if matches!(
+                                        view.split('<').next().unwrap_or(view.as_str()),
+                                        CKB_INPUT_VIEW_TYPE | CKB_OUTPUT_VIEW_TYPE | CKB_CELL_DEP_VIEW_TYPE
+                                    )
+                            );
+                            let valid_dep = |ty: &Type| matches!(ty, Type::Named(view) if view == CKB_CELL_DEP_VIEW_TYPE);
+                            if !valid_source
+                                || !valid_dep(&arg_types[1])
+                                || !valid_dep(&arg_types[2])
+                                || arg_types[3] != Type::Named(CKB_DEPLOYMENT_LINE_HANDLE_TYPE.to_string())
+                                || arg_types[4] != Type::Hash
+                            {
+                                return Err(CompileError::new(
+                                    format!(
+                                        "{name} expects (source_view, admission: CellDepView, code: CellDepView, handle: DeploymentLineHandle, handle_hash: Hash)"
+                                    ),
+                                    call.span,
+                                ));
+                            }
+                            Type::Unit
+                        }
+                        ("ckb", "require_cell_dep_deployment_line_verifier_handle") => {
+                            self.validate_builtin_arity(name, 4, arg_types, call.span)?;
+                            let valid_dep = |ty: &Type| matches!(ty, Type::Named(view) if view == CKB_CELL_DEP_VIEW_TYPE);
+                            if !valid_dep(&arg_types[0])
+                                || !valid_dep(&arg_types[1])
+                                || arg_types[2] != Type::Named(CKB_DEPLOYMENT_LINE_HANDLE_TYPE.to_string())
+                                || arg_types[3] != Type::Hash
+                            {
+                                return Err(CompileError::new(
+                                    format!(
+                                        "{name} expects (admission: CellDepView, code: CellDepView, handle: DeploymentLineHandle, handle_hash: Hash)"
+                                    ),
+                                    call.span,
+                                ));
+                            }
+                            Type::Unit
+                        }
                         ("ckb", "transaction_u32_le") => {
                             self.validate_builtin_arity(name, 1, arg_types, call.span)?;
                             if arg_types[0] != Type::U64 {
@@ -8376,6 +8420,7 @@ impl<'a> TypeChecker<'a> {
             | CKB_SCRIPT_VIEW_TYPE
             | CKB_SCRIPT_HASH_TYPE
             | CKB_EXACT_SCRIPT_HANDLE_TYPE
+            | CKB_DEPLOYMENT_LINE_HANDLE_TYPE
             | CKB_SIGHASH_ALL_DIGEST_TYPE
             | CKB_EPOCH_NUMBER_TYPE
             | CKB_EPOCH_DURATION_TYPE

@@ -403,8 +403,21 @@ where
         })
         .collect();
 
-    // Create cell deps (deployed cells that the script can reference via load_cell).
-    let dep_out_points: Vec<packed::OutPoint> = fixture.cell_deps.iter().map(|cell| context.deploy_cell(cell.data.clone())).collect();
+    // Create cell deps that the script can reference via load_cell. Tests may
+    // attach a Type Script when the dependency identity itself is part of the
+    // contract under test.
+    let dep_out_points: Vec<packed::OutPoint> = fixture
+        .cell_deps
+        .iter()
+        .map(|cell| {
+            let output = packed::CellOutput::new_builder()
+                .capacity::<packed::Uint64>(cell.capacity.pack())
+                .lock(always_success_lock.clone())
+                .type_(packed::ScriptOpt::from(cell.type_script.clone()))
+                .build();
+            context.create_cell(output, cell.data.clone())
+        })
+        .collect();
 
     // Create header deps with DAO fields.
     // Each header is built with a DAO field containing the accumulated rate,

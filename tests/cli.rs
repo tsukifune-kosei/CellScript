@@ -10228,6 +10228,8 @@ action mint(amount: u64, owner: Address) -> Token {
     assert!(index_ts.contains("EXACT_SCRIPT_HANDLE_RECEIPT_SCHEMA"), "{index_ts}");
     assert!(index_ts.contains("bindCheckedExactScriptHandle"), "{index_ts}");
     assert!(index_ts.contains("exactScriptHandleFromCheckedBundle"), "{index_ts}");
+    assert!(index_ts.contains("deploymentLineHandleFromCheckedBundle"), "{index_ts}");
+    assert!(index_ts.contains("deploymentLineHandleEvidence"), "{index_ts}");
     assert!(index_ts.contains("CSHDLv1-fixed-202"), "{index_ts}");
     assert!(index_ts.contains("createProtocolBundleClient"), "{index_ts}");
     assert!(index_ts.contains("ProtocolBundleSigningRequest"), "{index_ts}");

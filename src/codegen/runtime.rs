@@ -631,6 +631,18 @@ impl CodeGenerator {
                 "__ckb_require_cell_dep_exact_verifier_handle",
                 "CSHDLv1 full-value commitment plus exact CellDep artifact data-hash binding check",
             ),
+            (
+                "__ckb_require_cell_lock_deployment_line_handle",
+                "active CSLINv1 admission plus exact Lock Script and Type-hash code CellDep binding check",
+            ),
+            (
+                "__ckb_require_cell_type_deployment_line_handle",
+                "active CSLINv1 admission plus exact Type Script and Type-hash code CellDep binding check",
+            ),
+            (
+                "__ckb_require_cell_dep_deployment_line_verifier_handle",
+                "active CSLINv1 admission plus exact spawned-verifier Type-hash code CellDep binding check",
+            ),
             ("__ckb_require_cell_data_hash", "SourceView data hash full 32-byte binding check"),
             (
                 "__ckb_require_bounded_cell_dep_data_hash",
@@ -870,6 +882,32 @@ impl CodeGenerator {
                     crate::script_handle_contract::EXACT_SCRIPT_HANDLE_ARTIFACT_HASH_OFFSET,
                     enabled,
                 ),
+                "__ckb_require_cell_lock_deployment_line_handle" => self.emit_runtime_deployment_line_handle_requirement_helper(
+                    name,
+                    detail,
+                    Some(CKB_CELL_FIELD_LOCK_HASH),
+                    crate::script_handle_contract::EXACT_SCRIPT_HANDLE_CLASS_SCRIPT,
+                    crate::script_handle_contract::EXACT_SCRIPT_HANDLE_ROLE_LOCK,
+                    enabled,
+                ),
+                "__ckb_require_cell_type_deployment_line_handle" => self.emit_runtime_deployment_line_handle_requirement_helper(
+                    name,
+                    detail,
+                    Some(CKB_CELL_FIELD_TYPE_HASH),
+                    crate::script_handle_contract::EXACT_SCRIPT_HANDLE_CLASS_SCRIPT,
+                    crate::script_handle_contract::EXACT_SCRIPT_HANDLE_ROLE_TYPE,
+                    enabled,
+                ),
+                "__ckb_require_cell_dep_deployment_line_verifier_handle" => {
+                    self.emit_runtime_deployment_line_handle_requirement_helper(
+                        name,
+                        detail,
+                        None,
+                        crate::script_handle_contract::EXACT_SCRIPT_HANDLE_CLASS_VERIFIER,
+                        crate::script_handle_contract::EXACT_SCRIPT_HANDLE_ROLE_SPAWNED_VERIFIER,
+                        enabled,
+                    )
+                }
                 "__ckb_require_cell_data_hash" => self.emit_runtime_cell_hash_requirement_helper(
                     name,
                     detail,
@@ -1073,6 +1111,9 @@ impl CodeGenerator {
                     | "__ckb_require_cell_lock_exact_handle"
                     | "__ckb_require_cell_type_exact_handle"
                     | "__ckb_require_cell_dep_exact_verifier_handle"
+                    | "__ckb_require_cell_lock_deployment_line_handle"
+                    | "__ckb_require_cell_type_deployment_line_handle"
+                    | "__ckb_require_cell_dep_deployment_line_verifier_handle"
             )
         });
         if enabled && needs_blake2b_compress {
@@ -1105,6 +1146,9 @@ impl CodeGenerator {
             || referenced_helpers.contains("__ckb_require_cell_lock_exact_handle")
             || referenced_helpers.contains("__ckb_require_cell_type_exact_handle")
             || referenced_helpers.contains("__ckb_require_cell_dep_exact_verifier_handle")
+            || referenced_helpers.contains("__ckb_require_cell_lock_deployment_line_handle")
+            || referenced_helpers.contains("__ckb_require_cell_type_deployment_line_handle")
+            || referenced_helpers.contains("__ckb_require_cell_dep_deployment_line_verifier_handle")
         {
             self.emit_runtime_blake2b_hash_var(enabled, RuntimeHashInput::Memory);
         }
@@ -6398,6 +6442,255 @@ impl CodeGenerator {
         self.emit(format!("j {done}"));
         self.emit_label(&invalid_handle);
         self.emit(format!("li a0, {}", CellScriptRuntimeError::ExactScriptHandleInvalid.code()));
+        self.emit_label(&done);
+        self.emit(format!("ld ra, {RA}(sp)"));
+        self.emit(format!("addi sp, sp, {FRAME}"));
+        self.emit("ret");
+    }
+
+    fn emit_runtime_deployment_line_handle_requirement_helper(
+        &mut self,
+        symbol: &str,
+        detail: &str,
+        subject_field_id: Option<u64>,
+        expected_class: u8,
+        expected_role: u8,
+        enabled: bool,
+    ) {
+        use crate::script_handle_contract::{
+            DEPLOYMENT_LINE_COMMITMENT_MAGIC, DEPLOYMENT_LINE_HANDLE_ADMISSION_TYPE_HASH_OFFSET, DEPLOYMENT_LINE_HANDLE_BYTES,
+            DEPLOYMENT_LINE_HANDLE_CLASS_OFFSET, DEPLOYMENT_LINE_HANDLE_EXACT_HANDLE_OFFSET, DEPLOYMENT_LINE_HANDLE_MAGIC,
+            DEPLOYMENT_LINE_HANDLE_RESERVED_BYTES, DEPLOYMENT_LINE_HANDLE_RESERVED_OFFSET, DEPLOYMENT_LINE_HANDLE_ROLE_OFFSET,
+            DEPLOYMENT_LINE_HANDLE_STATUS_ACTIVE, DEPLOYMENT_LINE_HANDLE_STATUS_OFFSET, EXACT_SCRIPT_HANDLE_ARTIFACT_HASH_OFFSET,
+            EXACT_SCRIPT_HANDLE_BYTES, EXACT_SCRIPT_HANDLE_CLASS_OFFSET, EXACT_SCRIPT_HANDLE_HASH_BYTES, EXACT_SCRIPT_HANDLE_MAGIC,
+            EXACT_SCRIPT_HANDLE_ROLE_OFFSET, EXACT_SCRIPT_HANDLE_SCRIPT_HASH_OFFSET,
+        };
+
+        self.emit_global(symbol);
+        self.emit_label(symbol);
+        self.emit(format!("# cellscript abi: deployment line handle requirement ({detail})"));
+        if subject_field_id.is_some() {
+            self.emit("# cellscript abi: args a0=subject SourceView, a1=admission CellDepView, a2=code CellDepView, a3=handle_ptr, a4=handle_len, a5=handle_hash_ptr, a6=handle_hash_len");
+        } else {
+            self.emit("# cellscript abi: args a0=admission CellDepView, a1=code CellDepView, a2=handle_ptr, a3=handle_len, a4=handle_hash_ptr, a5=handle_hash_len");
+        }
+        if !enabled {
+            self.emit(format!("li a0, {}", CellScriptRuntimeError::SyscallFailed.code()));
+            self.emit("ret");
+            return;
+        }
+
+        const HANDLE_PTR: usize = 0;
+        const EXPECTED_HASH_PTR: usize = 8;
+        const SUBJECT_VIEW: usize = 16;
+        const ADMISSION_VIEW: usize = 24;
+        const CODE_VIEW: usize = 32;
+        const ADMISSION_INDEX: usize = 40;
+        const ADMISSION_SOURCE: usize = 48;
+        const CODE_INDEX: usize = 56;
+        const CODE_SOURCE: usize = 64;
+        const SUBJECT_INDEX: usize = 72;
+        const SUBJECT_SOURCE: usize = 80;
+        const SIZE: usize = 88;
+        const LOADED_HASH: usize = 96;
+        const HANDLE_HASH: usize = 128;
+        const ADMISSION_DATA: usize = 160;
+        const RA: usize = 216;
+        const FRAME: usize = 224;
+
+        let invalid = self.fresh_label("deployment_line_handle_invalid");
+        let done = self.fresh_label("deployment_line_handle_done");
+        let abi = self.runtime_abi();
+
+        self.emit(format!("addi sp, sp, -{FRAME}"));
+        self.emit(format!("sd ra, {RA}(sp)"));
+        if subject_field_id.is_some() {
+            self.emit(format!("sd a0, {SUBJECT_VIEW}(sp)"));
+            self.emit(format!("sd a1, {ADMISSION_VIEW}(sp)"));
+            self.emit(format!("sd a2, {CODE_VIEW}(sp)"));
+            self.emit(format!("sd a3, {HANDLE_PTR}(sp)"));
+            self.emit(format!("sd a5, {EXPECTED_HASH_PTR}(sp)"));
+            self.emit(format!("li t0, {DEPLOYMENT_LINE_HANDLE_BYTES}"));
+            self.emit("sub t1, a4, t0");
+            self.emit(format!("bnez t1, {invalid}"));
+            self.emit(format!("li t0, {EXACT_SCRIPT_HANDLE_HASH_BYTES}"));
+            self.emit("sub t1, a6, t0");
+            self.emit(format!("bnez t1, {invalid}"));
+        } else {
+            self.emit(format!("sd a0, {ADMISSION_VIEW}(sp)"));
+            self.emit(format!("sd a1, {CODE_VIEW}(sp)"));
+            self.emit(format!("sd a2, {HANDLE_PTR}(sp)"));
+            self.emit(format!("sd a4, {EXPECTED_HASH_PTR}(sp)"));
+            self.emit(format!("li t0, {DEPLOYMENT_LINE_HANDLE_BYTES}"));
+            self.emit("sub t1, a3, t0");
+            self.emit(format!("bnez t1, {invalid}"));
+            self.emit(format!("li t0, {EXACT_SCRIPT_HANDLE_HASH_BYTES}"));
+            self.emit("sub t1, a5, t0");
+            self.emit(format!("bnez t1, {invalid}"));
+        }
+        self.emit(format!("ld t3, {HANDLE_PTR}(sp)"));
+        self.emit(format!("beqz t3, {invalid}"));
+        self.emit(format!("ld t4, {EXPECTED_HASH_PTR}(sp)"));
+        self.emit(format!("beqz t4, {invalid}"));
+
+        for (offset, byte) in DEPLOYMENT_LINE_HANDLE_MAGIC.iter().enumerate() {
+            self.emit(format!("lbu t0, {offset}(t3)"));
+            self.emit(format!("li t1, {byte}"));
+            self.emit(format!("bne t0, t1, {invalid}"));
+        }
+        self.emit(format!("lbu t0, {DEPLOYMENT_LINE_HANDLE_CLASS_OFFSET}(t3)"));
+        self.emit(format!("li t1, {expected_class}"));
+        self.emit(format!("bne t0, t1, {invalid}"));
+        self.emit(format!("lbu t0, {DEPLOYMENT_LINE_HANDLE_ROLE_OFFSET}(t3)"));
+        self.emit(format!("li t1, {expected_role}"));
+        self.emit(format!("bne t0, t1, {invalid}"));
+        self.emit(format!("lbu t0, {DEPLOYMENT_LINE_HANDLE_STATUS_OFFSET}(t3)"));
+        self.emit(format!("li t1, {DEPLOYMENT_LINE_HANDLE_STATUS_ACTIVE}"));
+        self.emit(format!("bne t0, t1, {invalid}"));
+        for offset in
+            DEPLOYMENT_LINE_HANDLE_RESERVED_OFFSET..DEPLOYMENT_LINE_HANDLE_RESERVED_OFFSET + DEPLOYMENT_LINE_HANDLE_RESERVED_BYTES
+        {
+            self.emit(format!("lbu t0, {offset}(t3)"));
+            self.emit(format!("bnez t0, {invalid}"));
+        }
+        for (offset, byte) in EXACT_SCRIPT_HANDLE_MAGIC.iter().enumerate() {
+            self.emit(format!("lbu t0, {}(t3)", DEPLOYMENT_LINE_HANDLE_EXACT_HANDLE_OFFSET + offset));
+            self.emit(format!("li t1, {byte}"));
+            self.emit(format!("bne t0, t1, {invalid}"));
+        }
+        self.emit(format!("lbu t0, {}(t3)", DEPLOYMENT_LINE_HANDLE_EXACT_HANDLE_OFFSET + EXACT_SCRIPT_HANDLE_CLASS_OFFSET));
+        self.emit(format!("li t1, {expected_class}"));
+        self.emit(format!("bne t0, t1, {invalid}"));
+        self.emit(format!("lbu t0, {}(t3)", DEPLOYMENT_LINE_HANDLE_EXACT_HANDLE_OFFSET + EXACT_SCRIPT_HANDLE_ROLE_OFFSET));
+        self.emit(format!("li t1, {expected_role}"));
+        self.emit(format!("bne t0, t1, {invalid}"));
+        debug_assert_eq!(DEPLOYMENT_LINE_HANDLE_EXACT_HANDLE_OFFSET + EXACT_SCRIPT_HANDLE_BYTES, DEPLOYMENT_LINE_HANDLE_BYTES);
+
+        self.emit(format!("ld a0, {HANDLE_PTR}(sp)"));
+        self.emit(format!("li a1, {DEPLOYMENT_LINE_HANDLE_BYTES}"));
+        self.emit(format!("addi a2, sp, {HANDLE_HASH}"));
+        self.emit("call __ckb_hash_blake2b_var");
+        self.emit(format!("bnez a0, {invalid}"));
+        self.emit(format!("addi a0, sp, {HANDLE_HASH}"));
+        self.emit(format!("ld a1, {EXPECTED_HASH_PTR}(sp)"));
+        self.emit(format!("li a2, {EXACT_SCRIPT_HANDLE_HASH_BYTES}"));
+        self.emit("call __cellscript_memcmp_fixed");
+        self.emit(format!("bnez a0, {invalid}"));
+
+        self.emit(format!("ld a0, {ADMISSION_VIEW}(sp)"));
+        self.emit_decode_source_view_to_t1_t2(&invalid);
+        self.emit(format!("li t0, {CKB_SOURCE_CELL_DEP}"));
+        self.emit(format!("bne t2, t0, {invalid}"));
+        self.emit(format!("sd t1, {ADMISSION_INDEX}(sp)"));
+        self.emit(format!("sd t2, {ADMISSION_SOURCE}(sp)"));
+        self.emit(format!("li t0, {EXACT_SCRIPT_HANDLE_HASH_BYTES}"));
+        self.emit(format!("sd t0, {SIZE}(sp)"));
+        self.emit(format!("addi a0, sp, {LOADED_HASH}"));
+        self.emit(format!("addi a1, sp, {SIZE}"));
+        self.emit("li a2, 0");
+        self.emit(format!("ld a3, {ADMISSION_INDEX}(sp)"));
+        self.emit(format!("ld a4, {ADMISSION_SOURCE}(sp)"));
+        self.emit(format!("li a5, {CKB_CELL_FIELD_TYPE_HASH}"));
+        self.emit(format!("li a7, {}", abi.load_cell_by_field));
+        self.emit("ecall");
+        self.emit(format!("bnez a0, {invalid}"));
+        self.emit(format!("ld t0, {SIZE}(sp)"));
+        self.emit(format!("li t1, {EXACT_SCRIPT_HANDLE_HASH_BYTES}"));
+        self.emit("sub t2, t0, t1");
+        self.emit(format!("bnez t2, {invalid}"));
+        self.emit(format!("addi a0, sp, {LOADED_HASH}"));
+        self.emit(format!("ld a1, {HANDLE_PTR}(sp)"));
+        self.emit(format!("addi a1, a1, {DEPLOYMENT_LINE_HANDLE_ADMISSION_TYPE_HASH_OFFSET}"));
+        self.emit(format!("li a2, {EXACT_SCRIPT_HANDLE_HASH_BYTES}"));
+        self.emit("call __cellscript_memcmp_fixed");
+        self.emit(format!("bnez a0, {invalid}"));
+
+        let admission_data_bytes = DEPLOYMENT_LINE_COMMITMENT_MAGIC.len() + EXACT_SCRIPT_HANDLE_HASH_BYTES;
+        self.emit(format!("li t0, {admission_data_bytes}"));
+        self.emit(format!("sd t0, {SIZE}(sp)"));
+        self.emit(format!("addi a0, sp, {ADMISSION_DATA}"));
+        self.emit(format!("addi a1, sp, {SIZE}"));
+        self.emit("li a2, 0");
+        self.emit(format!("ld a3, {ADMISSION_INDEX}(sp)"));
+        self.emit(format!("ld a4, {ADMISSION_SOURCE}(sp)"));
+        self.emit(format!("li a7, {}", abi.load_cell_data));
+        self.emit("ecall");
+        self.emit(format!("bnez a0, {invalid}"));
+        self.emit(format!("ld t0, {SIZE}(sp)"));
+        self.emit(format!("li t1, {admission_data_bytes}"));
+        self.emit("sub t2, t0, t1");
+        self.emit(format!("bnez t2, {invalid}"));
+        for (offset, byte) in DEPLOYMENT_LINE_COMMITMENT_MAGIC.iter().enumerate() {
+            self.emit(format!("lbu t0, {}(sp)", ADMISSION_DATA + offset));
+            self.emit(format!("li t1, {byte}"));
+            self.emit(format!("bne t0, t1, {invalid}"));
+        }
+        self.emit(format!("addi a0, sp, {}", ADMISSION_DATA + DEPLOYMENT_LINE_COMMITMENT_MAGIC.len()));
+        self.emit(format!("addi a1, sp, {HANDLE_HASH}"));
+        self.emit(format!("li a2, {EXACT_SCRIPT_HANDLE_HASH_BYTES}"));
+        self.emit("call __cellscript_memcmp_fixed");
+        self.emit(format!("bnez a0, {invalid}"));
+
+        self.emit(format!("ld a0, {CODE_VIEW}(sp)"));
+        self.emit_decode_source_view_to_t1_t2(&invalid);
+        self.emit(format!("li t0, {CKB_SOURCE_CELL_DEP}"));
+        self.emit(format!("bne t2, t0, {invalid}"));
+        self.emit(format!("sd t1, {CODE_INDEX}(sp)"));
+        self.emit(format!("sd t2, {CODE_SOURCE}(sp)"));
+        self.emit(format!("li t0, {EXACT_SCRIPT_HANDLE_HASH_BYTES}"));
+        self.emit(format!("sd t0, {SIZE}(sp)"));
+        self.emit(format!("addi a0, sp, {LOADED_HASH}"));
+        self.emit(format!("addi a1, sp, {SIZE}"));
+        self.emit("li a2, 0");
+        self.emit(format!("ld a3, {CODE_INDEX}(sp)"));
+        self.emit(format!("ld a4, {CODE_SOURCE}(sp)"));
+        self.emit(format!("li a5, {CKB_CELL_FIELD_DATA_HASH}"));
+        self.emit(format!("li a7, {}", abi.load_cell_by_field));
+        self.emit("ecall");
+        self.emit(format!("bnez a0, {invalid}"));
+        self.emit(format!("ld t0, {SIZE}(sp)"));
+        self.emit(format!("li t1, {EXACT_SCRIPT_HANDLE_HASH_BYTES}"));
+        self.emit("sub t2, t0, t1");
+        self.emit(format!("bnez t2, {invalid}"));
+        self.emit(format!("addi a0, sp, {LOADED_HASH}"));
+        self.emit(format!("ld a1, {HANDLE_PTR}(sp)"));
+        self.emit(format!("addi a1, a1, {}", DEPLOYMENT_LINE_HANDLE_EXACT_HANDLE_OFFSET + EXACT_SCRIPT_HANDLE_ARTIFACT_HASH_OFFSET));
+        self.emit(format!("li a2, {EXACT_SCRIPT_HANDLE_HASH_BYTES}"));
+        self.emit("call __cellscript_memcmp_fixed");
+        self.emit(format!("bnez a0, {invalid}"));
+
+        if let Some(field_id) = subject_field_id {
+            self.emit(format!("ld a0, {SUBJECT_VIEW}(sp)"));
+            self.emit_decode_source_view_to_t1_t2(&invalid);
+            self.emit(format!("sd t1, {SUBJECT_INDEX}(sp)"));
+            self.emit(format!("sd t2, {SUBJECT_SOURCE}(sp)"));
+            self.emit(format!("li t0, {EXACT_SCRIPT_HANDLE_HASH_BYTES}"));
+            self.emit(format!("sd t0, {SIZE}(sp)"));
+            self.emit(format!("addi a0, sp, {LOADED_HASH}"));
+            self.emit(format!("addi a1, sp, {SIZE}"));
+            self.emit("li a2, 0");
+            self.emit(format!("ld a3, {SUBJECT_INDEX}(sp)"));
+            self.emit(format!("ld a4, {SUBJECT_SOURCE}(sp)"));
+            self.emit(format!("li a5, {field_id}"));
+            self.emit(format!("li a7, {}", abi.load_cell_by_field));
+            self.emit("ecall");
+            self.emit(format!("bnez a0, {invalid}"));
+            self.emit(format!("ld t0, {SIZE}(sp)"));
+            self.emit(format!("li t1, {EXACT_SCRIPT_HANDLE_HASH_BYTES}"));
+            self.emit("sub t2, t0, t1");
+            self.emit(format!("bnez t2, {invalid}"));
+            self.emit(format!("addi a0, sp, {LOADED_HASH}"));
+            self.emit(format!("ld a1, {HANDLE_PTR}(sp)"));
+            self.emit(format!("addi a1, a1, {}", DEPLOYMENT_LINE_HANDLE_EXACT_HANDLE_OFFSET + EXACT_SCRIPT_HANDLE_SCRIPT_HASH_OFFSET));
+            self.emit(format!("li a2, {EXACT_SCRIPT_HANDLE_HASH_BYTES}"));
+            self.emit("call __cellscript_memcmp_fixed");
+            self.emit(format!("bnez a0, {invalid}"));
+        }
+
+        self.emit("li a0, 0");
+        self.emit(format!("j {done}"));
+        self.emit_label(&invalid);
+        self.emit(format!("li a0, {}", CellScriptRuntimeError::DeploymentLineHandleInvalid.code()));
         self.emit_label(&done);
         self.emit(format!("ld ra, {RA}(sp)"));
         self.emit(format!("addi sp, sp, {FRAME}"));

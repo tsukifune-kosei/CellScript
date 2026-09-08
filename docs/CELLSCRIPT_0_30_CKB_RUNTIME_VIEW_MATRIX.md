@@ -115,6 +115,8 @@ hash; it does not prove existence, deployment, or authorization.
 | 67 | `witness-field-absent` | A bounded WitnessArgs field is absent; `Some(empty)` remains a present zero-length value. |
 | 68 | `witness-bound-exceeded` | The selected raw witness or field is larger than its compile-time declared maximum. |
 | 69 | `sighash-bound-exceeded` | A group/input/extra-witness count or included witness exceeds the signing-domain literals. |
+| 70 | `exact-script-handle-invalid` | An exact handle encoding, commitment, class, role, selected Script, or verifier code identity differs. |
+| 71 | `deployment-line-handle-invalid` | An exact active line, admission CellDep, code CellDep, or selected Script identity differs. |
 
 ## Current executable evidence
 

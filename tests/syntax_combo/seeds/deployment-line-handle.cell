@@ -1,0 +1,18 @@
+// audit:edition=2027
+// audit:phase=accept
+module cellscript::audit::seed_deployment_line_handle
+
+resource Token has store { amount: u64 }
+
+action inspect(witness handle: DeploymentLineHandle) -> u64 {
+    verification
+        let admission = ckb::cell_dep(0)
+        let code = ckb::cell_dep(1)
+        ckb::require_cell_dep_deployment_line_verifier_handle(
+            admission,
+            code,
+            handle,
+            Hash::from_bytes(b"0123456789abcdef0123456789abcdef")
+        )
+        return 0
+}

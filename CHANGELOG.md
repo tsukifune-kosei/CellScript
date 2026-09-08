@@ -407,6 +407,21 @@
   artifact cache identity to
   `project-source-set-v48-0.30-dev6-live-deployment-line`.
 
+- Close the bounded on-chain consumer path for exact deployment lines.
+  `DeploymentLineHandle` is a fixed 386-byte source/ABI value consumed by
+  role-specific Lock, Type, and spawned-verifier helpers. Each helper requires
+  a compile-time full-handle hash, active canonical `CSLINv1`, the exact
+  admission CellDep Type hash and `CSREGv1 || handle_hash` data, and the exact
+  code CellDep data hash; Script roles additionally bind the selected complete
+  Script hash. `cellc tx validate` binds the handle to its compiled `CSARGv1`
+  witness position and both direct CellDep indexes. Generated TypeScript
+  builders extract the checked handle and construct that evidence shape.
+  Typed semantics, ProofPlan, LSP, syntax governance, standalone-checker
+  rebound mutations, and real CKB-VM stale/yank/substitution cases retain the
+  same contract under stable error 71. Generic compatible/open handles remain
+  outside this bounded exact-line path. Advance the artifact cache identity to
+  `project-source-set-v49-0.30-dev7-deployment-line-runtime`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

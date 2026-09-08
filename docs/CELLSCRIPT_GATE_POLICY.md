@@ -341,21 +341,25 @@ substitutions must make `cellc tx validate` fail. A runtime-selected expected
 handle hash, legacy numeric source index, or unknown helper target must reject. See
 [the exact Script handle contract](CELLSCRIPT_EXACT_SCRIPT_HANDLES.md).
 
-The deployment-line foundation adds the canonical
+The deployment-line path adds the canonical
 `cellscript-deployment-line-receipt-v1` chain and `CSLINv1-fixed-386` value.
 `dev` and `ci` execute its initial, additive-upgrade, breaking-change,
 same-version replay, stable-Script, stale-predecessor, yank, and data-hash
 rejection cases. The same gates compile the distinct `ckb-type-hash` profile
 and require the standalone checker to bind it to `deployment_hash_types =
-["type"]`, while the default `ckb` profile remains `["data2"]`. The receipt
-foundation is still off-chain evidence only. The gate must not present it as
-runtime-complete. `dev` and `ci` additionally check standard TYPE_ID admission
+["type"]`, while the default `ckb` profile remains `["data2"]`. `dev` and
+`ci` additionally check standard TYPE_ID admission
 creation/replacement, exact active admission/code Cell data, mandatory
 `ckb-type-hash` ProtocolBundle binding, and direct CellDep positions. The CKB
 adapter covers node-backed admission/code Cell liveness and refuses the
 ready-to-sign state after any network, out-point, Lock, Type, data, or position
-substitution. The remaining release boundary is source/runtime helpers,
-independent deployment-line checker records, and real CKB-VM cases. See
+substitution. Fixed `DeploymentLineHandle` source/ABI values and the three
+role-specific helpers cover the bounded exact-line runtime boundary. The gates
+retain compile-time full-handle hashes, exact `CSARGv1` witness positions, both
+direct CellDep positions, active admission data, exact code data, selected full
+Script identity, standalone-checker rebound mutations, and real CKB-VM
+negatives under error 71. Compatible interface-selected/open handles remain
+outside this exact-line contract. See
 [the deployment-line handle contract](CELLSCRIPT_DEPLOYMENT_LINE_HANDLES.md).
 
 ### 0.26b semantic-foundation evidence

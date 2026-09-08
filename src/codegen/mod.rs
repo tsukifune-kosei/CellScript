@@ -360,6 +360,9 @@ fn is_v014_runtime_helper(func: &str) -> bool {
             | "__ckb_require_cell_lock_exact_handle"
             | "__ckb_require_cell_type_exact_handle"
             | "__ckb_require_cell_dep_exact_verifier_handle"
+            | "__ckb_require_cell_lock_deployment_line_handle"
+            | "__ckb_require_cell_type_deployment_line_handle"
+            | "__ckb_require_cell_dep_deployment_line_verifier_handle"
             | "__ckb_require_cell_data_hash"
             | "__ckb_require_bounded_cell_dep_data_hash"
             | "__ckb_require_current_script_args_empty"
@@ -619,6 +622,12 @@ fn fixed_byte_width(ty: &IrType, fixed_size: Option<usize>) -> Option<usize> {
         {
             Some(size)
         }
+        (IrType::Named(name), Some(size))
+            if name == crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_TYPE
+                && size == crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_BYTES =>
+        {
+            Some(size)
+        }
         (IrType::Ref(inner) | IrType::MutRef(inner), _) => fixed_byte_width(inner, type_static_length(inner)),
         _ => None,
     }
@@ -685,6 +694,9 @@ fn type_static_length(ty: &IrType) -> Option<usize> {
         IrType::Named(name) if name == crate::script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE => {
             Some(crate::script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES)
         }
+        IrType::Named(name) if name == crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_TYPE => {
+            Some(crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_BYTES)
+        }
         IrType::Named(_) => None,
     }
 }
@@ -703,6 +715,9 @@ fn operand_fixed_byte_width(operand: &IrOperand) -> Option<usize> {
         IrType::Array(_, _) | IrType::Tuple(_) => type_static_length(ty),
         IrType::Named(name) if name == crate::script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE => {
             Some(crate::script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES)
+        }
+        IrType::Named(name) if name == crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_TYPE => {
+            Some(crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_BYTES)
         }
         _ => None,
     }
@@ -1249,6 +1264,9 @@ impl CodeGenerator {
         match ty {
             IrType::Named(name) if name == crate::script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE => {
                 Some(crate::script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES)
+            }
+            IrType::Named(name) if name == crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_TYPE => {
+                Some(crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_BYTES)
             }
             IrType::Named(name) => self.type_fixed_sizes.get(name).copied().or_else(|| self.enum_fixed_sizes.get(name).copied()),
             IrType::Ref(inner) | IrType::MutRef(inner) => self.fixed_named_type_width(inner),
@@ -4389,7 +4407,12 @@ fn entry_param_consumes_witness_payload(param: &IrParam, index: usize, runtime_b
 }
 
 fn entry_witness_dynamic_schema_param(ty: &IrType) -> bool {
-    if matches!(ty, IrType::Named(name) if name == crate::script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE) {
+    if matches!(
+        ty,
+        IrType::Named(name)
+            if name == crate::script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE
+                || name == crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_TYPE
+    ) {
         return false;
     }
     fixed_byte_pointer_param_width(ty).is_none()

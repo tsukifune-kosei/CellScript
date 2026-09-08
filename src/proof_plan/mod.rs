@@ -177,6 +177,7 @@ pub fn build_for_body(
     plans
         .extend(body.borrow_regions.iter().enumerate().map(|(index, region)| plan_for_borrow_region(scope_kind, name, index, region)));
     plans.extend(exact_script_handle_plans(scope_kind, name, body));
+    plans.extend(deployment_line_handle_plans(scope_kind, name, body));
 
     plans
 }
@@ -265,6 +266,104 @@ fn exact_script_handle_plans(scope_kind: &str, scope_name: &str, body: &ir::IrBo
                     message:
                         "exact handles are non-linear fixed values; the runtime check does not authorize Cell consumption or creation"
                             .to_string(),
+                }],
+            });
+        }
+    }
+    plans
+}
+
+fn deployment_line_handle_plans(scope_kind: &str, scope_name: &str, body: &ir::IrBody) -> Vec<ProofPlanMetadata> {
+    let mut plans = Vec::new();
+    for (block_index, block) in body.blocks.iter().enumerate() {
+        for (operation_index, instruction) in block.instructions.iter().enumerate() {
+            let IrInstruction::Call { func, args, .. } = instruction else {
+                continue;
+            };
+            let (role, subject_index, handle_index, hash_index) = match func.as_str() {
+                "__ckb_require_cell_lock_deployment_line_handle" => ("lock", Some(0), 3, 4),
+                "__ckb_require_cell_type_deployment_line_handle" => ("type", Some(0), 3, 4),
+                "__ckb_require_cell_dep_deployment_line_verifier_handle" => ("spawned-verifier", None, 2, 3),
+                _ => continue,
+            };
+            let source = subject_index
+                .and_then(|index| args.get(index))
+                .and_then(|operand| match operand {
+                    ir::IrOperand::Var(var) => Some(match &var.ty {
+                        ir::IrType::Named(name) if name.starts_with("InputView<") => "input",
+                        ir::IrType::Named(name) if name.starts_with("OutputView<") => "output",
+                        ir::IrType::Named(name) if name == "CellDepView" || name.starts_with("CellDepView<") => "cell_dep",
+                        _ => "invalid-source-view",
+                    }),
+                    _ => None,
+                })
+                .unwrap_or("cell_dep");
+            let handle_parameter = match args.get(handle_index) {
+                Some(ir::IrOperand::Var(var)) => var.name.as_str(),
+                _ => "invalid-handle-parameter",
+            };
+            let handle_hash = match args.get(hash_index) {
+                Some(ir::IrOperand::Const(ir::IrConst::Hash(hash))) => hex::encode(hash),
+                _ => "invalid-non-constant-handle-hash".to_string(),
+            };
+            let feature = format!("{role}:{handle_hash}");
+            let mut reads = vec![
+                "source-view".to_string(),
+                "cell_dep".to_string(),
+                "witness".to_string(),
+                "DeploymentLineHandle".to_string(),
+                "handle-hash-literal".to_string(),
+            ];
+            if source != "cell_dep" {
+                reads.push(source.to_string());
+            }
+            plans.push(ProofPlanMetadata {
+                name: format!("{}#deployment-line-handle-{}-{}", scope_name, block_index, operation_index),
+                origin: format!("{}:{}#deployment-line-handle:{}:{}", scope_kind, scope_name, block_index, operation_index),
+                category: "deployment-line-handle".to_string(),
+                feature: feature.clone(),
+                evidence_tier: EvidenceTier::CheckedRuntime,
+                source_span: None,
+                trigger: trigger_for_scope_kind(scope_kind).to_string(),
+                scope: "selected-ckb-source-and-two-direct-cell-deps".to_string(),
+                reads,
+                coverage: vec![
+                    "encoding:CSLINv1-fixed-386".to_string(),
+                    "magic:CSLINv1\\0".to_string(),
+                    "status:active-only".to_string(),
+                    format!("class-and-role:{role}"),
+                    format!("source:{source}"),
+                    format!("parameter:{handle_parameter}"),
+                    format!("handle-hash:{handle_hash}"),
+                    "admission:CellDep-Type-hash-and-CSREGv1-full-handle-commitment".to_string(),
+                    "code:CellDep-data-hash-equals-embedded-exact-artifact".to_string(),
+                    "selected-script:complete-hash-equals-embedded-exact-Script".to_string(),
+                ],
+                input_output_relation_checks: Vec::new(),
+                group_cardinality: "one-selected-source-view-plus-one-admission-and-one-code-cell-dep".to_string(),
+                identity_lifecycle_policy: "read-only active deployment-line check; grants no admission Cell lifecycle authority".to_string(),
+                preserved_fields: Vec::new(),
+                witness_fields: vec!["DeploymentLineHandle".to_string()],
+                lock_args_fields: Vec::new(),
+                on_chain_checked: true,
+                on_chain_checked_obligations: vec![
+                    format!("deployment-line-handle:{feature}=checked-runtime"),
+                    "the full handle, active status, live admission commitment, selected Script identity, and exact code artifact are checked"
+                        .to_string(),
+                ],
+                builder_assumptions: vec![
+                    "builder must bind the current active line handle, admission CellDep, code CellDep, and declared witness parameter before signing"
+                        .to_string(),
+                ],
+                codegen_coverage_status: "covered".to_string(),
+                status: "checked-runtime".to_string(),
+                detail: format!(
+                    "{func} binds active {role} deployment line parameter {handle_parameter} to {source}, its admission CellDep, and exact code CellDep under handle hash 0x{handle_hash}"
+                ),
+                diagnostics: vec![ProofPlanDiagnosticMetadata {
+                    severity: "info".to_string(),
+                    message: "deployment line handles are fixed witness values; upgrades and yanks require the separate admission TYPE_ID transition"
+                        .to_string(),
                 }],
             });
         }

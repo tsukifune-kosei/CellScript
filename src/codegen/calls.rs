@@ -305,6 +305,9 @@ impl CodeGenerator {
         }
         self.emit(format!("# call {}", func));
 
+        if self.emit_runtime_deployment_line_handle_requirement_call(func, args)? {
+            return Ok(());
+        }
         if self.emit_runtime_exact_script_handle_requirement_call(func, args)? {
             return Ok(());
         }
@@ -986,6 +989,71 @@ impl CodeGenerator {
         Ok(true)
     }
 
+    fn emit_runtime_deployment_line_handle_requirement_call(&mut self, func: &str, args: &[IrOperand]) -> Result<bool> {
+        let (handle_index, hash_index) = match func {
+            "__ckb_require_cell_lock_deployment_line_handle" | "__ckb_require_cell_type_deployment_line_handle" if args.len() == 5 => {
+                (3, 4)
+            }
+            "__ckb_require_cell_dep_deployment_line_verifier_handle" if args.len() == 4 => (2, 3),
+            "__ckb_require_cell_lock_deployment_line_handle"
+            | "__ckb_require_cell_type_deployment_line_handle"
+            | "__ckb_require_cell_dep_deployment_line_verifier_handle" => return Ok(false),
+            _ => return Ok(false),
+        };
+
+        let Some(handle) =
+            self.expected_fixed_byte_source(&args[handle_index], crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_BYTES)
+        else {
+            self.emit_fail(CellScriptRuntimeError::DeploymentLineHandleInvalid);
+            return Ok(true);
+        };
+        let Some(handle_hash) = self.expected_fixed_byte_source(&args[hash_index], 32) else {
+            self.emit_fail(CellScriptRuntimeError::DeploymentLineHandleInvalid);
+            return Ok(true);
+        };
+        self.emit_prepare_fixed_byte_source(
+            &handle,
+            crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_BYTES,
+            "deployment line handle",
+        );
+        self.emit_prepare_fixed_byte_source(&handle_hash, 32, "deployment line handle hash");
+
+        if handle_index == 3 {
+            self.emit_operand_to_register("a0", &args[0]);
+            self.emit_operand_to_register("a1", &args[1]);
+            self.emit_operand_to_register("a2", &args[2]);
+            if !self.emit_fixed_byte_source_pointer_or_const_to("a3", &handle) {
+                self.emit_fail(CellScriptRuntimeError::DeploymentLineHandleInvalid);
+                return Ok(true);
+            }
+            self.emit(format!("li a4, {}", crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_BYTES));
+            if !self.emit_fixed_byte_source_pointer_or_const_to("a5", &handle_hash) {
+                self.emit_fail(CellScriptRuntimeError::DeploymentLineHandleInvalid);
+                return Ok(true);
+            }
+            self.emit("li a6, 32");
+        } else {
+            self.emit_operand_to_register("a0", &args[0]);
+            self.emit_operand_to_register("a1", &args[1]);
+            if !self.emit_fixed_byte_source_pointer_or_const_to("a2", &handle) {
+                self.emit_fail(CellScriptRuntimeError::DeploymentLineHandleInvalid);
+                return Ok(true);
+            }
+            self.emit(format!("li a3, {}", crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_BYTES));
+            if !self.emit_fixed_byte_source_pointer_or_const_to("a4", &handle_hash) {
+                self.emit_fail(CellScriptRuntimeError::DeploymentLineHandleInvalid);
+                return Ok(true);
+            }
+            self.emit("li a5, 32");
+        }
+        self.emit(format!("call {func}"));
+        let ok = self.fresh_label("deployment_line_handle_requirement_ok");
+        self.emit(format!("beqz a0, {ok}"));
+        self.emit_process_failure_status();
+        self.emit_label(&ok);
+        Ok(true)
+    }
+
     fn emit_runtime_bounded_cell_dep_requirement_call(&mut self, func: &str, args: &[IrOperand]) -> Result<bool> {
         if func != "__ckb_require_bounded_cell_dep_data_hash" {
             return Ok(false);
@@ -1513,6 +1581,24 @@ impl CodeGenerator {
             let width = crate::script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES;
             self.emit(format!(
                 "# cellscript abi: call {} exact Script handle param {} pointer={} length={} size={}",
+                func,
+                param.name,
+                abi_arg_label(*abi_index),
+                abi_arg_label(*abi_index + 1),
+                width
+            ));
+            if !self.emit_call_pointer_arg(func, &param.name, abi_index, arg, Some(width), outgoing_stack_arg_bytes) {
+                return false;
+            }
+            if !self.emit_call_length_arg(func, &param.name, abi_index, arg, CallLengthKind::FixedBytes, outgoing_stack_arg_bytes) {
+                return false;
+            }
+            return true;
+        }
+        if matches!(&param.ty, IrType::Named(name) if name == crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_TYPE) {
+            let width = crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_BYTES;
+            self.emit(format!(
+                "# cellscript abi: call {} deployment line handle param {} pointer={} length={} size={}",
                 func,
                 param.name,
                 abi_arg_label(*abi_index),

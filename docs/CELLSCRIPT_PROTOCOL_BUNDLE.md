@@ -307,6 +307,12 @@ interface, artifact, profile, ABI, role, or Script identity byte changes the
 literal.
 Successful bundle artifacts and closed-role participants emit that value as
 `exact_handle_hash`; generated TypeScript binders retain it as `handleHash`.
+For Type-hash artifacts, `deploymentLineHandleFromCheckedBundle` returns the
+checked 386-byte active line value and its admission/code CellDep positions.
+`deploymentLineHandleEvidence` projects those fields, the selected source, and
+the exact `WitnessArgs.input_type` index into the evidence shape consumed by
+`cellc tx validate`; the on-chain helper still recomputes the full handle hash
+against its compiled literal.
 
 Registry verified-build evidence makes that capability discoverable without
 weakening admission. A release carries `protocol_bundle_schema`,

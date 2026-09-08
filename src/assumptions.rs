@@ -129,6 +129,7 @@ pub fn validate_transaction_against_metadata(metadata: &CompileMetadata, tx: &Va
     };
     let mut report = validate_transaction_against_assumptions(&assumptions, tx);
     validate_exact_handle_parameter_bindings(metadata, tx, &assumptions, &mut report.violations);
+    validate_deployment_line_handle_parameter_bindings(metadata, tx, &assumptions, &mut report.violations);
     report.status = if report.violations.is_empty() { "ok".to_string() } else { "failed".to_string() };
     report
 }
@@ -225,6 +226,8 @@ fn classify_plan_assumption(plan: &ProofPlanMetadata, assumption: &str) -> &'sta
     let text = format!("{} {} {}", plan.feature, plan.detail, assumption).to_ascii_lowercase();
     if plan.category == "exact-script-handle" {
         "exact_script_handle"
+    } else if plan.category == "deployment-line-handle" {
+        "deployment_line_handle"
     } else if text.contains("lock transaction scan") || text.contains("only protects the lock group") {
         "lock_group_transaction_scope"
     } else if text.contains("runtime-required") {
@@ -365,6 +368,10 @@ fn validate_evidence_payload_shape(mismatches: &mut Vec<String>, payload: &Value
 
     if assumption.kind == "exact_script_handle" {
         validate_exact_handle_evidence(mismatches, object, assumption, tx);
+        return;
+    }
+    if assumption.kind == "deployment_line_handle" {
+        validate_deployment_line_handle_evidence(mismatches, object, assumption, tx);
         return;
     }
 
@@ -545,6 +552,197 @@ fn validate_exact_handle_evidence(
         Some(witness) => validate_exact_handle_witness(mismatches, witness, handle.as_deref(), tx),
         None => mismatches
             .push("exact_script_handle evidence must include witness { index: <transaction index>, field: input_type }".to_string()),
+    }
+}
+
+fn validate_deployment_line_handle_evidence(
+    mismatches: &mut Vec<String>,
+    object: &serde_json::Map<String, Value>,
+    assumption: &BuilderAssumptionMetadata,
+    tx: &Value,
+) {
+    let Some((role, expected_hash)) = exact_handle_feature(&assumption.feature) else {
+        mismatches
+            .push("deployment_line_handle feature must be <lock|type|spawned-verifier>:<64 lowercase hex handle hash>".to_string());
+        return;
+    };
+    let handle = match object.get("handle").and_then(Value::as_str) {
+        Some(value) => match canonical_lower_hex_bytes(value, crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_BYTES) {
+            Ok(bytes) => Some(bytes),
+            Err(message) => {
+                mismatches.push(format!("deployment line handle evidence {message}"));
+                None
+            }
+        },
+        None => {
+            mismatches.push("deployment_line_handle evidence must include canonical handle bytes".to_string());
+            None
+        }
+    };
+    if let Some(handle) = handle.as_deref() {
+        validate_deployment_line_handle_value(mismatches, handle, role, expected_hash);
+    }
+
+    let admission_index =
+        validate_deployment_line_dep(mismatches, object, "admission", tx, handle.as_deref(), DeploymentLineDepRole::Admission);
+    let code_index = validate_deployment_line_dep(mismatches, object, "code", tx, handle.as_deref(), DeploymentLineDepRole::Code);
+    if admission_index.is_some() && admission_index == code_index {
+        mismatches.push("deployment line admission and code CellDeps must use distinct transaction indexes".to_string());
+    }
+
+    let expected_source = deployment_line_expected_source(assumption);
+    match object.get("source").and_then(Value::as_object) {
+        Some(source) => {
+            let exact = handle
+                .as_deref()
+                .and_then(|handle| handle.get(crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_EXACT_HANDLE_OFFSET..));
+            validate_exact_handle_source(mismatches, source, expected_source, role, exact, tx);
+            if role == "spawned-verifier"
+                && source.get("location").and_then(Value::as_str) == Some("cell_dep")
+                && source.get("index").and_then(Value::as_u64) != code_index
+            {
+                mismatches.push("spawned-verifier deployment line source must be the declared code CellDep index".to_string());
+            }
+        }
+        None => mismatches.push(
+            "deployment_line_handle evidence must include source { location: input|output|cell_dep, index: <transaction index> }"
+                .to_string(),
+        ),
+    }
+
+    match object.get("witness").and_then(Value::as_object) {
+        Some(witness) => validate_deployment_line_handle_witness(mismatches, witness, handle.as_deref(), tx),
+        None => mismatches.push(
+            "deployment_line_handle evidence must include witness { index: <transaction index>, field: input_type }".to_string(),
+        ),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DeploymentLineDepRole {
+    Admission,
+    Code,
+}
+
+fn validate_deployment_line_dep(
+    mismatches: &mut Vec<String>,
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    tx: &Value,
+    handle: Option<&[u8]>,
+    role: DeploymentLineDepRole,
+) -> Option<u64> {
+    let Some(dep) = object.get(field).and_then(Value::as_object) else {
+        mismatches.push(format!("deployment_line_handle evidence must include {field} {{ index: <transaction CellDep index> }}"));
+        return None;
+    };
+    let Some(index) = dep.get("index").and_then(Value::as_u64) else {
+        mismatches.push(format!("deployment line {field} CellDep must include numeric transaction index"));
+        return None;
+    };
+    let Some(item) = tx.get("cell_deps").and_then(Value::as_array).and_then(|items| items.get(index as usize)) else {
+        mismatches.push(format!("deployment line {field} CellDep index {index} is out of range"));
+        return Some(index);
+    };
+    if item.get("dep_type").and_then(Value::as_str) != Some("code") {
+        mismatches.push(format!("deployment line {field} CellDep at transaction index {index} must use dep_type code"));
+    }
+    let Some(handle) = handle else {
+        return Some(index);
+    };
+    let cell = resolved_transaction_cell(item);
+    match role {
+        DeploymentLineDepRole::Admission => {
+            let offset = crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_ADMISSION_TYPE_HASH_OFFSET;
+            let expected_type_hash: [u8; 32] = handle[offset..offset + 32].try_into().expect("fixed deployment line handle");
+            match transaction_script_identity(cell, "type") {
+                Ok(actual) if actual == expected_type_hash => {}
+                Ok(_) => mismatches
+                    .push(format!("deployment line admission Type Script hash does not match transaction cell_deps[{index}]")),
+                Err(message) => mismatches.push(format!("transaction cell_deps[{index}] {message}")),
+            }
+            let expected_data = {
+                let mut bytes = Vec::from(crate::script_handle_contract::DEPLOYMENT_LINE_COMMITMENT_MAGIC);
+                bytes.extend_from_slice(&ckb_blake2b256(handle));
+                bytes
+            };
+            match cell.get("data").and_then(Value::as_str) {
+                Some(value) => match canonical_lower_variable_hex(value) {
+                    Ok(actual) if actual == expected_data => {}
+                    Ok(_) => mismatches.push(format!(
+                        "deployment line admission data does not equal CSREGv1 plus the full handle hash at transaction cell_deps[{index}]"
+                    )),
+                    Err(message) => mismatches.push(format!("transaction cell_deps[{index}] has invalid admission data: {message}")),
+                },
+                None => mismatches.push(format!(
+                    "transaction cell_deps[{index}] must expose resolved admission data bytes for deployment line validation"
+                )),
+            }
+        }
+        DeploymentLineDepRole::Code => {
+            let offset = crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_EXACT_HANDLE_OFFSET
+                + crate::script_handle_contract::EXACT_SCRIPT_HANDLE_ARTIFACT_HASH_OFFSET;
+            let expected_artifact: [u8; 32] = handle[offset..offset + 32].try_into().expect("fixed deployment line handle");
+            match transaction_data_identity(cell) {
+                Ok(actual) if actual == expected_artifact => {}
+                Ok(_) => mismatches.push(format!("deployment line exact artifact hash does not match transaction cell_deps[{index}]")),
+                Err(message) => mismatches.push(format!("transaction cell_deps[{index}] {message}")),
+            }
+        }
+    }
+    Some(index)
+}
+
+fn deployment_line_expected_source(assumption: &BuilderAssumptionMetadata) -> Option<&'static str> {
+    match (assumption.required_inputs.is_empty(), assumption.required_outputs.is_empty()) {
+        (false, true) => Some("input"),
+        (true, false) => Some("output"),
+        (true, true) => Some("cell_dep"),
+        (false, false) => None,
+    }
+}
+
+fn validate_deployment_line_handle_value(mismatches: &mut Vec<String>, handle: &[u8], role: &str, expected_hash: &str) {
+    use crate::script_handle_contract::{
+        DEPLOYMENT_LINE_HANDLE_CLASS_OFFSET, DEPLOYMENT_LINE_HANDLE_EXACT_HANDLE_OFFSET, DEPLOYMENT_LINE_HANDLE_MAGIC,
+        DEPLOYMENT_LINE_HANDLE_RESERVED_BYTES, DEPLOYMENT_LINE_HANDLE_RESERVED_OFFSET, DEPLOYMENT_LINE_HANDLE_ROLE_OFFSET,
+        DEPLOYMENT_LINE_HANDLE_STATUS_ACTIVE, DEPLOYMENT_LINE_HANDLE_STATUS_OFFSET, EXACT_SCRIPT_HANDLE_CLASS_OFFSET,
+        EXACT_SCRIPT_HANDLE_CLASS_SCRIPT, EXACT_SCRIPT_HANDLE_CLASS_VERIFIER, EXACT_SCRIPT_HANDLE_MAGIC,
+        EXACT_SCRIPT_HANDLE_ROLE_LOCK, EXACT_SCRIPT_HANDLE_ROLE_OFFSET, EXACT_SCRIPT_HANDLE_ROLE_SPAWNED_VERIFIER,
+        EXACT_SCRIPT_HANDLE_ROLE_TYPE,
+    };
+    let (expected_class, expected_role) = match role {
+        "lock" => (EXACT_SCRIPT_HANDLE_CLASS_SCRIPT, EXACT_SCRIPT_HANDLE_ROLE_LOCK),
+        "type" => (EXACT_SCRIPT_HANDLE_CLASS_SCRIPT, EXACT_SCRIPT_HANDLE_ROLE_TYPE),
+        "spawned-verifier" => (EXACT_SCRIPT_HANDLE_CLASS_VERIFIER, EXACT_SCRIPT_HANDLE_ROLE_SPAWNED_VERIFIER),
+        _ => return,
+    };
+    if handle.get(..DEPLOYMENT_LINE_HANDLE_MAGIC.len()) != Some(DEPLOYMENT_LINE_HANDLE_MAGIC.as_slice()) {
+        mismatches.push("deployment line handle has invalid CSLINv1 encoding magic".to_string());
+    }
+    if handle.get(DEPLOYMENT_LINE_HANDLE_CLASS_OFFSET).copied() != Some(expected_class)
+        || handle.get(DEPLOYMENT_LINE_HANDLE_ROLE_OFFSET).copied() != Some(expected_role)
+    {
+        mismatches.push(format!("deployment line handle class or role does not match {role}"));
+    }
+    if handle.get(DEPLOYMENT_LINE_HANDLE_STATUS_OFFSET).copied() != Some(DEPLOYMENT_LINE_HANDLE_STATUS_ACTIVE) {
+        mismatches.push("deployment line handle is not active".to_string());
+    }
+    if handle[DEPLOYMENT_LINE_HANDLE_RESERVED_OFFSET..DEPLOYMENT_LINE_HANDLE_RESERVED_OFFSET + DEPLOYMENT_LINE_HANDLE_RESERVED_BYTES]
+        .iter()
+        .any(|byte| *byte != 0)
+    {
+        mismatches.push("deployment line handle reserved bytes must be zero".to_string());
+    }
+    let exact = &handle[DEPLOYMENT_LINE_HANDLE_EXACT_HANDLE_OFFSET..];
+    if exact.get(..EXACT_SCRIPT_HANDLE_MAGIC.len()) != Some(EXACT_SCRIPT_HANDLE_MAGIC.as_slice())
+        || exact.get(EXACT_SCRIPT_HANDLE_CLASS_OFFSET).copied() != Some(expected_class)
+        || exact.get(EXACT_SCRIPT_HANDLE_ROLE_OFFSET).copied() != Some(expected_role)
+    {
+        mismatches.push("deployment line embedded exact handle has inconsistent magic, class, or role".to_string());
+    }
+    if hex_encode(&ckb_blake2b256(handle)) != expected_hash {
+        mismatches.push("deployment line handle bytes do not match the compile-time full-handle commitment".to_string());
     }
 }
 
@@ -787,6 +985,34 @@ fn validate_exact_handle_witness(
     }
 }
 
+fn validate_deployment_line_handle_witness(
+    mismatches: &mut Vec<String>,
+    witness: &serde_json::Map<String, Value>,
+    handle: Option<&[u8]>,
+    tx: &Value,
+) {
+    if witness.get("field").and_then(Value::as_str) != Some("input_type") {
+        mismatches.push("deployment line handle witness.field must be input_type".to_string());
+    }
+    let Some(index) = witness.get("index").and_then(Value::as_u64) else {
+        mismatches.push("deployment line handle witness must include numeric transaction index".to_string());
+        return;
+    };
+    let input_type = match transaction_witness_input_type(tx, index as usize) {
+        Ok(bytes) => bytes,
+        Err(message) => {
+            mismatches.push(format!("transaction witnesses[{index}] {message}"));
+            return;
+        }
+    };
+    if let Some(handle) = handle
+        && !input_type.windows(handle.len()).any(|window| window == handle)
+    {
+        mismatches
+            .push(format!("transaction witnesses[{index}].input_type does not contain the committed deployment line handle bytes"));
+    }
+}
+
 fn transaction_witness_input_type(tx: &Value, index: usize) -> Result<Vec<u8>, String> {
     let witness = tx
         .get("witnesses")
@@ -894,12 +1120,74 @@ fn validate_exact_handle_parameter_bindings(
             push_violation(violations, assumption, "exact handle ProofPlan is missing its entry parameter binding");
             continue;
         };
-        match entry_payload_parameter(&input_type, params, parameter) {
+        match entry_payload_parameter(
+            &input_type,
+            params,
+            parameter,
+            crate::script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE,
+            crate::script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES,
+            "exact handle",
+        ) {
             Ok(actual) if actual == handle => {}
             Ok(_) => push_violation(
                 violations,
                 assumption,
                 "exact handle evidence does not match the declared parameter position in WitnessArgs.input_type",
+            ),
+            Err(message) => push_violation(violations, assumption, &message),
+        }
+    }
+}
+
+fn validate_deployment_line_handle_parameter_bindings(
+    metadata: &CompileMetadata,
+    tx: &Value,
+    assumptions: &[BuilderAssumptionMetadata],
+    violations: &mut Vec<TxValidationViolation>,
+) {
+    for assumption in assumptions.iter().filter(|assumption| assumption.kind == "deployment_line_handle") {
+        let Some(payload) = matching_evidence_payload(tx, assumption) else {
+            continue;
+        };
+        let Some(handle_text) = payload.get("handle").and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(handle) = canonical_lower_hex_bytes(handle_text, crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_BYTES) else {
+            continue;
+        };
+        let Some(witness_index) =
+            payload.get("witness").and_then(Value::as_object).and_then(|witness| witness.get("index")).and_then(Value::as_u64)
+        else {
+            continue;
+        };
+        let Ok(input_type) = transaction_witness_input_type(tx, witness_index as usize) else {
+            continue;
+        };
+        let Some((plan, params)) = exact_handle_plan_and_params(metadata, assumption) else {
+            push_violation(
+                violations,
+                assumption,
+                "deployment line ProofPlan cannot be resolved to its compiled action or lock entry",
+            );
+            continue;
+        };
+        let Some(parameter) = plan.coverage.iter().find_map(|item| item.strip_prefix("parameter:")) else {
+            push_violation(violations, assumption, "deployment line ProofPlan is missing its entry parameter binding");
+            continue;
+        };
+        match entry_payload_parameter(
+            &input_type,
+            params,
+            parameter,
+            crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_TYPE,
+            crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_BYTES,
+            "deployment line handle",
+        ) {
+            Ok(actual) if actual == handle => {}
+            Ok(_) => push_violation(
+                violations,
+                assumption,
+                "deployment line evidence does not match the declared parameter position in WitnessArgs.input_type",
             ),
             Err(message) => push_violation(violations, assumption, &message),
         }
@@ -963,7 +1251,14 @@ fn exact_handle_plan_and_params<'a>(
     None
 }
 
-fn entry_payload_parameter<'a>(payload: &'a [u8], params: &[ParamMetadata], target: &str) -> Result<&'a [u8], String> {
+fn entry_payload_parameter<'a>(
+    payload: &'a [u8],
+    params: &[ParamMetadata],
+    target: &str,
+    expected_type: &str,
+    expected_width: usize,
+    label: &str,
+) -> Result<&'a [u8], String> {
     if !payload.starts_with(crate::ENTRY_WITNESS_ABI_MAGIC) {
         return Err("WitnessArgs.input_type must start with the compiled CSARGv1 entry ABI magic".to_string());
     }
@@ -999,10 +1294,8 @@ fn entry_payload_parameter<'a>(payload: &'a [u8], params: &[ParamMetadata], targ
             .get(start..cursor)
             .ok_or_else(|| format!("WitnessArgs.input_type truncates compiled parameter '{}'", param.name))?;
         if param.name == target {
-            if param.ty != crate::script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE
-                || param.fixed_byte_len != Some(crate::script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES)
-            {
-                return Err(format!("compiled parameter '{target}' is not a fixed exact Script handle"));
+            if param.ty != expected_type || param.fixed_byte_len != Some(expected_width) {
+                return Err(format!("compiled parameter '{target}' is not a fixed {label}"));
             }
             selected = Some(bytes);
         }
@@ -1010,7 +1303,7 @@ fn entry_payload_parameter<'a>(payload: &'a [u8], params: &[ParamMetadata], targ
     if cursor != payload.len() {
         return Err("WitnessArgs.input_type has trailing bytes outside the compiled entry ABI".to_string());
     }
-    selected.ok_or_else(|| format!("exact handle ProofPlan parameter '{target}' is not present in the compiled entry ABI"))
+    selected.ok_or_else(|| format!("{label} ProofPlan parameter '{target}' is not present in the compiled entry ABI"))
 }
 
 fn param_consumes_entry_payload(param: &ParamMetadata) -> bool {
@@ -1263,6 +1556,7 @@ fn requires_explicit_evidence(kind: &str) -> bool {
             | "lock_group_transaction_scope"
             | "capacity_policy"
             | "exact_script_handle"
+            | "deployment_line_handle"
     )
 }
 

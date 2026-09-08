@@ -1235,6 +1235,7 @@ impl LspServer {
             "Hash",
             "ScriptHash",
             "ExactScriptHandle",
+            "DeploymentLineHandle",
             "SighashAllDigest",
             "EpochNumber",
             "EpochDuration",

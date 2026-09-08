@@ -2663,8 +2663,17 @@ fn validate_typed_operation(
                     | "__ckb_require_cell_type_exact_handle"
                     | "__ckb_require_cell_dep_exact_verifier_handle"
             );
+            let is_deployment_line_handle_call = matches!(
+                call.target.as_str(),
+                "__ckb_require_cell_lock_deployment_line_handle"
+                    | "__ckb_require_cell_type_deployment_line_handle"
+                    | "__ckb_require_cell_dep_deployment_line_verifier_handle"
+            );
             if operation.operands.iter().any(|operand| operand.ty == "ExactScriptHandle") && !is_exact_handle_call {
                 return typed_error("ExactScriptHandle operand is passed to an unrecognized runtime helper".to_string());
+            }
+            if operation.operands.iter().any(|operand| operand.ty == "DeploymentLineHandle") && !is_deployment_line_handle_call {
+                return typed_error("DeploymentLineHandle operand is passed to an unrecognized runtime helper".to_string());
             }
             // This known helper has no executable digest contract in this
             // schema. It must not be relabelled as an ordinary value-producing
@@ -2724,6 +2733,47 @@ fn validate_typed_operation(
                 {
                     return typed_error(
                         "exact Script handle call does not declare its canonical full-handle commitment and runtime contract"
+                            .to_string(),
+                    );
+                }
+            }
+            if is_deployment_line_handle_call {
+                let verifier = call.target == "__ckb_require_cell_dep_deployment_line_verifier_handle";
+                let expected_len = if verifier { 4 } else { 5 };
+                let handle_index = if verifier { 2 } else { 3 };
+                let hash_index = handle_index + 1;
+                let source_type_valid = if verifier {
+                    call.params.first().map(String::as_str) == Some("CellDepView")
+                } else {
+                    call.params.first().map(String::as_str).is_some_and(|first| {
+                        matches!(first.split('<').next().unwrap_or(first), "InputView" | "OutputView" | "CellDepView")
+                    })
+                };
+                let deps_valid = if verifier {
+                    call.params.first().map(String::as_str) == Some("CellDepView")
+                        && call.params.get(1).map(String::as_str) == Some("CellDepView")
+                } else {
+                    call.params.get(1).map(String::as_str) == Some("CellDepView")
+                        && call.params.get(2).map(String::as_str) == Some("CellDepView")
+                };
+                let handle_hash_is_constant = matches!(
+                    operation.operands.get(hash_index).and_then(|operand| operand.constant.as_ref()),
+                    Some(TypedSemanticConstant::Hash(_))
+                );
+                if call.contract != "versioned-runtime-helper"
+                    || call.effect != "runtime-contract"
+                    || call.return_type != "unit"
+                    || !operation.destinations.is_empty()
+                    || operation.operands.len() != expected_len
+                    || call.params.len() != expected_len
+                    || !source_type_valid
+                    || !deps_valid
+                    || call.params.get(handle_index).map(String::as_str) != Some("DeploymentLineHandle")
+                    || canonical_abi_type(call.params.get(hash_index).map(String::as_str).unwrap_or_default()) != "hash"
+                    || !handle_hash_is_constant
+                {
+                    return typed_error(
+                        "deployment line handle call does not declare its canonical active-admission, exact-code, and full-handle runtime contract"
                             .to_string(),
                     );
                 }

@@ -279,8 +279,10 @@ standalone checker preserves that profile/hash-type contract. Standard TYPE_ID
 admission/code Cell evidence, exact admission transitions, and mandatory
 ProtocolBundle binding are implemented off chain. The CKB adapter independently
 resolves both TYPE_ID Cells as live, rechecks their exact Scripts/data/network,
-and blocks signing on substitution. The runtime helper needed to reject stale
-line versions in consensus is not implemented. Generic
+and blocks signing on substitution. Fixed `DeploymentLineHandle` witness values
+and role-specific checked helpers now bind the active admission commitment,
+exact code CellDep, and selected full Script identity in CKB-VM; spent admission
+out points remain unavailable under ordinary CKB CellDep liveness. Generic
 `ScriptHandle<I>` types, runtime-selected compatible construction,
 compatible-open handles, and open cross-Script roles remain open.
 

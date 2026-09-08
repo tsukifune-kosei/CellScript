@@ -69,6 +69,7 @@ pub enum CellScriptRuntimeError {
     WitnessBoundExceeded = 68,
     SighashBoundExceeded = 69,
     ExactScriptHandleInvalid = 70,
+    DeploymentLineHandleInvalid = 71,
 }
 
 impl CellScriptRuntimeError {
@@ -141,6 +142,7 @@ impl CellScriptRuntimeError {
             Self::WitnessBoundExceeded => "witness-bound-exceeded",
             Self::SighashBoundExceeded => "sighash-bound-exceeded",
             Self::ExactScriptHandleInvalid => "exact-script-handle-invalid",
+            Self::DeploymentLineHandleInvalid => "deployment-line-handle-invalid",
         }
     }
 
@@ -230,6 +232,9 @@ impl CellScriptRuntimeError {
             }
             Self::ExactScriptHandleInvalid => {
                 "An exact Script handle had the wrong canonical encoding, receipt commitment, role, or selected transaction Script identity."
+            }
+            Self::DeploymentLineHandleInvalid => {
+                "A deployment line handle, its active admission Cell, selected transaction Script, or exact code CellDep identity did not match."
             }
         }
     }
@@ -343,6 +348,9 @@ impl CellScriptRuntimeError {
             Self::ExactScriptHandleInvalid => {
                 "Use the checked CSHDLv1 receipt value and keep its complete Script or CellDep artifact identity unchanged."
             }
+            Self::DeploymentLineHandleInvalid => {
+                "Use the current active CSLINv1 handle with its exact admission and code CellDeps at the compiled transaction positions."
+            }
         }
     }
 
@@ -411,6 +419,7 @@ impl CellScriptRuntimeError {
             68 => Some(Self::WitnessBoundExceeded),
             69 => Some(Self::SighashBoundExceeded),
             70 => Some(Self::ExactScriptHandleInvalid),
+            71 => Some(Self::DeploymentLineHandleInvalid),
             _ => None,
         }
     }
@@ -488,6 +497,7 @@ pub const ALL_RUNTIME_ERRORS: &[CellScriptRuntimeError] = &[
     CellScriptRuntimeError::WitnessBoundExceeded,
     CellScriptRuntimeError::SighashBoundExceeded,
     CellScriptRuntimeError::ExactScriptHandleInvalid,
+    CellScriptRuntimeError::DeploymentLineHandleInvalid,
 ];
 
 pub const RESERVED_RUNTIME_ERROR_CODES: &[u64] = &[6, 19, 27, 28, 29, 30, 31];

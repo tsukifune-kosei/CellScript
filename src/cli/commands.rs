@@ -8897,6 +8897,76 @@ export function exactScriptHandleFromCheckedBundle(
   });
 }
 
+export interface BoundDeploymentLineHandle {
+  artifact: ProtocolBundleArtifactBinding;
+  admission: DeploymentLineAdmissionEvidence;
+  exact: BoundExactScriptHandle;
+  handleBytes: HexString;
+  admissionCellDepIndex: number;
+  codeCellDepIndex: number;
+}
+
+/** Extract the current checked CSLINv1 value and its exact CellDep positions. */
+export function deploymentLineHandleFromCheckedBundle(
+  checked: CheckedProtocolBundle,
+  artifact: ProtocolBundleArtifactBinding,
+): BoundDeploymentLineHandle {
+  if (artifact.targetProfile !== "ckb-type-hash" || artifact.deployment.script.hashType !== "type") {
+    throw new Error("deployment line handles require a checked ckb-type-hash artifact");
+  }
+  const bundle = checked.bundle as { deployment_lines?: readonly DeploymentLineAdmissionEvidence[] };
+  const admission = bundle.deployment_lines?.find((item) => item.artifact === artifact.id);
+  if (!admission || admission.schema !== DEPLOYMENT_LINE_ADMISSION_EVIDENCE_SCHEMA || admission.version !== 1
+    || admission.receipt.schema !== DEPLOYMENT_LINE_RECEIPT_SCHEMA || admission.receipt.version !== 1
+    || admission.receipt.status !== "active" || admission.receipt.script_role !== artifact.scriptRole
+    || admission.handle.schema !== DEPLOYMENT_LINE_VALUE_SCHEMA || admission.handle.version !== 1
+    || admission.handle.encoding !== DEPLOYMENT_LINE_HANDLE_ENCODING
+    || !/^0x[0-9a-f]{772}$/.test(admission.handle.encoded)
+    || !Number.isSafeInteger(admission.admission_cell_dep_index) || admission.admission_cell_dep_index < 0
+    || !Number.isSafeInteger(admission.code_cell_dep_index) || admission.code_cell_dep_index < 0
+    || admission.admission_cell_dep_index === admission.code_cell_dep_index) {
+    throw new Error(`successful ProtocolBundle report has no active canonical deployment line for artifact '${artifact.id}'`);
+  }
+  const exact = exactScriptHandleFromCheckedBundle(checked, artifact);
+  if (admission.receipt.current_exact_handle_hash !== exact.handleHash
+    || admission.receipt.current_exact_receipt.verified_bundle_id !== exact.receipt.verified_bundle_id
+    || !exactDeploymentMatches(artifact, admission.receipt.current_exact_receipt)) {
+    throw new Error(`deployment line for artifact '${artifact.id}' does not bind its checked exact version`);
+  }
+  return Object.freeze({
+    artifact,
+    admission: Object.freeze(admission),
+    exact,
+    handleBytes: admission.handle.encoded,
+    admissionCellDepIndex: admission.admission_cell_dep_index,
+    codeCellDepIndex: admission.code_cell_dep_index,
+  });
+}
+
+/** Build the exact evidence payload consumed by `cellc tx validate`. */
+export function deploymentLineHandleEvidence(
+  binding: BoundDeploymentLineHandle,
+  source: { location: "input" | "output" | "cell_dep"; index: number },
+  witness: { index: number; field: "input_type" },
+): {
+  handle: HexString;
+  source: { location: "input" | "output" | "cell_dep"; index: number };
+  admission: { index: number };
+  code: { index: number };
+  witness: { index: number; field: "input_type" };
+} {
+  if (!Number.isSafeInteger(source.index) || source.index < 0 || !Number.isSafeInteger(witness.index) || witness.index < 0) {
+    throw new Error("deployment line runtime source and witness indexes must be non-negative safe integers");
+  }
+  return Object.freeze({
+    handle: binding.handleBytes,
+    source: Object.freeze({ ...source }),
+    admission: Object.freeze({ index: binding.admissionCellDepIndex }),
+    code: Object.freeze({ index: binding.codeCellDepIndex }),
+    witness: Object.freeze({ ...witness }),
+  });
+}
+
 export interface ProtocolBundleStage<S extends string> {
   state: S;
   bundleHash: string;

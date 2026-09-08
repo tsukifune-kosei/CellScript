@@ -75,6 +75,24 @@ action inspect(witness handle: ExactScriptHandle) -> u64 {
 }
 "#;
 
+const DEPLOYMENT_LINE_HANDLE_SOURCE: &str = r#"
+module artifact_checker_deployment_line_handle
+
+resource Token has store { amount: u64 }
+
+action inspect(witness line: DeploymentLineHandle) -> u64 {
+    let admission = ckb::cell_dep(0)
+    let code = ckb::cell_dep(1)
+    ckb::require_cell_dep_deployment_line_verifier_handle(
+        admission,
+        code,
+        line,
+        Hash::from_bytes(b"0123456789abcdef0123456789abcdef")
+    )
+    return 0
+}
+"#;
+
 #[derive(Clone)]
 struct Fixture {
     artifact: Vec<u8>,
@@ -185,6 +203,20 @@ fn exact_handle_operation(fixture: &mut Fixture) -> &mut TypedSemanticOperation 
         .flat_map(|block| &mut block.operations)
         .find(|operation| operation.call.as_ref().is_some_and(|call| call.target == "__ckb_require_cell_dep_exact_verifier_handle"))
         .expect("exact verifier handle operation")
+}
+
+fn deployment_line_handle_operation(fixture: &mut Fixture) -> &mut TypedSemanticOperation {
+    fixture
+        .record
+        .typed_semantics
+        .entries
+        .iter_mut()
+        .flat_map(|entry| &mut entry.blocks)
+        .flat_map(|block| &mut block.operations)
+        .find(|operation| {
+            operation.call.as_ref().is_some_and(|call| call.target == "__ckb_require_cell_dep_deployment_line_verifier_handle")
+        })
+        .expect("deployment line verifier handle operation")
 }
 
 #[test]
@@ -1340,6 +1372,56 @@ fn exact_handle_contract_cannot_be_reclassified_after_hash_rebinding() {
     hash.replace_range(0..2, "ff");
     changed.rebind_typed_semantics();
     assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+}
+
+#[test]
+fn deployment_line_handle_contract_cannot_be_reclassified_after_hash_rebinding() {
+    let fixture = Fixture::from_result(
+        compile(
+            DEPLOYMENT_LINE_HANDLE_SOURCE,
+            CompileOptions {
+                edition: NEXT_EDITION,
+                opt_level: 0,
+                target: Some("riscv64-elf".to_string()),
+                target_profile: Some("ckb".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    );
+    assert!(check_bundle_values(
+        &fixture.artifact,
+        &fixture.metadata,
+        &fixture.record,
+        &fixture.source_map,
+        &CheckerBudgets::default(),
+    )
+    .is_ok());
+
+    let mut changed = fixture.clone();
+    deployment_line_handle_operation(&mut changed).call.as_mut().unwrap().target = "__foreign_deployment_line".to_string();
+    changed.rebind_typed_semantics();
+    assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
+
+    let mut changed = fixture.clone();
+    deployment_line_handle_operation(&mut changed).call.as_mut().unwrap().effect = "Pure".to_string();
+    changed.rebind_typed_semantics();
+    assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
+
+    let mut changed = fixture.clone();
+    let operation = deployment_line_handle_operation(&mut changed);
+    operation.operands[2].ty = "ExactScriptHandle".to_string();
+    operation.call.as_mut().unwrap().params[2] = "ExactScriptHandle".to_string();
+    changed.rebind_typed_semantics();
+    assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
+
+    let mut changed = fixture;
+    let operation = deployment_line_handle_operation(&mut changed);
+    operation.operands[3].ty = "address".to_string();
+    operation.operands[3].constant = Some(TypedSemanticConstant::Address("00".repeat(32)));
+    operation.call.as_mut().unwrap().params[3] = "address".to_string();
+    changed.rebind_typed_semantics();
+    assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
 }
 
 #[test]

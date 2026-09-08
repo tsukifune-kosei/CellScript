@@ -173,6 +173,18 @@ an exact deployed-artifact reference; it does not perform Registry lookup,
 grant Cell lifecycle authority, establish signature authorization, or accept a
 compatible upgrade. See [Exact Script handles](CELLSCRIPT_EXACT_SCRIPT_HANDLES.md).
 
+Type-hash upgrade lines use the distinct fixed `DeploymentLineHandle` value.
+A consumer supplies the checked admission and code `CellDepView`s, the full
+386-byte witness value, and its compile-time CKB Blake2b-256 hash to one of
+`ckb::require_cell_lock_deployment_line_handle`,
+`ckb::require_cell_type_deployment_line_handle`, or
+`ckb::require_cell_dep_deployment_line_verifier_handle`. These calls accept
+only active `CSLINv1`, require the admission commitment and exact code data,
+and bind Lock/Type roles to the selected complete Script hash. They preserve
+one exact compatible version; they do not select an arbitrary compatible
+implementation at runtime. See
+[Deployment-line handles](CELLSCRIPT_DEPLOYMENT_LINE_HANDLES.md).
+
 ### A3. Preservation and schema evolution
 
 For a concrete schema, `same except` can produce exhaustive checks. Accept it

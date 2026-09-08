@@ -4,8 +4,9 @@ Status: off-chain receipt/fixed-value foundation and the distinct
 `ckb-type-hash` generated-artifact profile are implemented on the `0.30`
 development branch. Standard Type ID admission evidence, admission-state
 transitions, ProtocolBundle binding, and CKB-adapter live dependency resolution
-are also implemented. Source/runtime helpers, consensus execution cases, and
-compatible open roles remain release blockers.
+are also implemented. Fixed source/runtime helpers and real CKB-VM
+stale/yank/substitution cases close the exact active-version consumer path.
+Compatible open roles remain a later phase.
 
 ## Security boundary
 
@@ -99,15 +100,23 @@ entire line value without treating the off-chain Registry as consensus.
   args from the first serialized `CellInput` and output index. For upgrades and
   yanks it requires exactly one matching TYPE_ID input and output, exact
   predecessor data, and the checked receipt successor.
+- `DeploymentLineHandle` is the fixed 386-byte source/ABI type. Its three
+  role-specific CKB helpers require the admission CellDep, code CellDep,
+  complete handle, and compile-time full-handle hash. Lock and Type forms also
+  take the selected typed source view.
 
 `ckb-type-hash` artifacts in `cellscript-protocol-bundle-input-v1` must carry
 exactly one `cellscript-deployment-line-admission-evidence-v1` record. The
 offline checker rejects missing, duplicate, predecessor/data-stale, yanked,
 incompatible, wrong-code, wrong-Type-ID, and wrong-CellDep-position evidence.
-The generated TypeScript builder contract exports both admission schemas and marks
-`ckb-type-hash` packages as requiring this binding.
+The generated TypeScript builder contract exports both admission schemas and
+marks `ckb-type-hash` packages as requiring this binding. It also exposes
+`deploymentLineHandleFromCheckedBundle` and `deploymentLineHandleEvidence` so
+the checked handle, both direct CellDep positions, selected source, and witness
+position enter `cellc tx validate` without being reselected by application
+code.
 
-## Remaining runtime closure
+## Runtime consumer contract
 
 The default `ckb` profile remains exact-data deployment and permits only
 `data2`. The separate `ckb-type-hash` profile now emits the same CKB VM2/Zbb
@@ -126,8 +135,52 @@ the returned Lock, TYPE_ID Script, data hash, out point, and transaction
 position. `ReadyToSignProtocolBundleTx` is unreachable unless all ordinary and
 deployment-line dependencies pass together.
 
-No source type or on-chain helper consumes `DeploymentLineHandle` yet. The
-next phase must add those runtime checks, standalone-checker mutations, and
-real CKB-VM stale/yank/substitution cases. Compatible open handles remain a
-later phase and cannot infer behavioral equivalence from interface
-compatibility.
+The source-level forms are:
+
+```cell
+ckb::require_cell_lock_deployment_line_handle(
+    cell, admission_dep, code_dep, line, expected_line_hash
+)
+ckb::require_cell_type_deployment_line_handle(
+    cell, admission_dep, code_dep, line, expected_line_hash
+)
+ckb::require_cell_dep_deployment_line_verifier_handle(
+    admission_dep, code_dep, line, expected_line_hash
+)
+```
+
+`line` must be a `DeploymentLineHandle`, both dependency arguments must be
+`CellDepView`, and `expected_line_hash` must lower from a compile-time `Hash`
+literal. The runtime checks all 386 bytes, magic, class, role, active status,
+reserved bytes, and the embedded exact-handle header. It recomputes the full
+handle hash, requires the admission Cell Type hash at offset 152, loads exactly
+39 admission-data bytes and compares `CSREGv1 || handle_hash`, then requires
+the code Cell data hash to equal the embedded exact artifact. Lock and Type
+forms additionally compare the selected complete Script hash. Any mismatch
+uses stable runtime error 71.
+
+The ProofPlan and `deployment_line_handle` builder assumption retain the
+selected source kind, witness parameter name, full-handle hash, and both
+CellDep obligations. Pre-signing evidence has this payload shape:
+
+```json
+{
+  "handle": "0x<386-byte-CSLINv1-value>",
+  "source": { "location": "cell_dep", "index": 1 },
+  "admission": { "index": 0 },
+  "code": { "index": 1 },
+  "witness": { "index": 0, "field": "input_type" }
+}
+```
+
+Validation requires direct `code` CellDeps at distinct indexes, resolved
+admission Type Script and data bytes, exact code data identity, and the handle
+at its compiled `CSARGv1` parameter position. The standalone artifact checker
+rejects helper, effect, operand-type, or literal-contract relabeling after
+sidecar hash rebinding. Real CKB-VM tests cover all three roles plus stale
+admission data, yanked status, admission Type substitution, code substitution,
+and selected Type Script substitution. A spent predecessor cannot be loaded as
+a live CellDep under CKB consensus.
+
+Compatible open handles remain a later phase and cannot infer behavioral
+equivalence from interface compatibility alone.

@@ -36,7 +36,7 @@ pub const DEPLOYMENT_LINE_POLICY_SCHEMA: &str = "cellscript-deployment-line-poli
 pub const DEPLOYMENT_LINE_RECEIPT_HASH_DOMAIN: &str = "cellscript-deployment-line-receipt-v1";
 pub const DEPLOYMENT_LINE_ID_HASH_DOMAIN: &str = "cellscript-deployment-line-id-v1";
 pub const DEPLOYMENT_LINE_POLICY_HASH_DOMAIN: &str = "cellscript-deployment-line-policy-v1";
-pub const DEPLOYMENT_LINE_COMMITMENT_MAGIC: &[u8; 7] = b"CSREGv1";
+pub use crate::script_handle_contract::DEPLOYMENT_LINE_COMMITMENT_MAGIC;
 pub const DEPLOYMENT_LINE_ADMISSION_EVIDENCE_SCHEMA: &str = "cellscript-deployment-line-admission-evidence-v1";
 pub const DEPLOYMENT_LINE_ADMISSION_TRANSITION_SCHEMA: &str = "cellscript-deployment-line-admission-transition-v1";
 
