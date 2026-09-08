@@ -495,6 +495,10 @@
   original-binary, and normalized-fixture evidence remains stable. Refresh the
   production evidence inventory for the typed-temporal and zero-lock sighash
   language examples while retaining their non-production classification.
+  Rebind the 26 affected action/Lock artifacts in the audited production
+  transaction recipes, including 123 generated-Script code-hash references,
+  48 dependency data-hash references, and 88 embedded complete Script hashes;
+  transaction structure and business payload fields remain unchanged.
 
 ## 0.26b - Experimental semantic-foundation branch
 
