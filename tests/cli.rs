@@ -12141,6 +12141,22 @@ action main() -> u64 {
 
 // ── Workspace e2e tests ──────────────────────────────────────────────────────
 
+fn write_workspace_member(root: &std::path::Path, directory: &str, name: &str, dependencies: &[(&str, &str)]) -> std::path::PathBuf {
+    let member = root.join(directory);
+    std::fs::create_dir_all(member.join("src")).unwrap();
+    let mut manifest = format!("[package]\nedition = \"2026\"\nname = \"{name}\"\nversion = \"1.0.0\"\n");
+    for (alias, path) in dependencies {
+        manifest.push_str(&format!("\n[dependencies.{alias}]\npath = \"{path}\"\n"));
+    }
+    std::fs::write(member.join("Cell.toml"), manifest).unwrap();
+    std::fs::write(
+        member.join("src/main.cell"),
+        format!("module {name}\n\naction run() -> u64 {{\n    verification\n        1\n}}\n"),
+    )
+    .unwrap();
+    member
+}
+
 #[test]
 fn cellc_workspace_build_compiles_all_members() {
     let dir = tempfile::tempdir().unwrap();
@@ -12208,6 +12224,12 @@ action world() -> u64 {
     assert_eq!(summary["status"], "ok");
     let members = summary["results"].as_array().unwrap();
     assert_eq!(members.len(), 2);
+    assert!(!root.join("Cell.lock").exists(), "virtual workspace roots must not receive a synthetic package lock");
+    for package in [&pkg_a, &pkg_b] {
+        let lock = cellscript::package::Lockfile::read_from_root(package).unwrap().unwrap();
+        assert!(lock.package_build.is_some(), "successful member build must refresh package_build");
+        assert!(lock.dependencies.values().all(|node| node.manifest_digest != "workspace-member-artifact"));
+    }
 }
 
 #[test]
@@ -12307,12 +12329,19 @@ action compute() -> u64 { verification let v: u64 = 7 return v }
     )
     .unwrap();
 
-    let output =
-        Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("check").arg("--workspace").arg("--json").output().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .arg("check")
+        .arg("--workspace")
+        .arg("--all-targets")
+        .arg("--json")
+        .output()
+        .unwrap();
     assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
 
     let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(summary["status"], "ok");
+    assert_eq!(summary["results"][0]["checked_units"].as_array().unwrap().len(), 2);
 }
 
 #[test]
@@ -12347,6 +12376,8 @@ entry = "src/types.cell"
 resource Token has store, replace, relock, consume, burn {
     amount: u64
 }
+
+
 "#,
     )
     .unwrap();
@@ -12387,8 +12418,157 @@ action passthrough(token: Token) -> Token {
     let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(summary["status"], "ok");
     let members = summary["results"].as_array().unwrap();
-    assert_eq!(members.len(), 1);
-    assert!(members[0]["member"].as_str().unwrap().contains("app"));
+    assert_eq!(members.len(), 2, "package selection must include its transitive workspace-member closure");
+    assert_eq!(members[0]["member_name"], "shared_types");
+    assert_eq!(members[1]["member_name"], "app");
+}
+
+#[test]
+fn cellc_workspace_exclude_removes_an_explicit_member() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("Cell.toml"), "[workspace]\nmembers = [\"included\", \"excluded\"]\nexclude = [\"excluded\"]\n").unwrap();
+    write_workspace_member(root, "included", "included", &[]);
+    write_workspace_member(root, "excluded", "excluded", &[]);
+
+    let output = cellc_command().current_dir(root).args(["check", "--workspace", "--json"]).output().unwrap();
+    assert!(output.status.success(), "stdout: {}", String::from_utf8_lossy(&output.stdout));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["results"].as_array().unwrap().len(), 1);
+    assert_eq!(report["results"][0]["member_name"], "included");
+}
+
+#[test]
+fn cellc_workspace_rejects_duplicate_names_and_canonical_paths() {
+    for duplicate_paths in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_workspace_member(root, "one", "shared", &[]);
+        if duplicate_paths {
+            std::fs::write(root.join("Cell.toml"), "[workspace]\nmembers = [\"one\", \"./one\"]\n").unwrap();
+        } else {
+            write_workspace_member(root, "two", "shared", &[]);
+            std::fs::write(root.join("Cell.toml"), "[workspace]\nmembers = [\"one\", \"two\"]\n").unwrap();
+        }
+
+        let output = cellc_command().current_dir(root).args(["check", "--workspace", "--json"]).output().unwrap();
+        assert!(!output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["diagnostics"][0]["code"], "E2700");
+        let message = report["diagnostics"][0]["message"].as_str().unwrap();
+        assert!(message.contains(if duplicate_paths { "listed more than once" } else { "declared by more than one member" }));
+    }
+}
+
+#[test]
+fn cellc_workspace_builds_a_reversed_diamond_in_dependency_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("Cell.toml"), "[workspace]\nmembers = [\"app\", \"right\", \"left\", \"shared\"]\n").unwrap();
+    write_workspace_member(root, "shared", "shared", &[]);
+    let left = write_workspace_member(root, "left", "left", &[("shared", "../shared")]);
+    let right = write_workspace_member(root, "right", "right", &[("shared", "../shared")]);
+    let app = write_workspace_member(root, "app", "app", &[("left", "../left"), ("right", "../right")]);
+    lock_package(&left);
+    lock_package(&right);
+    lock_package(&app);
+
+    let output = cellc_command().current_dir(root).args(["build", "--workspace", "--json"]).output().unwrap();
+    assert!(output.status.success(), "stdout: {}", String::from_utf8_lossy(&output.stdout));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let order = report["results"].as_array().unwrap().iter().map(|result| result["member_name"].as_str().unwrap()).collect::<Vec<_>>();
+    assert_eq!(order, ["shared", "left", "right", "app"]);
+    assert_eq!(report["member_edges"].as_array().unwrap().len(), 4);
+    assert!(!root.join("Cell.lock").exists());
+}
+
+#[test]
+fn cellc_workspace_unifies_the_same_member_across_different_relative_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("Cell.toml"), "[workspace]\nmembers = [\"layers/left\", \"apps/deep/right\", \"shared\"]\n").unwrap();
+    write_workspace_member(root, "shared", "shared", &[]);
+    let left = write_workspace_member(root, "layers/left", "left", &[("shared", "../../shared")]);
+    let right = write_workspace_member(root, "apps/deep/right", "right", &[("shared", "../../../shared")]);
+    lock_package(&left);
+    lock_package(&right);
+
+    let graph = cellscript::package::workspace::resolve_workspace_graph(root, &Default::default()).unwrap();
+    assert_eq!(graph.build_order, ["shared", "left", "right"]);
+    let shared_nodes = graph.resolved_nodes.values().filter(|node| node.name == "shared").collect::<Vec<_>>();
+    assert_eq!(shared_nodes.len(), 1);
+    assert_eq!(shared_nodes[0].source_identity, "workspace:shared");
+}
+
+#[test]
+fn cellc_workspace_rejects_a_virtual_root_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("Cell.toml"), "[workspace]\nmembers = [\"member\"]\n").unwrap();
+    write_workspace_member(root, "member", "member", &[]);
+    std::fs::write(root.join("Cell.lock"), "synthetic workspace lock").unwrap();
+
+    let output = cellc_command().current_dir(root).args(["check", "--workspace", "--json"]).output().unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["diagnostics"][0]["code"], "E2700");
+    assert!(report["diagnostics"][0]["message"].as_str().unwrap().contains("must not contain Cell.lock"));
+}
+
+#[test]
+fn cellc_workspace_rejects_member_cycles_before_lock_or_compilation() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("Cell.toml"), "[workspace]\nmembers = [\"a\", \"b\"]\n").unwrap();
+    write_workspace_member(root, "a", "a", &[("b", "../b")]);
+    write_workspace_member(root, "b", "b", &[("a", "../a")]);
+
+    let output = cellc_command().current_dir(root).args(["build", "--workspace", "--json"]).output().unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["diagnostics"][0]["code"], "E2700");
+    assert!(report["diagnostics"][0]["message"].as_str().unwrap().contains("a -> b -> a"));
+    assert!(!root.join("a/build").exists());
+    assert!(!root.join("b/build").exists());
+}
+
+#[test]
+fn cellc_workspace_rejects_stale_member_locks_before_compilation() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("Cell.toml"), "[workspace]\nmembers = [\"base\", \"app\"]\n").unwrap();
+    let base = write_workspace_member(root, "base", "base", &[]);
+    let app = write_workspace_member(root, "app", "app", &[("base", "../base")]);
+    lock_package(&app);
+    let manifest = std::fs::read_to_string(base.join("Cell.toml")).unwrap().replace("version = \"1.0.0\"", "version = \"1.0.1\"");
+    std::fs::write(base.join("Cell.toml"), manifest).unwrap();
+
+    let output = cellc_command().current_dir(root).args(["check", "--workspace", "--json"]).output().unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(report["diagnostics"][0]["message"].as_str().unwrap().contains("manifest digest mismatch"));
+    assert!(!app.join("build").exists());
+}
+
+#[test]
+fn cellc_workspace_propagates_dependency_failure_without_building_dependents() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("Cell.toml"), "[workspace]\nmembers = [\"app\", \"base\"]\n").unwrap();
+    let base = write_workspace_member(root, "base", "base", &[]);
+    let app = write_workspace_member(root, "app", "app", &[("base", "../base")]);
+    std::fs::write(base.join("src/main.cell"), "invalid CellScript source").unwrap();
+    lock_package(&app);
+
+    let output = cellc_command().current_dir(root).args(["build", "--workspace", "--json"]).output().unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = report["results"].as_array().unwrap();
+    assert_eq!(results[0]["member_name"], "base");
+    assert_eq!(results[0]["status"], "failed");
+    assert_eq!(results[1]["member_name"], "app");
+    assert_eq!(results[1]["status"], "blocked");
+    assert!(!app.join("build").exists());
 }
 
 // ── Incremental compilation e2e tests ────────────────────────────────────────

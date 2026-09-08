@@ -1,0 +1,5 @@
+[package]
+edition = "2026"
+name = "excluded"
+version = "1.0.0"
+cellscript_version = ">=0.26.0"

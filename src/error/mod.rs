@@ -198,6 +198,12 @@ pub const COMPILER_ERROR_INFOS: &[CompilerErrorInfo] = &[
         hint: "Align every incoming dependency edge on one explicit package version, source authority, feature root, and environment, then repin the lockfile.",
     },
     CompilerErrorInfo {
+        code: "E2700",
+        name: "workspace-graph-invalid",
+        description: "A workspace member set, dependency edge, authoritative member lock, or build order is invalid.",
+        hint: "Fix workspace membership and member locks, then resolve the complete acyclic graph before compiling any member.",
+    },
+    CompilerErrorInfo {
         code: "E2900",
         name: "backend-invariant",
         description: "A backend invariant was violated after semantic checking.",

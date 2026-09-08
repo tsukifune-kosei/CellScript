@@ -1154,42 +1154,57 @@ impl CommandExecutor {
     fn build_workspace(args: BuildArgs) -> Result<()> {
         validate_build_entry_selection(&args)?;
         let ws_root = crate::find_workspace_root(Utf8Path::new("."))?.ok_or_else(|| {
-            crate::error::CompileError::without_span(
-                "no workspace root found; run from a directory containing a [workspace] Cell.toml",
-            )
+            CompileError::without_span("no workspace root found; run from a directory containing a [workspace] Cell.toml")
         })?;
-        let all_members = crate::resolve_workspace_members(&ws_root)?;
-        let members: Vec<_> = if let Some(ref pkg_name) = args.package {
-            // Find the specific member by reading its manifest for the package name.
-            let mut found = Vec::new();
-            for member_dir in &all_members {
-                let pm = crate::package::PackageManager::new(member_dir.as_std_path());
-                let manifest = pm.read_manifest()?;
-                if manifest.package.name == *pkg_name {
-                    found.push(member_dir.clone());
-                }
-            }
-            if found.is_empty() {
-                return Err(crate::error::CompileError::without_span(format!(
-                    "workspace member '{}' not found; available members: {}",
-                    pkg_name,
-                    all_members.iter().map(|m| m.as_str().to_string()).collect::<Vec<_>>().join(", ")
-                )));
-            }
-            found
-        } else {
-            all_members
-        };
+        let resolution_options = build_resolution_options(&args, crate::package::DependencyScope::Runtime);
+        let workspace_graph = crate::package::workspace::resolve_workspace_graph(ws_root.as_std_path(), &resolution_options)?;
+        let selected_order = workspace_graph.selected_build_order(args.package.as_deref())?;
+        let members = selected_order
+            .iter()
+            .map(|name| {
+                let member = &workspace_graph.members[name];
+                (name.clone(), ws_root.join(&member.path))
+            })
+            .collect::<Vec<_>>();
 
         let opt_level = if args.release { 3 } else { 1 };
         let mut member_results = Vec::new();
         let mut human_lines = Vec::new();
         let mut failure_diagnostics = Vec::new();
-        let mut failed = 0;
+        let mut failed = 0usize;
+        let mut failed_members = BTreeSet::new();
+        let mut successful_builds = Vec::new();
         let policy_args = effective_build_check_args(&args)?;
         let executable_surface_policy = executable_surface_policy(&policy_args);
 
-        for member_dir in &members {
+        for (order_index, (member_name, member_dir)) in members.iter().enumerate() {
+            let blocked_by = workspace_graph
+                .member_edges
+                .iter()
+                .filter(|edge| edge.from_member == *member_name && failed_members.contains(&edge.to_member))
+                .map(|edge| edge.to_member.clone())
+                .collect::<Vec<_>>();
+            if !blocked_by.is_empty() {
+                let error = CompileError::without_span(format!(
+                    "workspace member '{}' was not built because dependencies failed: {}",
+                    member_name,
+                    blocked_by.join(", ")
+                ))
+                .with_code("E2700")
+                .with_file(member_dir.clone());
+                failure_diagnostics.push(error.clone());
+                member_results.push(serde_json::json!({
+                    "member": member_dir.as_str(),
+                    "member_name": member_name,
+                    "status": "blocked",
+                    "blocked_by": blocked_by,
+                    "error": error.message,
+                }));
+                failed_members.insert(member_name.clone());
+                failed += 1;
+                continue;
+            }
+
             let options = CompileOptions {
                 edition: crate::CURRENT_EDITION,
                 opt_level,
@@ -1199,17 +1214,16 @@ impl CommandExecutor {
                 target_profile: args.target_profile.clone(),
                 primitive_compat: args.primitive_compat.clone(),
             };
-
-            let resolution_options = build_resolution_options(&args, crate::package::DependencyScope::Runtime);
+            let cache_options = options.clone();
             let entry_scope = match (args.entry_action.as_deref(), args.entry_lock.as_deref()) {
                 (Some(action), None) => Some(CompileEntryScope::Action(action.to_string())),
                 (None, Some(lock)) => Some(CompileEntryScope::Lock(lock.to_string())),
                 (None, None) => None,
                 (Some(_), Some(_)) => {
-                    return Err(crate::error::CompileError::without_span("--entry-action and --entry-lock are mutually exclusive"));
+                    return Err(CompileError::without_span("--entry-action and --entry-lock are mutually exclusive"))
                 }
             };
-            let compile_result = crate::package::with_resolution_options(resolution_options, || {
+            let compile_result = crate::package::with_resolution_options(resolution_options.clone(), || {
                 if let Some(name) = args.artifact.as_deref() {
                     crate::compile_path_with_artifact_name(member_dir, options, name, executable_surface_policy)
                 } else {
@@ -1219,13 +1233,15 @@ impl CommandExecutor {
 
             match compile_result {
                 Ok(result) => {
-                    if let Err(e) = validate_check_policy(&result.metadata, &policy_args) {
-                        failure_diagnostics.push(e.clone().with_file(member_dir.clone()));
+                    if let Err(error) = validate_check_policy(&result.metadata, &policy_args) {
+                        failure_diagnostics.push(error.clone().with_file(member_dir.clone()));
                         member_results.push(serde_json::json!({
                             "member": member_dir.as_str(),
+                            "member_name": member_name,
                             "status": "failed",
-                            "error": e.message,
+                            "error": error.message,
                         }));
+                        failed_members.insert(member_name.clone());
                         failed += 1;
                         continue;
                     }
@@ -1236,9 +1252,19 @@ impl CommandExecutor {
                     let metadata_path = default_metadata_path_for_artifact(&output_path);
                     result.write_metadata_to_path(&metadata_path)?;
                     let verified_sidecars = result.write_verified_artifact_sidecars(&output_path)?;
-
+                    if args.entry_action.is_none() && args.entry_lock.is_none() && args.artifact.is_none() {
+                        crate::refresh_incremental_cache_for_input(member_dir, &cache_options, &result)?;
+                    }
+                    successful_builds.push((member_dir.clone(), result.metadata.clone()));
                     member_results.push(serde_json::json!({
                         "member": member_dir.as_str(),
+                        "member_name": member_name,
+                        "member_id": workspace_graph.members[member_name].id,
+                        "order": order_index,
+                        "dependencies": workspace_graph.member_edges.iter()
+                            .filter(|edge| edge.from_member == *member_name)
+                            .map(|edge| edge.to_member.as_str())
+                            .collect::<Vec<_>>(),
                         "status": "ok",
                         "artifact": output_path.to_string(),
                         "metadata": metadata_path.to_string(),
@@ -1250,16 +1276,17 @@ impl CommandExecutor {
                         "artifact_size_bytes": result.artifact_bytes.len(),
                         "cache_hit": result.cache_hit,
                     }));
-
-                    human_lines.push(format!("{} {}", "Built".green(), member_dir));
+                    human_lines.push(format!("{} {}", "Built".green(), member_name));
                 }
-                Err(e) => {
-                    failure_diagnostics.push(e.clone().with_file(member_dir.clone()));
+                Err(error) => {
+                    failure_diagnostics.push(error.clone().with_file(member_dir.clone()));
                     member_results.push(serde_json::json!({
                         "member": member_dir.as_str(),
+                        "member_name": member_name,
                         "status": "failed",
-                        "error": e.message,
+                        "error": error.message,
                     }));
+                    failed_members.insert(member_name.clone());
                     failed += 1;
                 }
             }
@@ -1268,6 +1295,18 @@ impl CommandExecutor {
         if failed > 0 {
             return Err(diagnostics_to_error(&failure_diagnostics).with_details(serde_json::json!({
                 "mode": "workspace-build",
+                "graph_schema": workspace_graph.schema,
+                "dependency_selection": workspace_graph.selection,
+                "build_selection": {
+                    "target": args.target,
+                    "target_profile": args.target_profile,
+                    "release": args.release,
+                    "entry_action": args.entry_action,
+                    "entry_lock": args.entry_lock,
+                    "artifact": args.artifact,
+                },
+                "selected_members": selected_order,
+                "member_edges": workspace_graph.member_edges,
                 "members": members.len(),
                 "succeeded": members.len().saturating_sub(failed),
                 "failed": failed,
@@ -1275,38 +1314,28 @@ impl CommandExecutor {
             })));
         }
 
-        // Write workspace-level Cell.lock at the workspace root.
-        let mut lockfile = Lockfile::read_from_root(ws_root.as_std_path())?.unwrap_or_else(Lockfile::new);
-        // Merge build hashes from each successfully built member.
-        for res in &member_results {
-            if res["status"].as_str() == Some("ok") {
-                let member_name = res["member"].as_str().unwrap_or("unknown");
-                let artifact_hash = res.get("artifact_hash").and_then(|v| v.as_str()).unwrap_or("");
-                if !artifact_hash.is_empty() {
-                    lockfile.dependencies.insert(
-                        member_name.to_string(),
-                        crate::package::LockedDependency {
-                            name: member_name.to_string(),
-                            namespace: None,
-                            version: String::new(),
-                            source: crate::package::LockedSource::Path { path: member_name.to_string() },
-                            source_hash: Some(artifact_hash.to_string()),
-                            manifest_digest: "workspace-member-artifact".to_string(),
-                            dependencies: BTreeMap::new(),
-                            build: None,
-                            compiler_requirement: "*".to_string(),
-                            resolver_compiler_version: crate::VERSION.to_string(),
-                        },
-                    );
-                }
+        if !args.frozen {
+            for (member_dir, metadata) in &successful_builds {
+                refresh_lockfile_from_build(member_dir.as_std_path(), metadata)?;
             }
         }
-        lockfile.write_to_root(ws_root.as_std_path())?;
 
         CommandOutcome {
             machine: serde_json::json!({
                 "status": "ok",
                 "mode": "workspace-build",
+                "graph_schema": workspace_graph.schema,
+                "dependency_selection": workspace_graph.selection,
+                "build_selection": {
+                    "target": args.target,
+                    "target_profile": args.target_profile,
+                    "release": args.release,
+                    "entry_action": args.entry_action,
+                    "entry_lock": args.entry_lock,
+                    "artifact": args.artifact,
+                },
+                "selected_members": selected_order,
+                "member_edges": workspace_graph.member_edges,
                 "members": members.len(),
                 "succeeded": members.len(),
                 "failed": 0,
@@ -1997,87 +2026,154 @@ impl CommandExecutor {
     fn check_workspace(args: CheckArgs) -> Result<()> {
         let args = effective_check_args(args)?;
         let ws_root = crate::find_workspace_root(Utf8Path::new("."))?.ok_or_else(|| {
-            crate::error::CompileError::without_span(
-                "no workspace root found; run from a directory containing a [workspace] Cell.toml",
-            )
+            CompileError::without_span("no workspace root found; run from a directory containing a [workspace] Cell.toml")
         })?;
-        let all_members = crate::resolve_workspace_members(&ws_root)?;
-        let members: Vec<_> = if let Some(ref pkg_name) = args.package {
-            let mut found = Vec::new();
-            for member_dir in &all_members {
-                let pm = crate::package::PackageManager::new(member_dir.as_std_path());
-                let manifest = pm.read_manifest()?;
-                if manifest.package.name == *pkg_name {
-                    found.push(member_dir.clone());
-                }
-            }
-            if found.is_empty() {
-                return Err(crate::error::CompileError::without_span(format!("workspace member '{}' not found", pkg_name)));
-            }
-            found
-        } else {
-            all_members
-        };
+        let resolution_options = check_resolution_options(&args, crate::package::DependencyScope::Runtime);
+        let workspace_graph = crate::package::workspace::resolve_workspace_graph(ws_root.as_std_path(), &resolution_options)?;
+        let selected_order = workspace_graph.selected_build_order(args.package.as_deref())?;
+        let members = selected_order
+            .iter()
+            .map(|name| {
+                let member = &workspace_graph.members[name];
+                (name.clone(), ws_root.join(&member.path))
+            })
+            .collect::<Vec<_>>();
 
         let mut member_results = Vec::new();
         let mut human_lines = Vec::new();
         let mut failure_diagnostics = Vec::new();
-        let mut failed = 0;
+        let mut failed = 0usize;
+        let mut failed_members = BTreeSet::new();
+        let requested_profile = effective_check_target_profile(&args)?;
+        let compile_target_profile = compile_target_profile_for_check(requested_profile);
+        let targets: Vec<Option<&'static str>> =
+            if args.all_targets { vec![Some("riscv64-asm"), Some("riscv64-elf")] } else { vec![None] };
 
-        for member_dir in &members {
-            let compile_options = CompileOptions {
-                edition: crate::CURRENT_EDITION,
-                opt_level: 0,
-                output: None,
-                debug: false,
-                target: None,
-                target_profile: args.target_profile.clone(),
-                primitive_compat: args.primitive_compat.clone(),
-            };
-            let resolution_options = check_resolution_options(&args, crate::package::DependencyScope::Runtime);
-            let compile_result = crate::package::with_resolution_options(resolution_options, || {
-                if let Some(name) = args.artifact.as_deref() {
-                    crate::compile_path_with_artifact_name(member_dir, compile_options, name, executable_surface_policy(&args))
-                } else {
-                    compile_path_with_executable_surface_policy(member_dir, compile_options, None, executable_surface_policy(&args))
-                }
-            });
+        for (order_index, (member_name, member_dir)) in members.iter().enumerate() {
+            let blocked_by = workspace_graph
+                .member_edges
+                .iter()
+                .filter(|edge| edge.from_member == *member_name && failed_members.contains(&edge.to_member))
+                .map(|edge| edge.to_member.clone())
+                .collect::<Vec<_>>();
+            if !blocked_by.is_empty() {
+                let error = CompileError::without_span(format!(
+                    "workspace member '{}' was not checked because dependencies failed: {}",
+                    member_name,
+                    blocked_by.join(", ")
+                ))
+                .with_code("E2700")
+                .with_file(member_dir.clone());
+                failure_diagnostics.push(error.clone());
+                member_results.push(serde_json::json!({
+                    "member": member_dir.as_str(),
+                    "member_name": member_name,
+                    "status": "blocked",
+                    "blocked_by": blocked_by,
+                    "error": error.message,
+                }));
+                failed_members.insert(member_name.clone());
+                failed += 1;
+                continue;
+            }
 
-            match compile_result {
-                Ok(result) => {
-                    if let Err(error) = validate_check_policy(&result.metadata, &args) {
-                        failure_diagnostics.push(error.clone().with_file(member_dir.clone()));
-                        member_results.push(serde_json::json!({
-                            "member": member_dir.as_str(),
-                            "status": "failed",
-                            "error": error.message,
-                        }));
-                        failed += 1;
-                        continue;
+            let mut unit_results = Vec::new();
+            let mut member_error = None;
+            for target in targets.iter().copied() {
+                let compile_options = CompileOptions {
+                    edition: crate::CURRENT_EDITION,
+                    opt_level: 0,
+                    output: None,
+                    debug: false,
+                    target: target.map(str::to_string),
+                    target_profile: compile_target_profile.clone(),
+                    primitive_compat: args.primitive_compat.clone(),
+                };
+                let compile_result = crate::package::with_resolution_options(resolution_options.clone(), || {
+                    if let Some(name) = args.artifact.as_deref() {
+                        crate::compile_path_with_artifact_name(member_dir, compile_options, name, executable_surface_policy(&args))
+                    } else {
+                        compile_path_with_executable_surface_policy(
+                            member_dir,
+                            compile_options,
+                            None,
+                            executable_surface_policy(&args),
+                        )
                     }
-                    member_results.push(serde_json::json!({
-                        "member": member_dir.as_str(),
-                        "status": "ok",
-                        "artifact_format": result.artifact_format.display_name(),
-                        "target_profile": result.metadata.target_profile.name,
-                    }));
-                    human_lines.push(format!("{} {}", "Checked".green(), member_dir));
+                });
+                let result = match compile_result {
+                    Ok(result) => result,
+                    Err(error) => {
+                        member_error = Some(error);
+                        break;
+                    }
+                };
+                if let Err(error) = validate_check_policy(&result.metadata, &args) {
+                    member_error = Some(error);
+                    break;
                 }
-                Err(e) => {
-                    failure_diagnostics.push(e.clone().with_file(member_dir.clone()));
-                    member_results.push(serde_json::json!({
-                        "member": member_dir.as_str(),
-                        "status": "failed",
-                        "error": e.message,
-                    }));
-                    failed += 1;
+                let profile_violations = target_profile_policy_violations(&result.metadata, result.artifact_format, requested_profile);
+                if !profile_violations.is_empty() {
+                    member_error = Some(CompileError::without_span(format!(
+                        "target profile policy failed for '{}':\n  - {}",
+                        requested_profile.name(),
+                        profile_violations.join("\n  - ")
+                    )));
+                    break;
                 }
+                unit_results.push(serde_json::json!({
+                    "requested_target": target.unwrap_or("package-default"),
+                    "artifact_format": result.artifact_format.display_name(),
+                    "requested_target_profile": requested_profile.name(),
+                    "compiled_target_profile": result.metadata.target_profile.name,
+                    "cache_hit": result.cache_hit,
+                }));
+            }
+
+            if let Some(error) = member_error {
+                failure_diagnostics.push(error.clone().with_file(member_dir.clone()));
+                member_results.push(serde_json::json!({
+                    "member": member_dir.as_str(),
+                    "member_name": member_name,
+                    "status": "failed",
+                    "checked_units": unit_results,
+                    "error": error.message,
+                }));
+                failed_members.insert(member_name.clone());
+                failed += 1;
+            } else {
+                let cache_hit = unit_results.iter().all(|unit| unit["cache_hit"].as_bool() == Some(true));
+                member_results.push(serde_json::json!({
+                    "member": member_dir.as_str(),
+                    "member_name": member_name,
+                    "member_id": workspace_graph.members[member_name].id,
+                    "order": order_index,
+                    "dependencies": workspace_graph.member_edges.iter()
+                        .filter(|edge| edge.from_member == *member_name)
+                        .map(|edge| edge.to_member.as_str())
+                        .collect::<Vec<_>>(),
+                    "status": "ok",
+                    "checked_units": unit_results,
+                    "cache_hit": cache_hit,
+                }));
+                human_lines.push(format!("{} {}", "Checked".green(), member_name));
             }
         }
 
         if failed > 0 {
             return Err(diagnostics_to_error(&failure_diagnostics).with_details(serde_json::json!({
                 "mode": "workspace-check",
+                "graph_schema": workspace_graph.schema,
+                "dependency_selection": workspace_graph.selection,
+                "check_selection": {
+                    "target_profile": args.target_profile,
+                    "artifact": args.artifact,
+                    "all_targets": args.all_targets,
+                    "primitive_compat": args.primitive_compat,
+                    "production": args.production,
+                },
+                "selected_members": selected_order,
+                "member_edges": workspace_graph.member_edges,
                 "members": members.len(),
                 "succeeded": members.len().saturating_sub(failed),
                 "failed": failed,
@@ -2088,6 +2184,17 @@ impl CommandExecutor {
             machine: serde_json::json!({
                 "status": "ok",
                 "mode": "workspace-check",
+                "graph_schema": workspace_graph.schema,
+                "dependency_selection": workspace_graph.selection,
+                "check_selection": {
+                    "target_profile": args.target_profile,
+                    "artifact": args.artifact,
+                    "all_targets": args.all_targets,
+                    "primitive_compat": args.primitive_compat,
+                    "production": args.production,
+                },
+                "selected_members": selected_order,
+                "member_edges": workspace_graph.member_edges,
                 "members": members.len(),
                 "succeeded": members.len(),
                 "failed": 0,
@@ -13111,7 +13218,7 @@ fn read_lockfile_for_explicit_repin(root: &Path) -> Result<Lockfile> {
             let path = root.join("Cell.lock");
             let source = std::fs::read_to_string(&path).map_err(|_| error.clone())?;
             let value: toml::Value = toml::from_str(&source).map_err(|_| error.clone())?;
-            if value.get("version").and_then(toml::Value::as_integer).is_some_and(|version| matches!(version, 1 | 2 | 3 | 4)) {
+            if value.get("version").and_then(toml::Value::as_integer).is_some_and(|version| matches!(version, 1..=4)) {
                 Ok(Lockfile::new())
             } else {
                 Err(error)

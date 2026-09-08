@@ -1,0 +1,57 @@
+version = 5
+schema = "cellscript-lock-v0.30-single-package-coordinate-v1"
+resolver_model = "single-package-coordinate-v1"
+
+[package]
+edition = "2026"
+name = "app"
+version = "1.0.0"
+source_hash = "a32347955166043828d1ba3dda8a915ee3c93bc296cd9e59c751852acee514cd"
+compiler_requirement = ">=0.26.0"
+resolver_compiler_version = "0.26.0"
+
+[root]
+manifest_digest = "sha256:2f024f93d2f05849914fea4bc8f2730ce3334105c67594d483425f3523e3167c"
+
+[root.dependencies]
+left = "left@1.0.0|path:../left|compiler=3e3d302e32362e30|env=default|features=default"
+right = "right@1.0.0|path:../right|compiler=3e3d302e32362e30|env=default|features=default"
+
+[dependencies."left@1.0.0|path:../left|compiler=3e3d302e32362e30|env=default|features=default"]
+name = "left"
+version = "1.0.0"
+source_hash = "b179a549783c3f93a9378ad2e1bc5d2a4576ace297a42275f6f2432e403f7fc3"
+manifest_digest = "sha256:9fb007bb55e71db970f0aea07505d06f55cdc2e3ef1bfd50c8970110b5931a62"
+compiler_requirement = ">=0.26.0"
+resolver_compiler_version = "0.26.0"
+
+[dependencies."left@1.0.0|path:../left|compiler=3e3d302e32362e30|env=default|features=default".source.Path]
+path = "../left"
+
+[dependencies."left@1.0.0|path:../left|compiler=3e3d302e32362e30|env=default|features=default".dependencies]
+shared = "shared@1.0.0|path:../shared|compiler=3e3d302e32362e30|env=default|features=default"
+
+[dependencies."right@1.0.0|path:../right|compiler=3e3d302e32362e30|env=default|features=default"]
+name = "right"
+version = "1.0.0"
+source_hash = "49b7003e325b39469354c118636a87e44f979cf65f69ce7952fa4eb05b0a45c1"
+manifest_digest = "sha256:5ed1405f9e2ea268a658e0738647ed775406b8bf78f8763de2eaaced5cee5872"
+compiler_requirement = ">=0.26.0"
+resolver_compiler_version = "0.26.0"
+
+[dependencies."right@1.0.0|path:../right|compiler=3e3d302e32362e30|env=default|features=default".source.Path]
+path = "../right"
+
+[dependencies."right@1.0.0|path:../right|compiler=3e3d302e32362e30|env=default|features=default".dependencies]
+shared = "shared@1.0.0|path:../shared|compiler=3e3d302e32362e30|env=default|features=default"
+
+[dependencies."shared@1.0.0|path:../shared|compiler=3e3d302e32362e30|env=default|features=default"]
+name = "shared"
+version = "1.0.0"
+source_hash = "7dd602e376ae63f7fa7cb3bee53145743332ed8090d21987b97b0741b246d359"
+manifest_digest = "sha256:0cbe3be56404e3c74b7b160c1c6abb6f84f1db12a612b2fcb67dc09194c22c16"
+compiler_requirement = ">=0.26.0"
+resolver_compiler_version = "0.26.0"
+
+[dependencies."shared@1.0.0|path:../shared|compiler=3e3d302e32362e30|env=default|features=default".source.Path]
+path = "../shared"

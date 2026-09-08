@@ -52,6 +52,13 @@ declares the `single-package-coordinate-v1` model and applies it unchanged in
 locked and frozen materialization. Supporting multiple versions remains a
 future schema and package-qualified module-identity change.
 
+Issue #15's workspace prerequisite now uses a canonical versioned member graph
+instead of declaration-order loops. It implements exclusions, unique names and
+paths, dependency-first selected closure, member-lock preflight, cycle and
+failure propagation, and member-local build-identity refresh. Virtual workspace
+roots reject synthetic `Cell.lock` artifact lists. The frozen/offline diamond
+fixture is part of both local and CI gates.
+
 Until this branch passes those criteria, treat it as development work, use
 `0.26b` only as its experimental implementation baseline, and retain 0.25 as
 the predecessor release contract. Do not publish a 0.26 tag solely to preserve

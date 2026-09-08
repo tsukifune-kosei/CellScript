@@ -668,6 +668,7 @@ CKB cycle/capacity estimates.
 | Module | What it does |
 |---|---|
 | **Package workflow** (`package/`) | `Cell.toml` parsing, enforced compiler SemVer requirements, single-instance package-coordinate unification, path/git/registry source resolution, manifest-bound `Cell.lock` v5 graphs, aliases, features/dev modes, genesis-bound environments, and bounded update-time resolvers; `cellc init`/`add`/`remove`/`lock`/`install`/`update`/`info`. Builds consume exact immutable Git/Registry pins and verified source hashes without mutable discovery; the Registry profile catalog keeps non-CellScript artifacts non-resolving. |
+| **Workspace graph** (`package/workspace.rs`) | Canonical explicit members and exclusions, unique member names/paths, independently authoritative member locks, dependency-first scheduling, package-selection closure, failure propagation, and the versioned `cellscript-workspace-resolve-graph-v1` model. Virtual roots never receive synthetic package locks. |
 | **Incremental compiler** (`incremental/`) | Dependency-graph-aware build cache — skips recompilation when inputs are unchanged and retains the 32 most recently used identities per cache root. |
 | **Build integration** (`lib.rs`) | Resolves `Cell.toml` → `CellBuildConfig`, merges CLI + manifest options, selects entry scope, runs policy gates, writes artifacts + metadata. |
 
@@ -793,6 +794,9 @@ Non-CellScript artifact profiles still fail closed.
 
 - `cellc init` — create an application or library package with `Cell.toml`
 - `cellc build` / `check` / `doc` / `fmt` — operate on the current package
+- `cellc build --workspace` / `check --workspace` — validate one canonical
+  member graph, then process dependencies before dependents; `-p <name>` also
+  includes the selected member's transitive workspace closure
 - `cellc test --backend simulator|ckb-vm|all` — execute versioned
   `*.scenario.json` fixtures; `--no-run` is the explicit compile-only mode
 - top-level `cellc <input>` and report commands accept `.cell` files, package
@@ -835,6 +839,8 @@ Non-CellScript artifact profiles still fail closed.
   exact Registry version or Git commit and is never executed by locked builds
 - `examples/package_graph` — runnable frozen/offline alias, SemVer, feature,
   test-only dependency, and explicit CKB-environment graph
+- `examples/workspace_graph` — frozen/offline reverse-declared four-member
+  diamond with one explicit excluded member; virtual-root locks are forbidden
 - `examples/scenario_basics` — runnable positive and exact-negative scenarios
   under both simulator and CKB-VM, plus a four-file artifact walkthrough
 - `examples/registry_ls_idl` — runnable LS-IDL validation, executable binding,

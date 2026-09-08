@@ -207,6 +207,34 @@ cellc path/to/file.cell
 That form is great for quick experiments. Packages are better when you need
 repeatability.
 
+## Build A Workspace
+
+Use an explicit workspace when several independently built packages share one
+repository:
+
+```toml
+[workspace]
+members = ["app", "right", "left", "shared", "experiments"]
+exclude = ["experiments"]
+```
+
+Member and exclude entries are literal directories. Included canonical paths
+and package names must be unique. Every member keeps its own authoritative
+`Cell.lock`; a virtual workspace root must not have one.
+
+```bash
+cellc check --workspace --frozen --offline
+cellc build --workspace
+cellc build -p app
+```
+
+CellScript resolves the full member graph before compiling, rejects cycles and
+stale member locks, and orders dependencies before dependents. `-p app` includes
+the transitive members needed by `app`. A failed dependency blocks its
+dependents. Successful non-frozen builds refresh each member's own build
+identity and never encode artifact hashes as dependency nodes at the workspace
+root. See [Canonical Workspace Graph](../CELLSCRIPT_WORKSPACE_GRAPH.md).
+
 ## Execute Package Scenarios
 
 Executable tests are versioned `*.scenario.json` files under `tests/`. Name a

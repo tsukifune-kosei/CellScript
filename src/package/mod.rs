@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub mod registry;
+pub mod workspace;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageManifest {
@@ -549,6 +550,12 @@ struct SelectedPackageInstance {
     features: FeatureSelection,
     environment: Option<String>,
     incoming: Vec<IncomingPackageRequest>,
+}
+
+struct ResolutionTraversal<'a> {
+    stack_ids: &'a mut Vec<String>,
+    stack_labels: &'a mut Vec<String>,
+    compiler_errors: &'a mut Vec<CompileError>,
 }
 
 /// Emit yank-related notices to stderr during registry resolution.
@@ -1233,6 +1240,13 @@ dist/
             let dependencies = self.selected_dependencies(&manifest, options, true)?;
             let mut compiler_errors = Vec::new();
             for (alias, dep) in dependencies {
+                let mut stack_ids = Vec::new();
+                let mut stack_labels = Vec::new();
+                let mut traversal = ResolutionTraversal {
+                    stack_ids: &mut stack_ids,
+                    stack_labels: &mut stack_labels,
+                    compiler_errors: &mut compiler_errors,
+                };
                 let node_id = self.resolve_dependency_from_root(
                     &alias,
                     &dep,
@@ -1241,9 +1255,7 @@ dist/
                     &self.root.clone(),
                     options,
                     root_environment.as_ref(),
-                    &mut Vec::new(),
-                    &mut Vec::new(),
-                    &mut compiler_errors,
+                    &mut traversal,
                 )?;
                 if let Some(node_id) = node_id {
                     self.root_dependencies.insert(alias, node_id);
@@ -1879,9 +1891,7 @@ dist/
         base_root: &Path,
         parent_options: &ResolutionOptions,
         parent_environment: Option<&SelectedEnvironmentContext>,
-        stack_ids: &mut Vec<String>,
-        stack_labels: &mut Vec<String>,
-        compiler_errors: &mut Vec<CompileError>,
+        traversal: &mut ResolutionTraversal<'_>,
     ) -> Result<Option<String>> {
         let package_name = dependency_package_name(alias, dep);
         let resolution: Result<(ResolvedPackage, PackageManifest)> = (|| match dep {
@@ -1943,14 +1953,14 @@ dist/
         let (mut resolved, manifest) = match resolution {
             Ok(resolution) => resolution,
             Err(error) if error.code.as_deref() == Some("E2600") => {
-                compiler_errors.push(compiler_error_with_incoming_edge(error, parent_package, alias, &package_name));
+                traversal.compiler_errors.push(compiler_error_with_incoming_edge(error, parent_package, alias, &package_name));
                 return Ok(None);
             }
             Err(error) => return Err(error),
         };
 
         if let Err(error) = validate_package_compiler_requirement(&manifest.package) {
-            compiler_errors.push(compiler_error_with_incoming_edge(error, parent_package, alias, &package_name));
+            traversal.compiler_errors.push(compiler_error_with_incoming_edge(error, parent_package, alias, &package_name));
         }
         self.validate_manifest_package_structure(&manifest)?;
         if manifest.package.name != package_name {
@@ -1984,25 +1994,25 @@ dist/
             dep,
             false,
         )?;
-        if let Some(position) = stack_ids.iter().position(|item| item == &node_id) {
-            let mut cycle = stack_labels[position..].to_vec();
+        if let Some(position) = traversal.stack_ids.iter().position(|item| item == &node_id) {
+            let mut cycle = traversal.stack_labels[position..].to_vec();
             cycle.push(alias.to_string());
             return Err(CompileError::without_span(format!("Circular dependency detected: {}", cycle.join(" -> "))));
         }
         if let Some(existing) = self.resolved.get(&node_id) {
-            if existing.manifest_digest != resolved.manifest_digest || existing.source_hash != resolved.source_hash {
-                if node_id == candidate_node_id {
-                    return Err(CompileError::without_span(format!(
-                        "dependency node '{}' resolved with conflicting manifest or source identity",
-                        node_id
-                    )));
-                }
+            if (existing.manifest_digest != resolved.manifest_digest || existing.source_hash != resolved.source_hash)
+                && node_id == candidate_node_id
+            {
+                return Err(CompileError::without_span(format!(
+                    "dependency node '{}' resolved with conflicting manifest or source identity",
+                    node_id
+                )));
             }
             return Ok(Some(node_id));
         }
 
-        stack_ids.push(node_id.clone());
-        stack_labels.push(alias.to_string());
+        traversal.stack_ids.push(node_id.clone());
+        traversal.stack_labels.push(alias.to_string());
         let child_dependencies = self.selected_dependencies(&manifest, &child_options, false)?;
         let mut child_edges = BTreeMap::new();
         for (child_alias, child_dep) in child_dependencies {
@@ -2014,16 +2024,14 @@ dist/
                 &resolved.path,
                 &child_options,
                 child_environment.as_ref(),
-                stack_ids,
-                stack_labels,
-                compiler_errors,
+                traversal,
             )?;
             if let Some(child_id) = child_id {
                 child_edges.insert(child_alias, child_id);
             }
         }
-        stack_ids.pop();
-        stack_labels.pop();
+        traversal.stack_ids.pop();
+        traversal.stack_labels.pop();
 
         resolved.node_id = node_id.clone();
         resolved.dependencies = child_edges;

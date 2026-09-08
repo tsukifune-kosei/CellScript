@@ -74,7 +74,7 @@ pub use proof_plan::{EvidenceTier, ProofPlanDiagnosticMetadata, ProofPlanMetadat
 
 use camino::{Utf8Path, Utf8PathBuf};
 use error::{CompileError, DiagnosticSeverity, Result};
-use package::{BuildConfig, CkbCellDepConfig, CkbTrustedExternalVerifierConfig, PackageManifest, WorkspaceManifest};
+use package::{BuildConfig, CkbCellDepConfig, CkbTrustedExternalVerifierConfig, PackageManifest};
 use resolve::ModuleResolver;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -8696,38 +8696,13 @@ pub fn find_workspace_root(path: &Utf8Path) -> Result<Option<Utf8PathBuf>> {
 /// Resolve workspace member directories from a workspace root.
 /// Reads the `[workspace]` section and resolves member paths.
 pub fn resolve_workspace_members(workspace_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
-    let manifest_path = workspace_root.join("Cell.toml");
-    let manifest_source = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| CompileError::new(format!("failed to read manifest '{}': {}", manifest_path, e), error::Span::default()))?;
-    let member_patterns = if manifest_has_table(&manifest_path, "package")? {
-        let manifest: PackageManifest = toml::from_str(&manifest_source)
-            .map_err(|e| CompileError::new(format!("failed to parse manifest '{}': {}", manifest_path, e), error::Span::default()))?;
-        artifact::validate_declarations(&manifest.artifacts)?;
-        manifest.workspace.map(|workspace| workspace.members).unwrap_or_default()
-    } else {
-        let manifest: WorkspaceManifest = toml::from_str(&manifest_source).map_err(|e| {
-            CompileError::new(format!("failed to parse workspace manifest '{}': {}", manifest_path, e), error::Span::default())
-        })?;
-        manifest.workspace.members
-    };
-    let mut members = Vec::new();
-    for member_pattern in &member_patterns {
-        let member_path = workspace_root.join(member_pattern);
-        if !member_path.is_dir() {
-            return Err(CompileError::new(
-                format!("workspace member '{}' does not exist or is not a directory", member_pattern),
-                error::Span::default(),
-            ));
-        }
-        if !member_path.join("Cell.toml").exists() {
-            return Err(CompileError::new(
-                format!("workspace member '{}' does not contain Cell.toml", member_pattern),
-                error::Span::default(),
-            ));
-        }
-        members.push(canonical_utf8_path(&member_path)?);
-    }
-    Ok(members)
+    package::workspace::resolve_workspace_member_paths(workspace_root.as_std_path())?
+        .into_iter()
+        .map(|path| {
+            Utf8PathBuf::from_path_buf(path)
+                .map_err(|path| CompileError::without_span(format!("workspace member path '{}' is not valid UTF-8", path.display())))
+        })
+        .collect()
 }
 
 fn local_dependency_roots(package_root: &Utf8Path, scope: crate::package::DependencyScope) -> Result<Vec<Utf8PathBuf>> {

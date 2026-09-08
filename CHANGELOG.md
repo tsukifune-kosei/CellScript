@@ -2,6 +2,17 @@
 
 ## 0.30 - Capability closure development branch
 
+- Replace declaration-order workspace member loops and synthetic root locks
+  with `cellscript-workspace-resolve-graph-v1`. Explicit members/exclusions,
+  canonical path and package-name uniqueness, independently authoritative
+  member locks, cross-root package-instance consistency, cycle rejection,
+  dependency-first ordering, `-p` transitive closure, and dependency failure
+  propagation are enforced before compilation. Successful non-frozen builds
+  refresh member-local `package_build` identities only after the selected graph
+  and every build succeed. Virtual roots reject `Cell.lock`; artifact hashes are
+  no longer disguised as dependency nodes. Dev and CI run the checked-in
+  reverse-declared workspace diamond frozen and offline.
+
 - Enforce `[package].cellscript_version` as a real compiler SemVer
   requirement before source loading. Legacy omission remains `*`, historical
   bare versions mean a minimum, and malformed or incompatible requirements

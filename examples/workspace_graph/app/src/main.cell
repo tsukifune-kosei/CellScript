@@ -1,0 +1,6 @@
+module workspace::app
+
+action run() -> u64 {
+    verification
+        1
+}

@@ -1,0 +1,11 @@
+[package]
+edition = "2026"
+name = "app"
+version = "1.0.0"
+cellscript_version = ">=0.26.0"
+
+[dependencies.left]
+path = "../left"
+
+[dependencies.right]
+path = "../right"
