@@ -508,6 +508,8 @@ fn plan_for_bounded_collection(
             "script_role:type-only".to_string(),
             "script_identity:current-script-hash".to_string(),
             "output_correspondence:plan-index-equals-group-output-index".to_string(),
+            "output_identity:fresh-ckb-outpoint-plus-type-group-ordinal".to_string(),
+            "equal_plan_bytes:allowed-for-fungible-splits".to_string(),
             "output_decode:fixed-width-exact-size".to_string(),
             "lock_policy:exact-create-template-lock-hash".to_string(),
             "capacity_policy:declared-type-floor-checked-on-chain".to_string(),
@@ -557,6 +559,8 @@ fn plan_for_bounded_collection(
             obligations.extend([
                 "canonical witness plan codec".to_string(),
                 "one plan element per GroupOutput".to_string(),
+                "exact output data from direct Plan field bindings".to_string(),
+                "fresh output OutPoint and group-relative ordinal correspondence".to_string(),
                 "exact output lock hash".to_string(),
                 "declared output capacity floor".to_string(),
             ]);
@@ -596,7 +600,7 @@ fn plan_for_bounded_collection(
             format!("declared-maximum:0..={}; actual:not-observed-no-runtime-lowering", operation.max_elements)
         },
         identity_lifecycle_policy: if is_create && runtime_checked {
-            "checked on chain: each canonical plan element binds exactly one current-Type-Script GroupOutput at the same relative index, with exact data and lock policy"
+            "checked on chain: each canonical plan element binds exactly one fresh CKB output OutPoint through the current-Type-Script GroupOutput ordinal at the same relative index, with exact data and lock policy; equal plan bytes remain valid for fungible splits"
                 .to_string()
         } else if is_create {
             "required but not enforced: define fresh-output identity, output ordering, and one-output-per-plan correspondence"

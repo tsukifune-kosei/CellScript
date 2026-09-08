@@ -130,8 +130,241 @@ pub fn validate_transaction_against_metadata(metadata: &CompileMetadata, tx: &Va
     let mut report = validate_transaction_against_assumptions(&assumptions, tx);
     validate_exact_handle_parameter_bindings(metadata, tx, &assumptions, &mut report.violations);
     validate_deployment_line_handle_parameter_bindings(metadata, tx, &assumptions, &mut report.violations);
+    let bounded_output_contracts = validate_bounded_output_plan_bindings(metadata, tx, &mut report);
+    report.assumption_count += bounded_output_contracts;
     report.status = if report.violations.is_empty() { "ok".to_string() } else { "failed".to_string() };
     report
+}
+
+fn validate_bounded_output_plan_bindings(metadata: &CompileMetadata, tx: &Value, report: &mut TxValidationReport) -> usize {
+    let contracts = metadata
+        .runtime
+        .collection_instantiations
+        .iter()
+        .filter(|collection| collection.scope_kind == "action")
+        .filter_map(|collection| collection.bounded_output_plan.as_ref().map(|contract| (&collection.scope_name, contract)))
+        .collect::<Vec<_>>();
+    for (action_name, contract) in &contracts {
+        let check_id = format!("bounded-output-plan:{action_name}:{}", contract.binding);
+        report.checked_assumptions.push(check_id.clone());
+        let fail = |violations: &mut Vec<TxValidationViolation>, message: String| {
+            violations.push(TxValidationViolation {
+                assumption_id: check_id.clone(),
+                kind: "bounded_output_plan".to_string(),
+                message,
+            });
+        };
+        let evidence = tx.get("bounded_output_plan_evidence").and_then(Value::as_array).and_then(|items| {
+            items.iter().find(|item| {
+                item.get("action").and_then(Value::as_str) == Some(action_name.as_str())
+                    && item.get("binding").and_then(Value::as_str) == Some(contract.binding.as_str())
+            })
+        });
+        let Some(evidence) = evidence else {
+            fail(
+                &mut report.violations,
+                "missing bounded_output_plan_evidence for the compiled action and witness binding".to_string(),
+            );
+            continue;
+        };
+        if evidence.get("schema").and_then(Value::as_str) != Some("cellscript-bounded-output-plan-evidence-v1")
+            || evidence.get("version").and_then(Value::as_u64) != Some(1)
+            || evidence.get("witness_field").and_then(Value::as_str) != Some("input_type")
+        {
+            fail(&mut report.violations, "bounded output evidence has an invalid schema, version, or witness field".to_string());
+            continue;
+        }
+        let Some(witness_index) = evidence.get("witness_index").and_then(Value::as_u64).and_then(|index| usize::try_from(index).ok())
+        else {
+            fail(&mut report.violations, "bounded output evidence has no valid witness_index".to_string());
+            continue;
+        };
+        let Some(action) = metadata.actions.iter().find(|action| action.name == **action_name) else {
+            fail(&mut report.violations, "bounded output metadata has no matching compiled action".to_string());
+            continue;
+        };
+        let input_type = match transaction_witness_input_type(tx, witness_index) {
+            Ok(input_type) => input_type,
+            Err(message) => {
+                fail(&mut report.violations, format!("bounded output witness is invalid: {message}"));
+                continue;
+            }
+        };
+        let payload = match entry_payload_schema_parameter(&input_type, &action.params, &contract.binding) {
+            Ok(payload) => payload,
+            Err(message) => {
+                fail(&mut report.violations, message);
+                continue;
+            }
+        };
+        let expected_payload = evidence.get("plan_payload").and_then(Value::as_str).map(canonical_lower_variable_hex).transpose();
+        match expected_payload {
+            Ok(Some(expected)) if expected == payload => {}
+            Ok(Some(_)) => {
+                fail(
+                    &mut report.violations,
+                    "bounded output plan_payload does not match its compiled position in WitnessArgs.input_type".to_string(),
+                );
+                continue;
+            }
+            Ok(None) => {
+                fail(&mut report.violations, "bounded output evidence has no canonical plan_payload".to_string());
+                continue;
+            }
+            Err(message) => {
+                fail(&mut report.violations, format!("bounded output plan_payload {message}"));
+                continue;
+            }
+        }
+        let count = match decode_bounded_output_plan_count(payload, contract.element_width_bytes, contract.max_elements) {
+            Ok(count) => count,
+            Err(message) => {
+                fail(&mut report.violations, message);
+                continue;
+            }
+        };
+        let indexes = evidence.get("group_output_indexes").and_then(Value::as_array);
+        let Some(indexes) = indexes else {
+            fail(&mut report.violations, "bounded output evidence has no group_output_indexes array".to_string());
+            continue;
+        };
+        let indexes =
+            indexes.iter().map(|index| index.as_u64().and_then(|index| usize::try_from(index).ok())).collect::<Option<Vec<_>>>();
+        let Some(indexes) = indexes else {
+            fail(&mut report.violations, "bounded output indexes must be non-negative integers".to_string());
+            continue;
+        };
+        if indexes.len() != count || indexes.windows(2).any(|pair| pair[0] >= pair[1]) {
+            fail(
+                &mut report.violations,
+                "bounded output indexes must be unique, strictly transaction-ordered, and equal the plan count".to_string(),
+            );
+            continue;
+        }
+        let Some(current_script_hash_text) = evidence.get("current_script_hash").and_then(Value::as_str) else {
+            fail(&mut report.violations, "bounded output evidence has no current_script_hash".to_string());
+            continue;
+        };
+        let current_script_hash = match canonical_lower_hex_bytes(current_script_hash_text, 32) {
+            Ok(hash) => hash,
+            Err(message) => {
+                fail(&mut report.violations, format!("bounded output current_script_hash {message}"));
+                continue;
+            }
+        };
+        if tx.get("current_script_hash").and_then(Value::as_str) != Some(current_script_hash_text) {
+            fail(
+                &mut report.violations,
+                "bounded output current_script_hash does not match the transaction execution context".to_string(),
+            );
+            continue;
+        }
+        let Some(outputs) = tx.get("outputs").and_then(Value::as_array) else {
+            fail(&mut report.violations, "transaction has no concrete outputs array".to_string());
+            continue;
+        };
+        let actual_group_indexes = outputs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, output)| {
+                let hash = output.get("type_hash").and_then(Value::as_str)?;
+                canonical_lower_hex_bytes(hash, 32).ok().filter(|hash| hash == &current_script_hash).map(|_| index)
+            })
+            .collect::<Vec<_>>();
+        if actual_group_indexes != indexes {
+            fail(
+                &mut report.violations,
+                "group_output_indexes do not exactly enumerate outputs with the current Type Script hash".to_string(),
+            );
+            continue;
+        }
+        for (ordinal, output_index) in indexes.iter().copied().enumerate() {
+            let Some(output) = outputs.get(output_index) else {
+                fail(&mut report.violations, format!("bounded output index {output_index} is outside transaction outputs"));
+                break;
+            };
+            if let Err(message) = validate_one_bounded_output(contract, payload, ordinal, output, current_script_hash_text) {
+                fail(&mut report.violations, format!("bounded output ordinal {ordinal} at outputs[{output_index}] {message}"));
+                break;
+            }
+        }
+    }
+    contracts.len()
+}
+
+fn decode_bounded_output_plan_count(payload: &[u8], element_width: usize, max_elements: usize) -> Result<usize, String> {
+    if payload.len() < 12 || &payload[..8] != crate::ir::BOUNDED_OUTPUT_PLAN_MAGIC_V1 {
+        return Err("bounded output plan has invalid CSBPLv1 magic or header".to_string());
+    }
+    let count = u32::from_le_bytes(payload[8..12].try_into().expect("bounded plan count slice")) as usize;
+    let expected = count.checked_mul(element_width).and_then(|bytes| bytes.checked_add(12));
+    if count > max_elements || expected != Some(payload.len()) || payload.len() > crate::ir::BOUNDED_OUTPUT_PLAN_MAX_BYTES {
+        return Err("bounded output plan violates its exact count/length bound".to_string());
+    }
+    Ok(count)
+}
+
+fn validate_one_bounded_output(
+    contract: &crate::BoundedOutputPlanContractMetadata,
+    payload: &[u8],
+    ordinal: usize,
+    output: &Value,
+    current_script_hash: &str,
+) -> Result<(), String> {
+    if output.get("type_hash").and_then(Value::as_str) != Some(current_script_hash) {
+        return Err("does not use the current Type Script hash".to_string());
+    }
+    let data = output
+        .get("data")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "has no canonical data field".to_string())
+        .and_then(canonical_lower_variable_hex)?;
+    if data.len() != contract.output_width_bytes {
+        return Err(format!("data width is {}, expected {}", data.len(), contract.output_width_bytes));
+    }
+    let element_start = 12 + ordinal * contract.element_width_bytes;
+    let mut expected_data = vec![0_u8; contract.output_width_bytes];
+    let mut written = vec![false; contract.output_width_bytes];
+    for binding in &contract.field_bindings {
+        let source_start = element_start + binding.plan_offset_bytes;
+        let source_end = source_start + binding.width_bytes;
+        let output_end = binding.output_offset_bytes + binding.width_bytes;
+        let source = payload.get(source_start..source_end).ok_or_else(|| "field binding exceeds the Plan element".to_string())?;
+        let target = expected_data
+            .get_mut(binding.output_offset_bytes..output_end)
+            .ok_or_else(|| "field binding exceeds output data".to_string())?;
+        if written[binding.output_offset_bytes..output_end].iter().any(|written| *written) {
+            return Err("field bindings overlap".to_string());
+        }
+        written[binding.output_offset_bytes..output_end].fill(true);
+        target.copy_from_slice(source);
+    }
+    if written.iter().any(|written| !written) || data != expected_data {
+        return Err("data does not exactly materialize the ordered Plan fields".to_string());
+    }
+    let lock_hash = output
+        .get("lock_hash")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "has no canonical lock_hash".to_string())
+        .and_then(|hash| canonical_lower_hex_bytes(hash, 32))?;
+    let lock_start = element_start + contract.lock_binding.plan_offset_bytes;
+    let lock_end = lock_start + contract.lock_binding.width_bytes;
+    if payload.get(lock_start..lock_end) != Some(lock_hash.as_slice()) {
+        return Err("lock_hash does not equal the ordered Plan lock field".to_string());
+    }
+    let capacity = output
+        .get("capacity_shannons")
+        .or_else(|| output.get("capacity"))
+        .and_then(json_u64)
+        .ok_or_else(|| "has no valid capacity_shannons".to_string())?;
+    if capacity < contract.capacity_floor_shannons {
+        return Err(format!("capacity {capacity} is below floor {}", contract.capacity_floor_shannons));
+    }
+    Ok(())
+}
+
+fn json_u64(value: &Value) -> Option<u64> {
+    value.as_u64().or_else(|| value.as_str().and_then(|value| value.parse().ok()))
 }
 
 pub fn validate_transaction_against_assumptions(assumptions: &[BuilderAssumptionMetadata], tx: &Value) -> TxValidationReport {
@@ -1304,6 +1537,57 @@ fn entry_payload_parameter<'a>(
         return Err("WitnessArgs.input_type has trailing bytes outside the compiled entry ABI".to_string());
     }
     selected.ok_or_else(|| format!("{label} ProofPlan parameter '{target}' is not present in the compiled entry ABI"))
+}
+
+fn entry_payload_schema_parameter<'a>(payload: &'a [u8], params: &[ParamMetadata], target: &str) -> Result<&'a [u8], String> {
+    if !payload.starts_with(crate::ENTRY_WITNESS_ABI_MAGIC) {
+        return Err("WitnessArgs.input_type must start with the compiled CSARGv1 entry ABI magic".to_string());
+    }
+    let mut cursor = crate::ENTRY_WITNESS_ABI_MAGIC.len();
+    let mut selected = None;
+    for param in params {
+        if !param_consumes_entry_payload(param) {
+            continue;
+        }
+        if param.schema_pointer_abi || param.schema_length_abi {
+            let length_bytes = payload
+                .get(cursor..cursor.saturating_add(4))
+                .ok_or_else(|| format!("WitnessArgs.input_type truncates schema parameter '{}' length", param.name))?;
+            let length = u32::from_le_bytes(length_bytes.try_into().expect("bounded schema length slice")) as usize;
+            let start = cursor
+                .checked_add(4)
+                .ok_or_else(|| format!("WitnessArgs.input_type schema parameter '{}' length overflows", param.name))?;
+            cursor = start
+                .checked_add(length)
+                .ok_or_else(|| format!("WitnessArgs.input_type schema parameter '{}' length overflows", param.name))?;
+            let bytes = payload
+                .get(start..cursor)
+                .ok_or_else(|| format!("WitnessArgs.input_type truncates compiled parameter '{}'", param.name))?;
+            if param.name == target {
+                if param.bounded_runtime_contract.as_deref() != Some(crate::ir::BOUNDED_OUTPUT_PLAN_V1) {
+                    return Err(format!("compiled parameter '{target}' is not a bounded-output-plan-v1 schema parameter"));
+                }
+                selected = Some(bytes);
+            }
+        } else if let Some(width) = param.fixed_byte_len {
+            cursor = cursor
+                .checked_add(width)
+                .ok_or_else(|| format!("WitnessArgs.input_type parameter '{}' length overflows", param.name))?;
+        } else if let Some(width) = crate::entry_witness_scalar_param_width(&param.ty) {
+            cursor = cursor
+                .checked_add(width)
+                .ok_or_else(|| format!("WitnessArgs.input_type parameter '{}' length overflows", param.name))?;
+        } else {
+            return Err(format!("compiled entry parameter '{}' has no deterministic witness width", param.name));
+        }
+        if cursor > payload.len() {
+            return Err(format!("WitnessArgs.input_type truncates compiled parameter '{}'", param.name));
+        }
+    }
+    if cursor != payload.len() {
+        return Err("WitnessArgs.input_type has trailing bytes outside the compiled entry ABI".to_string());
+    }
+    selected.ok_or_else(|| format!("bounded output parameter '{target}' is not present in the compiled entry ABI"))
 }
 
 fn param_consumes_entry_payload(param: &ParamMetadata) -> bool {

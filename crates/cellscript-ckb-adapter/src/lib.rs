@@ -51,6 +51,7 @@ pub const SCRIPT_REF_EVIDENCE_SCHEMA: &str = "cellscript-ckb-script-ref-evidence
 pub const SCRIPT_CODE_DEP_EVIDENCE_SCHEMA: &str = "cellscript-ckb-script-code-dep-evidence-v0.19";
 pub const DEPLOYMENT_MANIFEST_SCHEMA: &str = "cellscript-ckb-deployment-manifest-v0.19";
 pub const DEPLOY_EVIDENCE_SCHEMA: &str = "cellscript-ckb-deploy-evidence-v0.19";
+pub const BOUNDED_OUTPUT_PLAN_EVIDENCE_SCHEMA: &str = "cellscript-bounded-output-plan-evidence-v1";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ActionPlan {
@@ -61,6 +62,8 @@ pub struct ActionPlan {
     pub metadata_hash: Option<String>,
     #[serde(default)]
     pub action_scan_selectors: Option<ActionScanSelectors>,
+    #[serde(default)]
+    pub bounded_output_plans: Vec<BoundedOutputPlanContractDraft>,
     pub transaction_draft: TransactionDraft,
     pub adapter_contract: AdapterContract,
 }
@@ -90,6 +93,63 @@ pub struct TransactionDraft {
     pub lineage: Vec<ActionLineageDraft>,
     #[serde(default, alias = "scanSelectorEvidence")]
     pub scan_selector_evidence: Vec<ScanSelectorEvidenceDraft>,
+    #[serde(default)]
+    pub bounded_output_plan_evidence: Vec<BoundedOutputPlanEvidenceDraft>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BoundedOutputPlanContractDraft {
+    pub schema: String,
+    pub version: u32,
+    pub binding: String,
+    pub codec: String,
+    pub codec_magic_hex: String,
+    pub placement: String,
+    pub allow_zero: bool,
+    pub element_width_bytes: usize,
+    pub max_elements: usize,
+    pub output_source: String,
+    pub ordering: String,
+    pub correspondence: String,
+    pub output_ty: String,
+    pub output_width_bytes: usize,
+    pub type_script_policy: String,
+    pub lock_policy: String,
+    pub capacity_floor_shannons: u64,
+    pub identity_policy: String,
+    pub field_bindings: Vec<BoundedOutputFieldBindingDraft>,
+    pub lock_binding: BoundedOutputValueBindingDraft,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BoundedOutputFieldBindingDraft {
+    pub output_field: String,
+    pub output_offset_bytes: usize,
+    pub plan_field: String,
+    pub plan_offset_bytes: usize,
+    pub width_bytes: usize,
+    pub ty: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BoundedOutputValueBindingDraft {
+    pub plan_field: String,
+    pub plan_offset_bytes: usize,
+    pub width_bytes: usize,
+    pub ty: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BoundedOutputPlanEvidenceDraft {
+    pub schema: String,
+    pub version: u32,
+    pub action: String,
+    pub binding: String,
+    pub witness_index: usize,
+    pub witness_field: String,
+    pub plan_payload: String,
+    pub current_script_hash: String,
+    pub group_output_indexes: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -475,7 +535,68 @@ pub fn parse_action_plan(bytes: &[u8]) -> Result<ActionPlan> {
         }
     }
     validate_action_scan_selectors_schema(&plan)?;
+    validate_bounded_output_plan_contracts(&plan)?;
     Ok(plan)
+}
+
+fn validate_bounded_output_plan_contracts(plan: &ActionPlan) -> Result<()> {
+    let mut bindings = HashSet::new();
+    for contract in &plan.bounded_output_plans {
+        let encoded_max = contract.max_elements.checked_mul(contract.element_width_bytes).and_then(|bytes| bytes.checked_add(12));
+        if contract.schema != "cellscript-bounded-output-plan-contract"
+            || contract.version != 1
+            || contract.codec != "molecule-fixvec-fixed-item-v1"
+            || contract.codec_magic_hex != "0x435342504c763100"
+            || contract.placement != "entry-witness-args-v1-param-payload"
+            || !contract.allow_zero
+            || contract.output_source != "ckb-group-output"
+            || contract.ordering != "plan-index-equals-group-output-index"
+            || contract.correspondence != "exactly-one-group-output-per-plan-element"
+            || contract.type_script_policy != "exact-current-script-hash"
+            || contract.lock_policy != "exact-plan-field-hash"
+            || contract.identity_policy != "fresh-output-outpoint-plus-type-group-ordinal"
+            || contract.binding.is_empty()
+            || !bindings.insert(contract.binding.as_str())
+            || contract.element_width_bytes == 0
+            || !(1..=1024).contains(&contract.max_elements)
+            || encoded_max.is_none_or(|bytes| bytes > 4084)
+            || !(1..=512).contains(&contract.output_width_bytes)
+            || contract.capacity_floor_shannons == 0
+            || contract.output_ty.is_empty()
+            || contract.lock_binding.plan_field.is_empty()
+            || contract.lock_binding.width_bytes != 32
+            || contract.lock_binding.plan_offset_bytes.checked_add(32).is_none_or(|end| end > contract.element_width_bytes)
+            || contract.field_bindings.is_empty()
+        {
+            bail!("bounded output plan contract '{}' is invalid", contract.binding);
+        }
+        let mut output_fields = HashSet::new();
+        let mut covered = vec![false; contract.output_width_bytes];
+        for binding in &contract.field_bindings {
+            let Some(output_end) = binding.output_offset_bytes.checked_add(binding.width_bytes) else {
+                bail!("bounded output field binding overflows its output layout");
+            };
+            let Some(plan_end) = binding.plan_offset_bytes.checked_add(binding.width_bytes) else {
+                bail!("bounded output field binding overflows its Plan layout");
+            };
+            if binding.output_field.is_empty()
+                || binding.plan_field.is_empty()
+                || binding.ty.is_empty()
+                || binding.width_bytes == 0
+                || !output_fields.insert(binding.output_field.as_str())
+                || output_end > contract.output_width_bytes
+                || plan_end > contract.element_width_bytes
+                || covered[binding.output_offset_bytes..output_end].iter().any(|covered| *covered)
+            {
+                bail!("bounded output field binding is invalid, duplicate, overlapping, or outside its fixed layout");
+            }
+            covered[binding.output_offset_bytes..output_end].fill(true);
+        }
+        if covered.iter().any(|covered| !covered) {
+            bail!("bounded output field bindings do not cover the complete output data");
+        }
+    }
+    Ok(())
 }
 
 fn validate_action_scan_selectors_schema(plan: &ActionPlan) -> Result<()> {
@@ -845,6 +966,7 @@ pub fn resolve_materialized_action_plan_with_manifest(
         .map(|(index, (output, data))| parse_action_output_draft(index, output, data))
         .collect::<Result<Vec<_>>>()?;
     let witnesses = plan.transaction_draft.witnesses.iter().map(parse_action_witness_draft).collect::<Result<Vec<_>>>()?;
+    validate_bounded_output_plan_evidence(plan, &outputs, &witnesses)?;
     let mut cell_deps = plan.transaction_draft.cell_deps.iter().map(parse_action_cell_dep_draft).collect::<Result<Vec<_>>>()?;
     if let Some(manifest) = manifest {
         add_manifest_cell_deps(&mut cell_deps, &outputs, manifest)?;
@@ -940,6 +1062,127 @@ fn validate_scan_selector_evidence(plan: &ActionPlan) -> Result<()> {
                 "transaction_draft.scan_selector_evidence is missing selector_index {} declared by action_scan_selectors",
                 selector_index
             );
+        }
+    }
+    Ok(())
+}
+
+fn validate_bounded_output_plan_evidence(plan: &ActionPlan, outputs: &[CellOutputWithData], witnesses: &[WitnessArgs]) -> Result<()> {
+    if plan.bounded_output_plans.is_empty() {
+        if !plan.transaction_draft.bounded_output_plan_evidence.is_empty() {
+            bail!("transaction_draft.bounded_output_plan_evidence was supplied without a compiled bounded output contract");
+        }
+        return Ok(());
+    }
+    if plan.transaction_draft.bounded_output_plan_evidence.len() != plan.bounded_output_plans.len() {
+        bail!(
+            "transaction_draft.bounded_output_plan_evidence length {} does not match compiled bounded output contracts {}",
+            plan.transaction_draft.bounded_output_plan_evidence.len(),
+            plan.bounded_output_plans.len()
+        );
+    }
+    let mut evidence_bindings = HashSet::new();
+    for contract in &plan.bounded_output_plans {
+        let evidence = plan
+            .transaction_draft
+            .bounded_output_plan_evidence
+            .iter()
+            .find(|evidence| evidence.action == plan.action && evidence.binding == contract.binding)
+            .ok_or_else(|| {
+                anyhow::anyhow!("bounded output evidence is missing action '{}' binding '{}'", plan.action, contract.binding)
+            })?;
+        if !evidence_bindings.insert(evidence.binding.as_str())
+            || evidence.schema != BOUNDED_OUTPUT_PLAN_EVIDENCE_SCHEMA
+            || evidence.version != 1
+            || evidence.witness_field != "input_type"
+        {
+            bail!("bounded output evidence for '{}' has an invalid or duplicate identity", contract.binding);
+        }
+        let payload = parse_hex_bytes("bounded_output_plan_evidence[].plan_payload", &evidence.plan_payload)?;
+        if payload.len() < 12 || &payload[..8] != b"CSBPLv1\0" {
+            bail!("bounded output plan '{}' has invalid CSBPLv1 magic", contract.binding);
+        }
+        let count = u32::from_le_bytes(payload[8..12].try_into().expect("bounded output plan count slice")) as usize;
+        let expected_length = count.checked_mul(contract.element_width_bytes).and_then(|bytes| bytes.checked_add(12));
+        if count > contract.max_elements || expected_length != Some(payload.len()) || payload.len() > 4084 {
+            bail!("bounded output plan '{}' violates its exact count/length bound", contract.binding);
+        }
+        if evidence.group_output_indexes.len() != count || evidence.group_output_indexes.windows(2).any(|pair| pair[0] >= pair[1]) {
+            bail!(
+                "bounded output indexes for '{}' must be unique, strictly transaction-ordered, and equal the plan count",
+                contract.binding
+            );
+        }
+        let witness = witnesses
+            .get(evidence.witness_index)
+            .ok_or_else(|| anyhow::anyhow!("bounded output witness index {} is out of range", evidence.witness_index))?;
+        let input_type = witness
+            .input_type()
+            .to_opt()
+            .ok_or_else(|| anyhow::anyhow!("bounded output witness {} has no input_type", evidence.witness_index))?
+            .raw_data();
+        if !input_type.starts_with(b"CSARGv1\0") {
+            bail!("bounded output witness input_type does not use the compiled CSARGv1 entry ABI");
+        }
+        let mut framed_payload = Vec::with_capacity(payload.len() + 4);
+        framed_payload.extend_from_slice(
+            &u32::try_from(payload.len()).map_err(|_| anyhow::anyhow!("bounded output plan length exceeds u32"))?.to_le_bytes(),
+        );
+        framed_payload.extend_from_slice(&payload);
+        if input_type.windows(framed_payload.len()).filter(|window| *window == framed_payload.as_slice()).count() != 1 {
+            bail!("bounded output plan_payload is not present exactly once in WitnessArgs.input_type");
+        }
+        let current_script_hash =
+            parse_byte32_hex("bounded_output_plan_evidence[].current_script_hash", &evidence.current_script_hash)?;
+        let current_script_hash = current_script_hash.as_slice();
+        let actual_group_indexes = outputs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, output)| {
+                output
+                    .output
+                    .type_()
+                    .to_opt()
+                    .filter(|script| script.calc_script_hash().as_slice() == current_script_hash)
+                    .map(|_| index)
+            })
+            .collect::<Vec<_>>();
+        if actual_group_indexes != evidence.group_output_indexes {
+            bail!("bounded output indexes do not exactly enumerate outputs with the current Type Script hash");
+        }
+        for (ordinal, output_index) in evidence.group_output_indexes.iter().copied().enumerate() {
+            let output = outputs
+                .get(output_index)
+                .ok_or_else(|| anyhow::anyhow!("bounded output index {output_index} is outside transaction outputs"))?;
+            let element_start = 12 + ordinal * contract.element_width_bytes;
+            if output.data.len() != contract.output_width_bytes {
+                bail!(
+                    "bounded output ordinal {ordinal} data width {} does not match {}",
+                    output.data.len(),
+                    contract.output_width_bytes
+                );
+            }
+            let mut expected_data = vec![0_u8; contract.output_width_bytes];
+            let mut written = vec![false; contract.output_width_bytes];
+            for binding in &contract.field_bindings {
+                let source_start = element_start + binding.plan_offset_bytes;
+                let source_end = source_start + binding.width_bytes;
+                let output_end = binding.output_offset_bytes + binding.width_bytes;
+                expected_data[binding.output_offset_bytes..output_end].copy_from_slice(&payload[source_start..source_end]);
+                written[binding.output_offset_bytes..output_end].fill(true);
+            }
+            if written.iter().any(|written| !written) || output.data.as_ref() != expected_data {
+                bail!("bounded output ordinal {ordinal} data does not exactly materialize the ordered Plan fields");
+            }
+            let lock_start = element_start + contract.lock_binding.plan_offset_bytes;
+            let lock_end = lock_start + contract.lock_binding.width_bytes;
+            if output.output.lock().calc_script_hash().as_slice() != &payload[lock_start..lock_end] {
+                bail!("bounded output ordinal {ordinal} Lock hash does not equal the ordered Plan lock field");
+            }
+            let capacity: u64 = output.output.capacity().unpack();
+            if capacity < contract.capacity_floor_shannons {
+                bail!("bounded output ordinal {ordinal} capacity {capacity} is below floor {}", contract.capacity_floor_shannons);
+            }
         }
     }
     Ok(())
@@ -2394,6 +2637,7 @@ pub fn sample_action_plan() -> ActionPlan {
         artifact_hash: Some("0".repeat(64)),
         metadata_hash: Some("1".repeat(64)),
         action_scan_selectors: None,
+        bounded_output_plans: Vec::new(),
         transaction_draft: TransactionDraft {
             state: "resolved".to_string(),
             can_submit: true,
@@ -2408,6 +2652,7 @@ pub fn sample_action_plan() -> ActionPlan {
             header_deps: Vec::new(),
             lineage: Vec::new(),
             scan_selector_evidence: Vec::new(),
+            bounded_output_plan_evidence: Vec::new(),
         },
         adapter_contract: AdapterContract {
             schema: ADAPTER_CONTRACT_SCHEMA.to_string(),
@@ -2562,6 +2807,44 @@ mod tests {
         assert_eq!(tx.outputs().len(), tx.outputs_data().len());
         assert_eq!(evidence.state, "ResolvedActionTx");
         assert_eq!(evidence.outputs_data, 1);
+    }
+
+    #[test]
+    fn bounded_output_plan_evidence_binds_witness_order_and_materialized_outputs() {
+        let valid = bounded_output_action_plan_json();
+        let parsed = parse_action_plan(&serde_json::to_vec(&valid).unwrap()).unwrap();
+        let resolved = resolve_materialized_action_plan(&parsed).unwrap();
+        assert_eq!(resolved.outputs.len(), 1);
+        assert_eq!(resolved.outputs[0].data, Bytes::from(42_u64.to_le_bytes().to_vec()));
+
+        for (pointer, replacement, expected) in [
+            ("/transaction_draft/outputs_data/0", serde_json::json!("0x2b00000000000000"), "does not exactly materialize"),
+            ("/transaction_draft/outputs/0/lock/args", serde_json::json!("0x45"), "Lock hash does not equal"),
+            (
+                "/transaction_draft/outputs/0/type/code_hash",
+                serde_json::json!(format!("0x{}", hex::encode([0x67_u8; 32]))),
+                "do not exactly enumerate",
+            ),
+            ("/transaction_draft/outputs/0/capacity", serde_json::json!(9_999_999_999_u64), "below floor"),
+            (
+                "/transaction_draft/bounded_output_plan_evidence/0/group_output_indexes/0",
+                serde_json::json!(1),
+                "do not exactly enumerate",
+            ),
+            (
+                "/transaction_draft/bounded_output_plan_evidence/0/plan_payload",
+                serde_json::json!(
+                    "0x435342504c7631000100000000000000000000000000000000000000000000000000000000000000000000002b00000000000000"
+                ),
+                "not present exactly once",
+            ),
+        ] {
+            let mut changed = valid.clone();
+            *changed.pointer_mut(pointer).expect("bounded output plan test pointer") = replacement;
+            let parsed = parse_action_plan(&serde_json::to_vec(&changed).unwrap()).unwrap();
+            let error = resolve_materialized_action_plan(&parsed).unwrap_err().to_string();
+            assert!(error.contains(expected), "{pointer}: {error}");
+        }
     }
 
     #[test]
@@ -3361,6 +3644,75 @@ mod tests {
                 "resolved_tx_required_fields": ["outputs_data", "cell_deps", "lineage"]
             }
         })
+    }
+
+    fn bounded_output_action_plan_json() -> serde_json::Value {
+        let mut plan = materialized_action_plan_json(true);
+        let lock_script = construct_script(&ScriptSpec::new([0x33_u8; 32], ScriptHashType::Data1, vec![0x44_u8; 20]));
+        let type_script = construct_script(&ScriptSpec::new([0x66_u8; 32], ScriptHashType::Type, vec![0x77_u8; 4]));
+        let lock_hash = lock_script.calc_script_hash().as_slice().to_vec();
+        let current_script_hash = type_script.calc_script_hash().as_slice().to_vec();
+        let mut payload = b"CSBPLv1\0".to_vec();
+        payload.extend_from_slice(&1_u32.to_le_bytes());
+        payload.extend_from_slice(&lock_hash);
+        payload.extend_from_slice(&42_u64.to_le_bytes());
+        let mut input_type = b"CSARGv1\0".to_vec();
+        input_type.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_le_bytes());
+        input_type.extend_from_slice(&payload);
+
+        plan["transaction_draft"]["outputs"][0]["type"] = serde_json::json!({
+            "code_hash": format!("0x{}", hex::encode([0x66_u8; 32])),
+            "hash_type": "type",
+            "args": format!("0x{}", hex::encode([0x77_u8; 4]))
+        });
+        plan["transaction_draft"]["outputs_data"][0] = serde_json::json!(format!("0x{}", hex::encode(42_u64.to_le_bytes())));
+        plan["transaction_draft"]["witnesses"][0]["input_type"] = serde_json::json!(format!("0x{}", hex::encode(&input_type)));
+        plan["bounded_output_plans"] = serde_json::json!([{
+            "schema": "cellscript-bounded-output-plan-contract",
+            "version": 1,
+            "binding": "plans",
+            "codec": "molecule-fixvec-fixed-item-v1",
+            "codec_magic_hex": "0x435342504c763100",
+            "placement": "entry-witness-args-v1-param-payload",
+            "allow_zero": true,
+            "element_width_bytes": 40,
+            "max_elements": 2,
+            "output_source": "ckb-group-output",
+            "ordering": "plan-index-equals-group-output-index",
+            "correspondence": "exactly-one-group-output-per-plan-element",
+            "output_ty": "Token",
+            "output_width_bytes": 8,
+            "type_script_policy": "exact-current-script-hash",
+            "lock_policy": "exact-plan-field-hash",
+            "capacity_floor_shannons": 10_000_000_000_u64,
+            "identity_policy": "fresh-output-outpoint-plus-type-group-ordinal",
+            "field_bindings": [{
+                "output_field": "amount",
+                "output_offset_bytes": 0,
+                "plan_field": "amount",
+                "plan_offset_bytes": 32,
+                "width_bytes": 8,
+                "ty": "u64"
+            }],
+            "lock_binding": {
+                "plan_field": "owner",
+                "plan_offset_bytes": 0,
+                "width_bytes": 32,
+                "ty": "address"
+            }
+        }]);
+        plan["transaction_draft"]["bounded_output_plan_evidence"] = serde_json::json!([{
+            "schema": BOUNDED_OUTPUT_PLAN_EVIDENCE_SCHEMA,
+            "version": 1,
+            "action": "mint",
+            "binding": "plans",
+            "witness_index": 0,
+            "witness_field": "input_type",
+            "plan_payload": format!("0x{}", hex::encode(&payload)),
+            "current_script_hash": format!("0x{}", hex::encode(&current_script_hash)),
+            "group_output_indexes": [0]
+        }]);
+        plan
     }
 
     fn manifest_with_single_deployment(code_hash: [u8; 32], hash_type: &str, dep_type: &str, out_point: &str) -> DeploymentManifest {

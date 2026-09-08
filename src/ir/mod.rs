@@ -626,6 +626,8 @@ pub struct IrBoundedCollectionOp {
     /// Exact encoded element width for the first executable bounded runtime
     /// contracts. Dynamic element schemas remain fail-closed.
     pub element_width: Option<usize>,
+    /// Declared positive capacity floor for an executable bounded output.
+    pub output_capacity_floor_shannons: Option<u64>,
     pub span: Span,
 }
 
@@ -643,6 +645,17 @@ pub const BOUNDED_OUTPUT_PLAN_V1: &str = "bounded-output-plan-v1";
 pub const BOUNDED_OUTPUT_PLAN_MAGIC_V1: &[u8; 8] = b"CSBPLv1\0";
 const BOUNDED_CELL_RUNTIME_MAX_DATA_BYTES: usize = 512;
 pub const BOUNDED_OUTPUT_PLAN_MAX_BYTES: usize = 4084;
+
+fn direct_bounded_plan_field<'a>(rendered: &'a str, binding: &str) -> Option<&'a str> {
+    let field = rendered.strip_prefix(binding)?.strip_prefix('.')?;
+    (!field.is_empty() && !field.contains('.')).then_some(field)
+}
+
+fn direct_bounded_plan_field_expr<'a>(expr: &'a Expr, binding: &str) -> Option<&'a str> {
+    let Expr::FieldAccess(access) = expr else { return None };
+    let Expr::Identifier(base) = access.expr.as_ref() else { return None };
+    (base == binding).then_some(access.field.as_str())
+}
 
 /// Recognized source/runtime contracts with intentionally unavailable execution.
 /// Keep this classification shared by metadata and the emitter: a deferred
@@ -2771,6 +2784,8 @@ impl IrGenerator {
             {
                 operation.runtime_contract = Some(BOUNDED_OUTPUT_PLAN_V1.to_string());
                 operation.element_width = Some(width);
+                operation.output_capacity_floor_shannons =
+                    operation.output_type.as_deref().and_then(|output_type| self.type_capacity_floors.get(output_type).copied());
             }
         }
         let borrow_regions = std::mem::take(&mut self.borrow_regions);
@@ -2832,10 +2847,22 @@ impl IrGenerator {
         }
         let template = operation.create_template.as_ref()?;
         let required_fields = self.type_fields.get(output_type)?;
+        let plan_fields = self.type_fields.get(&operation.element_type)?;
         if template.lock.is_none()
             || template.fields.len() != required_fields.len()
             || !required_fields.keys().all(|field| template.fields.iter().any(|(name, _)| name == field))
         {
+            return None;
+        }
+        for (output_field, rendered) in &template.fields {
+            let plan_field = direct_bounded_plan_field(rendered, &operation.binding)?;
+            if required_fields.get(output_field) != plan_fields.get(plan_field) {
+                return None;
+            }
+        }
+        let lock_field = direct_bounded_plan_field(template.lock.as_deref()?, &operation.binding)?;
+        let lock_ty = plan_fields.get(lock_field)?;
+        if self.fixed_encoded_size(lock_ty) != Some(32) {
             return None;
         }
         Some(plan_width)
@@ -8354,7 +8381,7 @@ impl IrGenerator {
             _ => None,
         })?;
         let (element_width, capacity_floor_shannons) =
-            self.bounded_create_call_runtime_shape(&collection.element_type, collection.max_elements, create)?;
+            self.bounded_create_call_runtime_shape(binding, &collection.element_type, collection.max_elements, create)?;
 
         let index_var = self.new_var("bounded_plan_index", IrType::U64);
         self.block_mut(blocks, current)
@@ -8414,7 +8441,13 @@ impl IrGenerator {
         Some(LoweredExpr { operand: IrOperand::Const(IrConst::Unit), current: Some(exit_block) })
     }
 
-    fn bounded_create_call_runtime_shape(&self, element_type: &str, max_elements: usize, create: &CreateExpr) -> Option<(usize, u64)> {
+    fn bounded_create_call_runtime_shape(
+        &self,
+        binding: &str,
+        element_type: &str,
+        max_elements: usize,
+        create: &CreateExpr,
+    ) -> Option<(usize, u64)> {
         if !(1..=1024).contains(&max_elements) || self.type_kinds.get(element_type) != Some(&IrTypeKind::Struct) {
             return None;
         }
@@ -8433,7 +8466,18 @@ impl IrGenerator {
             return None;
         }
         let fields = self.type_fields.get(&create.ty)?;
+        let plan_fields = self.type_fields.get(element_type)?;
         if create.fields.len() != fields.len() || !fields.keys().all(|field| create.fields.iter().any(|(name, _)| name == field)) {
+            return None;
+        }
+        for (output_field, value) in &create.fields {
+            let plan_field = direct_bounded_plan_field_expr(value, binding)?;
+            if fields.get(output_field) != plan_fields.get(plan_field) {
+                return None;
+            }
+        }
+        let lock_field = direct_bounded_plan_field_expr(create.lock.as_deref()?, binding)?;
+        if self.fixed_encoded_size(plan_fields.get(lock_field)?) != Some(32) {
             return None;
         }
         Some((plan_width, self.type_capacity_floors.get(&create.ty).copied().filter(|floor| *floor > 0)?))
@@ -10482,6 +10526,7 @@ fn collect_bounded_collection_ops_from_expr(expr: &Expr, params: &[Param], ops: 
         create_template,
         runtime_contract: None,
         element_width: None,
+        output_capacity_floor_shannons: None,
         span: call.span,
     });
 }

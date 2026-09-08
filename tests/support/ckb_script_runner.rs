@@ -331,11 +331,17 @@ pub fn compile_cellscript_source_to_elf(source: &str, entry_action: &str, primit
 /// lock without weakening the script-side lock policy.
 #[allow(dead_code)]
 pub fn deterministic_always_success_lock_hash() -> [u8; 32] {
+    deterministic_always_success_script(Bytes::default()).calc_script_hash().unpack()
+}
+
+/// Return the deterministic always-success Script used by the harness. Tests
+/// may attach it as a foreign Type Script to prove group filtering.
+#[allow(dead_code)]
+pub fn deterministic_always_success_script(args: Bytes) -> packed::Script {
     let mut context = Context::new_with_deterministic_rng();
     let always_success_elf = compile_cellscript_source_to_elf(ALWAYS_SUCCESS_PROGRAM, "always_success", None);
     let out_point = context.deploy_cell(Bytes::copy_from_slice(&always_success_elf));
-    let lock = context.build_script(&out_point, Bytes::default()).expect("build deterministic always-success lock script");
-    lock.calc_script_hash().unpack()
+    context.build_script(&out_point, args).expect("build deterministic always-success script")
 }
 
 /// Execute a CellScript-compiled ELF against a CKB VM fixture.

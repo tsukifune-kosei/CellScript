@@ -629,6 +629,9 @@ impl SimulateInterpreter {
         if func_name == "__cellscript_consume_each" {
             return self.eval_bounded_consume_each(call);
         }
+        if func_name == "__cellscript_create_each" {
+            return self.eval_bounded_create_each(call);
+        }
 
         if matches!(
             func_name.as_str(),
@@ -732,6 +735,56 @@ impl SimulateInterpreter {
                     self.restore_binding(binding, previous);
                     return Err(SimulateError::Unsupported {
                         description: "loop control is not supported inside consume_each".to_string(),
+                    });
+                }
+            }
+        }
+        self.restore_binding(binding, previous);
+        Ok(SimValue::Unit)
+    }
+
+    fn eval_bounded_create_each(&mut self, call: &CallExpr) -> Result<SimValue, SimulateError> {
+        let [Expr::Identifier(binding), Expr::Identifier(collection_binding), Expr::Block(body)] = call.args.as_slice() else {
+            return Err(SimulateError::Unsupported {
+                description: "create_each has an invalid internal bounded-collection shape".to_string(),
+            });
+        };
+        let collection = self
+            .env
+            .get(collection_binding)
+            .cloned()
+            .ok_or_else(|| SimulateError::UndefinedVariable { name: collection_binding.clone() })?;
+        let SimValue::Array(items) = collection else {
+            return Err(SimulateError::TypeError {
+                expected: "BoundedList simulation array".to_string(),
+                got: collection.to_string(),
+            });
+        };
+        let max_elements = self.bounded_collection_limits.get(collection_binding).copied().ok_or_else(|| {
+            SimulateError::Unsupported { description: format!("create_each collection '{collection_binding}' has no declared bound") }
+        })?;
+        if items.len() > max_elements {
+            let error = crate::runtime_errors::CellScriptRuntimeError::CollectionBoundsInvalid;
+            return Err(SimulateError::RuntimeError { code: error.code(), name: error.name().to_string() });
+        }
+
+        self.has_cell_ops = true;
+        let previous = self.env.get(binding).cloned();
+        for item in items {
+            self.bump_steps()?;
+            self.env.insert(binding.clone(), item);
+            for stmt in body {
+                let flow = match self.exec_stmt(stmt) {
+                    Ok(flow) => flow,
+                    Err(error) => {
+                        self.restore_binding(binding, previous);
+                        return Err(error);
+                    }
+                };
+                if flow.is_some_and(|flow| matches!(flow, SimValue::LoopBreak(_) | SimValue::LoopContinue(_))) {
+                    self.restore_binding(binding, previous);
+                    return Err(SimulateError::Unsupported {
+                        description: "loop control is not supported inside create_each".to_string(),
                     });
                 }
             }
@@ -958,6 +1011,88 @@ action verify(input inputs: BoundedCellSet<Token, 3>) -> u64 {
             let error = interp
                 .simulate_action("verify", &[SimValue::Array(values)])
                 .expect_err("a false predicate must reject the full collection");
+            assert!(matches!(error, SimulateError::RuntimeError { code: 5, .. }));
+        }
+    }
+
+    #[test]
+    fn simulate_bounded_create_each_observes_cardinality_and_every_predicate() {
+        let source = r#"
+module bounded_create_sim
+
+struct Plan { amount: u64 }
+resource Token has store, consume { amount: u64 }
+
+action mint(witness plans: BoundedList<Plan, 2>, witness minimum: u64) -> u64 {
+    verification
+        create_each plan in plans {
+            require plan.amount >= minimum
+            create Token { amount: plan.amount }
+        }
+        return 0
+}
+"#;
+        let module = parse_module(source);
+        for values in [vec![], vec![bounded_token(1)], vec![bounded_token(1), bounded_token(2)]] {
+            let expected_count = values.len();
+            let mut interp = SimulateInterpreter::new(&module, 1000);
+            let result = interp
+                .simulate_action("mint", &[SimValue::Array(values), SimValue::Integer(1)])
+                .expect("0..=N valid plans must simulate");
+            assert_eq!(result.return_value, SimValue::Integer(0));
+            assert_eq!(
+                result.trace.iter().filter(|event| matches!(event, TraceEvent::Create { .. })).count(),
+                expected_count,
+                "every plan must create exactly one output"
+            );
+        }
+    }
+
+    #[test]
+    fn simulate_bounded_create_each_fails_closed_above_the_declared_bound() {
+        let source = r#"
+module bounded_create_sim
+
+struct Plan { amount: u64 }
+resource Token has store, consume { amount: u64 }
+
+action mint(witness plans: BoundedList<Plan, 2>) -> u64 {
+    verification
+        create_each plan in plans { create Token { amount: plan.amount } }
+        return 0
+}
+"#;
+        let module = parse_module(source);
+        let mut interp = SimulateInterpreter::new(&module, 1000);
+        let error = interp
+            .simulate_action("mint", &[SimValue::Array(vec![bounded_token(1), bounded_token(2), bounded_token(3)])])
+            .expect_err("N+1 plans must fail closed");
+        assert!(matches!(error, SimulateError::RuntimeError { code: 21, .. }));
+    }
+
+    #[test]
+    fn simulate_bounded_create_each_rejects_predicate_failure_at_every_position() {
+        let source = r#"
+module bounded_create_sim
+
+struct Plan { amount: u64 }
+resource Token has store, consume { amount: u64 }
+
+action mint(witness plans: BoundedList<Plan, 3>) -> u64 {
+    verification
+        create_each plan in plans {
+            require plan.amount > 0
+            create Token { amount: plan.amount }
+        }
+        return 0
+}
+"#;
+        let module = parse_module(source);
+        for amounts in [[0, 1, 1], [1, 0, 1], [1, 1, 0]] {
+            let mut interp = SimulateInterpreter::new(&module, 1000);
+            let values = amounts.into_iter().map(bounded_token).collect();
+            let error =
+                interp.simulate_action("mint", &[SimValue::Array(values)]).expect_err("a false predicate must reject the full plan");
             assert!(matches!(error, SimulateError::RuntimeError { code: 5, .. }));
         }
     }

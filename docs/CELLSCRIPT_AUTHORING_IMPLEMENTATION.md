@@ -247,7 +247,7 @@ max_extra_witnesses, max_witness_bytes) -> SighashAllDigest`. It streams the
 current input Script-group signing message, replaces the complete first
 `WitnessArgs.lock` payload with equal-length zero bytes, and commits to later
 group witnesses and transaction-level extra witnesses. All four bounds are
-integer literals and are enforced at runtime. Metadata schema 71 and the
+integer literals and are enforced at runtime. Metadata schema 72 and the
 standalone checker bind the scope, transform, order, type, and limits to typed
 semantics and runtime provenance. Differential CKB-VM evidence matches the
 pinned `ckb-sdk-rust` generator for this all-zero placeholder domain.
@@ -322,7 +322,7 @@ whole WitnessArgs limit is 4,096 bytes with at most eight records. Host and CKB
 adapter codecs are independently implemented; placement preserves other fields,
 rejects occupied `input_type`, and must occur before signing.
 
-Metadata schema 71, `cellscript-typed-semantics-v8` and
+Metadata schema 72, `cellscript-typed-semantics-v8` and
 `cellscript-semantic-foundation-v3` bind the declared policy, selector provenance,
 resource layout, variant payload schemas, fixed counts and ordered common
 checks. Runtime metadata also binds `cellscript-ckb-runtime-view-v1`, the

@@ -1,0 +1,21 @@
+module acceptance::bounded_output_plan_max_v1
+
+struct Plan {
+    owner: Address
+    amount: u64
+}
+
+resource Token has store, create
+with_capacity_floor(10000000000)
+{
+    amount: u64
+}
+
+action verify(witness plans: BoundedList<Plan, 101>) -> u64 {
+    verification
+        create_each plan in plans {
+            require plan.amount == 1
+            create Token { amount: plan.amount } with_lock(plan.owner)
+        }
+        return 0
+}

@@ -1,0 +1,173 @@
+{
+  "schema": "cellscript-bounded-output-plan-fixture-v1",
+  "source": "tests/fixtures/bounded_output_plan.cell",
+  "entry": "verify",
+  "max_elements": 3,
+  "element_width_bytes": 40,
+  "output_width_bytes": 8,
+  "capacity_floor_shannons": 10000000000,
+  "selection": "exact-current-type-script-group-output",
+  "order": "plan-index-equals-canonical-group-output-index",
+  "correspondence": "exactly-one-group-output-per-plan-element",
+  "identity_policy": "fresh-output-outpoint-plus-type-group-ordinal",
+  "equal_plan_bytes_allowed": true,
+  "resource_evidence": {
+    "maximum_source": "tests/fixtures/bounded_output_plan_max.cell",
+    "maximum_elements": 101,
+    "measurement_backend": "ckb-testtool-full-transaction-context",
+    "max_elf_bytes": 4096,
+    "max_cycles": 10000000
+  },
+  "cases": [
+    {
+      "name": "zero",
+      "plans": [],
+      "outputs": [],
+      "codec": "canonical",
+      "simulator_expected_exit": 0,
+      "expected_exit": 0
+    },
+    {
+      "name": "one",
+      "plans": [{ "owner": "output_lock", "amount": 10 }],
+      "outputs": [{ "scope": "group", "lock": "output_lock", "amount": 10, "capacity_shannons": 100000000000 }],
+      "codec": "canonical",
+      "simulator_expected_exit": 0,
+      "expected_exit": 0
+    },
+    {
+      "name": "maximum_n",
+      "plans": [
+        { "owner": "output_lock", "amount": 10 },
+        { "owner": "output_lock", "amount": 20 },
+        { "owner": "output_lock", "amount": 30 }
+      ],
+      "outputs": [
+        { "scope": "group", "lock": "output_lock", "amount": 10, "capacity_shannons": 100000000000 },
+        { "scope": "group", "lock": "output_lock", "amount": 20, "capacity_shannons": 100000000000 },
+        { "scope": "group", "lock": "output_lock", "amount": 30, "capacity_shannons": 100000000000 }
+      ],
+      "codec": "canonical",
+      "simulator_expected_exit": 0,
+      "expected_exit": 0
+    },
+    {
+      "name": "above_maximum_n_plus_one",
+      "plans": [
+        { "owner": "output_lock", "amount": 1 },
+        { "owner": "output_lock", "amount": 1 },
+        { "owner": "output_lock", "amount": 1 },
+        { "owner": "output_lock", "amount": 1 }
+      ],
+      "outputs": [
+        { "scope": "group", "lock": "output_lock", "amount": 1, "capacity_shannons": 100000000000 },
+        { "scope": "group", "lock": "output_lock", "amount": 1, "capacity_shannons": 100000000000 },
+        { "scope": "group", "lock": "output_lock", "amount": 1, "capacity_shannons": 100000000000 },
+        { "scope": "group", "lock": "output_lock", "amount": 1, "capacity_shannons": 100000000000 }
+      ],
+      "codec": "canonical_unchecked_count",
+      "simulator_expected_exit": 21,
+      "expected_exit": 21
+    },
+    {
+      "name": "missing_output",
+      "plans": [
+        { "owner": "output_lock", "amount": 1 },
+        { "owner": "output_lock", "amount": 2 }
+      ],
+      "outputs": [{ "scope": "group", "lock": "output_lock", "amount": 1, "capacity_shannons": 100000000000 }],
+      "codec": "canonical",
+      "simulator_expected_exit": 0,
+      "expected_exit": 21
+    },
+    {
+      "name": "extra_output",
+      "plans": [{ "owner": "output_lock", "amount": 1 }],
+      "outputs": [
+        { "scope": "group", "lock": "output_lock", "amount": 1, "capacity_shannons": 100000000000 },
+        { "scope": "group", "lock": "output_lock", "amount": 2, "capacity_shannons": 100000000000 }
+      ],
+      "codec": "canonical",
+      "simulator_expected_exit": 0,
+      "expected_exit": 21
+    },
+    {
+      "name": "data_mismatch",
+      "plans": [{ "owner": "output_lock", "amount": 1 }],
+      "outputs": [{ "scope": "group", "lock": "output_lock", "amount": 2, "capacity_shannons": 100000000000 }],
+      "codec": "canonical",
+      "simulator_expected_exit": 0,
+      "expected_exit": 3
+    },
+    {
+      "name": "lock_mismatch",
+      "plans": [{ "owner": "zero", "amount": 1 }],
+      "outputs": [{ "scope": "group", "lock": "output_lock", "amount": 1, "capacity_shannons": 100000000000 }],
+      "codec": "canonical",
+      "simulator_expected_exit": 0,
+      "expected_exit": 12
+    },
+    {
+      "name": "foreign_type_output",
+      "plans": [{ "owner": "output_lock", "amount": 1 }],
+      "outputs": [{ "scope": "outside_group", "lock": "output_lock", "amount": 1, "capacity_shannons": 100000000000 }],
+      "codec": "canonical",
+      "simulator_expected_exit": 0,
+      "expected_exit": 21
+    },
+    {
+      "name": "capacity_below_floor",
+      "plans": [{ "owner": "output_lock", "amount": 1 }],
+      "outputs": [{ "scope": "group", "lock": "output_lock", "amount": 1, "capacity_shannons": 9999999999 }],
+      "codec": "canonical",
+      "simulator_expected_exit": 0,
+      "expected_exit": 26
+    },
+    {
+      "name": "predicate_false_middle",
+      "plans": [
+        { "owner": "output_lock", "amount": 1 },
+        { "owner": "output_lock", "amount": 0 },
+        { "owner": "output_lock", "amount": 1 }
+      ],
+      "outputs": [
+        { "scope": "group", "lock": "output_lock", "amount": 1, "capacity_shannons": 100000000000 },
+        { "scope": "group", "lock": "output_lock", "amount": 0, "capacity_shannons": 100000000000 },
+        { "scope": "group", "lock": "output_lock", "amount": 1, "capacity_shannons": 100000000000 }
+      ],
+      "codec": "canonical",
+      "simulator_expected_exit": 5,
+      "expected_exit": 5
+    },
+    {
+      "name": "wrong_magic",
+      "plans": [{ "owner": "output_lock", "amount": 1 }],
+      "outputs": [{ "scope": "group", "lock": "output_lock", "amount": 1, "capacity_shannons": 100000000000 }],
+      "codec": "wrong_magic",
+      "simulator_expected_exit": 0,
+      "expected_exit": 25
+    },
+    {
+      "name": "trailing_payload_byte",
+      "plans": [{ "owner": "output_lock", "amount": 1 }],
+      "outputs": [{ "scope": "group", "lock": "output_lock", "amount": 1, "capacity_shannons": 100000000000 }],
+      "codec": "trailing_byte",
+      "simulator_expected_exit": 0,
+      "expected_exit": 25
+    },
+    {
+      "name": "equal_plan_bytes_use_distinct_ordinals",
+      "plans": [
+        { "owner": "output_lock", "amount": 9 },
+        { "owner": "output_lock", "amount": 9 }
+      ],
+      "outputs": [
+        { "scope": "group", "lock": "output_lock", "amount": 9, "capacity_shannons": 100000000000 },
+        { "scope": "group", "lock": "output_lock", "amount": 9, "capacity_shannons": 100000000000 }
+      ],
+      "codec": "canonical",
+      "simulator_expected_exit": 0,
+      "expected_exit": 0
+    }
+  ]
+}

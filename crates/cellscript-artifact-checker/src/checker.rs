@@ -124,6 +124,7 @@ const CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT: &str = "cellscript-ckb-runtime-acc
 const CKB_RUNTIME_ACCESS_PROVENANCE_METADATA_SCHEMA: u64 = 69;
 const BOUNDED_WITNESS_METADATA_SCHEMA: u64 = 70;
 const SIGHASH_ZERO_LOCK_METADATA_SCHEMA: u64 = 71;
+const BOUNDED_OUTPUT_PLAN_METADATA_SCHEMA: u64 = 72;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -269,6 +270,7 @@ pub fn check_bundle_values(
     validate_syscalls(record, &elf)?;
     validate_script_hash_machine_contract(record, &elf)?;
     validate_bounded_group_input_machine_contract(record, &elf)?;
+    validate_bounded_output_plan_machine_contract(metadata, record, &elf)?;
     validate_policy_dispatch_machine_contract(record, &elf)?;
     validate_source_map(source_map, record, artifact, &elf)?;
 
@@ -4700,6 +4702,630 @@ struct BoundedGroupInputMachineContract<'a> {
     element_width: u64,
 }
 
+#[derive(Debug)]
+struct BoundedOutputMachineContract {
+    owner: String,
+    maximum: u64,
+    element_width: u64,
+    output_width: u64,
+    capacity_floor: u64,
+    field_count: usize,
+    lock_plan_offset: u64,
+}
+
+fn validate_bounded_output_plan_machine_contract(
+    metadata: &Value,
+    record: &VerifiedLoweringRecord,
+    elf: &ParsedElf,
+) -> Result<(), CheckerError> {
+    let schema = json_u64(metadata, &["metadata_schema_version"])
+        .ok_or_else(|| bounded_output_machine_error("compile metadata has no numeric metadata schema"))?;
+    let typed_load_count = record
+        .typed_semantics
+        .entries
+        .iter()
+        .flat_map(|entry| &entry.blocks)
+        .flat_map(|block| &block.operations)
+        .filter(|operation| operation.opcode == "bounded-plan-load")
+        .count();
+    let contracts = bounded_output_contracts_from_metadata(metadata, record)?;
+    if contracts.is_empty() && typed_load_count == 0 {
+        return Ok(());
+    }
+    if schema < BOUNDED_OUTPUT_PLAN_METADATA_SCHEMA {
+        return Err(bounded_output_machine_error("bounded output evidence is present before metadata schema 72"));
+    }
+    if contracts.len() != typed_load_count {
+        return Err(bounded_output_machine_error(
+            "typed bounded Plan loads and metadata contracts do not have one-to-one correspondence",
+        ));
+    }
+
+    for owner in contracts.iter().map(|contract| contract.owner.as_str()).collect::<BTreeSet<_>>() {
+        let owner_contracts = contracts.iter().filter(|contract| contract.owner == owner).collect::<Vec<_>>();
+        let typed_entry = record
+            .typed_semantics
+            .entries
+            .iter()
+            .find(|entry| entry.id == owner)
+            .ok_or_else(|| bounded_output_machine_error(format!("metadata owner '{owner}' has no typed entry")))?;
+        let typed_loads = typed_entry
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter(|operation| operation.opcode == "bounded-plan-load")
+            .collect::<Vec<_>>();
+        let typed_verifies = typed_entry
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter(|operation| operation.opcode == "bounded-output-verify")
+            .collect::<Vec<_>>();
+        let typed_ends = typed_entry
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter(|operation| operation.opcode == "bounded-output-end")
+            .collect::<Vec<_>>();
+        if typed_loads.len() != owner_contracts.len()
+            || typed_verifies.len() != owner_contracts.len()
+            || typed_ends.len() != owner_contracts.len()
+        {
+            return Err(bounded_output_machine_error(format!(
+                "entry '{owner}' must have one typed load, verify, and exact-count end for each bounded output contract"
+            )));
+        }
+
+        let headers = generated_blocks(record, owner, ".Lbounded_plan_header_ok_");
+        let magic = generated_blocks(record, owner, ".Lbounded_plan_magic_ok_");
+        let counts = generated_blocks(record, owner, ".Lbounded_plan_count_ok_");
+        let lengths = generated_blocks(record, owner, ".Lbounded_plan_length_ok_");
+        let found = generated_blocks(record, owner, ".Lbounded_plan_element_found_");
+        let done = generated_blocks(record, owner, ".Lbounded_plan_load_done_");
+        let exact = generated_blocks(record, owner, ".Lbounded_output_count_exact_");
+        let type_only = generated_blocks(record, owner, ".Lbounded_output_type_only_");
+        let capacity_ok = generated_blocks(record, owner, ".Lbounded_output_capacity_ok_");
+        let expected = owner_contracts.len();
+        if headers.len() != expected
+            || magic.len() != expected * 8
+            || counts.len() != expected
+            || lengths.len() != expected
+            || found.len() != expected
+            || done.len() != expected
+            || exact.len() != expected
+            || type_only.len() != expected
+            || capacity_ok.len() != expected
+        {
+            return Err(bounded_output_machine_error(format!(
+                "entry '{owner}' does not have one complete decoder and output verifier per typed contract"
+            )));
+        }
+        for (index, contract) in owner_contracts.into_iter().enumerate() {
+            validate_one_bounded_output_machine_contract(
+                record,
+                elf,
+                contract,
+                headers[index],
+                &magic[index * 8..index * 8 + 8],
+                counts[index],
+                lengths[index],
+                found[index],
+                done[index],
+                exact[index],
+                type_only[index],
+                capacity_ok[index],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn bounded_output_contracts_from_metadata(
+    metadata: &Value,
+    record: &VerifiedLoweringRecord,
+) -> Result<Vec<BoundedOutputMachineContract>, CheckerError> {
+    fn text<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
+        value.get(field).and_then(Value::as_str)
+    }
+    fn number(value: &Value, field: &str) -> Option<u64> {
+        value.get(field).and_then(Value::as_u64)
+    }
+    let Some(collections) =
+        metadata.get("runtime").and_then(|runtime| runtime.get("collection_instantiations")).and_then(Value::as_array)
+    else {
+        return Ok(Vec::new());
+    };
+    let mut contracts = Vec::new();
+    for collection in collections {
+        let Some(contract) = collection.get("bounded_output_plan") else {
+            continue;
+        };
+        if text(collection, "scope_kind") != Some("action")
+            || text(collection, "status") != Some("checked-runtime")
+            || text(collection, "source") != Some("witness")
+            || text(collection, "ownership") != Some("bounded-output-plan")
+            || text(collection, "evidence_tier") != Some("checked-runtime")
+            || text(contract, "schema") != Some("cellscript-bounded-output-plan-contract")
+            || number(contract, "version") != Some(1)
+            || text(contract, "codec") != Some("molecule-fixvec-fixed-item-v1")
+            || text(contract, "codec_magic_hex") != Some("0x435342504c763100")
+            || text(contract, "placement") != Some("entry-witness-args-v1-param-payload")
+            || contract.get("allow_zero").and_then(Value::as_bool) != Some(true)
+            || text(contract, "output_source") != Some("ckb-group-output")
+            || text(contract, "ordering") != Some("plan-index-equals-group-output-index")
+            || text(contract, "correspondence") != Some("exactly-one-group-output-per-plan-element")
+            || text(contract, "type_script_policy") != Some("exact-current-script-hash")
+            || text(contract, "lock_policy") != Some("exact-plan-field-hash")
+            || text(contract, "identity_policy") != Some("fresh-output-outpoint-plus-type-group-ordinal")
+        {
+            return Err(bounded_output_machine_error("metadata bounded output contract identity is invalid"));
+        }
+        let scope_name = text(collection, "scope_name")
+            .ok_or_else(|| bounded_output_machine_error("bounded output metadata has no action name"))?;
+        let element_type =
+            text(contract, "element_ty").ok_or_else(|| bounded_output_machine_error("bounded output metadata has no Plan type"))?;
+        let output_type =
+            text(contract, "output_ty").ok_or_else(|| bounded_output_machine_error("bounded output metadata has no Resource type"))?;
+        let maximum =
+            number(contract, "max_elements").ok_or_else(|| bounded_output_machine_error("bounded output metadata has no maximum"))?;
+        let element_width = number(contract, "element_width_bytes")
+            .ok_or_else(|| bounded_output_machine_error("bounded output metadata has no Plan width"))?;
+        let output_width = number(contract, "output_width_bytes")
+            .ok_or_else(|| bounded_output_machine_error("bounded output metadata has no output width"))?;
+        let capacity_floor = number(contract, "capacity_floor_shannons")
+            .ok_or_else(|| bounded_output_machine_error("bounded output metadata has no capacity floor"))?;
+        if !(1..=1024).contains(&maximum)
+            || element_width == 0
+            || maximum.checked_mul(element_width).and_then(|bytes| bytes.checked_add(12)).is_none_or(|bytes| bytes > 4084)
+            || !(1..=512).contains(&output_width)
+            || capacity_floor == 0
+            || number(collection, "max_elements") != Some(maximum)
+            || number(collection, "element_width_bytes") != Some(element_width)
+            || number(collection, "output_cardinality_max") != Some(maximum)
+        {
+            return Err(bounded_output_machine_error("metadata bounded output resource bounds are invalid"));
+        }
+        let plan_layout = record
+            .typed_semantics
+            .types
+            .iter()
+            .find(|ty| ty.name == element_type && ty.kind == "struct" && ty.encoded_size == u32::try_from(element_width).ok())
+            .ok_or_else(|| bounded_output_machine_error("metadata Plan layout does not match typed semantics"))?;
+        let output_layout = record
+            .typed_semantics
+            .types
+            .iter()
+            .find(|ty| {
+                ty.name == output_type
+                    && ty.kind == "resource"
+                    && ty.identity_policy == "none"
+                    && ty.encoded_size == u32::try_from(output_width).ok()
+            })
+            .ok_or_else(|| bounded_output_machine_error("metadata Resource layout does not match typed semantics"))?;
+        let field_bindings = contract
+            .get("field_bindings")
+            .and_then(Value::as_array)
+            .filter(|bindings| bindings.len() == output_layout.fields.len() && !bindings.is_empty())
+            .ok_or_else(|| bounded_output_machine_error("metadata field bindings are incomplete"))?;
+        let mut seen = BTreeSet::new();
+        let mut covered = vec![false; output_width as usize];
+        for binding in field_bindings {
+            let output_field_name = text(binding, "output_field")
+                .ok_or_else(|| bounded_output_machine_error("metadata field binding has no output field"))?;
+            let plan_field_name =
+                text(binding, "plan_field").ok_or_else(|| bounded_output_machine_error("metadata field binding has no Plan field"))?;
+            let output_offset = number(binding, "output_offset_bytes");
+            let plan_offset = number(binding, "plan_offset_bytes");
+            let width = number(binding, "width_bytes");
+            let binding_type = text(binding, "ty");
+            let output_field = output_layout.fields.iter().find(|field| field.name == output_field_name);
+            let plan_field = plan_layout.fields.iter().find(|field| field.name == plan_field_name);
+            if !seen.insert(output_field_name)
+                || output_field.is_none_or(|field| {
+                    Some(u64::from(field.offset)) != output_offset
+                        || field.width_bytes.map(u64::from) != width
+                        || binding_type.is_none_or(|ty| canonical_abi_type(ty) != canonical_abi_type(&field.ty))
+                })
+                || plan_field.is_none_or(|field| {
+                    Some(u64::from(field.offset)) != plan_offset
+                        || field.width_bytes.map(u64::from) != width
+                        || binding_type.is_none_or(|ty| canonical_abi_type(ty) != canonical_abi_type(&field.ty))
+                })
+            {
+                return Err(bounded_output_machine_error("metadata field binding does not match typed fixed layouts"));
+            }
+            let Some((start, end)) = output_offset.zip(width).and_then(|(offset, width)| {
+                let start = usize::try_from(offset).ok()?;
+                let end = usize::try_from(offset.checked_add(width)?).ok()?;
+                (end <= covered.len()).then_some((start, end))
+            }) else {
+                return Err(bounded_output_machine_error("metadata field binding is outside output data"));
+            };
+            for byte in &mut covered[start..end] {
+                if *byte {
+                    return Err(bounded_output_machine_error("metadata output field bindings overlap"));
+                }
+                *byte = true;
+            }
+        }
+        if covered.iter().any(|covered| !covered) {
+            return Err(bounded_output_machine_error("metadata output field bindings do not cover exact output data"));
+        }
+        let lock = contract
+            .get("lock_binding")
+            .ok_or_else(|| bounded_output_machine_error("metadata bounded output contract has no lock binding"))?;
+        let lock_name = text(lock, "plan_field");
+        let lock_offset = number(lock, "plan_offset_bytes");
+        let lock_width = number(lock, "width_bytes");
+        let lock_type = text(lock, "ty");
+        if lock_width != Some(32)
+            || plan_layout.fields.iter().find(|field| Some(field.name.as_str()) == lock_name).is_none_or(|field| {
+                Some(u64::from(field.offset)) != lock_offset
+                    || field.width_bytes.map(u64::from) != lock_width
+                    || !matches!(canonical_abi_type(lock_type.unwrap_or_default()).as_str(), "address" | "hash")
+            })
+        {
+            return Err(bounded_output_machine_error("metadata lock binding does not match a 32-byte Plan field"));
+        }
+        contracts.push(BoundedOutputMachineContract {
+            owner: format!("action:{scope_name}"),
+            maximum,
+            element_width,
+            output_width,
+            capacity_floor,
+            field_count: field_bindings.len(),
+            lock_plan_offset: lock_offset.expect("validated bounded output lock offset"),
+        });
+    }
+    Ok(contracts)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_one_bounded_output_machine_contract(
+    record: &VerifiedLoweringRecord,
+    elf: &ParsedElf,
+    contract: &BoundedOutputMachineContract,
+    header: &LoweringBlock,
+    magic: &[&LoweringBlock],
+    count_ok: &LoweringBlock,
+    length_ok: &LoweringBlock,
+    found: &LoweringBlock,
+    done: &LoweringBlock,
+    exact: &LoweringBlock,
+    type_only: &LoweringBlock,
+    capacity_ok: &LoweringBlock,
+) -> Result<(), CheckerError> {
+    if magic.len() != 8
+        || !(header.range.start < magic[0].range.start
+            && magic.windows(2).all(|pair| pair[0].range.start < pair[1].range.start)
+            && magic[7].range.start < count_ok.range.start
+            && count_ok.range.start < length_ok.range.start
+            && length_ok.range.start < found.range.start
+            && found.range.start < done.range.start)
+    {
+        return Err(bounded_output_machine_error("bounded Plan decoder blocks are not in canonical order"));
+    }
+
+    let plan_pointer_offset = ld_stack_offset(bounded_word(elf, header.range.start - 24)?, 29)
+        .ok_or_else(|| bounded_output_machine_error("bounded Plan decoder does not load its exact witness pointer"))?;
+    let _plan_size_offset = ld_stack_offset(bounded_word(elf, header.range.start - 20)?, 30)
+        .ok_or_else(|| bounded_output_machine_error("bounded Plan decoder does not load its exact witness length"))?;
+    if !is_ld(bounded_word(elf, header.range.start - 20)?, 30, 2, _plan_size_offset)
+        || !is_addi(bounded_word(elf, header.range.start - 16)?, 5, 0, 12)
+        || !is_sltu(bounded_word(elf, header.range.start - 12)?, 7, 30, 5)
+        || !is_beq(bounded_word(elf, header.range.start - 8)?, 7, 0)
+        || !flow_targets(elf, header.range.start - 8, header.range.start)
+        || !jump_targets_runtime_error(record, elf, header.range.start - 4, 25)
+    {
+        return Err(bounded_output_machine_error("bounded Plan header no longer requires the exact 12-byte minimum"));
+    }
+    for (byte_index, (block, expected)) in magic.iter().zip(b"CSBPLv1\0").enumerate() {
+        let start = block.range.start;
+        if !is_lbu(bounded_word(elf, start - 20)?, 5, 29, byte_index as i32)
+            || !is_addi(bounded_word(elf, start - 16)?, 6, 0, i32::from(*expected))
+            || !is_sub(bounded_word(elf, start - 12)?, 7, 5, 6)
+            || !is_beq(bounded_word(elf, start - 8)?, 7, 0)
+            || !flow_targets(elf, start - 8, start)
+            || !jump_targets_runtime_error(record, elf, start - 4, 25)
+        {
+            return Err(bounded_output_machine_error("bounded Plan magic comparison is incomplete"));
+        }
+    }
+
+    let maximum = i32::try_from(contract.maximum)
+        .map_err(|_| bounded_output_machine_error("bounded Plan maximum does not fit a machine immediate"))?;
+    if !is_addi(bounded_word(elf, count_ok.range.start - 16)?, 5, 0, maximum)
+        || !is_sltu(bounded_word(elf, count_ok.range.start - 12)?, 7, 5, 28)
+        || !is_beq(bounded_word(elf, count_ok.range.start - 8)?, 7, 0)
+        || !flow_targets(elf, count_ok.range.start - 8, count_ok.range.start)
+        || !jump_targets_runtime_error(record, elf, count_ok.range.start - 4, 21)
+    {
+        return Err(bounded_output_machine_error("bounded Plan count is not the typed count <= N contract"));
+    }
+    let width = i32::try_from(contract.element_width)
+        .map_err(|_| bounded_output_machine_error("bounded Plan width does not fit a machine immediate"))?;
+    if !is_addi(bounded_word(elf, length_ok.range.start - 24)?, 5, 0, width)
+        || !is_mul(bounded_word(elf, length_ok.range.start - 20)?, 6, 28, 5)
+        || !is_addi(bounded_word(elf, length_ok.range.start - 16)?, 6, 6, 12)
+        || !is_sub(bounded_word(elf, length_ok.range.start - 12)?, 7, 30, 6)
+        || !is_beq(bounded_word(elf, length_ok.range.start - 8)?, 7, 0)
+        || !flow_targets(elf, length_ok.range.start - 8, length_ok.range.start)
+        || !jump_targets_runtime_error(record, elf, length_ok.range.start - 4, 25)
+    {
+        return Err(bounded_output_machine_error("bounded Plan does not enforce exact 12 + count * width length"));
+    }
+    let index_offset = ld_stack_offset(bounded_word(elf, length_ok.range.start)?, 5)
+        .ok_or_else(|| bounded_output_machine_error("bounded Plan loop ordinal is not loaded from its typed stack slot"))?;
+    let found_words = instructions_from_bounded(elf, found.range.start, 10)?;
+    let destination_offset = sd_stack_offset(found_words[5].word, 29)
+        .ok_or_else(|| bounded_output_machine_error("bounded Plan element pointer is not stored"))?;
+    let element_size_offset = sd_stack_offset(found_words[7].word, 6)
+        .ok_or_else(|| bounded_output_machine_error("bounded Plan element width is not stored"))?;
+    let presence_offset = sd_stack_offset(found_words[9].word, 6)
+        .ok_or_else(|| bounded_output_machine_error("bounded Plan presence bit is not stored"))?;
+    if !is_addi(found_words[0].word, 6, 0, width)
+        || !is_mul(found_words[1].word, 7, 5, 6)
+        || !is_addi(found_words[2].word, 7, 7, 12)
+        || !is_ld(found_words[3].word, 29, 2, plan_pointer_offset)
+        || !is_add(found_words[4].word, 29, 29, 7)
+        || !is_addi(found_words[6].word, 6, 0, width)
+        || !is_addi(found_words[8].word, 6, 0, 1)
+        || destination_offset == element_size_offset
+        || destination_offset == presence_offset
+        || element_size_offset == presence_offset
+        || found.range.end != done.range.start
+    {
+        return Err(bounded_output_machine_error("bounded Plan element pointer/width/presence result is not canonical"));
+    }
+
+    let owner_sites = record
+        .syscall_sites
+        .iter()
+        .filter(|site| block_for_address(record, site.address).is_some_and(|block| block.owner_entry == contract.owner))
+        .collect::<Vec<_>>();
+    let end_site = owner_sites
+        .iter()
+        .copied()
+        .filter(|site| done.range.start < site.address && site.address < exact.range.start)
+        .max_by_key(|site| site.address)
+        .ok_or_else(|| bounded_output_machine_error("bounded output exact-count check has no GroupOutput capacity probe"))?;
+    let end_abi = validate_bounded_group_input_syscall(
+        record,
+        elf,
+        end_site.address,
+        CKB_LOAD_CELL_BY_FIELD,
+        Some(CKB_GROUP_OUTPUT),
+        Some(0),
+        Some(8),
+    )?;
+    if !is_addi(bounded_word(elf, exact.range.start - 16)?, 5, 0, 1)
+        || !is_sub(bounded_word(elf, exact.range.start - 12)?, 6, 10, 5)
+        || !is_beq(bounded_word(elf, exact.range.start - 8)?, 6, 0)
+        || !flow_targets(elf, exact.range.start - 8, exact.range.start)
+        || !jump_targets_runtime_error(record, elf, exact.range.start - 4, 21)
+    {
+        return Err(bounded_output_machine_error(
+            "bounded output count no longer requires the first absent GroupOutput at the plan count",
+        ));
+    }
+
+    let verify_sites = owner_sites
+        .iter()
+        .copied()
+        .filter(|site| exact.range.end <= site.address && site.address < capacity_ok.range.start)
+        .collect::<Vec<_>>();
+    if verify_sites.len() != 4 {
+        return Err(bounded_output_machine_error(
+            "bounded output verification must contain data, current-Script, Lock-hash, and capacity syscalls",
+        ));
+    }
+    let data_abi = validate_bounded_group_input_syscall(
+        record,
+        elf,
+        verify_sites[0].address,
+        CKB_LOAD_CELL_DATA,
+        Some(CKB_GROUP_OUTPUT),
+        None,
+        Some(512),
+    )?;
+    validate_bounded_output_syscall_result(record, elf, verify_sites[0].address, data_abi.size_offset, contract.output_width, 21)?;
+    let current_abi =
+        validate_bounded_group_input_syscall(record, elf, verify_sites[1].address, CKB_LOAD_SCRIPT_HASH, None, None, Some(32))?;
+    validate_bounded_output_syscall_result(record, elf, verify_sites[1].address, current_abi.size_offset, 32, 1)?;
+    let lock_abi = validate_bounded_group_input_syscall(
+        record,
+        elf,
+        verify_sites[2].address,
+        CKB_LOAD_CELL_BY_FIELD,
+        Some(CKB_GROUP_OUTPUT),
+        Some(3),
+        Some(32),
+    )?;
+    validate_bounded_output_syscall_result(record, elf, verify_sites[2].address, lock_abi.size_offset, 32, 12)?;
+    let capacity_abi = validate_bounded_group_input_syscall(
+        record,
+        elf,
+        verify_sites[3].address,
+        CKB_LOAD_CELL_BY_FIELD,
+        Some(CKB_GROUP_OUTPUT),
+        Some(0),
+        Some(8),
+    )?;
+    validate_bounded_output_syscall_result(record, elf, verify_sites[3].address, capacity_abi.size_offset, 8, 26)?;
+    if data_abi.index_offset != Some(index_offset)
+        || lock_abi.index_offset != Some(index_offset)
+        || capacity_abi.index_offset != Some(index_offset)
+        || end_abi.index_offset != Some(index_offset)
+    {
+        return Err(bounded_output_machine_error(
+            "plan decode, data, Lock, capacity, and exact-count probes do not share one group-relative ordinal",
+        ));
+    }
+
+    let data_error_guards = elf
+        .instructions
+        .iter()
+        .filter(|instruction| verify_sites[0].address + 32 <= instruction.address && instruction.address < verify_sites[1].address)
+        .filter(|instruction| jump_targets_runtime_error(record, elf, instruction.address, 3))
+        .collect::<Vec<_>>();
+    if data_error_guards.len() != contract.field_count
+        || data_error_guards.iter().any(|instruction| !guarded_runtime_error_jump(elf, instruction.address))
+    {
+        return Err(bounded_output_machine_error(
+            "bounded output data does not have one guarded exact comparison for every typed field",
+        ));
+    }
+
+    let role_words = instructions_from_bounded(elf, type_only.range.start - 68, 17)?;
+    if !is_ld(role_words[0].word, 5, 2, lock_abi.buffer_offset)
+        || !is_ld(role_words[1].word, 6, 2, current_abi.buffer_offset)
+        || !is_sub(role_words[2].word, 7, 5, 6)
+    {
+        return Err(bounded_output_machine_error("bounded output Lock/Type role comparison does not start at word zero"));
+    }
+    for word_index in 1..4 {
+        let start = 3 + (word_index - 1) * 4;
+        let byte_offset =
+            i32::try_from(word_index * 8).map_err(|_| bounded_output_machine_error("bounded output hash word offset overflowed"))?;
+        if !is_ld(role_words[start].word, 5, 2, lock_abi.buffer_offset + byte_offset)
+            || !is_ld(role_words[start + 1].word, 6, 2, current_abi.buffer_offset + byte_offset)
+            || !is_sub(role_words[start + 2].word, 5, 5, 6)
+            || !is_or(role_words[start + 3].word, 7, 7, 5)
+        {
+            return Err(bounded_output_machine_error("bounded output Lock/Type role comparison omits a hash word"));
+        }
+    }
+    if !is_bne(role_words[15].word, 7, 0)
+        || !flow_targets(elf, role_words[15].address, type_only.range.start)
+        || !jump_targets_runtime_error(record, elf, role_words[16].address, 47)
+    {
+        return Err(bounded_output_machine_error(
+            "bounded GroupOutput Lock hash is no longer required to differ from the current Type Script hash",
+        ));
+    }
+    let lock_value_errors = elf
+        .instructions
+        .iter()
+        .filter(|instruction| type_only.range.start <= instruction.address && instruction.address < verify_sites[3].address)
+        .filter(|instruction| jump_targets_runtime_error(record, elf, instruction.address, 12))
+        .collect::<Vec<_>>();
+    if lock_value_errors.len() != 1 || !guarded_runtime_error_jump(elf, lock_value_errors[0].address) {
+        return Err(bounded_output_machine_error("bounded output Lock hash is not compared with the exact Plan field"));
+    }
+    let lock_start = type_only.range.start;
+    let lock_end = lock_value_errors[0].address;
+    let pointer_load = elf
+        .instructions
+        .iter()
+        .find(|instruction| {
+            lock_start <= instruction.address && instruction.address < lock_end && is_ld(instruction.word, 11, 2, destination_offset)
+        })
+        .ok_or_else(|| {
+            bounded_output_machine_error("bounded output Lock comparison does not load the decoded Plan element pointer")
+        })?;
+    let pointer_ready = if contract.lock_plan_offset == 0 {
+        pointer_load.address
+    } else if contract.lock_plan_offset <= 2047 {
+        let address = pointer_load.address + 4;
+        let offset = i32::try_from(contract.lock_plan_offset)
+            .map_err(|_| bounded_output_machine_error("bounded output Lock Plan offset does not fit a machine immediate"))?;
+        if !is_addi(bounded_word(elf, address)?, 11, 11, offset) {
+            return Err(bounded_output_machine_error("bounded output Lock comparison uses the wrong Plan field offset"));
+        }
+        address
+    } else {
+        let block = block_for_address(record, pointer_load.address)
+            .ok_or_else(|| bounded_output_machine_error("bounded output Lock pointer adjustment is outside machine coverage"))?;
+        elf.instructions
+            .iter()
+            .filter(|instruction| pointer_load.address < instruction.address && instruction.address < lock_end)
+            .find(|instruction| {
+                let word = instruction.word;
+                if word & 0x7f != 0x33 || (word >> 7) & 0x1f != 11 || (word >> 15) & 0x1f != 11 {
+                    return false;
+                }
+                let scratch = (word >> 20) & 0x1f;
+                register_constant_before(elf, block, instruction.address, scratch as usize) == Some(contract.lock_plan_offset)
+            })
+            .map(|instruction| instruction.address)
+            .ok_or_else(|| bounded_output_machine_error("bounded output Lock comparison uses the wrong large Plan field offset"))?
+    };
+    let comparison = elf
+        .instructions
+        .iter()
+        .find(|instruction| {
+            pointer_ready < instruction.address
+                && instruction.address + 20 < lock_end
+                && is_addi(instruction.word, 10, 2, data_abi.buffer_offset)
+                && bounded_word(elf, instruction.address + 4).is_ok_and(|word| is_addi(word, 12, 0, 32))
+                && bounded_word(elf, instruction.address + 8).is_ok_and(|word| is_auipc(word, 1))
+                && bounded_word(elf, instruction.address + 12).is_ok_and(is_jalr_call)
+                && bounded_word(elf, instruction.address + 16).is_ok_and(|word| is_bne(word, 10, 0))
+        })
+        .ok_or_else(|| bounded_output_machine_error("bounded output Lock comparison is not an exact 32-byte Plan-field comparison"))?;
+    if !flow_targets(elf, comparison.address + 16, lock_value_errors[0].address) {
+        return Err(bounded_output_machine_error("bounded output Lock mismatch branch no longer reaches error 12"));
+    }
+    let capacity_branch = capacity_ok.range.start - 8;
+    let branch_block = block_for_address(record, capacity_branch)
+        .ok_or_else(|| bounded_output_machine_error("bounded output capacity comparison is outside machine coverage"))?;
+    if !is_bgeu(bounded_word(elf, capacity_branch)?, 5, 6)
+        || !flow_targets(elf, capacity_branch, capacity_ok.range.start)
+        || register_constant_before(elf, branch_block, capacity_branch, 6) != Some(contract.capacity_floor)
+        || !jump_targets_runtime_error(record, elf, capacity_ok.range.start - 4, 26)
+    {
+        return Err(bounded_output_machine_error(
+            "bounded output capacity is not checked against the metadata-declared positive floor",
+        ));
+    }
+    for code in [1, 3, 4, 12, 21, 25, 26, 47] {
+        if !owner_has_abort_error(record, elf, &contract.owner, code) {
+            return Err(bounded_output_machine_error(format!(
+                "entry '{}' no longer has stable bounded output runtime error {code}",
+                contract.owner
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_bounded_output_syscall_result(
+    record: &VerifiedLoweringRecord,
+    elf: &ParsedElf,
+    address: u64,
+    size_offset: i32,
+    expected_width: u64,
+    status_error: i32,
+) -> Result<(), CheckerError> {
+    let width = i32::try_from(expected_width)
+        .map_err(|_| bounded_output_machine_error("bounded output syscall width does not fit a machine immediate"))?;
+    if !is_beq(bounded_word(elf, address + 4)?, 10, 0)
+        || !flow_targets(elf, address + 4, address + 12)
+        || !jump_targets_runtime_error(record, elf, address + 8, status_error)
+        || !is_ld(bounded_word(elf, address + 12)?, 10, 2, size_offset)
+        || !is_addi(bounded_word(elf, address + 16)?, 11, 0, width)
+        || !is_sub(bounded_word(elf, address + 20)?, 10, 10, 11)
+        || !is_beq(bounded_word(elf, address + 24)?, 10, 0)
+        || !flow_targets(elf, address + 24, address + 32)
+        || !jump_targets_runtime_error(record, elf, address + 28, 4)
+    {
+        return Err(bounded_output_machine_error("bounded output syscall no longer requires success and its exact typed width"));
+    }
+    Ok(())
+}
+
+fn guarded_runtime_error_jump(elf: &ParsedElf, address: u64) -> bool {
+    let prior = elf.control_flow.iter().filter(|edge| edge.address + 8 >= address && edge.address < address).collect::<Vec<_>>();
+    prior.iter().any(|edge| bounded_word(elf, edge.address).is_ok_and(|word| word & 0x7f == 0x63) && edge.target >= address)
+}
+
+fn bounded_output_machine_error(message: impl Into<String>) -> CheckerError {
+    CheckerError::new(
+        CheckerRejectionCode::V2420TypedMachineBindingInvalid,
+        format!("bounded GroupOutput machine contract: {}", message.into()),
+    )
+}
+
 fn validate_bounded_group_input_machine_contract(record: &VerifiedLoweringRecord, elf: &ParsedElf) -> Result<(), CheckerError> {
     let mut contracts = Vec::new();
     for entry in &record.typed_semantics.entries {
@@ -6276,6 +6902,15 @@ fn is_sub(word: u32, rd: u32, rs1: u32, rs2: u32) -> bool {
 fn is_add(word: u32, rd: u32, rs1: u32, rs2: u32) -> bool {
     word & 0x7f == 0x33
         && (word >> 25) & 0x7f == 0
+        && (word >> 12) & 0x7 == 0
+        && (word >> 7) & 0x1f == rd
+        && (word >> 15) & 0x1f == rs1
+        && (word >> 20) & 0x1f == rs2
+}
+
+fn is_mul(word: u32, rd: u32, rs1: u32, rs2: u32) -> bool {
+    word & 0x7f == 0x33
+        && (word >> 25) & 0x7f == 0x01
         && (word >> 12) & 0x7 == 0
         && (word >> 7) & 0x1f == rd
         && (word >> 15) & 0x1f == rs1

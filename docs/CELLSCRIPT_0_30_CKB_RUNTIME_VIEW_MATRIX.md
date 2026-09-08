@@ -6,7 +6,7 @@
 `cellscript-ckb-runtime-view-v1`. This is a development contract, not a claim
 that issue #24 or the 0.30 release gate is complete.**
 
-Compile metadata schema 71 records the view contract name in
+Compile metadata schema 72 records the view contract name in
 `runtime.ckb_runtime_view_contract` and binds
 `cellscript-ckb-runtime-access-provenance-v1` in
 `runtime.ckb_runtime_access_provenance_contract`. Metadata validation and the
@@ -154,7 +154,7 @@ values, malformed/truncated Molecule data, and GroupOutput provenance.
 the pinned `ckb-sdk-rust` message generator across a non-contiguous two-input
 Script group, an unrelated input witness, and a transaction-level extra
 witness. It also proves post-message witness mutation changes verification and
-all four declared bounds terminate with error 69. Metadata schema 71 records
+all four declared bounds terminate with error 69. Metadata schema 72 records
 the exact transform, order, digest domain, scope, and limits; the independent
 checker binds those records to runtime access provenance and typed call
 operands after outer hashes are rebound. Generated TypeScript builder manifests

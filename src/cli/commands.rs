@@ -3761,6 +3761,14 @@ impl CommandExecutor {
             })
         });
         let action_scan_selectors = action_scan_selectors_json(action);
+        let bounded_output_plans = result
+            .metadata
+            .runtime
+            .collection_instantiations
+            .iter()
+            .filter(|collection| collection.scope_kind == "action" && collection.scope_name == action.name)
+            .filter_map(|collection| collection.bounded_output_plan.as_ref())
+            .collect::<Vec<_>>();
         let transaction_draft = serde_json::json!({
             "format": "cellscript-ccc-transaction-draft-v1",
             "state": "ActionPlan",
@@ -3786,6 +3794,7 @@ impl CommandExecutor {
             "outputs": [],
             "outputs_data": [],
             "witnesses": [],
+            "bounded_output_plan_evidence": [],
             "required_evidence": [
                 "live_cell_resolution",
                 "outputs_data_pairing",
@@ -3905,11 +3914,13 @@ impl CommandExecutor {
                 "runtime_input_requirements": action.transaction_runtime_input_requirements,
                 "action_scan_selectors": action_scan_selectors,
                 "fail_closed_runtime_features": action.fail_closed_runtime_features,
+                "bounded_output_plans": bounded_output_plans,
             },
             "ckb": ckb_contract,
             "transaction_draft": transaction_draft,
             "adapter_contract": adapter_contract,
             "action_scan_selectors": action_scan_selectors,
+            "bounded_output_plans": bounded_output_plans,
             "preview": preview,
             "constraints_status": result.metadata.constraints.status,
             "constraints_failures": result.metadata.constraints.failures,
@@ -8837,7 +8848,7 @@ fn write_typescript_builder_package(
         &index_path,
         typescript_builder_index(package_name, metadata, actions, metadata_hash, locked_identity, deployment_identity)?,
     )?;
-    std::fs::write(&test_path, typescript_builder_test(actions)?)?;
+    std::fs::write(&test_path, typescript_builder_test(metadata, actions)?)?;
     let policy_test_path = test_dir.join("policy-witness.test.mjs");
     let policy_test_source = include_str!("policy_builder_test.mjs");
     if metadata.runtime.policy_artifact.is_some() {
@@ -8987,6 +8998,7 @@ fn typescript_builder_manifest(
                     "runtime_accesses": action.ckb_runtime_accesses,
                     "action_scan_selectors": action_scan_selectors_json(action),
                     "entry_witness_required": action_requires_entry_witness(action),
+                    "bounded_output_plans": bounded_output_plan_contracts_for_action(metadata, &action.name),
                 })
             })
             .collect::<Vec<_>>(),
@@ -9057,6 +9069,19 @@ fn typescript_builder_manifest(
         }
     }
     Ok(manifest)
+}
+
+fn bounded_output_plan_contracts_for_action<'a>(
+    metadata: &'a CompileMetadata,
+    action_name: &str,
+) -> Vec<&'a crate::BoundedOutputPlanContractMetadata> {
+    metadata
+        .runtime
+        .collection_instantiations
+        .iter()
+        .filter(|collection| collection.scope_kind == "action" && collection.scope_name == action_name)
+        .filter_map(|collection| collection.bounded_output_plan.as_ref())
+        .collect()
 }
 
 fn typescript_package_json(package_name: &str) -> serde_json::Value {
@@ -9670,6 +9695,7 @@ fn typescript_builder_index(
                 "runtimeAccesses": action.ckb_runtime_accesses,
                 "actionScanSelectors": action_scan_selectors_json(action),
                 "failClosedRuntimeFeatures": action.fail_closed_runtime_features,
+                "boundedOutputPlans": bounded_output_plan_contracts_for_action(metadata, &action.name),
             })
         })
         .collect::<Vec<_>>();
@@ -9848,6 +9874,7 @@ fn typescript_builder_index(
          actionScanSelectors: ActionScanSelectors;\n\
          verifierObligations: readonly unknown[];\n\
          failClosedRuntimeFeatures: readonly string[];\n\
+         boundedOutputPlans: readonly BoundedOutputPlanMaterialization[];\n\
          notProvenByGeneratedBuilder: readonly string[];\n\
        }\n\n\
          export type ActionBuilderMode = \"build\" | \"dry-run\" | \"submit\";\n\n\
@@ -10299,6 +10326,176 @@ fn typescript_builder_index(
          }\n\n",
     );
 
+    ts.push_str(
+        r#"export interface BoundedOutputPlanOutput {
+  ordinal: number;
+  outputType: string;
+  data: Uint8Array;
+  lockHash: Uint8Array;
+  minimumCapacityShannons: string;
+  typeScriptPolicy: "exact-current-script-hash";
+}
+
+export interface BoundedOutputPlanMaterialization {
+  schema: "cellscript-bounded-output-plan-materialization-v1";
+  contract: Readonly<Record<string, unknown>>;
+  binding: string;
+  count: number;
+  witnessPayload: Uint8Array;
+  outputs: readonly BoundedOutputPlanOutput[];
+}
+
+function boundedOutputBytes(value: unknown, label: string): Uint8Array {
+  if (value instanceof Uint8Array) return new Uint8Array(value);
+  if (typeof value !== "string" || !/^0x(?:[0-9a-fA-F]{2})*$/.test(value)) {
+    throw new Error("CellScript bounded output plan '" + label + "' must be an even-length 0x hex string or Uint8Array");
+  }
+  const bytes = new Uint8Array((value.length - 2) / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(value.slice(2 + index * 2, 4 + index * 2), 16);
+  }
+  return bytes;
+}
+
+function boundedOutputInteger(record: Record<string, unknown>, field: string): number {
+  const value = record[field];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error("CellScript bounded output plan contract field '" + field + "' must be a non-negative safe integer");
+  }
+  return value;
+}
+
+function boundedOutputU32Le(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0;
+}
+
+export function encodeBoundedOutputPlanV1(
+  elements: readonly (HexString | Uint8Array)[],
+  elementWidthBytes: number,
+  maxElements: number,
+): Uint8Array {
+  if (!Number.isSafeInteger(elementWidthBytes) || elementWidthBytes < 1
+    || !Number.isSafeInteger(maxElements) || maxElements < 1 || elements.length > maxElements) {
+    throw new Error("CellScript bounded output plan encoder received an invalid width, bound, or element count");
+  }
+  const totalBytes = 12 + elements.length * elementWidthBytes;
+  if (totalBytes > 4084) {
+    throw new Error("CellScript bounded output plan exceeds the 4084-byte runtime limit");
+  }
+  const output = new Uint8Array(totalBytes);
+  output.set([0x43, 0x53, 0x42, 0x50, 0x4c, 0x76, 0x31, 0x00], 0);
+  new DataView(output.buffer, output.byteOffset, output.byteLength).setUint32(8, elements.length, true);
+  elements.forEach((element, index) => {
+    const bytes = boundedOutputBytes(element, "element[" + index + "]");
+    if (bytes.length !== elementWidthBytes) {
+      throw new Error("CellScript bounded output plan element[" + index + "] has width " + bytes.length + ", expected " + elementWidthBytes);
+    }
+    output.set(bytes, 12 + index * elementWidthBytes);
+  });
+  return output;
+}
+
+export function materializeBoundedOutputPlanV1(
+  contractValue: unknown,
+  payloadValue: HexString | Uint8Array,
+): BoundedOutputPlanMaterialization {
+  const contract = assertRuntimeObject(contractValue, "bounded output plan contract");
+  if (contract.schema !== "cellscript-bounded-output-plan-contract" || contract.version !== 1
+    || contract.codec !== "molecule-fixvec-fixed-item-v1" || contract.codec_magic_hex !== "0x435342504c763100"
+    || contract.ordering !== "plan-index-equals-group-output-index"
+    || contract.correspondence !== "exactly-one-group-output-per-plan-element") {
+    throw new Error("CellScript bounded output plan contract identity or ordering is invalid");
+  }
+  const binding = contract.binding;
+  const outputType = contract.output_ty;
+  if (typeof binding !== "string" || binding.length === 0 || typeof outputType !== "string" || outputType.length === 0) {
+    throw new Error("CellScript bounded output plan contract has no binding or output type");
+  }
+  const elementWidth = boundedOutputInteger(contract, "element_width_bytes");
+  const maxElements = boundedOutputInteger(contract, "max_elements");
+  const outputWidth = boundedOutputInteger(contract, "output_width_bytes");
+  const capacityFloor = boundedOutputInteger(contract, "capacity_floor_shannons");
+  if (elementWidth < 1 || maxElements < 1 || outputWidth < 1 || outputWidth > 512 || capacityFloor < 1) {
+    throw new Error("CellScript bounded output plan contract has invalid resource bounds");
+  }
+  const payload = boundedOutputBytes(payloadValue, binding);
+  const magic = [0x43, 0x53, 0x42, 0x50, 0x4c, 0x76, 0x31, 0x00];
+  if (payload.length < 12 || magic.some((byte, index) => payload[index] !== byte)) {
+    throw new Error("CellScript bounded output plan '" + binding + "' has invalid CSBPLv1 magic");
+  }
+  const count = boundedOutputU32Le(payload, 8);
+  const expectedLength = 12 + count * elementWidth;
+  if (count > maxElements || expectedLength !== payload.length || payload.length > 4084) {
+    throw new Error("CellScript bounded output plan '" + binding + "' violates its exact count/length bound");
+  }
+  if (!Array.isArray(contract.field_bindings) || contract.field_bindings.length === 0) {
+    throw new Error("CellScript bounded output plan contract has no field bindings");
+  }
+  const lockBinding = assertRuntimeObject(contract.lock_binding, "bounded output lock binding");
+  const lockOffset = boundedOutputInteger(lockBinding, "plan_offset_bytes");
+  const lockWidth = boundedOutputInteger(lockBinding, "width_bytes");
+  if (lockWidth !== 32 || lockOffset + lockWidth > elementWidth) {
+    throw new Error("CellScript bounded output lock binding is outside the plan element");
+  }
+  const outputs: BoundedOutputPlanOutput[] = [];
+  for (let ordinal = 0; ordinal < count; ordinal += 1) {
+    const elementStart = 12 + ordinal * elementWidth;
+    const data = new Uint8Array(outputWidth);
+    const written = new Uint8Array(outputWidth);
+    for (const candidate of contract.field_bindings) {
+      const field = assertRuntimeObject(candidate, "bounded output field binding");
+      const planOffset = boundedOutputInteger(field, "plan_offset_bytes");
+      const outputOffset = boundedOutputInteger(field, "output_offset_bytes");
+      const width = boundedOutputInteger(field, "width_bytes");
+      if (width < 1 || planOffset + width > elementWidth || outputOffset + width > outputWidth) {
+        throw new Error("CellScript bounded output field binding is outside its fixed layout");
+      }
+      for (let byte = outputOffset; byte < outputOffset + width; byte += 1) {
+        if (written[byte] !== 0) throw new Error("CellScript bounded output field bindings overlap");
+        written[byte] = 1;
+      }
+      data.set(payload.subarray(elementStart + planOffset, elementStart + planOffset + width), outputOffset);
+    }
+    if (written.some((byte) => byte !== 1)) {
+      throw new Error("CellScript bounded output field bindings do not cover the complete output data");
+    }
+    outputs.push({
+      ordinal,
+      outputType,
+      data,
+      lockHash: payload.slice(elementStart + lockOffset, elementStart + lockOffset + lockWidth),
+      minimumCapacityShannons: capacityFloor.toString(),
+      typeScriptPolicy: "exact-current-script-hash",
+    });
+  }
+  return {
+    schema: "cellscript-bounded-output-plan-materialization-v1",
+    contract: contract as Readonly<Record<string, unknown>>,
+    binding,
+    count,
+    witnessPayload: payload,
+    outputs,
+  };
+}
+
+function materializeBoundedOutputPlans(
+  contracts: readonly unknown[],
+  params: CellScriptParams,
+): BoundedOutputPlanMaterialization[] {
+  const values = params as Record<string, unknown>;
+  return contracts.map((contractValue) => {
+    const contract = assertRuntimeObject(contractValue, "bounded output plan contract");
+    const binding = contract.binding;
+    if (typeof binding !== "string" || !(binding in values)) {
+      throw new Error("CellScript bounded output plan parameter is missing");
+    }
+    return materializeBoundedOutputPlanV1(contract, values[binding] as HexString | Uint8Array);
+  });
+}
+
+"#,
+    );
+
     for action in actions {
         let suffix = typescript_type_suffix(&action.name);
         let params_type = typescript_action_params_type(action);
@@ -10362,7 +10559,7 @@ fn typescript_builder_index(
     );
     ts.push_str("  assertRuntimeAccessParams(actionSpec.runtimeAccesses, params);\n");
     ts.push_str(&format!(
-        "  return {{\n    schema: CELLSCRIPT_BUILDER_SCHEMA,\n    state: \"GeneratedActionPlan\",\n    status: \"requires-runtime-resolution\",\n    action,\n    params,\n    options,\n    metadataHash: {},\n    artifactHash: {},\n    targetProfile: {},\n    canSubmit: false,\n    requiresLiveCellResolution: true,\n    requiresDeploymentResolution: true,\n    cellDataCodecManifest,\n    temporalContract,\n    runtimeAccessProvenanceContract,\n    signingMessageDomains,\n    runtimeAccesses: [...actionSpec.runtimeAccesses],\n    runtimeInputRequirements: [...actionSpec.runtimeInputRequirements],\n    actionScanSelectors: actionSpec.actionScanSelectors as ActionScanSelectors,\n    verifierObligations: [...actionSpec.verifierObligations],\n    failClosedRuntimeFeatures: [...actionSpec.failClosedRuntimeFeatures],\n    notProvenByGeneratedBuilder: [\n      \"live_cell_availability\",\n      \"deployment_live_chain_match\",\n      \"capacity_fee_balance\",\n      \"signature_authority\",\n      \"ckb_vm_execution\",\n      \"cell_data_codec_materialization\",\n      \"tx_pool_acceptance\",\n      \"submission\"\n    ] as const,\n  }};\n}}\n\n",
+        "  return {{\n    schema: CELLSCRIPT_BUILDER_SCHEMA,\n    state: \"GeneratedActionPlan\",\n    status: \"requires-runtime-resolution\",\n    action,\n    params,\n    options,\n    metadataHash: {},\n    artifactHash: {},\n    targetProfile: {},\n    canSubmit: false,\n    requiresLiveCellResolution: true,\n    requiresDeploymentResolution: true,\n    cellDataCodecManifest,\n    temporalContract,\n    runtimeAccessProvenanceContract,\n    signingMessageDomains,\n    runtimeAccesses: [...actionSpec.runtimeAccesses],\n    runtimeInputRequirements: [...actionSpec.runtimeInputRequirements],\n    actionScanSelectors: actionSpec.actionScanSelectors as ActionScanSelectors,\n    verifierObligations: [...actionSpec.verifierObligations],\n    failClosedRuntimeFeatures: [...actionSpec.failClosedRuntimeFeatures],\n    boundedOutputPlans: materializeBoundedOutputPlans(actionSpec.boundedOutputPlans, params),\n    notProvenByGeneratedBuilder: [\n      \"live_cell_availability\",\n      \"deployment_live_chain_match\",\n      \"capacity_fee_balance\",\n      \"signature_authority\",\n      \"ckb_vm_execution\",\n      \"cell_data_codec_materialization\",\n      \"tx_pool_acceptance\",\n      \"submission\"\n    ] as const,\n  }};\n}}\n\n",
         typescript_string_literal(metadata_hash),
         metadata.artifact_hash.as_deref().map(typescript_string_literal).unwrap_or_else(|| "null".to_string()),
         typescript_string_literal(&metadata.target_profile.name)
@@ -10575,7 +10772,7 @@ fn typescript_builder_index(
     Ok(ts)
 }
 
-fn typescript_builder_test(actions: &[&crate::ActionMetadata]) -> Result<String> {
+fn typescript_builder_test(metadata: &CompileMetadata, actions: &[&crate::ActionMetadata]) -> Result<String> {
     let cases = actions
         .iter()
         .map(|action| {
@@ -10583,11 +10780,27 @@ fn typescript_builder_test(actions: &[&crate::ActionMetadata]) -> Result<String>
                 "name": action.name,
                 "plan": format!("plan{}", typescript_type_suffix(&action.name)),
                 "method": typescript_identifier(&action.name, "action"),
-                "params": javascript_sample_params(action),
+                "params": javascript_sample_params(action, &bounded_output_plan_contracts_for_action(metadata, &action.name)),
             })
         })
         .collect::<Vec<_>>();
     let cases_json = json_string_pretty("builder test cases", &cases)?;
+    let bounded_output_plan_cases = actions
+        .iter()
+        .flat_map(|action| {
+            bounded_output_plan_contracts_for_action(metadata, &action.name).into_iter().map(|contract| {
+                serde_json::json!({
+                    "name": action.name,
+                    "plan": format!("plan{}", typescript_type_suffix(&action.name)),
+                    "binding": contract.binding,
+                    "elementWidth": contract.element_width_bytes,
+                    "maxElements": contract.max_elements,
+                    "outputWidth": contract.output_width_bytes,
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    let bounded_output_plan_cases_json = json_string_pretty("bounded output plan builder test cases", &bounded_output_plan_cases)?;
     let dynamic_index_cases = actions
         .iter()
         .flat_map(|action| {
@@ -10629,6 +10842,7 @@ fn typescript_builder_test(actions: &[&crate::ActionMetadata]) -> Result<String>
     js.push_str("import * as builder from \"../dist/index.js\";\n\n");
     js.push_str(&format!("const actionCases = {cases_json};\n"));
     js.push_str(&format!("const dynamicIndexCases = {dynamic_index_cases_json};\n"));
+    js.push_str(&format!("const boundedOutputPlanCases = {bounded_output_plan_cases_json};\n"));
     js.push_str("const WRONG_HASH = \"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\";\n\n");
     js.push_str(
         "test(\"exposes a resumable ProtocolBundle runtime state machine without private keys\", async () => {\n\
@@ -10719,6 +10933,50 @@ fn typescript_builder_test(actions: &[&crate::ActionMetadata]) -> Result<String>
            assert.deepEqual(calls, [\"check\", \"materialize\", \"live-inputs\", \"live-dependencies\", \"ready\", \"signed\", \"dry-run\", \"tx-pool\", \"submit\", \"confirm\"]);\n\
            const wrongRuntime = { ...runtime, async resolveLiveInputs(value) { return stage(\"WrongState\", value); } };\n\
            await assert.rejects(() => builder.createProtocolBundleClient(wrongRuntime).prepare({}, [first, second]), /invalid LiveResolvedProtocolBundleTx evidence/);\n\
+         });\n\n",
+    );
+    js.push_str(
+        "test(\"encodes and materializes bounded output plans with exact order and length\", () => {\n\
+           for (const boundedCase of boundedOutputPlanCases) {\n\
+             const actionCase = actionCases.find((candidate) => candidate.name === boundedCase.name);\n\
+             assert.ok(actionCase);\n\
+             const zeroPlan = builder[boundedCase.plan](actionCase.params);\n\
+             const zero = zeroPlan.boundedOutputPlans.find((candidate) => candidate.binding === boundedCase.binding);\n\
+             assert.ok(zero);\n\
+             assert.equal(zero.count, 0);\n\
+             assert.deepEqual(zero.outputs, []);\n\
+             const first = new Uint8Array(boundedCase.elementWidth);\n\
+             first[first.length - 1] = 7;\n\
+             const payload = builder.encodeBoundedOutputPlanV1([first], boundedCase.elementWidth, boundedCase.maxElements);\n\
+             const params = { ...actionCase.params, [boundedCase.binding]: payload };\n\
+             const onePlan = builder[boundedCase.plan](params);\n\
+             const one = onePlan.boundedOutputPlans.find((candidate) => candidate.binding === boundedCase.binding);\n\
+             assert.ok(one);\n\
+             assert.equal(one.count, 1);\n\
+             assert.equal(one.outputs.length, 1);\n\
+             assert.equal(one.outputs[0].ordinal, 0);\n\
+             assert.equal(one.outputs[0].data.length, boundedCase.outputWidth);\n\
+             assert.equal(one.outputs[0].lockHash.length, 32);\n\
+             const maximum = Array.from({ length: boundedCase.maxElements }, (_, index) => {\n\
+               const element = new Uint8Array(boundedCase.elementWidth);\n\
+               element[element.length - 1] = index & 0xff;\n\
+               return element;\n\
+             });\n\
+             const maximumPayload = builder.encodeBoundedOutputPlanV1(maximum, boundedCase.elementWidth, boundedCase.maxElements);\n\
+             const maximumPlan = builder[boundedCase.plan]({ ...actionCase.params, [boundedCase.binding]: maximumPayload });\n\
+             const materialized = maximumPlan.boundedOutputPlans.find((candidate) => candidate.binding === boundedCase.binding);\n\
+             assert.deepEqual(materialized.outputs.map((output) => output.ordinal), maximum.map((_, index) => index));\n\
+             const wrongMagic = payload.slice();\n\
+             wrongMagic[0] ^= 0xff;\n\
+             assert.throws(() => builder[boundedCase.plan]({ ...actionCase.params, [boundedCase.binding]: wrongMagic }), /invalid CSBPLv1 magic/);\n\
+             const trailing = new Uint8Array(payload.length + 1);\n\
+             trailing.set(payload);\n\
+             assert.throws(() => builder[boundedCase.plan]({ ...actionCase.params, [boundedCase.binding]: trailing }), /exact count\\/length bound/);\n\
+             assert.throws(\n\
+               () => builder.encodeBoundedOutputPlanV1([...maximum, new Uint8Array(boundedCase.elementWidth)], boundedCase.elementWidth, boundedCase.maxElements),\n\
+               /invalid width, bound, or element count/,\n\
+             );\n\
+           }\n\
          });\n\n",
     );
     js.push_str(
@@ -10988,10 +11246,16 @@ fn typescript_builder_test(actions: &[&crate::ActionMetadata]) -> Result<String>
     Ok(js)
 }
 
-fn javascript_sample_params(action: &crate::ActionMetadata) -> serde_json::Value {
+fn javascript_sample_params(
+    action: &crate::ActionMetadata,
+    bounded_output_plans: &[&crate::BoundedOutputPlanContractMetadata],
+) -> serde_json::Value {
     let mut params = serde_json::Map::new();
     for param in &action.params {
         params.insert(param.name.clone(), javascript_sample_param_value(param));
+    }
+    for contract in bounded_output_plans {
+        params.insert(contract.binding.clone(), serde_json::Value::String("0x435342504c76310000000000".to_string()));
     }
     serde_json::Value::Object(params)
 }

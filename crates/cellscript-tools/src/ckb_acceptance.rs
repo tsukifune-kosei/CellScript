@@ -484,6 +484,23 @@ fn compile_matrix(root: &Path, cellc: &Path, run_dir: &Path) -> Result<Vec<Artif
         Some("--entry-action"),
         Some("verify"),
     )?);
+    let bounded_output_package = run_dir.join("bounded-output-plan-package");
+    fs::create_dir_all(bounded_output_package.join("src"))?;
+    fs::copy(root.join("tests/fixtures/bounded_output_plan.cell"), bounded_output_package.join("src/main.cell"))?;
+    fs::write(
+        bounded_output_package.join("Cell.toml"),
+        "[package]\nedition = \"2026\"\nname = \"bounded_output_plan_acceptance\"\nversion = \"0.1.0\"\n",
+    )?;
+    artifacts.push(compile_artifact(
+        cellc,
+        &bounded_output_package,
+        &artifact_root.join("bounded_output_plan_v1_verify.elf"),
+        "bounded-output-plan-v1:verify",
+        "bounded-output-plan-stateful-acceptance",
+        None,
+        Some("--entry-action"),
+        Some("verify"),
+    )?);
     Ok(artifacts)
 }
 

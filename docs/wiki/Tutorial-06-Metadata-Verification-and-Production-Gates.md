@@ -25,7 +25,7 @@ The profile combines that with independently versioned target,
 primitive-assurance, entry payload, witness placement, and metadata-schema
 axes. Verification rejects a sidecar whose profile does not resolve from those
 inputs; it never guesses another contract. Current `0.30` outputs use metadata
-schema 71, source schema 2, artifact schema 1, and constraints schema 4. Runtime
+schema 72, source schema 2, artifact schema 1, and constraints schema 4. Runtime
 metadata binds the closed `cellscript-ckb-runtime-view-v1` contract and the
 structured `cellscript-ckb-runtime-access-provenance-v1` source/index/range
 contract.
@@ -262,7 +262,7 @@ records the exact `identity(...)` condition declared by the same resource.
 No proof may source authority from a container or another Cell type.
 
 Top-level `enum_layouts` for concrete payload ADTs first appeared in schema 53
-and remain in current metadata schema 71 on the `0.30` development branch. Audit the
+and remain in current metadata schema 72 on the `0.30` development branch. Audit the
 `packed-tagged-union-v1` layout, one-byte tag, sequential variant tags, packed
 field offsets, encoded size, ownership, storage, and ABI together. A
 `linear-cell-handle` field is exactly eight bytes and forces
@@ -301,7 +301,7 @@ emit runtime error 24 in permissive artifacts and stop at E2105 under the
 production policy; a static `N` alone is never evidence that a scan ran.
 
 The validity record first appeared in schema 55 during the 0.22 line and is
-retained by current metadata schema 71 on the `0.30` development branch as
+retained by current metadata schema 72 on the `0.30` development branch as
 `types[].validity_predicates`. Review each predicate's
 `expression`, `dependencies`, `evidence_tier`,
 `runtime_checked_on_create`, `create_paths_selected`,
@@ -363,6 +363,16 @@ selected Lock/Type Script or verifier CellDep data identity; decodes
 `WitnessArgs.input_type`; and binds the handle to its compiled `CSARGv1`
 parameter position. Exact-handle source items therefore need resolved Script,
 Script-hash, data, or data-hash fields in addition to their transaction index.
+For checked `create_each`, metadata schema 72 adds an explicit bounded output
+plan contract. `tx validate` re-decodes the exact `CSBPLv1` parameter at its
+compiled `CSARGv1` position and requires
+`cellscript-bounded-output-plan-evidence-v1`: a witness index, current Script
+hash, exact Plan payload, and strictly ordered output indexes. It then compares
+the Plan count and every selected output's complete data, Lock hash, Type hash,
+and capacity floor. Generated TypeScript builders materialize the same ordered
+contract, and the CKB adapter repeats the validation before building a packed
+transaction. See
+[the bounded output plan contract](../CELLSCRIPT_BOUNDED_OUTPUT_PLAN_CONTRACT.md).
 This is still pre-chain evidence: dry-run, capacity, cycles, and commit checks
 remain required for production claims.
 

@@ -473,7 +473,7 @@ action inspect() -> u64 {
 "#;
         let result: serde_json::Value = serde_json::from_str(&compile_metadata_json(source, "2027", None)).unwrap();
         assert!(result.get("error").is_none(), "unexpected wasm compile error: {result}");
-        assert_eq!(result["metadata_schema_version"], 71);
+        assert_eq!(result["metadata_schema_version"], 72);
         assert_eq!(result["runtime"]["fail_closed_runtime_features"], serde_json::json!([]));
         let domain = &result["runtime"]["signing_message_domains"][0];
         assert_eq!(domain["contract"], "cellscript-ckb-sighash-all-zero-lock-v1");

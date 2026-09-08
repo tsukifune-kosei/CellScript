@@ -301,7 +301,7 @@ fn checker_rejects_runtime_access_provenance_tampering_after_hash_rebinding() {
         )
         .unwrap(),
     );
-    assert_eq!(valid.metadata["metadata_schema_version"], Value::from(71));
+    assert_eq!(valid.metadata["metadata_schema_version"], Value::from(72));
     assert_eq!(
         valid.metadata["runtime"]["ckb_runtime_access_provenance_contract"],
         Value::String("cellscript-ckb-runtime-access-provenance-v1".to_string())
@@ -387,7 +387,7 @@ fn checker_rejects_runtime_access_provenance_tampering_after_hash_rebinding() {
     changed.rebind_sidecars();
     assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
 
-    let mut changed = valid;
+    let mut changed = valid.clone();
     let handle = changed.metadata["runtime"]["transaction_view_handles"]
         .as_array_mut()
         .unwrap()
@@ -674,7 +674,7 @@ fn checker_binds_bounded_witness_owner_limit_range_and_typed_retyping() {
         )
         .unwrap(),
     );
-    assert_eq!(valid.metadata["metadata_schema_version"], Value::from(71));
+    assert_eq!(valid.metadata["metadata_schema_version"], Value::from(72));
 
     let mutate_bounded_accesses = |metadata: &mut Value, mutation: fn(&mut Value)| {
         for pointer in ["/runtime/ckb_runtime_accesses", "/actions/0/ckb_runtime_accesses"] {
@@ -738,7 +738,7 @@ fn checker_binds_zero_lock_signing_domain_to_runtime_access_and_typed_call() {
         )
         .unwrap(),
     );
-    assert_eq!(valid.metadata["metadata_schema_version"], Value::from(71));
+    assert_eq!(valid.metadata["metadata_schema_version"], Value::from(72));
     assert_eq!(valid.metadata["runtime"]["signing_message_domains"].as_array().unwrap().len(), 1);
 
     for (field, tampered) in [
@@ -1197,6 +1197,7 @@ lock_script VaultOwner on lock_group {
 }
 "#;
 
+#[track_caller]
 fn assert_code(fixture: &Fixture, expected: CheckerRejectionCode) {
     match fixture.check() {
         Ok(()) => panic!("mutation unexpectedly passed; expected {}", expected.as_str()),
@@ -2442,6 +2443,19 @@ action verify(witness plans: BoundedList<Plan, 2>) -> u64 {
     assert!(valid.check().is_ok());
 
     let mut changed = valid.clone();
+    changed.record.compatibility_profile.metadata_schema_version = 71;
+    changed.record.compatibility_profile.id = changed.record.compatibility_profile.id.replace("metadata-72-", "metadata-71-");
+    changed.record.compatibility_profile_hash =
+        canonical_hash("cellscript-compatibility-profile-identity-v1", &changed.record.compatibility_profile).unwrap();
+    changed.metadata["metadata_schema_version"] = Value::from(71);
+    changed.metadata["compatibility_profile"] = serde_json::to_value(&changed.record.compatibility_profile).unwrap();
+    changed.metadata["public_interface"]["runtime_contract"]["compatibility_profile_id"] =
+        Value::String(changed.record.compatibility_profile.id.clone());
+    changed.metadata["constraints"]["compatibility_profile"] = Value::String(changed.record.compatibility_profile.id.clone());
+    changed.rebind_sidecars();
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let mut changed = valid.clone();
     let declared_type = changed
         .record
         .typed_semantics
@@ -2458,7 +2472,7 @@ action verify(witness plans: BoundedList<Plan, 2>) -> u64 {
     changed.rebind_typed_semantics();
     assert_code(&changed, CheckerRejectionCode::V2419TypedSemanticsInvalid);
 
-    let mut changed = valid;
+    let mut changed = valid.clone();
     let (entry_id, typed_block_id) = changed
         .record
         .typed_semantics
@@ -2481,6 +2495,85 @@ action verify(witness plans: BoundedList<Plan, 2>) -> u64 {
         .expect("fixture must contain a machine binding for bounded output verification");
     binding.machine_block_ids.clear();
     changed.rebind_sidecars();
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    for (pointer, replacement) in [
+        ("/runtime/collection_instantiations/0/bounded_output_plan/ordering", Value::String("reverse-plan-order".to_string())),
+        ("/runtime/collection_instantiations/0/bounded_output_plan/identity_policy", Value::String("content-hash".to_string())),
+        ("/runtime/collection_instantiations/0/bounded_output_plan/field_bindings/0/plan_offset_bytes", Value::from(0)),
+    ] {
+        let mut changed = valid.clone();
+        *changed.metadata.pointer_mut(pointer).expect("bounded output contract field") = replacement;
+        assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+    }
+
+    let machine_block = |prefix: &str| {
+        valid
+            .record
+            .blocks
+            .iter()
+            .find(|block| block.machine_label.as_deref().is_some_and(|label| label.starts_with(prefix)))
+            .expect("bounded output machine block")
+    };
+    let elf = parse_elf(&valid.artifact, CheckerBudgets::default().instructions).unwrap();
+    let word_at = |address| elf.instructions.iter().find(|instruction| instruction.address == address).unwrap().word;
+    let exact = machine_block(".Lbounded_output_count_exact_");
+    let type_only = machine_block(".Lbounded_output_type_only_");
+    let capacity_ok = machine_block(".Lbounded_output_capacity_ok_");
+    let output_sites = valid
+        .record
+        .syscall_sites
+        .iter()
+        .filter(|site| {
+            valid
+                .record
+                .blocks
+                .iter()
+                .find(|block| block.id == site.block_id)
+                .is_some_and(|block| block.owner_entry == "action:verify" && exact.range.end <= site.address)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(output_sites.len(), 4);
+
+    let mut changed = valid.clone();
+    let first_magic = machine_block(".Lbounded_plan_magic_ok_").range.start;
+    changed.replace_machine_word(first_magic - 16, word_at(first_magic - 16) ^ (1 << 20));
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let mut changed = valid.clone();
+    changed.replace_machine_word(exact.range.start - 8, word_at(exact.range.start - 8) ^ (1 << 20));
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let mut changed = valid.clone();
+    let data_site = output_sites[0].address;
+    let data_index_move = elf
+        .instructions
+        .iter()
+        .filter(|instruction| instruction.address < data_site)
+        .rev()
+        .find(|instruction| {
+            let word = instruction.word;
+            word & 0x7f == 0x13 && (word >> 7) & 0x1f == 13 && (word >> 15) & 0x1f == 28
+        })
+        .expect("GroupOutput data ordinal move")
+        .address;
+    changed.replace_machine_word(data_index_move, word_at(data_index_move) ^ (1 << 15));
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let mut changed = valid.clone();
+    changed.replace_machine_word(data_site + 16, word_at(data_site + 16) ^ (1 << 20));
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let mut changed = valid.clone();
+    changed.replace_machine_word(type_only.range.start + 12, word_at(type_only.range.start + 12) ^ (1 << 20));
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let mut changed = valid.clone();
+    changed.replace_machine_word(type_only.range.start - 8, word_at(type_only.range.start - 8) ^ (1 << 20));
+    assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
+
+    let mut changed = valid.clone();
+    changed.replace_machine_word(capacity_ok.range.start - 8, word_at(capacity_ok.range.start - 8) ^ (1 << 20));
     assert_code(&changed, CheckerRejectionCode::V2420TypedMachineBindingInvalid);
 }
 

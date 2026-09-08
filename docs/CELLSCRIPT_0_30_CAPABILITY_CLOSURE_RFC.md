@@ -39,10 +39,10 @@ The first #24 runtime-view tranche is specified by the
 The additive typed HeaderDep and six-domain `Since` subset is specified in the
 [0.30 temporal-domain contract](CELLSCRIPT_0_30_TEMPORAL_DOMAINS.md); it does
 not by itself close issue #12.
-Metadata schema 71 binds `cellscript-ckb-runtime-view-v1` together with the
+Metadata schema 72 retains `cellscript-ckb-runtime-view-v1` together with the
 structured `cellscript-ckb-runtime-access-provenance-v1` source/index/range
-contract. Typed Cell views now expose occupied/unoccupied capacity, consensus
-data hashes and input `since`.
+contract and adds the explicit bounded output Plan mapping. Typed Cell views
+expose occupied/unoccupied capacity, consensus data hashes and input `since`.
 
 The admitted input half of #7 is implemented and accepted under the
 [bounded GroupInput contract](CELLSCRIPT_BOUNDED_GROUP_INPUT_CONTRACT.md).
@@ -51,8 +51,9 @@ Type Script's canonical `GroupInput` array, decodes fixed-width resources,
 executes each pure predicate and numeric accumulator update exactly once, and
 discharges every selected linear input. Shared simulator/CKB-VM cases, a 1024
 element resource guard, independent machine mutations, and a ten-case live CKB
-acceptance corpus cover the admitted boundary. Dynamic outputs remain owned by
-#8 and do not inherit this acceptance.
+acceptance corpus cover the admitted input boundary. The admitted output half
+is defined separately by the
+[bounded output Plan contract](CELLSCRIPT_BOUNDED_OUTPUT_PLAN_CONTRACT.md).
 Typed HeaderDep views expose all three fields admitted by CKB's
 `LOAD_HEADER_BY_FIELD`; and complete Script hashes are separated from code and
 args hashes. CKB-VM tests cover a nonzero epoch, the derived epoch-start block,
@@ -86,7 +87,7 @@ replaces the complete first group `WitnessArgs.lock` payload with equal-length
 zero bytes, and commits to later group witnesses and transaction-level extra
 witnesses in canonical order. A real CKB-VM differential matches the pinned
 `ckb-sdk-rust` message generator. Its `SighashAllDigest` result, four literal
-bounds, exact transform, scope, and order are bound in metadata schema 71 and
+bounds, exact transform, scope, and order are bound in metadata schema 72 and
 the independent checker. This is the simple all-zero placeholder domain; it
 does not claim multisig layouts that preserve a nonzero configuration prefix,
 and the older generic `env::sighash_all(source)` spelling remains fail-closed.
@@ -153,7 +154,7 @@ form a complete 0.30 business-capability plan.
 | Capability needed for the 0.30 target | Existing owner | Coverage assessment |
 | --- | --- | --- |
 | Bounded variable-cardinality Type-group inputs | [#7](https://github.com/CellScript-Labs/CellScript/issues/7) | Implemented and accepted for native `input BoundedCellSet<T, N>` over the current complete Type Script's canonical `GroupInput` array, with fixed-width decoding, exact `0..=N` cardinality, per-element predicates/accumulators, linear discharge, independent machine validation, shared simulator/CKB-VM fixtures, and live stateful CKB evidence. The required `dev`, `ci`, and `backend` gates passed on 2026-09-09 at `43e58780`. Generic transaction iteration, non-Type roles, arbitrary loop effects, and dynamic outputs are outside this contract. |
-| Bounded output plans and one-to-one output correspondence | [#8](https://github.com/CellScript-Labs/CellScript/issues/8) | Partial. The runtime foundation exists on the 0.26 development line, while authoring, shared-witness composition, builders, and complete independent machine evidence remain release work. |
+| Bounded output plans and one-to-one output correspondence | [#8](https://github.com/CellScript-Labs/CellScript/issues/8) | Implemented on `0.30` for the admitted fixed-width direct-Plan-field contract: native authoring, shared `CSARGv1` witness composition, exact GroupOutput order/count/data/Lock/Type/capacity checks, generated builders, transaction and adapter validation, independent machine evidence, shared fixtures, and live acceptance. Computed or dynamic output templates remain fail-closed. |
 | Multi-Script transaction construction and conflict handling | [#9](https://github.com/CellScript-Labs/CellScript/issues/9) | Covered as the architecture owner. The ProtocolBundle must precede any `.celltx` convenience syntax. |
 | Typed roles across Script boundaries | [#10](https://github.com/CellScript-Labs/CellScript/issues/10) | Closed artifact-known Cell/witness roles are implemented in ProtocolBundle with exact schema/interface/ELF/deployment identity. Open/runtime-selected roles remain dependent on #11. |
 | Runtime Script and verifier handles | [#11](https://github.com/CellScript-Labs/CellScript/issues/11) | Exact artifact receipts and fixed-width values are implemented for independently checked ProtocolBundle artifacts. Canonical checked Script construction/hashing is implemented for fixed args up to 459 bytes. Generic handles, dynamic/larger construction, and open/runtime-selected roles remain open. |
@@ -214,8 +215,7 @@ Treat #7 and #8 as one author-visible lifecycle system while preserving their
 separate security contracts. The admitted surface supports transaction-chosen
 cardinality from zero through a declared maximum, canonical group-relative
 selection, exact schema and Script identity, deterministic decoding, per-element
-checks, linear input discharge, and will add exact plan-to-output correspondence
-through #8.
+checks, linear input discharge, and exact plan-to-output correspondence.
 
 The implementation must cover bounded fungible splits and merges, batched state
 updates, receipt settlement, and capped claims. Missing, extra, duplicated,
@@ -223,10 +223,12 @@ reordered, foreign, malformed, or over-bound elements must fail with stable
 errors. Builders and verifiers must consume one versioned ordering and witness
 specification.
 
-The #7 input contract is complete for its admitted source and runtime boundary.
-The remaining work in this section is #8's bounded output plan, authoring,
-correspondence, shared-witness, builder, independent-checker, and live-acceptance
-closure.
+The #7 input contract and #8 output contract are complete for their admitted
+source and runtime boundaries. The output side uses `bounded-output-plan-v1`,
+binds each Plan ordinal to the same GroupOutput ordinal, and rejects missing,
+extra, reordered, foreign, malformed, under-capacity, or field/Lock-mismatched
+outputs. See
+[the bounded output plan contract](CELLSCRIPT_BOUNDED_OUTPUT_PLAN_CONTRACT.md).
 
 ### C. Typed CKB runtime-view closure
 
@@ -444,9 +446,9 @@ adding an untracked general-purpose escape hatch.
 
 - Complete the remaining authoring relations and graph-wide consumption of
   focused schema acknowledgements.
-- Complete #8 and #12 for the admitted corpus. #7 is complete for the accepted
-  bounded GroupInput contract, and #23 is complete on the branch with its
-  required `dev`, `ci`, and `backend` gate evidence.
+- Complete #12 for the admitted corpus. #7 and #8 are complete for the accepted
+  bounded GroupInput and GroupOutput-plan contracts, and #23 is complete on the
+  branch with its required `dev`, `ci`, and `backend` gate evidence.
 - Implement the typed CKB runtime-view issue and cryptographic capability issue.
 - Extend typed semantics, ProofPlan, source maps, lowering records, runtime
   errors, and independent mutations together.

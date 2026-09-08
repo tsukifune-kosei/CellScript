@@ -11,7 +11,7 @@ the `0.30` development branch
 `cellscript-verified-artifact-boundary-v2`, plus
 `cellscript-artifact-checker-policy-v1`
 
-**Metadata schema**: 71
+**Metadata schema**: 72
 
 ## Purpose
 

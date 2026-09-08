@@ -2,6 +2,21 @@
 
 ## 0.30 - Capability closure development branch
 
+- Complete issue #8 for the admitted bounded output plan contract. Native
+  `create_each` accepts a fixed-width witness `BoundedList<Plan, N>` when one
+  complete output template maps every data field and the Lock directly from
+  the same Plan element and the resource declares a positive capacity floor.
+  `CSBPLv1` order is bound one-to-one to the current Type Script's canonical
+  `GroupOutput` array; missing, extra, malformed, foreign, field/Lock/Type,
+  capacity, and predicate failures terminate with stable errors. Metadata
+  schema 72 exposes the complete mapping. Generated TypeScript builders,
+  `cellc tx validate`, and the CKB adapter independently materialize or verify
+  the exact witness and concrete outputs. The standalone artifact checker binds
+  the typed contract to decoder, syscall, comparison, ordinal, and error paths;
+  rebound mutations fail with V2420. The shared corpus covers 14 semantic and
+  adversarial cases, and a separate 101-output fixture guards the 4,084-byte
+  Plan payload boundary. Computed and dynamic templates remain fail-closed.
+
 - Complete issue #7 for the accepted bounded Type-group input contract. Native
   `input BoundedCellSet<T, N>` authoring selects the current complete Type
   Script's canonical `GroupInput` array, accepts `0..=N` fixed-width resources,

@@ -294,7 +294,7 @@ CKB-VM execution, deployment, and chain evidence.
 
 ### 0.30 typed CKB runtime-view evidence
 
-The `0.30` development branch advances compile metadata to schema 71 and binds
+The `0.30` development branch uses compile metadata schema 72 and binds
 `runtime.ckb_runtime_view_contract = cellscript-ckb-runtime-view-v1` plus
 `runtime.ckb_runtime_access_provenance_contract =
 cellscript-ckb-runtime-access-provenance-v1`. The first
@@ -355,7 +355,7 @@ matrix spans both editions and optimization
 levels 0-3; mutations alter each stage, rebind block and bundle identities, and
 must still reject with `V2420`.
 
-Metadata schema 71 additionally binds
+Metadata schema 72 additionally binds the existing
 `cellscript-ckb-sighash-all-zero-lock-v1`. Reviewers must check the current
 input Script-group scope, complete first-lock zero transform, witness order,
 `SighashAllDigest` type, and all four literal bounds together. The standalone
@@ -377,6 +377,17 @@ runtime substitutions must exit with stable code 70 and metadata-evidence
 substitutions must make `cellc tx validate` fail. A runtime-selected expected
 handle hash, legacy numeric source index, or unknown helper target must reject. See
 [the exact Script handle contract](CELLSCRIPT_EXACT_SCRIPT_HANDLES.md).
+
+The bounded output tranche adds
+`cellscript-bounded-output-plan-contract` and the `CSBPLv1` fixed-element
+codec. `dev` and `ci` must retain native authoring and simulator coverage,
+generated-builder 0/1/N and malformed-codec cases, transaction-validator and
+CKB-adapter concrete-output binding, standalone-checker rebound mutations, and
+the shared CKB-VM corpus. The production acceptance validator additionally
+requires the stateful live-node corpus and binds its fixture digest, unique
+deployed ELF, ordered GroupOutput indexes, commits, rejection codes, and Cell
+liveness. See
+[the bounded output plan contract](CELLSCRIPT_BOUNDED_OUTPUT_PLAN_CONTRACT.md).
 
 The deployment-line path adds the canonical
 `cellscript-deployment-line-receipt-v1` chain and `CSLINv1-fixed-386` value.

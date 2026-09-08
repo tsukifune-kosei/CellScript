@@ -5,19 +5,25 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use ckb_jsonrpc_types::Transaction as JsonTransaction;
-use ckb_types::{packed, prelude::Entity};
+use ckb_types::{
+    bytes::Bytes,
+    core::ScriptHashType,
+    packed,
+    prelude::{Builder, Entity, Pack, Unpack},
+};
 use serde_json::{json, Map, Value};
 
 use crate::ckb_acceptance::{self, ArtifactRecord, CompileEvidence};
 use crate::ckb_devnet::{
-    always_success_dep, always_success_lock, decode_hex, deploy_code, funding_cells, out_point, resolve_ckb_bin, sha256_hex,
-    transaction, CkbDevnet, ALWAYS_SUCCESS_CODE_HASH,
+    always_success_dep, always_success_lock, decode_hex, deploy_code, entry_witness_input_type_hex, funding_cells, hex0x, out_point,
+    resolve_ckb_bin, sha256_hex, transaction, CkbDevnet, ALWAYS_SUCCESS_CODE_HASH,
 };
 use crate::evidence_retention::{keep_gate_workdirs, remove_directory_if_present};
 use crate::production_evidence::{ACTION_RUNS, EXPECTED_END_TO_END_STATEFUL_SCENARIOS, EXPECTED_EXAMPLES, LOCKS};
 
 const RECIPES: &str = include_str!("../fixtures/ckb_acceptance/transactions-v0.23.json");
 const BOUNDED_GROUP_INPUT_FIXTURE: &str = include_str!("../../../tests/fixtures/bounded_group_input_v1.json");
+const BOUNDED_OUTPUT_PLAN_FIXTURE: &str = include_str!("../../../tests/fixtures/bounded_output_plan_v1.json");
 const PINNED_CKB_CXXFLAGS: &str = "-include cstdint";
 const PINNED_CKB_CXX_COMPATIBILITY: &str = "ckb-librocksdb-sys-8.5.4-explicit-cstdint-v1";
 
@@ -831,6 +837,225 @@ fn run_bounded_group_input_acceptance(
     }))
 }
 
+fn packed_script_hash(script: &Value) -> Result<[u8; 32]> {
+    let code_hash: [u8; 32] = decode_hex(script["code_hash"].as_str().context("Script code_hash missing")?)?
+        .try_into()
+        .map_err(|bytes: Vec<u8>| anyhow::anyhow!("Script code_hash must be 32 bytes, got {}", bytes.len()))?;
+    let hash_type = match script["hash_type"].as_str().context("Script hash_type missing")? {
+        "data" => ScriptHashType::Data,
+        "type" => ScriptHashType::Type,
+        "data1" => ScriptHashType::Data1,
+        "data2" => ScriptHashType::Data2,
+        value => bail!("unsupported Script hash_type '{value}' in bounded output fixture"),
+    };
+    let args = decode_hex(script["args"].as_str().context("Script args missing")?)?;
+    let packed = packed::Script::new_builder().code_hash(code_hash.pack()).hash_type(hash_type).args(Bytes::from(args).pack()).build();
+    Ok(packed.calc_script_hash().unpack())
+}
+
+fn bounded_output_plan_payload(case: &Value, output_lock_hash: [u8; 32]) -> Result<Vec<u8>> {
+    let plans = case["plans"].as_array().context("bounded output case plans missing")?;
+    let mut inner = b"CSBPLv1\0".to_vec();
+    inner.extend_from_slice(&u32::try_from(plans.len())?.to_le_bytes());
+    for plan in plans {
+        match plan["owner"].as_str().context("bounded output Plan owner missing")? {
+            "output_lock" => inner.extend_from_slice(&output_lock_hash),
+            "zero" => inner.extend_from_slice(&[0_u8; 32]),
+            owner => bail!("unsupported bounded output Plan owner '{owner}'"),
+        }
+        inner.extend_from_slice(&plan["amount"].as_u64().context("bounded output Plan amount missing")?.to_le_bytes());
+    }
+    match case["codec"].as_str().context("bounded output case codec missing")? {
+        "canonical" | "canonical_unchecked_count" => {}
+        "wrong_magic" => inner[0] ^= 0xff,
+        "trailing_byte" => inner.push(0),
+        codec => bail!("unsupported bounded output fixture codec '{codec}'"),
+    }
+    let mut outer = b"CSARGv1\0".to_vec();
+    outer.extend_from_slice(&u32::try_from(inner.len())?.to_le_bytes());
+    outer.extend_from_slice(&inner);
+    Ok(outer)
+}
+
+fn seed_bounded_output_plan_case(
+    devnet: &mut CkbDevnet,
+    case: &Value,
+    artifact: &ArtifactRecord,
+    deployment: &Value,
+    always_dep: &Value,
+) -> Result<(Value, Value)> {
+    const CHANGE_FLOOR: u64 = 5_000_000_000;
+    let output_capacity =
+        case["outputs"].as_array().context("bounded output case outputs missing")?.iter().try_fold(0_u64, |sum, output| {
+            sum.checked_add(output["capacity_shannons"].as_u64().context("bounded output capacity missing")?)
+                .context("bounded output capacity sum overflow")
+        })?;
+    let needed = output_capacity.checked_add(CHANGE_FLOOR).context("bounded output seed capacity overflow")?;
+    let funding = devnet.collect_spendable(needed)?;
+    let total = funding["total_capacity"].as_u64().context("bounded output funding total missing")?;
+    let trigger_lock = always_success_lock("0x");
+    let trigger_lock_hash = packed_script_hash(&trigger_lock)?;
+    let seed_plan = json!({
+        "plans":[{"owner":"output_lock","amount":1}],
+        "codec":"canonical"
+    });
+    let seed_payload = bounded_output_plan_payload(&seed_plan, trigger_lock_hash)?;
+    let mut witnesses = vec!["0x".to_string(); funding_cells(&funding).len()];
+    witnesses[0] = entry_witness_input_type_hex(&seed_payload);
+    let tx = transaction(
+        funding_cells(&funding),
+        vec![json!({
+            "capacity":format!("0x{total:x}"),
+            "lock":trigger_lock,
+            "type":bounded_group_input_script(artifact)
+        })],
+        vec![hex0x(&1_u64.to_le_bytes())],
+        vec![always_dep.clone(), deployment["cell_dep"].clone()],
+        witnesses,
+        vec![],
+    );
+    let dry_run = devnet.dry_run(&tx)?;
+    let name = case["name"].as_str().context("bounded output case name missing")?;
+    let commit = devnet.submit_and_commit(&tx, &format!("bounded output trigger seed {name}"))?;
+    let tx_hash = commit["tx_hash"].as_str().context("bounded output seed hash missing")?;
+    devnet.wait_live_cell(tx_hash, 0)?;
+    Ok((json!({"status":"committed","dry_run":dry_run,"commit":commit}), json!({"tx_hash":tx_hash,"index":0,"capacity":total})))
+}
+
+fn run_bounded_output_plan_acceptance(
+    devnet: &mut CkbDevnet,
+    artifact: &ArtifactRecord,
+    deployment: &Value,
+    always_dep: &Value,
+) -> Result<Value> {
+    let fixture: Value = serde_json::from_str(BOUNDED_OUTPUT_PLAN_FIXTURE)?;
+    if fixture["schema"] != "cellscript-bounded-output-plan-fixture-v1" {
+        bail!("unexpected bounded output plan fixture schema");
+    }
+    let cases = fixture["cases"].as_array().context("bounded output plan fixture cases missing")?;
+    let output_lock = always_success_lock("0x");
+    let output_lock_hash = packed_script_hash(&output_lock)?;
+    let current_type = bounded_group_input_script(artifact);
+    let foreign_type = always_success_lock("0x666f726569676e");
+    let mut runs = Vec::new();
+    for case in cases {
+        let name = case["name"].as_str().context("bounded output case name missing")?;
+        let expected_exit = case["expected_exit"].as_i64().context("bounded output expected exit missing")?;
+        let (seed, trigger) = seed_bounded_output_plan_case(devnet, case, artifact, deployment, always_dep)?;
+        let outputs_spec = case["outputs"].as_array().context("bounded output case outputs missing")?;
+        let mut outputs = Vec::new();
+        let mut outputs_data = Vec::new();
+        let mut allocated = 0_u64;
+        let mut group_output_indexes = Vec::new();
+        for (index, output) in outputs_spec.iter().enumerate() {
+            let capacity = output["capacity_shannons"].as_u64().context("bounded output capacity missing")?;
+            allocated = allocated.checked_add(capacity).context("bounded output allocation overflow")?;
+            let scope = output["scope"].as_str().context("bounded output scope missing")?;
+            let type_script = if scope == "group" {
+                group_output_indexes.push(index);
+                current_type.clone()
+            } else if scope == "outside_group" {
+                foreign_type.clone()
+            } else {
+                bail!("unsupported bounded output scope '{scope}'");
+            };
+            if output["lock"] != "output_lock" {
+                bail!("unsupported bounded output fixture Lock selector");
+            }
+            outputs.push(json!({
+                "capacity":format!("0x{capacity:x}"),
+                "lock":output_lock,
+                "type":type_script
+            }));
+            outputs_data.push(hex0x(&output["amount"].as_u64().context("bounded output amount missing")?.to_le_bytes()));
+        }
+        let total = trigger["capacity"].as_u64().context("bounded output trigger capacity missing")?;
+        let change = total.checked_sub(allocated).context("bounded output trigger cannot fund outputs")?;
+        outputs.push(json!({
+            "capacity":format!("0x{change:x}"),
+            "lock":always_success_lock("0x"),
+            "type":Value::Null
+        }));
+        outputs_data.push("0x".to_string());
+        let payload = bounded_output_plan_payload(case, output_lock_hash)?;
+        let tx = transaction(
+            std::slice::from_ref(&trigger),
+            outputs,
+            outputs_data,
+            vec![always_dep.clone(), deployment["cell_dep"].clone()],
+            vec![entry_witness_input_type_hex(&payload)],
+            vec![],
+        );
+        if expected_exit == 0 {
+            let dry_run = devnet.dry_run(&tx)?;
+            let measurements = measured_constraints(&json!({}), &tx, &dry_run)?;
+            let commit = devnet.submit_and_commit(&tx, &format!("bounded output plan commit {name}"))?;
+            devnet.wait_dead_cell(
+                trigger["tx_hash"].as_str().context("bounded output trigger hash missing")?,
+                trigger["index"].as_u64().context("bounded output trigger index missing")?,
+            )?;
+            let tx_hash = commit["tx_hash"].as_str().context("bounded output commit hash missing")?;
+            for index in &group_output_indexes {
+                devnet.wait_live_cell(tx_hash, u64::try_from(*index)?)?;
+            }
+            runs.push(json!({
+                "name":name,
+                "status":"passed",
+                "expected_exit":0,
+                "observed_exit":0,
+                "execution":"committed-ordered-group-outputs",
+                "plan_count":case["plans"].as_array().map(Vec::len).unwrap_or(0),
+                "group_output_indexes":group_output_indexes,
+                "seed":seed,
+                "dry_run":dry_run,
+                "measurements":measurements,
+                "commit":commit,
+                "trigger_input_dead":true,
+                "group_outputs_live":true
+            }));
+        } else {
+            let rejection = devnet.dry_run_rejects(
+                &tx,
+                &format!("bounded output plan reject {name}"),
+                Some("Inputs[0].Type"),
+                Some(&artifact.data_hash),
+                Some(expected_exit),
+            )?;
+            devnet.wait_live_cell(
+                trigger["tx_hash"].as_str().context("bounded output trigger hash missing")?,
+                trigger["index"].as_u64().context("bounded output trigger index missing")?,
+            )?;
+            runs.push(json!({
+                "name":name,
+                "status":"passed",
+                "expected_exit":expected_exit,
+                "observed_exit":expected_exit,
+                "execution":"rejected-ordered-group-outputs",
+                "plan_count":case["plans"].as_array().map(Vec::len).unwrap_or(0),
+                "group_output_indexes":group_output_indexes,
+                "seed":seed,
+                "rejection":rejection,
+                "trigger_input_remains_live":true
+            }));
+        }
+    }
+    Ok(json!({
+        "schema":"cellscript-bounded-output-plan-stateful-acceptance-v1",
+        "status":"passed",
+        "fixture_schema":fixture["schema"],
+        "fixture_sha256":sha256_hex(BOUNDED_OUTPUT_PLAN_FIXTURE.as_bytes()),
+        "artifact":artifact.path,
+        "artifact_ckb_data_hash_blake2b":artifact.data_hash,
+        "selection":fixture["selection"],
+        "order":fixture["order"],
+        "correspondence":fixture["correspondence"],
+        "identity_policy":fixture["identity_policy"],
+        "equal_plan_bytes_allowed":fixture["equal_plan_bytes_allowed"],
+        "case_count":runs.len(),
+        "runs":runs
+    }))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     root: &Path,
@@ -879,6 +1104,16 @@ pub(crate) fn run(
             .get(&artifact.path.to_string_lossy().into_owned())
             .context("bounded GroupInput acceptance deployment missing")?;
         run_bounded_group_input_acceptance(&mut devnet, artifact, deployment, &always_dep)?
+    } else {
+        json!({"status":"skipped","reason":"stateful scenarios not requested","runs":[]})
+    };
+    let bounded_output_plan_report = if stateful {
+        let artifact =
+            artifact_by_name.get("bounded-output-plan-v1:verify").context("bounded output plan acceptance artifact missing")?;
+        let deployment = artifact_deployments
+            .get(&artifact.path.to_string_lossy().into_owned())
+            .context("bounded output plan acceptance deployment missing")?;
+        run_bounded_output_plan_acceptance(&mut devnet, artifact, deployment, &always_dep)?
     } else {
         json!({"status":"skipped","reason":"stateful scenarios not requested","runs":[]})
     };
@@ -949,6 +1184,7 @@ pub(crate) fn run(
         "launch_action_runs":group_actions(&action_groups,"launch_action_runs"),
         "lock_spend_matrix_runs":lock_runs, "stateful_scenarios":stateful_report,
         "bounded_group_input_acceptance":bounded_group_input_report,
+        "bounded_output_plan_acceptance":bounded_output_plan_report,
         "all_token_actions_exercised":true, "all_nft_actions_exercised":true,
         "all_timelock_actions_exercised":true, "all_multisig_actions_exercised":true,
         "all_vesting_actions_exercised":true, "all_amm_actions_exercised":true,

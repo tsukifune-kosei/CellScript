@@ -10875,7 +10875,7 @@ action inspect(source_index: u64) -> u64 {
     assert!(metadata_output.status.success(), "stderr: {}", String::from_utf8_lossy(&metadata_output.stderr));
 
     let metadata: serde_json::Value = serde_json::from_slice(&std::fs::read(&metadata_path).unwrap()).unwrap();
-    assert_eq!(metadata["metadata_schema_version"], 71);
+    assert_eq!(metadata["metadata_schema_version"], 72);
     assert_eq!(metadata["runtime"]["ckb_runtime_access_provenance_contract"], "cellscript-ckb-runtime-access-provenance-v1");
     let dynamic_access = metadata["actions"][0]["ckb_runtime_accesses"]
         .as_array()
@@ -10917,6 +10917,66 @@ action inspect(source_index: u64) -> u64 {
     let builder_test = std::fs::read_to_string(output_dir.join("test").join("builder.test.mjs")).unwrap();
     assert!(builder_test.contains("dynamicIndexCases"), "{builder_test}");
     assert!(builder_test.contains("rejects dynamic source indexes above their declared bound"), "{builder_test}");
+}
+
+#[test]
+fn cellc_gen_builder_emits_executable_bounded_output_plan_contract() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+edition = "2026"
+name = "bounded-output-builder"
+version = "0.1.0"
+
+[build]
+target_profile = "ckb"
+"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("src/main.cell"), include_str!("fixtures/bounded_output_plan.cell")).unwrap();
+
+    let metadata_path = root.join("verify.meta.json");
+    let metadata_output = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .args(["metadata", "--output"])
+        .arg(&metadata_path)
+        .output()
+        .unwrap();
+    assert!(metadata_output.status.success(), "stderr: {}", String::from_utf8_lossy(&metadata_output.stderr));
+
+    let output_dir = root.join("generated-builder");
+    let generated = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .current_dir(root)
+        .args(["gen-builder", "--target", "typescript", "--metadata"])
+        .arg(&metadata_path)
+        .args(["--action", "verify", "--output"])
+        .arg(&output_dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(generated.status.success(), "stderr: {}", String::from_utf8_lossy(&generated.stderr));
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output_dir.join("cellscript-builder-manifest.json")).unwrap()).unwrap();
+    let contract = &manifest["actions"][0]["bounded_output_plans"][0];
+    assert_eq!(contract["schema"], "cellscript-bounded-output-plan-contract");
+    assert_eq!(contract["binding"], "plans");
+    assert_eq!(contract["max_elements"], 3);
+    assert_eq!(contract["ordering"], "plan-index-equals-group-output-index");
+    assert_eq!(contract["identity_policy"], "fresh-output-outpoint-plus-type-group-ordinal");
+
+    let index_ts = std::fs::read_to_string(output_dir.join("src/index.ts")).unwrap();
+    assert!(index_ts.contains("encodeBoundedOutputPlanV1"), "{index_ts}");
+    assert!(index_ts.contains("materializeBoundedOutputPlanV1"), "{index_ts}");
+    assert!(index_ts.contains("boundedOutputPlans"), "{index_ts}");
+    let builder_test = std::fs::read_to_string(output_dir.join("test/builder.test.mjs")).unwrap();
+    assert!(builder_test.contains("encodes and materializes bounded output plans with exact order and length"), "{builder_test}");
+    assert!(builder_test.contains("wrongMagic"), "{builder_test}");
+    assert!(builder_test.contains("trailing"), "{builder_test}");
 }
 
 #[test]
@@ -10965,7 +11025,7 @@ action inspect() -> u64 {
     assert!(metadata_output.status.success(), "stderr: {}", String::from_utf8_lossy(&metadata_output.stderr));
 
     let metadata: serde_json::Value = serde_json::from_slice(&std::fs::read(&metadata_path).unwrap()).unwrap();
-    assert_eq!(metadata["metadata_schema_version"], 71);
+    assert_eq!(metadata["metadata_schema_version"], 72);
     let handle = metadata["runtime"]["transaction_view_handles"]
         .as_array()
         .unwrap()

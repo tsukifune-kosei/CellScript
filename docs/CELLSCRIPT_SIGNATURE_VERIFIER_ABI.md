@@ -115,7 +115,7 @@ This contract matches signers whose complete lock placeholder is zero-filled.
 It does not describe multisig layouts that retain a nonzero configuration
 prefix while zeroing only signature slots. Such Locks must keep using their
 standard lock implementation and SDK signer, or gain a separately named and
-tested CellScript message domain. Metadata schema 71 records the exact scope,
+tested CellScript message domain. Metadata schema 72 records the exact scope,
 transform, ordering, digest type, and four bounds; the standalone artifact
 checker binds them to typed call operands and runtime access provenance.
 

@@ -233,7 +233,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
 const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v52-0.30-dev10-public-value-generics";
-pub const METADATA_SCHEMA_VERSION: u32 = 71;
+pub const METADATA_SCHEMA_VERSION: u32 = 72;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
 pub const CONSTRAINTS_METADATA_SCHEMA_VERSION: u32 = 4;
@@ -1136,6 +1136,51 @@ pub struct CollectionInstantiationMetadata {
     pub evidence_tier: EvidenceTier,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub helpers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounded_output_plan: Option<BoundedOutputPlanContractMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BoundedOutputPlanContractMetadata {
+    pub schema: String,
+    pub version: u32,
+    pub binding: String,
+    pub codec: String,
+    pub codec_magic_hex: String,
+    pub placement: String,
+    pub allow_zero: bool,
+    pub element_ty: String,
+    pub element_width_bytes: usize,
+    pub max_elements: usize,
+    pub output_source: String,
+    pub ordering: String,
+    pub correspondence: String,
+    pub output_ty: String,
+    pub output_width_bytes: usize,
+    pub type_script_policy: String,
+    pub lock_policy: String,
+    pub capacity_floor_shannons: u64,
+    pub identity_policy: String,
+    pub field_bindings: Vec<BoundedOutputFieldBindingMetadata>,
+    pub lock_binding: BoundedOutputValueBindingMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BoundedOutputFieldBindingMetadata {
+    pub output_field: String,
+    pub output_offset_bytes: usize,
+    pub plan_field: String,
+    pub plan_offset_bytes: usize,
+    pub width_bytes: usize,
+    pub ty: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BoundedOutputValueBindingMetadata {
+    pub plan_field: String,
+    pub plan_offset_bytes: usize,
+    pub width_bytes: usize,
+    pub ty: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2101,15 +2146,20 @@ fn validate_collection_instantiation_metadata(metadata: &CompileMetadata) -> Res
                     let checked = collection.status == "checked-runtime"
                         && collection.evidence_tier == EvidenceTier::CheckedRuntime
                         && !collection.capacity_builder_evidence_required
-                        && collection.helpers.iter().any(|helper| helper == ir::BOUNDED_OUTPUT_PLAN_V1);
+                        && collection.helpers.iter().any(|helper| helper == ir::BOUNDED_OUTPUT_PLAN_V1)
+                        && collection.bounded_output_plan.is_some();
                     if collection.source != "witness"
                         || !(pending || checked)
                         || collection.output_cardinality_max != Some(collection.max_elements)
                         || !collection.helpers.iter().any(|helper| helper == "create_each")
+                        || (pending && collection.bounded_output_plan.is_some())
                     {
                         return Err(CompileError::without_span(format!(
                             "{prefix} bounded output plan must use witness source and carry either builder evidence or the recognised checked runtime contract"
                         )));
+                    }
+                    if let Some(contract) = &collection.bounded_output_plan {
+                        validate_bounded_output_plan_contract_metadata(&prefix, metadata, collection, contract)?;
                     }
                 }
                 ownership => {
@@ -2128,6 +2178,120 @@ fn validate_collection_instantiation_metadata(metadata: &CompileMetadata) -> Res
                 "{prefix} stack collection must use checked-runtime local owned-value evidence"
             )));
         }
+    }
+    Ok(())
+}
+
+fn validate_bounded_output_plan_contract_metadata(
+    prefix: &str,
+    metadata: &CompileMetadata,
+    collection: &CollectionInstantiationMetadata,
+    contract: &BoundedOutputPlanContractMetadata,
+) -> Result<()> {
+    let total_bytes = contract.max_elements.checked_mul(contract.element_width_bytes).and_then(|bytes| bytes.checked_add(12));
+    if contract.schema != "cellscript-bounded-output-plan-contract"
+        || contract.version != 1
+        || contract.binding.trim().is_empty()
+        || contract.codec != "molecule-fixvec-fixed-item-v1"
+        || contract.codec_magic_hex != format!("0x{}", hex_encode(ir::BOUNDED_OUTPUT_PLAN_MAGIC_V1))
+        || contract.placement != "entry-witness-args-v1-param-payload"
+        || !contract.allow_zero
+        || contract.element_ty != collection.element_ty
+        || contract.element_width_bytes != collection.element_width_bytes
+        || contract.max_elements != collection.max_elements
+        || total_bytes.is_none_or(|bytes| bytes > ir::BOUNDED_OUTPUT_PLAN_MAX_BYTES)
+        || contract.output_source != "ckb-group-output"
+        || contract.ordering != "plan-index-equals-group-output-index"
+        || contract.correspondence != "exactly-one-group-output-per-plan-element"
+        || contract.output_ty.trim().is_empty()
+        || contract.output_width_bytes == 0
+        || contract.output_width_bytes > 512
+        || contract.type_script_policy != "exact-current-script-hash"
+        || contract.lock_policy != "exact-plan-field-hash"
+        || contract.capacity_floor_shannons == 0
+        || contract.identity_policy != "fresh-output-outpoint-plus-type-group-ordinal"
+        || contract.field_bindings.is_empty()
+        || contract.lock_binding.width_bytes != 32
+    {
+        return Err(CompileError::without_span(format!(
+            "{prefix}.bounded_output_plan is not the accepted bounded-output-plan-v1 contract"
+        )));
+    }
+    let mut output_fields = BTreeSet::new();
+    let plan_type = metadata
+        .types
+        .iter()
+        .find(|ty| ty.name == contract.element_ty)
+        .ok_or_else(|| CompileError::without_span(format!("{prefix}.bounded_output_plan element type is missing")))?;
+    let output_type = metadata
+        .types
+        .iter()
+        .find(|ty| ty.name == contract.output_ty)
+        .ok_or_else(|| CompileError::without_span(format!("{prefix}.bounded_output_plan output type is missing")))?;
+    if plan_type.kind != "Struct"
+        || plan_type.encoded_size != Some(contract.element_width_bytes)
+        || output_type.kind != "Resource"
+        || output_type.encoded_size != Some(contract.output_width_bytes)
+        || output_type.capacity_floor_shannons != Some(contract.capacity_floor_shannons)
+        || output_type.identity_policy.is_some()
+        || contract.field_bindings.len() != output_type.fields.len()
+    {
+        return Err(CompileError::without_span(format!(
+            "{prefix}.bounded_output_plan does not match its fixed Plan and Resource type metadata"
+        )));
+    }
+    let mut covered = vec![false; contract.output_width_bytes];
+    for binding in &contract.field_bindings {
+        let plan_field = plan_type.fields.iter().find(|field| field.name == binding.plan_field);
+        let output_field = output_type.fields.iter().find(|field| field.name == binding.output_field);
+        if binding.output_field.trim().is_empty()
+            || binding.plan_field.trim().is_empty()
+            || binding.width_bytes == 0
+            || binding.output_offset_bytes.checked_add(binding.width_bytes).is_none_or(|end| end > contract.output_width_bytes)
+            || binding.plan_offset_bytes.checked_add(binding.width_bytes).is_none_or(|end| end > contract.element_width_bytes)
+            || !output_fields.insert(binding.output_field.as_str())
+            || plan_field.is_none_or(|field| {
+                field.offset != binding.plan_offset_bytes
+                    || field.encoded_size != Some(binding.width_bytes)
+                    || field.ty != binding.ty
+                    || !field.fixed_width
+            })
+            || output_field.is_none_or(|field| {
+                field.offset != binding.output_offset_bytes
+                    || field.encoded_size != Some(binding.width_bytes)
+                    || field.ty != binding.ty
+                    || !field.fixed_width
+            })
+        {
+            return Err(CompileError::without_span(format!(
+                "{prefix}.bounded_output_plan.field_bindings contain an invalid or duplicate exact field mapping"
+            )));
+        }
+        for byte in covered.iter_mut().skip(binding.output_offset_bytes).take(binding.width_bytes) {
+            if *byte {
+                return Err(CompileError::without_span(format!("{prefix}.bounded_output_plan.field_bindings overlap")));
+            }
+            *byte = true;
+        }
+    }
+    let lock_field = plan_type.fields.iter().find(|field| field.name == contract.lock_binding.plan_field);
+    if contract
+        .lock_binding
+        .plan_offset_bytes
+        .checked_add(contract.lock_binding.width_bytes)
+        .is_none_or(|end| end > contract.element_width_bytes)
+        || contract.lock_binding.plan_field.trim().is_empty()
+        || lock_field.is_none_or(|field| {
+            field.offset != contract.lock_binding.plan_offset_bytes
+                || field.encoded_size != Some(32)
+                || field.ty != contract.lock_binding.ty
+                || !field.fixed_width
+        })
+        || covered.iter().any(|covered| !covered)
+    {
+        return Err(CompileError::without_span(format!(
+            "{prefix}.bounded_output_plan.lock_binding falls outside the fixed plan element"
+        )));
     }
     Ok(())
 }
@@ -11511,6 +11675,7 @@ impl CollectionInstantiationBuilder {
             capacity_builder_evidence_required: false,
             evidence_tier: EvidenceTier::CheckedRuntime,
             helpers: self.helpers.into_iter().collect(),
+            bounded_output_plan: None,
         }
     }
 }
@@ -11566,6 +11731,7 @@ fn body_collection_instantiation_metadata(
         .iter()
         .map(|op| {
             let checked_runtime = op.runtime_contract.is_some();
+            let bounded_output_plan = bounded_output_plan_contract_metadata(op, type_layouts);
             CollectionInstantiationMetadata {
                 scope_kind: scope_kind.to_string(),
                 scope_name: scope_name.to_string(),
@@ -11599,6 +11765,7 @@ fn body_collection_instantiation_metadata(
                     EvidenceTier::RuntimeHelperRequired
                 },
                 helpers: op.runtime_contract.iter().cloned().chain(std::iter::once(op.operation.clone())).collect(),
+                bounded_output_plan,
             }
         })
         .collect::<Vec<_>>();
@@ -11818,6 +11985,82 @@ fn body_collection_instantiation_metadata(
 
     bounded.extend(builders.into_values().map(CollectionInstantiationBuilder::into_metadata));
     bounded
+}
+
+fn bounded_output_plan_contract_metadata(
+    operation: &ir::IrBoundedCollectionOp,
+    type_layouts: &MetadataTypeLayouts,
+) -> Option<BoundedOutputPlanContractMetadata> {
+    if operation.runtime_contract.as_deref() != Some(ir::BOUNDED_OUTPUT_PLAN_V1) {
+        return None;
+    }
+    let template = operation.create_template.as_ref()?;
+    let output_type = operation.output_type.as_deref()?;
+    let plan_layouts = type_layouts.get(&operation.element_type)?;
+    let output_layouts = type_layouts.get(output_type)?;
+    let mut field_bindings = Vec::with_capacity(template.fields.len());
+    for (output_field, rendered) in &template.fields {
+        let plan_field = rendered.strip_prefix(&operation.binding)?.strip_prefix('.')?;
+        if plan_field.is_empty() || plan_field.contains('.') {
+            return None;
+        }
+        let output_layout = output_layouts.get(output_field)?;
+        let plan_layout = plan_layouts.get(plan_field)?;
+        let output_width = output_layout.fixed_size.or(output_layout.fixed_enum_size)?;
+        let plan_width = plan_layout.fixed_size.or(plan_layout.fixed_enum_size)?;
+        if output_layout.ty != plan_layout.ty || output_width != plan_width {
+            return None;
+        }
+        field_bindings.push(BoundedOutputFieldBindingMetadata {
+            output_field: output_field.clone(),
+            output_offset_bytes: output_layout.offset,
+            plan_field: plan_field.to_string(),
+            plan_offset_bytes: plan_layout.offset,
+            width_bytes: output_width,
+            ty: ir_type_to_string(&output_layout.ty),
+        });
+    }
+    field_bindings.sort_by_key(|binding| binding.output_offset_bytes);
+    let lock_rendered = template.lock.as_deref()?;
+    let lock_field = lock_rendered.strip_prefix(&operation.binding)?.strip_prefix('.')?;
+    if lock_field.is_empty() || lock_field.contains('.') {
+        return None;
+    }
+    let lock_layout = plan_layouts.get(lock_field)?;
+    let lock_width = lock_layout.fixed_size.or(lock_layout.fixed_enum_size)?;
+    if lock_width != 32 {
+        return None;
+    }
+    let element_width_bytes = operation.element_width?;
+    let output_width_bytes = metadata_inline_type_fixed_width(output_type, type_layouts)?;
+    Some(BoundedOutputPlanContractMetadata {
+        schema: "cellscript-bounded-output-plan-contract".to_string(),
+        version: 1,
+        binding: operation.collection_binding.clone(),
+        codec: "molecule-fixvec-fixed-item-v1".to_string(),
+        codec_magic_hex: format!("0x{}", hex_encode(ir::BOUNDED_OUTPUT_PLAN_MAGIC_V1)),
+        placement: "entry-witness-args-v1-param-payload".to_string(),
+        allow_zero: true,
+        element_ty: operation.element_type.clone(),
+        element_width_bytes,
+        max_elements: operation.max_elements,
+        output_source: "ckb-group-output".to_string(),
+        ordering: "plan-index-equals-group-output-index".to_string(),
+        correspondence: "exactly-one-group-output-per-plan-element".to_string(),
+        output_ty: output_type.to_string(),
+        output_width_bytes,
+        type_script_policy: "exact-current-script-hash".to_string(),
+        lock_policy: "exact-plan-field-hash".to_string(),
+        capacity_floor_shannons: operation.output_capacity_floor_shannons?,
+        identity_policy: "fresh-output-outpoint-plus-type-group-ordinal".to_string(),
+        field_bindings,
+        lock_binding: BoundedOutputValueBindingMetadata {
+            plan_field: lock_field.to_string(),
+            plan_offset_bytes: lock_layout.offset,
+            width_bytes: lock_width,
+            ty: ir_type_to_string(&lock_layout.ty),
+        },
+    })
 }
 
 fn metadata_operand_is_stack_collection(operand: &ir::IrOperand, availability: &MetadataPreludeAvailability) -> bool {
@@ -37359,6 +37602,29 @@ action mint(witness plans: BoundedList<Plan, 2>) -> u64 {
         assert_eq!(entry.params[0].abi_kind, crate::ir::BOUNDED_OUTPUT_PLAN_V1);
         assert_eq!(entry.params[0].witness_bytes, 4);
 
+        let collection = result
+            .metadata
+            .runtime
+            .collection_instantiations
+            .iter()
+            .find(|collection| collection.scope_name == "mint" && collection.ownership == "bounded-output-plan")
+            .expect("bounded output collection metadata");
+        let contract = collection.bounded_output_plan.as_ref().expect("explicit bounded output plan contract");
+        assert_eq!(contract.binding, "plans");
+        assert_eq!(contract.codec_magic_hex, "0x435342504c763100");
+        assert_eq!(contract.element_width_bytes, 40);
+        assert_eq!(contract.max_elements, 2);
+        assert_eq!(contract.output_ty, "Token");
+        assert_eq!(contract.output_width_bytes, 8);
+        assert_eq!(contract.capacity_floor_shannons, 10_000_000_000);
+        assert_eq!(contract.identity_policy, "fresh-output-outpoint-plus-type-group-ordinal");
+        assert_eq!(contract.field_bindings.len(), 1);
+        assert_eq!(contract.field_bindings[0].output_field, "amount");
+        assert_eq!(contract.field_bindings[0].plan_field, "amount");
+        assert_eq!(contract.field_bindings[0].plan_offset_bytes, 32);
+        assert_eq!(contract.lock_binding.plan_field, "owner");
+        assert_eq!(contract.lock_binding.width_bytes, 32);
+
         let mut element = [0_u8; 40].to_vec();
         element[32..40].copy_from_slice(&7_u64.to_le_bytes());
         let encoded_plan = encode_bounded_output_plan_v1(&[element], 40, 2).unwrap();
@@ -37373,6 +37639,117 @@ action mint(witness plans: BoundedList<Plan, 2>) -> u64 {
         assert!(asm.contains("codec=MoleculeFixVec magic=CSBPLv1 element=Plan max=2 width=40"));
         assert!(asm.contains("require GroupOutput count equals plan count"));
         assert!(!asm.contains(crate::ir::BOUNDED_CREATE_EACH_FAIL_CLOSED_HELPER));
+    }
+
+    #[test]
+    fn bounded_create_each_keeps_computed_output_fields_fail_closed() {
+        let source = r#"
+module bounded::computed_output
+
+struct Plan { owner: Address, amount: u64 }
+resource Token has store, create
+with_capacity_floor(10000000000)
+{ amount: u64 }
+
+action mint(witness plans: BoundedList<Plan, 2>) -> u64 {
+    verification
+        create_each plan in plans {
+            require plan.amount > 0
+            create Token { amount: plan.amount + 1 } with_lock(plan.owner)
+        }
+        return 0
+}
+"#;
+        let compiled =
+            compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() }).unwrap();
+        let collection = compiled
+            .metadata
+            .runtime
+            .collection_instantiations
+            .iter()
+            .find(|collection| collection.scope_name == "mint" && collection.ownership == "bounded-output-plan")
+            .expect("bounded output collection metadata");
+        assert_eq!(collection.status, "builder-evidence-required");
+        assert!(collection.bounded_output_plan.is_none());
+        let asm = String::from_utf8(compiled.artifact_bytes).unwrap();
+        assert!(asm.contains(crate::ir::BOUNDED_CREATE_EACH_FAIL_CLOSED_HELPER));
+
+        let error = compile_with_executable_surface_policy(
+            source,
+            CompileOptions { target_profile: Some("ckb".to_string()), ..CompileOptions::default() },
+            ExecutableSurfacePolicy::DenyFailClosed,
+        )
+        .unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("E2105"));
+        assert!(error.message.contains("create_each:plans:BoundedList<Plan, 2>"));
+    }
+
+    #[test]
+    fn tx_validation_binds_bounded_output_plan_to_witness_order_and_concrete_outputs() {
+        let source = r#"
+module bounded::tx_validation
+
+struct Plan { owner: Address, amount: u64 }
+resource Token has store, create
+with_capacity_floor(10000000000)
+{ amount: u64 }
+
+action mint(witness plans: BoundedList<Plan, 2>) -> u64 {
+    verification
+        create_each plan in plans {
+            require plan.amount > 0
+            create Token { amount: plan.amount } with_lock(plan.owner)
+        }
+        return 0
+}
+"#;
+        let result = compile(source, CompileOptions { target_profile: Some("ckb".to_string()), ..Default::default() }).unwrap();
+        let action = result.metadata.actions.iter().find(|action| action.name == "mint").unwrap();
+        let mut element = vec![1_u8; 40];
+        element[32..].copy_from_slice(&7_u64.to_le_bytes());
+        let plan = encode_bounded_output_plan_v1(&[element], 40, 2).unwrap();
+        let witness = action.entry_witness_args(&[EntryWitnessArg::Bytes(plan.clone())]).unwrap();
+        let current_script_hash = format!("0x{}", "09".repeat(32));
+        let mut tx = serde_json::json!({
+            "current_script_hash": current_script_hash.clone(),
+            "witnesses": [{ "input_type": format!("0x{}", crate::hex_encode(&witness)) }],
+            "outputs": [{
+                "data": format!("0x{}", crate::hex_encode(&7_u64.to_le_bytes())),
+                "lock_hash": format!("0x{}", "01".repeat(32)),
+                "type_hash": current_script_hash.clone(),
+                "capacity_shannons": 10_000_000_000_u64
+            }],
+            "bounded_output_plan_evidence": [{
+                "schema": "cellscript-bounded-output-plan-evidence-v1",
+                "version": 1,
+                "action": "mint",
+                "binding": "plans",
+                "witness_index": 0,
+                "witness_field": "input_type",
+                "plan_payload": format!("0x{}", crate::hex_encode(&plan)),
+                "current_script_hash": current_script_hash,
+                "group_output_indexes": [0]
+            }]
+        });
+        let report = crate::assumptions::validate_transaction_against_metadata(&result.metadata, &tx);
+        assert_eq!(report.status, "ok", "{:?}", report.violations);
+        assert_eq!(report.checked_assumptions, ["bounded-output-plan:mint:plans"]);
+
+        for (pointer, replacement, expected) in [
+            ("/outputs/0/data", serde_json::json!("0x0800000000000000"), "data does not exactly materialize"),
+            ("/outputs/0/lock_hash", serde_json::json!(format!("0x{}", "02".repeat(32))), "lock_hash does not equal"),
+            ("/outputs/0/type_hash", serde_json::json!(format!("0x{}", "08".repeat(32))), "do not exactly enumerate"),
+            ("/outputs/0/capacity_shannons", serde_json::json!(9_999_999_999_u64), "is below floor"),
+            ("/bounded_output_plan_evidence/0/group_output_indexes", serde_json::json!([0, 0]), "unique, strictly"),
+            ("/bounded_output_plan_evidence/0/plan_payload", serde_json::json!("0x435342504c76310000000000"), "does not match"),
+        ] {
+            let previous = tx.pointer(pointer).cloned().unwrap();
+            *tx.pointer_mut(pointer).unwrap() = replacement;
+            let report = crate::assumptions::validate_transaction_against_metadata(&result.metadata, &tx);
+            assert_eq!(report.status, "failed");
+            assert!(report.violations.iter().any(|violation| violation.message.contains(expected)), "{:?}", report.violations);
+            *tx.pointer_mut(pointer).unwrap() = previous;
+        }
     }
 
     #[test]
