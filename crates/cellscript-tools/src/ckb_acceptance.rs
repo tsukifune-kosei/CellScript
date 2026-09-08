@@ -707,5 +707,21 @@ mod tests {
             let case = action_cases.iter().find(|case| case["name"] == name).unwrap();
             assert_eq!(case["artifact_data_hash"], expected_hash, "stale audited artifact identity for {name}");
         }
+
+        for (transaction, expected_since) in [
+            ("0x352b275582f167c4a2332d05c5bab89ffb39f2053dcc899f5d42f57a9f075234", &["0x2000010000000000"][..]),
+            ("0xd5fa5dcfd1dc5ac7749aac58e2ccc70953e8e86adcbbd315e7d28eac991c6bbc", &["0x2000010000000000", "0x0", "0x0"][..]),
+            ("0x7e40aa9553c4f2c63d5ae3732a4d57a9e697e14b8bf8428dcd99574709a66b9e", &["0x2000010000000000"][..]),
+            ("0x402f7e5dd680c1d6dc63abfc07b59a2583aa577503c506bef3d00a3a9318608b", &["0x200001000000000b"][..]),
+            ("0xf36de341cb16e3887aa7fca0f4421e35bc3bd224f9e39d215606a49f73dabee4", &["0x200001000000000b", "0x0", "0x0"][..]),
+        ] {
+            let actual_since = fixture["transactions"][transaction]["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|input| input["since"].as_str().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(actual_since, expected_since, "stale typed temporal input since for {transaction}");
+        }
     }
 }

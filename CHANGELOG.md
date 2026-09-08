@@ -2,6 +2,14 @@
 
 ## 0.30 - Capability closure development branch
 
+- Rebind the CKB acceptance transaction recipes to the typed timelock
+  contract. `request_release`, `execute_release`, and `can_unlock_lock` now
+  supply canonical absolute-epoch `since` values for the selected `TimeLock`;
+  the stateful release path carries epoch 11 from the created lock. A focused
+  fixture assertion prevents these inputs from silently reverting to the
+  pre-typed all-zero block-number encoding, which the current machine contract
+  correctly rejects with `ckb-since-malformed` (37).
+
 - Add focused schema-change acknowledgements for Edition 2027
   `data = same except` relations. `cellc schema-ack` emits a canonical plan,
   blocks a newly added implicitly preserved field with `SACK1001`, creates a
