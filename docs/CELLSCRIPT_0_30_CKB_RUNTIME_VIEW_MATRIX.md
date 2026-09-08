@@ -75,13 +75,29 @@ transaction hash, or args hash is `Hash`. `ckb::script_hash(hash)` is an
 explicit assertion that already trusted raw bytes represent a complete Script
 hash; it does not prove existence, deployment, or authorization.
 
+Code that has the Script fields can compute the complete value directly:
+
+```cellscript
+let args = script::args(b"owner")
+let lock = script::new(code_hash, script::hash_type_data1(), args)
+let complete: ScriptHash = script::hash(lock)
+```
+
+`script::hash` serializes the canonical Molecule Script table with offsets 16,
+48, and 49, then applies CKB Blake2b-256. The serialized width is `53 +
+args.len`; the current fixed scratch contract admits `args.len <= 459`. The
+hash-type helpers produce exactly the CKB values 0, 1, 2, and 4. A dynamic
+value outside that set, an invalid pointer, or an over-bound value returns
+`script-construction-invalid` (72). This constructs a value for comparison; it
+does not establish that the Script is deployed or authorized.
+
 ## Existing bounded runtime families
 
 | Family | Admitted operations | Classification and bound |
 |---|---|---|
 | Source views | `source::{input,output,group_input,group_output,cell_dep,header_dep}` | Executable closed source-kind/index values. Legacy `u64` consumers remain accepted for Edition 2026 compatibility; typed handles are preferred for new authoring. |
 | Cell scalars and fixed bytes | capacity/occupied/unoccupied, count, type presence, data size, exact u8/u32/u64 reads, serialized Script byte/size reads | Executable or executable limited. Every byte offset is checked; fixed reads never allocate an unbounded buffer. |
-| Cell identities | data/lock/type hash reads and requirements, Script code-hash/hash-type/args checks, current Script args checks | Executable fixed 32-byte or scalar reads. Absent Type Script and wrong Script domain fail closed. |
+| Cell identities | data/lock/type hash reads and requirements, Script code-hash/hash-type/args checks, current Script args checks, canonical bounded `script::new`/`script::hash` | Executable fixed 32-byte or scalar reads. Constructed Script hashing accepts at most 459 fixed args bytes. Absent Type Script and wrong Script domain fail closed. |
 | Input lineage | full OutPoint transaction hash/index requirements and MetaPoint pair helpers | Executable fixed-width helpers. Pair scanners are protocol-neutral but have separately documented cardinality bounds. |
 | Temporal and DAO | typed HeaderDep epoch fields plus full-header block number and millisecond timestamp; opaque and decoded `InputView.since`; six absolute/relative block, epoch, and timestamp `Since` domains; checked narrowing; checked `EpochDuration` arithmetic; explicit raw conversions; legacy raw constructors; DAO accumulated-rate/header-lineage/maturity helpers | The additive temporal subset is executable under the typed temporal contract. Full-header reads require the exact 208-byte Molecule Header; Since decoding validates RFC0017 flags and payloads; same-domain epoch-Since comparisons use canonical fraction ordering; duration construction and EpochNumber add/sub enforce the 24-bit domain. |
 | Witness | count/size, legacy exact byte/u32/u64/bytes32 reads, bounded spans, selected gather hashing, exact 32-byte typed WitnessArgs fields, and owner-tagged variable-length raw/lock/entry/output_type views with exact scalar reads and streaming Blake2b | Executable limited. Bounded views admit at most 65,536 bytes and do not expose allocation, mutation, slicing as an owned value, or unchecked pointers. |
@@ -117,6 +133,7 @@ hash; it does not prove existence, deployment, or authorization.
 | 69 | `sighash-bound-exceeded` | A group/input/extra-witness count or included witness exceeds the signing-domain literals. |
 | 70 | `exact-script-handle-invalid` | An exact handle encoding, commitment, class, role, selected Script, or verifier code identity differs. |
 | 71 | `deployment-line-handle-invalid` | An exact active line, admission CellDep, code CellDep, or selected Script identity differs. |
+| 72 | `script-construction-invalid` | A constructed Script has an invalid pointer, args width, or CKB hash type. |
 
 ## Current executable evidence
 
@@ -150,13 +167,19 @@ independent `V2410` rejection. HeaderDep-specific cases additionally change
 each access record, typed result, declared syscall contract, CKB syscall
 number, field selector, SourceView kind/index, 8/208-byte request and response
 width, RawHeader offset, return-code branch, and errors 44/45/4 in the final
-RISC-V instructions. Lowering record v7 rejects those rebound record or machine
+RISC-V instructions. Lowering record v8 rejects those rebound record or machine
 mutations. Generated
 TypeScript builder tests retain the same dynamic parameter bound.
 `tests/authoring_replace.rs` exercises the
 `ScriptHash` domain against real output Lock Script hashes. Existing
 `tests/ickb_diff.rs`, `tests/crypto_primitives.rs`, and artifact-checker mutation
 suites retain the older bounded helper families.
+`tests/script_hash.rs` differentially compares all four hash types, empty and
+maximum args, and substituted results with `ckb-types::Script::calc_script_hash`
+inside CKB-VM. Lowering record v8 binds that typed call and its exact Molecule
+serialization, 459/512-byte bounds, Blake2b target, and error 72 to the final
+machine code. `tests/artifact_checker.rs` mutates each of those boundaries
+after recomputing outer hashes and requires independent rejection.
 
 The following work remains before issue #24 can close:
 

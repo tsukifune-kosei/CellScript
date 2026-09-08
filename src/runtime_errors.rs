@@ -70,6 +70,7 @@ pub enum CellScriptRuntimeError {
     SighashBoundExceeded = 69,
     ExactScriptHandleInvalid = 70,
     DeploymentLineHandleInvalid = 71,
+    ScriptConstructionInvalid = 72,
 }
 
 impl CellScriptRuntimeError {
@@ -143,6 +144,7 @@ impl CellScriptRuntimeError {
             Self::SighashBoundExceeded => "sighash-bound-exceeded",
             Self::ExactScriptHandleInvalid => "exact-script-handle-invalid",
             Self::DeploymentLineHandleInvalid => "deployment-line-handle-invalid",
+            Self::ScriptConstructionInvalid => "script-construction-invalid",
         }
     }
 
@@ -235,6 +237,9 @@ impl CellScriptRuntimeError {
             }
             Self::DeploymentLineHandleInvalid => {
                 "A deployment line handle, its active admission Cell, selected transaction Script, or exact code CellDep identity did not match."
+            }
+            Self::ScriptConstructionInvalid => {
+                "A constructed CKB Script had an invalid hash_type, oversized args, or unavailable fixed-byte input."
             }
         }
     }
@@ -351,6 +356,9 @@ impl CellScriptRuntimeError {
             Self::DeploymentLineHandleInvalid => {
                 "Use the current active CSLINv1 handle with its exact admission and code CellDeps at the compiled transaction positions."
             }
+            Self::ScriptConstructionInvalid => {
+                "Use data, type, data1, or data2 and keep fixed Script args within the documented bounded maximum."
+            }
         }
     }
 
@@ -420,6 +428,7 @@ impl CellScriptRuntimeError {
             69 => Some(Self::SighashBoundExceeded),
             70 => Some(Self::ExactScriptHandleInvalid),
             71 => Some(Self::DeploymentLineHandleInvalid),
+            72 => Some(Self::ScriptConstructionInvalid),
             _ => None,
         }
     }
@@ -498,6 +507,7 @@ pub const ALL_RUNTIME_ERRORS: &[CellScriptRuntimeError] = &[
     CellScriptRuntimeError::SighashBoundExceeded,
     CellScriptRuntimeError::ExactScriptHandleInvalid,
     CellScriptRuntimeError::DeploymentLineHandleInvalid,
+    CellScriptRuntimeError::ScriptConstructionInvalid,
 ];
 
 pub const RESERVED_RUNTIME_ERROR_CODES: &[u64] = &[6, 19, 27, 28, 29, 30, 31];

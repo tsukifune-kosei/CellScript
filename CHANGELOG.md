@@ -450,6 +450,21 @@
   result-length check. Advance the artifact cache identity to
   `project-source-set-v50-0.30-dev8-header-dep-machine-contract`.
 
+- Add canonical source-level CKB Script hashing. `script::args` accepts fixed
+  bytes or a `Hash`, `script::new` constructs the typed `Script` value, and
+  `script::hash` returns `ScriptHash` after serializing the exact Molecule
+  table and applying CKB Blake2b-256. The fixed runtime scratch contract admits
+  at most 459 args bytes, validates hash types `data`, `type`, `data1`, and
+  `data2`, and returns stable error 72 for an invalid dynamic construction.
+  Real CKB-VM tests differentially match `ckb-types::Script::calc_script_hash`
+  at empty, ordinary, 32-byte, and maximum args widths and reject substituted
+  hashes. Lowering record v8 independently binds the typed call, 53-byte
+  Molecule prefix, 512-byte preimage bound, byte-copy loops, valid hash-type
+  set, Blake2b delegation, and error return to decoded machine instructions;
+  hash-rebound metadata, typed-record, and instruction mutations reject.
+  Advance the artifact cache identity to
+  `project-source-set-v51-0.30-dev9-script-hash`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

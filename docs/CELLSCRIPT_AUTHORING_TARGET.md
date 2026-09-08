@@ -160,9 +160,12 @@ read from typed CKB transaction views have that type. A trusted raw `Hash` must
 cross the domain explicitly through `ckb::script_hash(hash)`; that conversion
 does not prove that a corresponding Script exists, is deployed, or authenticates
 the transaction. Verifying an already-known complete Script hash therefore does
-not require constructing a Script object in source. Address decoding, hashing a
-newly constructed complete Script, and signature verification remain separate
-API work under the 0.30 closure plan.
+not require constructing a Script object in source. When the complete Script is
+known by fields, `script::args`, `script::new`, and `script::hash` serialize the
+canonical Molecule value and produce `ScriptHash`. This executable path admits
+fixed args of at most 459 bytes and all four CKB hash types. Address decoding,
+dynamic or larger Script args, and signature verification remain separate API
+work under the 0.30 closure plan.
 
 The exact-artifact path is now executable through the ordinary fixed-width
 `ExactScriptHandle` value. A consuming contract embeds the CKB Blake2b-256 hash

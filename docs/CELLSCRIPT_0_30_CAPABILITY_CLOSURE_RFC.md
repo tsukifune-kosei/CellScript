@@ -21,10 +21,15 @@ relations accept `lock = exact_hash(script_hash)` only for the dedicated
 type, while `ckb::script_hash(Hash)` makes conversion from an already trusted
 raw hash explicit. The conversion does not prove Script existence, deployment,
 or authorization. Formatter/LSP support and real CKB-VM matching and
-substitution-negative fixtures ship with the compiler path. This closes one
-bounded part of #25; complete Script construction/hashing, broader
-authorization-domain APIs, cryptographic capability contracts, and the rest of
-Stage 1 remain open.
+substitution-negative fixtures ship with the compiler path. The bounded #25
+Script-construction slice also adds `script::args`, `script::new`, and
+`script::hash`: fixed args up
+to 459 bytes are serialized as canonical Molecule Script data and hashed with
+CKB Blake2b-256. CKB-VM differentials cover all four hash types and the exact
+upper bound; invalid dynamic hash types return error 72. This closes complete
+Script hashing for the admitted fixed source shape, while address decoding,
+dynamic Script args, signature verification, and broader cryptographic
+capability contracts remain open.
 The slice has the development source identity
 `cellscript-source-semantics-2027-0.30-dev1`; it does not reuse or redefine the
 recorded `authoring1` identity and is not the final 0.30 grammar identity.
@@ -48,9 +53,11 @@ add/sub now enforce the 24-bit domain with executable overflow and underflow
 evidence. Exact 208-byte full-header decoding now supplies typed block number
 and millisecond timestamp reads. Dynamic source indexes retain their parameter
 binding and 32-bit runtime bound through metadata, generated TypeScript
-builders, CKB-VM execution, and the standalone checker. Lowering record v7 now
+builders, CKB-VM execution, and the standalone checker. Lowering record v8 now
 binds the five HeaderDep field contracts to their final syscall, selector,
-width, offset, and terminal-error instructions. Remaining work includes
+width, offset, and terminal-error instructions. It also binds canonical
+constructed-Script hashing to the 53-byte Molecule prefix, fixed args bound,
+hash-type set, byte-copy loops, Blake2b target, and error 72. Remaining work includes
 complete builder parity, measurement, and release evidence. Owner-tagged
 bounded raw/lock/entry/output_type witness views now
 close the variable witness-value row with literal 65,536-byte bounds, exact
@@ -120,7 +127,7 @@ form a complete 0.30 business-capability plan.
 | Bounded output plans and one-to-one output correspondence | [#8](https://github.com/CellScript-Labs/CellScript/issues/8) | Partial. The runtime foundation exists on the 0.26 development line, while authoring, shared-witness composition, builders, and complete independent machine evidence remain release work. |
 | Multi-Script transaction construction and conflict handling | [#9](https://github.com/CellScript-Labs/CellScript/issues/9) | Covered as the architecture owner. The ProtocolBundle must precede any `.celltx` convenience syntax. |
 | Typed roles across Script boundaries | [#10](https://github.com/CellScript-Labs/CellScript/issues/10) | Closed artifact-known Cell/witness roles are implemented in ProtocolBundle with exact schema/interface/ELF/deployment identity. Open/runtime-selected roles remain dependent on #11. |
-| Runtime Script and verifier handles | [#11](https://github.com/CellScript-Labs/CellScript/issues/11) | Exact artifact receipts and fixed-width values are implemented for independently checked ProtocolBundle artifacts. Source-level generic handles, checked runtime construction, and open/runtime-selected roles remain open. |
+| Runtime Script and verifier handles | [#11](https://github.com/CellScript-Labs/CellScript/issues/11) | Exact artifact receipts and fixed-width values are implemented for independently checked ProtocolBundle artifacts. Canonical checked Script construction/hashing is implemented for fixed args up to 459 bytes. Generic handles, dynamic/larger construction, and open/runtime-selected roles remain open. |
 | Timelocks, epochs, timestamps, and `Since` | [#12](https://github.com/CellScript-Labs/CellScript/issues/12) | Covered for typed temporal domains. It does not own the rest of the transaction-view and syscall surface. |
 | Digest-committed substate and authenticated openings | [#13](https://github.com/CellScript-Labs/CellScript/issues/13) | Covered for commitments and opening correspondence. It must share the entry witness envelope with output plans and verifier proofs. |
 | Honest capability and product-completeness claims | [#14](https://github.com/CellScript-Labs/CellScript/issues/14) | Covered as a governance rule. It is not an implementation owner for the missing capabilities. |

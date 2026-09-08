@@ -446,6 +446,7 @@ fn is_v014_runtime_helper(func: &str) -> bool {
             | "__ckb_hash_blake2b_var"
             | "__ckb_hash_blake2b_packed"
             | "__ckb_hash_data_packed"
+            | "__ckb_script_hash"
             | "__ckb_hash_sha256"
             | "__ckb_hash_sha256d"
             | "__ckb_hash_sha256_pair"
@@ -506,6 +507,7 @@ fn is_ckb_fixed_hash_helper(func: &str) -> bool {
             | "__ckb_hash_blake2b_var"
             | "__ckb_hash_blake2b_packed"
             | "__ckb_hash_data_packed"
+            | "__ckb_script_hash"
             | "__ckb_hash_sha256"
             | "__ckb_hash_sha256d"
             | "__ckb_hash_sha256_pair"
@@ -628,6 +630,7 @@ fn fixed_byte_width(ty: &IrType, fixed_size: Option<usize>) -> Option<usize> {
         {
             Some(size)
         }
+        (IrType::Named(name), Some(32)) if is_ckb_fixed_hash_domain_name(name) => Some(32),
         (IrType::Ref(inner) | IrType::MutRef(inner), _) => fixed_byte_width(inner, type_static_length(inner)),
         _ => None,
     }
@@ -691,6 +694,7 @@ fn type_static_length(ty: &IrType) -> Option<usize> {
         IrType::Unit => Some(0),
         IrType::Ref(inner) | IrType::MutRef(inner) => type_static_length(inner),
         IrType::Named(name) if is_ckb_temporal_scalar_name(name) => Some(8),
+        IrType::Named(name) if is_ckb_fixed_hash_domain_name(name) => Some(32),
         IrType::Named(name) if name == crate::script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE => {
             Some(crate::script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES)
         }
@@ -719,6 +723,7 @@ fn operand_fixed_byte_width(operand: &IrOperand) -> Option<usize> {
         IrType::Named(name) if name == crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_TYPE => {
             Some(crate::script_handle_contract::DEPLOYMENT_LINE_HANDLE_BYTES)
         }
+        IrType::Named(name) if is_ckb_fixed_hash_domain_name(name) => Some(32),
         _ => None,
     }
 }

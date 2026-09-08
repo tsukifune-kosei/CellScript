@@ -267,6 +267,7 @@ pub fn check_bundle_values(
     let terminal_sink = crate::failure::validate_verifier_failures(record, &elf)?;
     validate_stack_discipline(record, &elf, terminal_sink)?;
     validate_syscalls(record, &elf)?;
+    validate_script_hash_machine_contract(record, &elf)?;
     validate_source_map(source_map, record, artifact, &elf)?;
 
     Ok(CheckerReport {
@@ -703,6 +704,7 @@ fn validate_runtime_access_provenance_metadata(metadata: &Value, typed_semantics
             }
         }
         validate_header_dep_runtime_accesses(&module_accesses, &typed_handles, typed_semantics)?;
+        validate_script_hash_runtime_accesses(&module_accesses, typed_semantics)?;
     }
     if schema >= SIGHASH_ZERO_LOCK_METADATA_SCHEMA {
         validate_sighash_zero_lock_domains(metadata, &module_accesses, typed_semantics)?;
@@ -999,6 +1001,7 @@ fn parse_runtime_accesses(value: Option<&Value>, label: &str) -> Result<Vec<Runt
         validate_runtime_access_provenance(&prefix, &access.source, Some(access.index), &access.provenance)?;
         validate_canonical_transaction_hash_runtime_access(&prefix, access)?;
         validate_canonical_sighash_zero_lock_runtime_access(&prefix, access)?;
+        validate_canonical_script_hash_runtime_access(&prefix, access)?;
         validate_canonical_header_dep_runtime_access(&prefix, access)?;
     }
     Ok(accesses)
@@ -1137,6 +1140,60 @@ fn validate_header_dep_runtime_accesses(
     Ok(())
 }
 
+fn validate_script_hash_runtime_accesses(
+    accesses: &[RuntimeAccess],
+    typed_semantics: &TypedSemanticRecord,
+) -> Result<(), CheckerError> {
+    const MAX_ARGS_BYTES: u64 = 459;
+    const MOLECULE_SCRIPT_PREFIX_BYTES: u64 = 53;
+    let mut matching_accesses = accesses.iter().filter(|access| access.operation == "script-hash-v1").collect::<Vec<_>>();
+    let matching_calls = typed_semantics
+        .entries
+        .iter()
+        .flat_map(|entry| &entry.blocks)
+        .flat_map(|block| &block.operations)
+        .filter(|operation| operation.call.as_ref().is_some_and(|call| call.target == "__ckb_script_hash"))
+        .collect::<Vec<_>>();
+    if matching_accesses.len() != matching_calls.len() {
+        return Err(metadata_binding_error("canonical Script hash runtime accesses do not match typed helper calls"));
+    }
+    for operation in matching_calls {
+        let call = operation.call.as_ref().expect("filtered typed call");
+        let args_width = operation.operands.get(2).and_then(|operand| script_hash_args_width(&operand.ty));
+        if operation.destinations.len() != 1
+            || operation.operands.len() != 3
+            || call.params != operation.operands.iter().map(|operand| operand.ty.clone()).collect::<Vec<_>>()
+            || call.return_type != "hash"
+            || operation.operands.first().is_none_or(|operand| canonical_abi_type(&operand.ty) != "hash")
+            || operation.operands.get(1).is_none_or(|operand| operand.ty != "u64")
+            || args_width.is_none_or(|width| width > MAX_ARGS_BYTES)
+        {
+            return Err(metadata_binding_error(
+                "typed __ckb_script_hash call does not preserve the canonical code-hash, hash-type, args, and result domains",
+            ));
+        }
+        let encoded_width = MOLECULE_SCRIPT_PREFIX_BYTES + args_width.expect("validated Script args width");
+        let Some(position) = matching_accesses.iter().position(|access| access.provenance.range.length.value == Some(encoded_width))
+        else {
+            return Err(metadata_binding_error(
+                "typed __ckb_script_hash call has no runtime access with its canonical Molecule width",
+            ));
+        };
+        matching_accesses.remove(position);
+    }
+    Ok(())
+}
+
+fn fixed_u8_array_width(ty: &str) -> Option<u64> {
+    let inner = ty.strip_prefix('[')?.strip_suffix(']')?;
+    let (element, width) = inner.rsplit_once(';')?;
+    (element.trim() == "u8").then(|| width.trim().parse().ok()).flatten()
+}
+
+fn script_hash_args_width(ty: &str) -> Option<u64> {
+    (canonical_abi_type(ty) == "hash").then_some(32).or_else(|| fixed_u8_array_width(ty))
+}
+
 fn validate_canonical_transaction_hash_runtime_access(prefix: &str, access: &RuntimeAccess) -> Result<(), CheckerError> {
     let identifies_transaction_hash =
         access.operation == "transaction-hash" || access.syscall == "LOAD_TX_HASH" || access.binding == "ckb::transaction_hash";
@@ -1201,6 +1258,42 @@ fn validate_canonical_sighash_zero_lock_runtime_access(prefix: &str, access: &Ru
     Ok(())
 }
 
+fn validate_canonical_script_hash_runtime_access(prefix: &str, access: &RuntimeAccess) -> Result<(), CheckerError> {
+    const MAX_ARGS_BYTES: u64 = 459;
+    let identifies_script_hash = access.operation == "script-hash-v1"
+        || access.binding == "script::hash"
+        || (access.syscall == "CKB_BLAKE2B" && access.source == "Script");
+    if !identifies_script_hash {
+        return Ok(());
+    }
+    let range = &access.provenance.range;
+    if access.operation != "script-hash-v1"
+        || access.syscall != "CKB_BLAKE2B"
+        || access.source != "Script"
+        || access.index != 0
+        || access.binding != "script::hash"
+        || access.provenance.source.resolved_source != "Script"
+        || access.provenance.source.origin != "constructed-script"
+        || access.provenance.source.binding.is_some()
+        || access.provenance.index.kind != "not-applicable"
+        || access.provenance.index.value.is_some()
+        || access.provenance.index.binding.is_some()
+        || access.provenance.index.max_inclusive.is_some()
+        || range.kind != "fixed-width"
+        || range.offset.kind != "not-applicable"
+        || range.offset.value.is_some()
+        || range.offset.binding.is_some()
+        || range.offset.max_inclusive.is_some()
+        || range.length.kind != "static"
+        || range.length.value.is_none_or(|width| !(53..=53 + MAX_ARGS_BYTES).contains(&width))
+        || range.length.value != range.length.max_inclusive
+        || range.length.binding.is_some()
+    {
+        return Err(metadata_binding_error(format!("{prefix} does not match the canonical bounded Molecule Script hash contract")));
+    }
+    Ok(())
+}
+
 fn validate_runtime_access_provenance(
     prefix: &str,
     declared_source: &str,
@@ -1219,6 +1312,7 @@ fn validate_runtime_access_provenance(
             | "inherited-source-view"
             | "implicit-lowering"
             | "bounded-scan"
+            | "constructed-script"
             | "metadata-summary"
             | "external-adapter"
     ) {
@@ -1322,6 +1416,7 @@ fn known_runtime_source(source: &str) -> bool {
             | "GroupHeaderDep"
             | "Witness"
             | "ScriptArgs"
+            | "Script"
             | "Expression"
             | "SourceView"
             | "Input/Output"
@@ -1418,7 +1513,8 @@ fn runtime_syscall_allows_source(syscall: &str, source: &str) -> bool {
         "LOAD_WITNESS_ARGS_LOCK" | "LOAD_WITNESS_ARGS_INPUT_TYPE" => source == "GroupInput",
         "LOAD_WITNESS_ARGS_OUTPUT_TYPE" => source == "GroupOutput",
         "CAPACITY_POLICY" => source == "Output",
-        "CKB_BLAKE2B" | "SHA256" => source == "Profile",
+        "CKB_BLAKE2B" => matches!(source, "Profile" | "Script"),
+        "SHA256" => source == "Profile",
         "SPAWN" | "EXEC" => source == "CellDep",
         "WAIT" | "PROCESS_ID" | "PIPE" | "PIPE_WRITE" | "PIPE_READ" | "INHERITED_FD" | "CLOSE" => source == "Process",
         _ => false,
@@ -2945,12 +3041,19 @@ fn validate_typed_operation(
                 || operand_type(0)
                     .zip(destination_type(0))
                     .is_some_and(|(source, destination)| bounded_witness_view_retyping_move(source, destination))
+                || operand_type(0)
+                    .zip(destination_type(0))
+                    .is_some_and(|(source, destination)| semantic_hash_domain_retyping_move(source, destination))
                 || (operand_type(0) == Some("Vec")
                     && destination_type(0).is_some_and(|destination| collection_element_type(destination).is_some()))
                 || checked_unsigned_narrowing_move(entry, block, operation, locals)
                 || zero_sized_aggregate_sentinel;
             if !shape(1, 1) || !none_detail || !move_types_match || operation.call.is_some() {
-                return fail();
+                return typed_error(format!(
+                    "typed move has an invalid shape or type: source {:?}, destination {:?}",
+                    operand_type(0),
+                    destination_type(0)
+                ));
             }
         }
         "tuple" => {
@@ -3284,6 +3387,11 @@ fn bounded_witness_view_retyping_move(actual: &str, expected: &str) -> bool {
         && maximum.trim().parse::<u64>().is_ok_and(|maximum| maximum <= 65_536)
 }
 
+fn semantic_hash_domain_retyping_move(actual: &str, expected: &str) -> bool {
+    (canonical_abi_type(actual) == "hash" && matches!(expected, "ScriptHash" | "SighashAllDigest"))
+        || (actual == "SighashAllDigest" && canonical_abi_type(expected) == "hash")
+}
+
 fn checked_unsigned_narrowing_move(
     entry: &TypedSemanticEntry,
     block: &TypedSemanticBlock,
@@ -3383,8 +3491,8 @@ fn tuple_field_type(ty: &str, field: &str) -> Option<String> {
 fn builtin_tuple_contract_matches(destination: &str, operands: &[TypedSemanticOperand]) -> bool {
     match (destination, operands) {
         ("ScriptArgs", [bytes, len, is_empty]) => {
-            bytes.ty.starts_with('[')
-                && collection_element_type(&bytes.ty).as_deref() == Some("u8")
+            (canonical_abi_type(&bytes.ty) == "hash"
+                || (bytes.ty.starts_with('[') && collection_element_type(&bytes.ty).as_deref() == Some("u8")))
                 && len.ty == "u64"
                 && is_empty.ty == "bool"
         }
@@ -4258,6 +4366,189 @@ fn validate_syscalls(record: &VerifiedLoweringRecord, elf: &ParsedElf) -> Result
     Ok(())
 }
 
+fn validate_script_hash_machine_contract(record: &VerifiedLoweringRecord, elf: &ParsedElf) -> Result<(), CheckerError> {
+    let call_count = record
+        .typed_semantics
+        .entries
+        .iter()
+        .flat_map(|entry| &entry.blocks)
+        .flat_map(|block| &block.operations)
+        .filter(|operation| operation.call.as_ref().is_some_and(|call| call.target == "__ckb_script_hash"))
+        .count();
+    if call_count == 0 {
+        return Ok(());
+    }
+
+    let entry = record
+        .entries
+        .iter()
+        .find(|entry| entry.id == "runtime:__ckb_script_hash")
+        .ok_or_else(|| script_hash_machine_error("missing __ckb_script_hash runtime entry"))?;
+    let entry_block = record
+        .blocks
+        .iter()
+        .find(|block| block.id == entry.entry_block)
+        .ok_or_else(|| script_hash_machine_error("missing __ckb_script_hash entry block"))?;
+    let blake_entry = record
+        .entries
+        .iter()
+        .find(|entry| entry.id == "runtime:__ckb_hash_blake2b_var")
+        .ok_or_else(|| script_hash_machine_error("missing bounded Blake2b runtime entry"))?;
+    let blake_block = record
+        .blocks
+        .iter()
+        .find(|block| block.id == blake_entry.entry_block)
+        .ok_or_else(|| script_hash_machine_error("missing bounded Blake2b entry block"))?;
+    if entry.frame_size_bytes != 560
+        || entry.outgoing_argument_bytes != 0
+        || entry_block.machine_label.as_deref() != Some("__ckb_script_hash")
+        || entry_block.frame_size_bytes != 560
+        || record.blocks.iter().filter(|block| block.owner_entry == entry.id).any(|block| block.frame_size_bytes != 560)
+    {
+        return Err(script_hash_machine_error("runtime entry no longer declares the bounded 512-byte preimage frame"));
+    }
+
+    let base = entry_block.range.start;
+    let word = |delta: u64| -> Result<u32, CheckerError> {
+        let address = base.checked_add(delta).ok_or_else(|| script_hash_machine_error("instruction address overflow"))?;
+        elf.instructions
+            .iter()
+            .find(|instruction| instruction.address == address)
+            .map(|instruction| instruction.word)
+            .ok_or_else(|| script_hash_machine_error(format!("missing instruction at {address:#x}")))
+    };
+    let flow_targets = |delta: u64, target: u64| {
+        base.checked_add(delta)
+            .is_some_and(|address| elf.control_flow.iter().any(|edge| edge.address == address && edge.target == target))
+    };
+    let invalid = base + 300;
+    let valid_hash_type = base + 100;
+    if !is_addi(word(0)?, 2, 2, -560)
+        || !is_sd(word(4)?, 1, 2, 552)
+        || !is_sd(word(8)?, 10, 2, 512)
+        || !is_sd(word(12)?, 11, 2, 520)
+        || !is_sd(word(16)?, 12, 2, 528)
+        || !is_sd(word(20)?, 13, 2, 536)
+        || !is_sd(word(24)?, 14, 2, 544)
+        || !is_beq(word(28)?, 10, 0)
+        || !flow_targets(28, invalid)
+        || !is_beq(word(32)?, 14, 0)
+        || !flow_targets(32, invalid)
+        || !is_addi(word(36)?, 5, 0, 460)
+        || !is_sltu(word(40)?, 6, 13, 5)
+        || !is_beq(word(44)?, 6, 0)
+        || !flow_targets(44, invalid)
+        || !is_beq(word(48)?, 13, 0)
+        || !flow_targets(48, base + 56)
+        || !is_beq(word(52)?, 12, 0)
+        || !flow_targets(52, invalid)
+    {
+        return Err(script_hash_machine_error("pointer, output, or 459-byte Script args bound changed"));
+    }
+    if !is_beq(word(56)?, 11, 0)
+        || !flow_targets(56, valid_hash_type)
+        || !is_addi(word(60)?, 5, 0, 1)
+        || !is_sub(word(64)?, 6, 11, 5)
+        || !is_beq(word(68)?, 6, 0)
+        || !flow_targets(68, valid_hash_type)
+        || !is_addi(word(72)?, 5, 0, 2)
+        || !is_sub(word(76)?, 6, 11, 5)
+        || !is_beq(word(80)?, 6, 0)
+        || !flow_targets(80, valid_hash_type)
+        || !is_addi(word(84)?, 5, 0, 4)
+        || !is_sub(word(88)?, 6, 11, 5)
+        || !is_beq(word(92)?, 6, 0)
+        || !flow_targets(92, valid_hash_type)
+        || !is_jal_zero(word(96)?)
+        || !flow_targets(96, invalid)
+    {
+        return Err(script_hash_machine_error("admitted CKB Script hash_type set changed"));
+    }
+    if !is_ld(word(100)?, 5, 2, 536)
+        || !is_addi(word(104)?, 5, 5, 53)
+        || !is_sw(word(108)?, 5, 2, 0)
+        || !is_addi(word(112)?, 5, 0, 16)
+        || !is_sw(word(116)?, 5, 2, 4)
+        || !is_addi(word(120)?, 5, 0, 48)
+        || !is_sw(word(124)?, 5, 2, 8)
+        || !is_addi(word(128)?, 5, 0, 49)
+        || !is_sw(word(132)?, 5, 2, 12)
+    {
+        return Err(script_hash_machine_error("canonical Molecule Script total size or table offsets changed"));
+    }
+    if !is_ld(word(136)?, 7, 2, 512)
+        || !is_addi(word(140)?, 5, 0, 0)
+        || !is_addi(word(144)?, 6, 0, 32)
+        || !is_sltu(word(148)?, 6, 5, 6)
+        || !is_beq(word(152)?, 6, 0)
+        || !flow_targets(152, base + 184)
+        || !is_add(word(156)?, 28, 7, 5)
+        || !is_lbu(word(160)?, 29, 28, 0)
+        || !is_addi(word(164)?, 28, 2, 16)
+        || !is_add(word(168)?, 28, 28, 5)
+        || !is_sb(word(172)?, 29, 28, 0)
+        || !is_addi(word(176)?, 5, 5, 1)
+        || !is_jal_zero(word(180)?)
+        || !flow_targets(180, base + 144)
+    {
+        return Err(script_hash_machine_error("32-byte code_hash serialization changed"));
+    }
+    if !is_ld(word(184)?, 5, 2, 520)
+        || !is_sb(word(188)?, 5, 2, 48)
+        || !is_ld(word(192)?, 5, 2, 536)
+        || !is_sb(word(196)?, 5, 2, 49)
+        || !is_srli(word(200)?, 5, 5, 8)
+        || !is_sb(word(204)?, 5, 2, 50)
+        || !is_srli(word(208)?, 5, 5, 8)
+        || !is_sb(word(212)?, 5, 2, 51)
+        || !is_srli(word(216)?, 5, 5, 8)
+        || !is_sb(word(220)?, 5, 2, 52)
+    {
+        return Err(script_hash_machine_error("hash_type or little-endian Bytes length serialization changed"));
+    }
+    if !is_ld(word(224)?, 7, 2, 528)
+        || !is_ld(word(228)?, 30, 2, 536)
+        || !is_addi(word(232)?, 5, 0, 0)
+        || !is_sltu(word(236)?, 6, 5, 30)
+        || !is_beq(word(240)?, 6, 0)
+        || !flow_targets(240, base + 272)
+        || !is_add(word(244)?, 28, 7, 5)
+        || !is_lbu(word(248)?, 29, 28, 0)
+        || !is_addi(word(252)?, 28, 2, 53)
+        || !is_add(word(256)?, 28, 28, 5)
+        || !is_sb(word(260)?, 29, 28, 0)
+        || !is_addi(word(264)?, 5, 5, 1)
+        || !is_jal_zero(word(268)?)
+        || !flow_targets(268, base + 236)
+    {
+        return Err(script_hash_machine_error("bounded Script args serialization changed"));
+    }
+    if !is_addi(word(272)?, 10, 2, 0)
+        || !is_ld(word(276)?, 11, 2, 536)
+        || !is_addi(word(280)?, 11, 11, 53)
+        || !is_ld(word(284)?, 12, 2, 544)
+        || !is_auipc(word(288)?, 1)
+        || !is_jalr_call(word(292)?)
+        || !flow_targets(292, blake_block.range.start)
+        || !is_jal_zero(word(296)?)
+        || !flow_targets(296, base + 304)
+        || !is_addi(word(300)?, 10, 0, 72)
+        || !is_ld(word(304)?, 1, 2, 552)
+        || !is_addi(word(308)?, 2, 2, 560)
+        || word(312)? != 0x0000_8067
+    {
+        return Err(script_hash_machine_error("Blake2b delegation, error 72, or bounded-frame return changed"));
+    }
+    Ok(())
+}
+
+fn script_hash_machine_error(message: impl Into<String>) -> CheckerError {
+    CheckerError::new(
+        CheckerRejectionCode::V2417SyscallContractInvalid,
+        format!("canonical Script hash machine contract: {}", message.into()),
+    )
+}
+
 #[derive(Clone, Copy)]
 struct HeaderDepSyscallContract {
     name: &'static str,
@@ -4467,6 +4758,67 @@ fn is_sub(word: u32, rd: u32, rs1: u32, rs2: u32) -> bool {
         && (word >> 7) & 0x1f == rd
         && (word >> 15) & 0x1f == rs1
         && (word >> 20) & 0x1f == rs2
+}
+
+fn is_add(word: u32, rd: u32, rs1: u32, rs2: u32) -> bool {
+    word & 0x7f == 0x33
+        && (word >> 25) & 0x7f == 0
+        && (word >> 12) & 0x7 == 0
+        && (word >> 7) & 0x1f == rd
+        && (word >> 15) & 0x1f == rs1
+        && (word >> 20) & 0x1f == rs2
+}
+
+fn is_sltu(word: u32, rd: u32, rs1: u32, rs2: u32) -> bool {
+    word & 0x7f == 0x33
+        && (word >> 25) & 0x7f == 0
+        && (word >> 12) & 0x7 == 3
+        && (word >> 7) & 0x1f == rd
+        && (word >> 15) & 0x1f == rs1
+        && (word >> 20) & 0x1f == rs2
+}
+
+fn is_lbu(word: u32, rd: u32, rs1: u32, immediate: i32) -> bool {
+    word & 0x7f == 0x03
+        && (word >> 12) & 0x7 == 4
+        && (word >> 7) & 0x1f == rd
+        && (word >> 15) & 0x1f == rs1
+        && (word as i32) >> 20 == immediate
+}
+
+fn is_store(word: u32, function: u32, rs2: u32, rs1: u32, immediate: i32) -> bool {
+    let decoded = (((word >> 25) & 0x7f) << 5) | ((word >> 7) & 0x1f);
+    let decoded = ((decoded as i32) << 20) >> 20;
+    word & 0x7f == 0x23
+        && (word >> 12) & 0x7 == function
+        && (word >> 20) & 0x1f == rs2
+        && (word >> 15) & 0x1f == rs1
+        && decoded == immediate
+}
+
+fn is_sb(word: u32, rs2: u32, rs1: u32, immediate: i32) -> bool {
+    is_store(word, 0, rs2, rs1, immediate)
+}
+
+fn is_sw(word: u32, rs2: u32, rs1: u32, immediate: i32) -> bool {
+    is_store(word, 2, rs2, rs1, immediate)
+}
+
+fn is_srli(word: u32, rd: u32, rs1: u32, shift: u32) -> bool {
+    word & 0x7f == 0x13
+        && (word >> 12) & 0x7 == 5
+        && (word >> 26) & 0x3f == 0
+        && (word >> 7) & 0x1f == rd
+        && (word >> 15) & 0x1f == rs1
+        && (word >> 20) & 0x3f == shift
+}
+
+fn is_auipc(word: u32, rd: u32) -> bool {
+    word & 0x7f == 0x17 && (word >> 7) & 0x1f == rd
+}
+
+fn is_jalr_call(word: u32) -> bool {
+    word & 0x7f == 0x67 && (word >> 7) & 0x1f == 1 && (word >> 12) & 0x7 == 0 && (word >> 15) & 0x1f == 1
 }
 
 fn is_beq(word: u32, rs1: u32, rs2: u32) -> bool {

@@ -72,6 +72,17 @@ action inspect(witness source_index: u64) -> u64 {
 }
 "#;
 
+const SCRIPT_HASH_SOURCE: &str = r#"
+module artifact_checker_script_hash
+
+action inspect() -> u64 {
+    let value = script::new(Hash::zero(), script::hash_type_data2(), script::args(b"ckb!"))
+    let complete: ScriptHash = script::hash(value)
+    require complete != ckb::script_hash(Hash::zero())
+    return 0
+}
+"#;
+
 const EXACT_HANDLE_SOURCE: &str = r#"
 module artifact_checker_exact_handle
 
@@ -559,6 +570,94 @@ fn checker_binds_header_dep_fields_widths_syscalls_and_terminal_errors_to_machin
     let word = elf.instructions.iter().find(|instruction| instruction.address == invalid_source_error).unwrap().word;
     changed.replace_machine_word(invalid_source_error, word ^ (1 << 20));
     assert_code(&changed, CheckerRejectionCode::V2414ControlFlowInvalid);
+}
+
+#[test]
+fn checker_binds_canonical_script_hash_metadata_types_and_machine_serialization() {
+    let valid = Fixture::from_result(
+        compile(
+            SCRIPT_HASH_SOURCE,
+            CompileOptions {
+                edition: NEXT_EDITION,
+                target: Some("riscv64-elf".to_string()),
+                target_profile: Some("ckb".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap(),
+    );
+    assert_eq!(valid.record.version, 8);
+
+    let mutate_access = |metadata: &mut Value, mutation: fn(&mut Value)| {
+        for pointer in ["/runtime/ckb_runtime_accesses", "/actions/0/ckb_runtime_accesses"] {
+            let access = metadata
+                .pointer_mut(pointer)
+                .and_then(Value::as_array_mut)
+                .unwrap()
+                .iter_mut()
+                .find(|access| access["operation"] == "script-hash-v1")
+                .expect("canonical Script hash access");
+            mutation(access);
+        }
+    };
+    for mutation in [
+        |access: &mut Value| access["syscall"] = Value::String("SHA256".to_string()),
+        |access: &mut Value| access["source"] = Value::String("Expression".to_string()),
+        |access: &mut Value| access["provenance"]["source"]["origin"] = Value::String("implicit-lowering".to_string()),
+        |access: &mut Value| {
+            access["provenance"]["range"]["length"]["value"] = Value::from(56);
+            access["provenance"]["range"]["length"]["max_inclusive"] = Value::from(56);
+        },
+    ] {
+        let mut changed = valid.clone();
+        mutate_access(&mut changed.metadata, mutation);
+        changed.rebind_sidecars();
+        assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+    }
+
+    let mut changed = valid.clone();
+    let call = changed
+        .record
+        .typed_semantics
+        .entries
+        .iter_mut()
+        .flat_map(|entry| &mut entry.blocks)
+        .flat_map(|block| &mut block.operations)
+        .find_map(|operation| operation.call.as_mut().filter(|call| call.target == "__ckb_script_hash"))
+        .expect("typed Script hash call");
+    call.return_type = "ScriptHash".to_string();
+    changed.rebind_typed_semantics();
+    assert_code(&changed, CheckerRejectionCode::V2410MetadataBindingMismatch);
+
+    let script_entry =
+        valid.record.entries.iter().find(|entry| entry.id == "runtime:__ckb_script_hash").expect("Script hash runtime entry");
+    let base =
+        valid.record.blocks.iter().find(|block| block.id == script_entry.entry_block).expect("Script hash entry block").range.start;
+    let elf = parse_elf(&valid.artifact, CheckerBudgets::default().instructions).unwrap();
+    for delta in [36_u64, 108, 144, 188, 200, 252, 280, 300] {
+        let mut changed = valid.clone();
+        let address = base + delta;
+        let word = elf.instructions.iter().find(|instruction| instruction.address == address).unwrap().word;
+        changed.replace_machine_word(address, word ^ (1 << 20));
+        assert_eq!(changed.check(), Err(CheckerRejectionCode::V2417SyscallContractInvalid), "machine delta {delta}");
+    }
+
+    for opt_level in 0..=3 {
+        let fixture = Fixture::from_result(
+            compile(
+                SCRIPT_HASH_SOURCE,
+                CompileOptions {
+                    edition: NEXT_EDITION,
+                    target: Some("riscv64-elf".to_string()),
+                    target_profile: Some("ckb".to_string()),
+                    opt_level,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        );
+        assert_eq!(fixture.check(), Ok(()), "optimization level {opt_level} must preserve the Script hash machine contract");
+    }
 }
 
 #[test]

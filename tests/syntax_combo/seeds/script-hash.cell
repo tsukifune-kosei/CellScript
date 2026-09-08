@@ -1,0 +1,11 @@
+// audit:edition=2027
+// audit:phase=accept
+module cellscript::audit::script_hash
+
+action verify(witness expected: Hash) -> u64 {
+    let args = script::args(b"owner")
+    let value = script::new(Hash::zero(), script::hash_type_data1(), args)
+    let complete: ScriptHash = script::hash(value)
+    require complete == ckb::script_hash(expected)
+    return 0
+}

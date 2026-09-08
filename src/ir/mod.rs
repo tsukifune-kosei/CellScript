@@ -34,6 +34,14 @@ pub(crate) fn is_ckb_temporal_scalar_name(name: &str) -> bool {
     CKB_TEMPORAL_SCALAR_TYPE_NAMES.contains(&name) || name.starts_with("Since<Absolute, ") || name.starts_with("Since<Relative, ")
 }
 
+/// CKB semantic hash domains remain physically represented by one 32-byte
+/// value while the type checker prevents accidental domain interchange.
+pub(crate) const CKB_FIXED_HASH_DOMAIN_TYPE_NAMES: &[&str] = &["ScriptHash", "SighashAllDigest"];
+
+pub(crate) fn is_ckb_fixed_hash_domain_name(name: &str) -> bool {
+    CKB_FIXED_HASH_DOMAIN_TYPE_NAMES.contains(&name)
+}
+
 pub(crate) const CKB_WITNESS_OWNER_RAW: u64 = 0;
 pub(crate) const CKB_WITNESS_OWNER_LOCK: u64 = 1;
 pub(crate) const CKB_WITNESS_OWNER_ENTRY: u64 = 2;
@@ -6634,6 +6642,7 @@ impl IrGenerator {
                 "script::args_empty" if call.args.is_empty() => Some(self.lower_script_args_empty(current, blocks)),
                 "script::args" if call.args.len() == 1 => Some(self.lower_script_args(&call.args[0], current, blocks, vars)),
                 "script::new" if call.args.len() == 3 => Some(self.lower_script_value(call, current, blocks, vars)),
+                "script::hash" if call.args.len() == 1 => Some(self.lower_script_hash(call, current, blocks, vars)),
                 "script::require_cell_lock_matches" if call.args.len() == 2 => {
                     Some(self.lower_script_match_requirement(call, true, current, blocks, vars))
                 }
@@ -6944,7 +6953,9 @@ impl IrGenerator {
                     blocks,
                     vars,
                 ),
-                "ckb::script_hash" if call.args.len() == 1 => Some(self.lower_expr(&call.args[0], current, blocks, vars)),
+                "ckb::script_hash" if call.args.len() == 1 => {
+                    self.lower_transparent_view_wrapper(call, CKB_SCRIPT_HASH_TYPE, current, blocks, vars)
+                }
                 "ckb::cell_capacity" if call.args.len() == 1 => self.lower_simple_runtime_call(
                     "__ckb_cell_capacity",
                     "ckb_cell_capacity",
@@ -8705,6 +8716,72 @@ impl IrGenerator {
         LoweredExpr { operand: IrOperand::Const(IrConst::Unit), current: Some(active) }
     }
 
+    fn lower_script_hash(
+        &mut self,
+        call: &CallExpr,
+        current: BlockId,
+        blocks: &mut Vec<IrBlock>,
+        vars: &mut HashMap<String, IrVar>,
+    ) -> LoweredExpr {
+        let script = self.lower_expr(&call.args[0], current, blocks, vars);
+        let Some(active) = script.current else {
+            return script;
+        };
+        let Some(script_var) = (match &script.operand {
+            IrOperand::Var(var) => Some(var.clone()),
+            IrOperand::Const(_) => None,
+        }) else {
+            self.record_error("script::hash requires a constructed Script value", call.span);
+            return LoweredExpr { operand: IrOperand::Const(IrConst::Hash([0; 32])), current: Some(active) };
+        };
+        let Some(fields) = self.aggregate_fields.get(&script_var.id).cloned() else {
+            self.record_error("script::hash requires a Script constructed by script::new in this verifier path", call.span);
+            return LoweredExpr { operand: IrOperand::Const(IrConst::Hash([0; 32])), current: Some(active) };
+        };
+        let Some(code_hash) = fields.get("code_hash").cloned() else {
+            self.record_error("constructed Script is missing code_hash", call.span);
+            return LoweredExpr { operand: IrOperand::Const(IrConst::Hash([0; 32])), current: Some(active) };
+        };
+        let Some(hash_type) = fields.get("hash_type").cloned() else {
+            self.record_error("constructed Script is missing hash_type", call.span);
+            return LoweredExpr { operand: IrOperand::Const(IrConst::Hash([0; 32])), current: Some(active) };
+        };
+        let Some(args) = fields.get("args").cloned() else {
+            self.record_error("constructed Script is missing args", call.span);
+            return LoweredExpr { operand: IrOperand::Const(IrConst::Hash([0; 32])), current: Some(active) };
+        };
+        let Some(args_fields) = self.aggregate_fields.get(&args.id).cloned() else {
+            self.record_error("constructed Script args must come from script::args or script::args_empty", call.span);
+            return LoweredExpr { operand: IrOperand::Const(IrConst::Hash([0; 32])), current: Some(active) };
+        };
+        let Some(args_bytes) = args_fields.get("bytes").cloned() else {
+            self.record_error("constructed ScriptArgs is missing bytes", call.span);
+            return LoweredExpr { operand: IrOperand::Const(IrConst::Hash([0; 32])), current: Some(active) };
+        };
+        let args_width = fixed_byte_width_for_script_args_var(&args_bytes).unwrap_or(usize::MAX);
+        if args_width > crate::CKB_SCRIPT_HASH_MAX_ARGS_BYTES {
+            self.record_error(
+                format!(
+                    "script::hash args length {} exceeds the bounded maximum of {} bytes",
+                    args_width,
+                    crate::CKB_SCRIPT_HASH_MAX_ARGS_BYTES
+                ),
+                call.span,
+            );
+            return LoweredExpr { operand: IrOperand::Const(IrConst::Hash([0; 32])), current: Some(active) };
+        }
+
+        let dest = self.new_var("script_hash_bytes", IrType::Hash);
+        self.block_mut(blocks, active).instructions.push(IrInstruction::Call {
+            dest: Some(dest.clone()),
+            func: "__ckb_script_hash".to_string(),
+            args: vec![IrOperand::Var(code_hash), IrOperand::Var(hash_type), IrOperand::Var(args_bytes)],
+        });
+        let semantic = self.new_var("script_hash", IrType::Named(CKB_SCRIPT_HASH_TYPE.to_string()));
+        self.block_mut(blocks, active).instructions.push(IrInstruction::Move { dest: semantic.clone(), src: IrOperand::Var(dest) });
+        LoweredExpr { operand: IrOperand::Var(semantic), current: Some(active) }
+    }
+
     fn lower_simple_runtime_call(
         &mut self,
         func: &str,
@@ -9306,6 +9383,7 @@ const CKB_TYPE_SCRIPT_REF_TYPE: &str = "__ckb_type_script_ref";
 const CKB_INPUT_OUT_POINT_REF_TYPE: &str = "__ckb_input_out_point_ref";
 const CKB_SCRIPT_ARGS_TYPE: &str = "ScriptArgs";
 const CKB_SCRIPT_VALUE_TYPE: &str = "Script";
+const CKB_SCRIPT_HASH_TYPE: &str = "ScriptHash";
 
 fn typed_view_property_runtime_helper(ty: &IrType, field: &str) -> Option<(&'static str, &'static str, IrType)> {
     let IrType::Named(name) = ty else {

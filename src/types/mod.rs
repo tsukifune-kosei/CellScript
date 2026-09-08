@@ -6694,6 +6694,16 @@ impl<'a> TypeChecker<'a> {
                             }
                             Type::Named(CKB_SCRIPT_VALUE_TYPE.to_string())
                         }
+                        ("script", "hash") => {
+                            self.validate_builtin_arity(name, 1, arg_types, call.span)?;
+                            if !Self::is_script_value_type(&arg_types[0]) {
+                                return Err(CompileError::new(
+                                    "script::hash expects a Script constructed with script::new",
+                                    call.span,
+                                ));
+                            }
+                            Type::Named(CKB_SCRIPT_HASH_TYPE.to_string())
+                        }
                         ("script", "require_cell_lock_matches" | "require_cell_type_matches") => {
                             self.validate_builtin_arity(name, 2, arg_types, call.span)?;
                             if !Self::is_cell_view_type(&arg_types[0]) || !Self::is_script_value_type(&arg_types[1]) {

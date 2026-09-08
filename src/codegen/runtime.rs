@@ -561,6 +561,7 @@ impl CodeGenerator {
             ("__ckb_current_role", "current script role inferred from group input lock/type hashes"),
             ("__ckb_current_script_hash", "current script hash loaded via LOAD_SCRIPT_HASH"),
             ("__ckb_transaction_hash", "canonical raw transaction hash loaded via LOAD_TX_HASH"),
+            ("__ckb_script_hash", "canonical bounded Molecule Script CKB Blake2b-256"),
             ("__ckb_since_to_raw", "explicit typed Since to raw CKB wire bits conversion"),
             ("__ckb_epoch_number_to_u64", "explicit EpochNumber to u64 conversion"),
             ("__ckb_epoch_duration_to_u64", "explicit EpochDuration to u64 conversion"),
@@ -750,6 +751,7 @@ impl CodeGenerator {
                 "__ckb_witness_blake2b_select_chunks" => self.emit_runtime_gather_hash(enabled, true),
                 "__ckb_current_script_hash" => self.emit_runtime_current_script_hash_helper(enabled),
                 "__ckb_transaction_hash" => self.emit_runtime_transaction_hash_helper(enabled),
+                "__ckb_script_hash" => self.emit_runtime_script_hash_helper(enabled),
                 "__ckb_sighash_all_zero_lock" => self.emit_runtime_sighash_all_zero_lock(enabled),
                 "__ckb_since_to_raw"
                 | "__ckb_epoch_number_to_u64"
@@ -1100,6 +1102,7 @@ impl CodeGenerator {
                     | "__ckb_hash_data_packed"
                     | "__ckb_hash_blake2b_var"
                     | "__ckb_hash_blake2b_packed"
+                    | "__ckb_script_hash"
                     | "__ckb_cell_data_hash"
                     | "__ckb_cell_data_blake2b_span"
                     | "__ckb_witness_blake2b_span"
@@ -1140,6 +1143,7 @@ impl CodeGenerator {
             self.emit_runtime_blake2b_hash32(enabled);
         }
         if referenced_helpers.contains("__ckb_hash_blake2b_var")
+            || referenced_helpers.contains("__ckb_script_hash")
             || referenced_helpers.contains("__ckb_hash_data_packed")
             || referenced_helpers.contains("__ckb_hash_blake2b_packed")
             || referenced_helpers.contains("__ckb_cell_data_hash")
@@ -1191,6 +1195,127 @@ impl CodeGenerator {
         }) {
             self.emit_runtime_sha256_surface(enabled);
         }
+    }
+
+    fn emit_runtime_script_hash_helper(&mut self, enabled: bool) {
+        self.emit_global("__ckb_script_hash");
+        self.emit_label("__ckb_script_hash");
+        self.emit(
+            "# cellscript abi: canonical Molecule Script hash; a0=code_hash[32], a1=hash_type, a2=args, a3=args_len, a4=out[32]",
+        );
+        if !enabled {
+            self.emit(format!("li a0, {}", CellScriptRuntimeError::ScriptConstructionInvalid.code()));
+            self.emit("ret");
+            return;
+        }
+
+        const PREIMAGE_BYTES: usize = 512;
+        const CODE_HASH_PTR_OFFSET: usize = 512;
+        const HASH_TYPE_OFFSET: usize = 520;
+        const ARGS_PTR_OFFSET: usize = 528;
+        const ARGS_LEN_OFFSET: usize = 536;
+        const OUT_PTR_OFFSET: usize = 544;
+        const RA_OFFSET: usize = 552;
+        const FRAME_SIZE: usize = 560;
+
+        let args_pointer_ok = self.fresh_label("script_hash_args_pointer_ok");
+        let hash_type_valid = self.fresh_label("script_hash_type_valid");
+        let code_hash_copy = self.fresh_label("script_hash_code_copy");
+        let code_hash_done = self.fresh_label("script_hash_code_done");
+        let args_copy = self.fresh_label("script_hash_args_copy");
+        let args_done = self.fresh_label("script_hash_args_done");
+        let invalid = self.fresh_label("script_hash_invalid");
+        let done = self.fresh_label("script_hash_done");
+
+        self.emit(format!("addi sp, sp, -{}", FRAME_SIZE));
+        self.emit(format!("sd ra, {}(sp)", RA_OFFSET));
+        self.emit(format!("sd a0, {}(sp)", CODE_HASH_PTR_OFFSET));
+        self.emit(format!("sd a1, {}(sp)", HASH_TYPE_OFFSET));
+        self.emit(format!("sd a2, {}(sp)", ARGS_PTR_OFFSET));
+        self.emit(format!("sd a3, {}(sp)", ARGS_LEN_OFFSET));
+        self.emit(format!("sd a4, {}(sp)", OUT_PTR_OFFSET));
+
+        self.emit(format!("beqz a0, {}", invalid));
+        self.emit(format!("beqz a4, {}", invalid));
+        self.emit(format!("li t0, {}", crate::CKB_SCRIPT_HASH_MAX_ARGS_BYTES + 1));
+        self.emit("sltu t1, a3, t0");
+        self.emit(format!("beqz t1, {}", invalid));
+        self.emit(format!("beqz a3, {}", args_pointer_ok));
+        self.emit(format!("beqz a2, {}", invalid));
+        self.emit_label(&args_pointer_ok);
+
+        self.emit(format!("beqz a1, {}", hash_type_valid));
+        for hash_type in [1u64, 2, 4] {
+            self.emit(format!("li t0, {}", hash_type));
+            self.emit("sub t1, a1, t0");
+            self.emit(format!("beqz t1, {}", hash_type_valid));
+        }
+        self.emit(format!("j {}", invalid));
+        self.emit_label(&hash_type_valid);
+
+        self.emit(format!("ld t0, {}(sp)", ARGS_LEN_OFFSET));
+        self.emit("addi t0, t0, 53");
+        self.emit("sw t0, 0(sp)");
+        for (offset, value) in [(4usize, 16u64), (8, 48), (12, 49)] {
+            self.emit(format!("li t0, {}", value));
+            self.emit(format!("sw t0, {}(sp)", offset));
+        }
+
+        self.emit(format!("ld t2, {}(sp)", CODE_HASH_PTR_OFFSET));
+        self.emit("li t0, 0");
+        self.emit_label(&code_hash_copy);
+        self.emit("li t1, 32");
+        self.emit("sltu t1, t0, t1");
+        self.emit(format!("beqz t1, {}", code_hash_done));
+        self.emit("add t3, t2, t0");
+        self.emit("lbu t4, 0(t3)");
+        self.emit("addi t3, sp, 16");
+        self.emit("add t3, t3, t0");
+        self.emit("sb t4, 0(t3)");
+        self.emit("addi t0, t0, 1");
+        self.emit(format!("j {}", code_hash_copy));
+        self.emit_label(&code_hash_done);
+
+        self.emit(format!("ld t0, {}(sp)", HASH_TYPE_OFFSET));
+        self.emit("sb t0, 48(sp)");
+        self.emit(format!("ld t0, {}(sp)", ARGS_LEN_OFFSET));
+        for byte in 0..4usize {
+            if byte > 0 {
+                self.emit("srli t0, t0, 8");
+            }
+            self.emit(format!("sb t0, {}(sp)", 49 + byte));
+        }
+
+        self.emit(format!("ld t2, {}(sp)", ARGS_PTR_OFFSET));
+        self.emit(format!("ld t5, {}(sp)", ARGS_LEN_OFFSET));
+        self.emit("li t0, 0");
+        self.emit_label(&args_copy);
+        self.emit("sltu t1, t0, t5");
+        self.emit(format!("beqz t1, {}", args_done));
+        self.emit("add t3, t2, t0");
+        self.emit("lbu t4, 0(t3)");
+        self.emit("addi t3, sp, 53");
+        self.emit("add t3, t3, t0");
+        self.emit("sb t4, 0(t3)");
+        self.emit("addi t0, t0, 1");
+        self.emit(format!("j {}", args_copy));
+        self.emit_label(&args_done);
+
+        self.emit("addi a0, sp, 0");
+        self.emit(format!("ld a1, {}(sp)", ARGS_LEN_OFFSET));
+        self.emit("addi a1, a1, 53");
+        self.emit(format!("ld a2, {}(sp)", OUT_PTR_OFFSET));
+        self.emit("call __ckb_hash_blake2b_var");
+        self.emit(format!("j {}", done));
+
+        self.emit_label(&invalid);
+        self.emit(format!("li a0, {}", CellScriptRuntimeError::ScriptConstructionInvalid.code()));
+        self.emit_label(&done);
+        self.emit(format!("ld ra, {}(sp)", RA_OFFSET));
+        self.emit(format!("addi sp, sp, {}", FRAME_SIZE));
+        self.emit("ret");
+
+        debug_assert_eq!(PREIMAGE_BYTES, 53 + crate::CKB_SCRIPT_HASH_MAX_ARGS_BYTES);
     }
 
     fn emit_u32_normalize(&mut self, register: &str) {

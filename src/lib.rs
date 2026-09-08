@@ -232,7 +232,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v50-0.30-dev8-header-dep-machine-contract";
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v51-0.30-dev9-script-hash";
 pub const METADATA_SCHEMA_VERSION: u32 = 71;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -240,6 +240,12 @@ pub const CONSTRAINTS_METADATA_SCHEMA_VERSION: u32 = 4;
 pub const CKB_RUNTIME_VIEW_CONTRACT: &str = "cellscript-ckb-runtime-view-v1";
 pub const CKB_RUNTIME_ACCESS_PROVENANCE_CONTRACT: &str = "cellscript-ckb-runtime-access-provenance-v1";
 pub const CKB_SIGHASH_ALL_ZERO_LOCK_CONTRACT: &str = "cellscript-ckb-sighash-all-zero-lock-v1";
+/// Maximum args payload admitted by source-level canonical CKB Script hashing.
+///
+/// A packed Molecule Script occupies 53 bytes before its args payload. Keeping
+/// `53 + args.len()` within the backend's 512-byte bounded scratch buffer makes
+/// the complete preimage size static and independently checkable.
+pub const CKB_SCRIPT_HASH_MAX_ARGS_BYTES: usize = 459;
 /// Maximum UTF-8 source bytes accepted by a single compiler input.
 ///
 /// This is a process-safety boundary shared by native, LSP, and WASM callers.
@@ -4212,6 +4218,7 @@ fn validate_ckb_runtime_access_list(scope: &str, name: &str, accesses: &[CkbRunt
         validate_ckb_runtime_access_provenance(&prefix, &access.source, Some(access.index), &access.provenance)?;
         validate_canonical_transaction_hash_runtime_access(&prefix, access)?;
         validate_canonical_sighash_zero_lock_runtime_access(&prefix, access)?;
+        validate_canonical_script_hash_runtime_access(&prefix, access)?;
     }
     Ok(())
 }
@@ -4270,6 +4277,38 @@ fn validate_canonical_sighash_zero_lock_runtime_access(prefix: &str, access: &Ck
     {
         return Err(CompileError::without_span(format!(
             "{} does not match the bounded CKB sighash-all zero-lock runtime contract",
+            prefix
+        )));
+    }
+    Ok(())
+}
+
+fn validate_canonical_script_hash_runtime_access(prefix: &str, access: &CkbRuntimeAccessMetadata) -> Result<()> {
+    let identifies_script_hash = access.operation == "script-hash-v1"
+        || access.binding == "script::hash"
+        || (access.syscall == "CKB_BLAKE2B" && access.source == "Script");
+    if !identifies_script_hash {
+        return Ok(());
+    }
+    let range = &access.provenance.range;
+    if access.operation != "script-hash-v1"
+        || access.syscall != "CKB_BLAKE2B"
+        || access.source != "Script"
+        || access.index != 0
+        || access.binding != "script::hash"
+        || access.provenance.source.resolved_source != "Script"
+        || access.provenance.source.origin != "constructed-script"
+        || access.provenance.source.binding.is_some()
+        || access.provenance.index != runtime_scalar_not_applicable()
+        || range.kind != "fixed-width"
+        || range.offset != runtime_scalar_not_applicable()
+        || range.length.kind != "static"
+        || range.length.value.is_none_or(|width| !(53..=53 + CKB_SCRIPT_HASH_MAX_ARGS_BYTES as u64).contains(&width))
+        || range.length.value != range.length.max_inclusive
+        || range.length.binding.is_some()
+    {
+        return Err(CompileError::without_span(format!(
+            "{} does not match the canonical bounded Molecule Script hash contract",
             prefix
         )));
     }
@@ -4405,6 +4444,7 @@ fn validate_ckb_runtime_access_provenance(
             | "inherited-source-view"
             | "implicit-lowering"
             | "bounded-scan"
+            | "constructed-script"
             | "metadata-summary"
             | "external-adapter"
     ) {
@@ -4567,6 +4607,7 @@ fn is_known_ckb_runtime_source(source: &str) -> bool {
             | "GroupHeaderDep"
             | "Witness"
             | "ScriptArgs"
+            | "Script"
             | "Expression"
             | "SourceView"
             | "Input/Output"
@@ -4663,7 +4704,7 @@ fn ckb_runtime_syscall_allows_source(syscall: &str, source: &str) -> bool {
         "LOAD_WITNESS_ARGS_LOCK" | "LOAD_WITNESS_ARGS_INPUT_TYPE" => source == "GroupInput",
         "LOAD_WITNESS_ARGS_OUTPUT_TYPE" => source == "GroupOutput",
         "CAPACITY_POLICY" => source == "Output",
-        "CKB_BLAKE2B" => source == "Profile",
+        "CKB_BLAKE2B" => matches!(source, "Profile" | "Script"),
         "SHA256" => source == "Profile",
         "SPAWN" | "EXEC" => source == "CellDep",
         "WAIT" | "PROCESS_ID" | "PIPE" | "PIPE_WRITE" | "PIPE_READ" | "INHERITED_FD" | "CLOSE" => source == "Process",
@@ -6204,6 +6245,7 @@ fn entry_witness_fixed_arg_bytes(param: &ParamMetadata, arg: &EntryWitnessArg, w
         ("u128", EntryWitnessArg::U128(value)) if width == 16 => value.to_le_bytes().to_vec(),
         ("Address", EntryWitnessArg::Address(bytes)) if width == 32 => bytes.to_vec(),
         ("Hash", EntryWitnessArg::Hash(bytes)) if width == 32 => bytes.to_vec(),
+        (ty, EntryWitnessArg::Hash(bytes)) if width == 32 && ir::is_ckb_fixed_hash_domain_name(ty) => bytes.to_vec(),
         (_, EntryWitnessArg::Bytes(bytes)) if bytes.len() == width => bytes.clone(),
         _ => {
             return Err(CompileError::without_span(format!(
@@ -6292,6 +6334,7 @@ pub(crate) fn entry_witness_static_type_len(ty: &str) -> Option<usize> {
         "u64" => return Some(8),
         "u128" => return Some(16),
         "Address" | "Hash" => return Some(32),
+        other if ir::is_ckb_fixed_hash_domain_name(other) => return Some(32),
         other if other == script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE => {
             return Some(script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES)
         }
@@ -17100,6 +17143,16 @@ fn metadata_prelude_availability(
                                     .first()
                                     .is_some_and(|arg| metadata_fixed_hash_input_available(arg, &availability, type_layouts))
                         }
+                        "__ckb_script_hash" => {
+                            let args_width = args.get(2).and_then(operand_fixed_byte_width);
+                            args.len() == 3
+                                && metadata_fixed_value_available_with_width(&args[0], &availability, 32)
+                                && metadata_scalar_available(&args[1], &availability)
+                                && args_width.is_some_and(|width| {
+                                    width <= CKB_SCRIPT_HASH_MAX_ARGS_BYTES
+                                        && metadata_fixed_value_available_with_width(&args[2], &availability, width)
+                                })
+                        }
                         "__ckb_current_script_hash" | "__ckb_transaction_hash" | "__ckb_raw_transaction_hash_without_cell_deps" => {
                             args.is_empty()
                         }
@@ -18074,6 +18127,7 @@ fn metadata_fixed_byte_width(ty: &ir::IrType, fixed_size: Option<usize>) -> Opti
         {
             Some(size)
         }
+        (ir::IrType::Named(name), Some(32)) if ir::is_ckb_fixed_hash_domain_name(name) => Some(32),
         (ir::IrType::Ref(inner) | ir::IrType::MutRef(inner), _) => metadata_fixed_byte_width(inner, type_static_length(inner)),
         _ => None,
     }
@@ -18979,6 +19033,23 @@ fn runtime_access_for_call(
     args: &[ir::IrOperand],
     view_provenance: &HashMap<usize, RuntimeViewProvenance>,
 ) -> Option<CkbRuntimeAccessMetadata> {
+    if func == "__ckb_script_hash" {
+        let args_width = args.get(2).and_then(operand_fixed_byte_width)?;
+        if args_width > CKB_SCRIPT_HASH_MAX_ARGS_BYTES {
+            return None;
+        }
+        return Some(runtime_access_metadata(
+            "script-hash-v1",
+            "CKB_BLAKE2B",
+            "Script",
+            "script::hash",
+            "Script",
+            "constructed-script",
+            None,
+            runtime_scalar_not_applicable(),
+            runtime_range_fixed((53 + args_width) as u64),
+        ));
+    }
     if func == "__ckb_sighash_all_zero_lock" {
         let max_group_inputs = args.first().and_then(|operand| match operand {
             ir::IrOperand::Const(value) => ir_const_u64(value),
@@ -21295,6 +21366,7 @@ fn operand_fixed_byte_width(operand: &ir::IrOperand) -> Option<usize> {
             ir::IrType::Named(name) if name == script_handle_contract::DEPLOYMENT_LINE_HANDLE_TYPE => {
                 Some(script_handle_contract::DEPLOYMENT_LINE_HANDLE_BYTES)
             }
+            ir::IrType::Named(name) if ir::is_ckb_fixed_hash_domain_name(name) => Some(32),
             _ => None,
         },
         _ => None,
@@ -21317,6 +21389,7 @@ fn type_static_length(ty: &ir::IrType) -> Option<usize> {
         ir::IrType::Unit => Some(0),
         ir::IrType::Ref(inner) | ir::IrType::MutRef(inner) => type_static_length(inner),
         ir::IrType::Named(name) if ir::is_ckb_temporal_scalar_name(name) => Some(8),
+        ir::IrType::Named(name) if ir::is_ckb_fixed_hash_domain_name(name) => Some(32),
         ir::IrType::Named(name) if name == script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE => {
             Some(script_handle_contract::EXACT_SCRIPT_HANDLE_BYTES)
         }
@@ -21377,6 +21450,7 @@ fn param_metadata(
         named_type.and_then(|name| enum_layouts.get(name)).filter(|layout| layout.has_payload()).map(|layout| layout.encoded_size);
     let schema_pointer_abi = named_type.is_some_and(|name| {
         !ir::is_ckb_temporal_scalar_name(name)
+            && !ir::is_ckb_fixed_hash_domain_name(name)
             && name != script_handle_contract::EXACT_SCRIPT_HANDLE_TYPE
             && name != script_handle_contract::DEPLOYMENT_LINE_HANDLE_TYPE
     }) && enum_fixed_len.is_none();

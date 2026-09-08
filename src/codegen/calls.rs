@@ -16,6 +16,68 @@ impl CodeGenerator {
             self.emit_fail(CellScriptRuntimeError::FixedByteComparisonUnresolved);
             return Ok(true);
         };
+        if func == "__ckb_script_hash" {
+            if args.len() != 3 {
+                self.emit("# cellscript abi: fail closed because script_hash needs code_hash, hash_type, and args");
+                self.emit_fail(CellScriptRuntimeError::ScriptConstructionInvalid);
+                return Ok(true);
+            }
+            let Some(code_hash) = self.expected_fixed_byte_source(&args[0], 32) else {
+                self.emit("# cellscript abi: fail closed because Script code_hash is not a materializable Hash");
+                self.emit_fail(CellScriptRuntimeError::ScriptConstructionInvalid);
+                return Ok(true);
+            };
+            let Some(args_width) = operand_fixed_byte_width(&args[2]).or_else(|| match &args[2] {
+                IrOperand::Var(var) => self.fixed_byte_like_width(&var.ty),
+                IrOperand::Const(_) => None,
+            }) else {
+                self.emit("# cellscript abi: fail closed because Script args do not have a static fixed-byte width");
+                self.emit_fail(CellScriptRuntimeError::ScriptConstructionInvalid);
+                return Ok(true);
+            };
+            if args_width > crate::CKB_SCRIPT_HASH_MAX_ARGS_BYTES {
+                self.emit("# cellscript abi: fail closed because canonical Script preimage exceeds the bounded buffer");
+                self.emit_fail(CellScriptRuntimeError::ScriptConstructionInvalid);
+                return Ok(true);
+            }
+            let script_args = if args_width == 0 {
+                None
+            } else {
+                let Some(source) = self.expected_fixed_byte_source(&args[2], args_width) else {
+                    self.emit("# cellscript abi: fail closed because Script args are not materializable");
+                    self.emit_fail(CellScriptRuntimeError::ScriptConstructionInvalid);
+                    return Ok(true);
+                };
+                Some(source)
+            };
+            self.emit_prepare_fixed_byte_source(&code_hash, 32, "canonical Script code_hash");
+            if let Some(source) = &script_args {
+                self.emit_prepare_fixed_byte_source(source, args_width, "canonical Script args");
+            }
+            if !self.emit_fixed_byte_source_pointer_or_const_to("a0", &code_hash) {
+                self.emit_fail(CellScriptRuntimeError::ScriptConstructionInvalid);
+                return Ok(true);
+            }
+            self.emit_operand_to_register("a1", &args[1]);
+            if let Some(source) = &script_args {
+                if !self.emit_fixed_byte_source_pointer_or_const_to("a2", source) {
+                    self.emit_fail(CellScriptRuntimeError::ScriptConstructionInvalid);
+                    return Ok(true);
+                }
+            } else {
+                self.emit("li a2, 0");
+            }
+            self.emit(format!("li a3, {}", args_width));
+            self.emit_sp_addi("a4", dest_offset);
+            self.emit("call __ckb_script_hash");
+            let ok = self.fresh_label("script_hash_ok");
+            self.emit(format!("beqz a0, {}", ok));
+            self.emit_process_failure_status();
+            self.emit_label(&ok);
+            self.emit_sp_addi("t0", dest_offset);
+            self.emit_stack_store("t0", dest.id * 8);
+            return Ok(true);
+        }
         if matches!(func, "__ckb_hash_pair" | "__ckb_hash_sha256_pair" | "__ckb_hash_sha256d_pair") {
             if args.len() != 2 {
                 self.emit("# cellscript abi: fail closed because hash_pair needs two inputs");

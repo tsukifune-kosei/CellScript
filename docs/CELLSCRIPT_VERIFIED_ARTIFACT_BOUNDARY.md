@@ -3,7 +3,7 @@
 **Status**: semantic-foundation and bounded machine contracts implemented on
 the `0.30` development branch
 
-**Schemas**: `cellscript-verified-lowering-record-v7`,
+**Schemas**: `cellscript-verified-lowering-record-v8`,
 `cellscript-typed-semantics-v8`,
 `cellscript-semantic-foundation-v3`,
 `cellscript-value-provenance-dag-v1`,
@@ -93,7 +93,7 @@ joining incoming stack depths: it never reads a caller frame or returns.
 An exact decoded EXIT sink also requires its declared contract; renaming the
 entry and dropping its static-site list cannot hide it.
 
-Lowering record v7 additionally specializes typed HeaderDep syscall sites.
+Lowering record v8 additionally specializes typed HeaderDep syscall sites.
 For each epoch number, epoch start, epoch length, block number, or timestamp
 helper, the checker binds the exact syscall number, field selector or RawHeader
 offset, `HeaderDepView` source and 32-bit index domain, 8/208-byte buffer,
@@ -101,6 +101,14 @@ return-code branch, exact-length comparison, and terminal errors 44, 45, and 4
 to decoded RISC-V instructions. The matching runtime-access record and typed
 call must identify the same field and width. This is a bounded contract for
 those five helpers, rather than a claim of general syscall dataflow recovery.
+
+Version 8 also specializes canonical constructed-Script hashing. The checker
+matches `script-hash-v1` runtime provenance with the typed helper call, then
+decodes the 560-byte frame, 459-byte args guard, valid hash-type branches,
+Molecule sizes and offsets, code/args byte loops, little-endian Bytes length,
+bounded Blake2b target, and error 72 return. This proves the emitted helper has
+the named fixed contract; it does not prove that the constructed Script is
+deployed or authorized.
 
 This bounded check does not establish completeness of every compiler-inserted
 guard, arbitrary callee behavior, or the provenance of every dynamic verifier

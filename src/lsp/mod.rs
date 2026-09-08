@@ -678,6 +678,7 @@ impl LspServer {
                     ("args_empty", "script::args_empty()"),
                     ("args", "script::args(${1:b\"owner\"})"),
                     ("new", "script::new(${1:code_hash}, ${2:hash_type}, ${3:args})"),
+                    ("hash", "script::hash(${1:script})"),
                     ("require_cell_lock_matches", "script::require_cell_lock_matches(${1:source::input(0)}, ${2:expected_script})"),
                     ("require_cell_type_matches", "script::require_cell_type_matches(${1:source::output(0)}, ${2:expected_script})"),
                 ] {
@@ -3213,6 +3214,7 @@ mod tests {
         let script = server.member_completions("file:///test.cell", "script");
         assert!(script.iter().any(|item| item.label == "new"));
         assert!(script.iter().any(|item| item.label == "args"));
+        assert!(script.iter().any(|item| item.label == "hash"));
         assert!(script.iter().any(|item| item.label == "require_cell_lock_matches"));
 
         let hash = server.member_completions("file:///test.cell", "Hash");

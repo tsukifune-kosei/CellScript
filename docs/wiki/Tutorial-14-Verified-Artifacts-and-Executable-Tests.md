@@ -6,7 +6,7 @@ backend. Together they make more compiler claims independently inspectable
 without calling local execution chain evidence.
 
 The experimental `0.26b` line extends the same four-file bundle with
-`cellscript-typed-semantics-v8` inside lowering record v7 and semantic source
+`cellscript-typed-semantics-v8` inside lowering record v8 and semantic source
 mapping in source-map v2. The checker now
 independently validates the IR-shaped typed record, recomputes its layout,
 identity, operation, dataflow, ownership, and borrow invariants, and checks its
@@ -14,11 +14,16 @@ connection to entry ABI and final machine blocks; failures use stable `V2419`
 and `V2420` codes. It does not reconstruct the record from source and still keeps
 `semantic_equivalence_claimed = false`.
 
-Lowering record v7 gives the five typed HeaderDep scalar reads field-specific
+Lowering record v8 gives the five typed HeaderDep scalar reads field-specific
 machine contracts. The checker decodes their CKB syscall number, selector or
 RawHeader offset, exact 8/208-byte length checks, and terminal error paths; a
 metadata or instruction mutation cannot retain the checked bundle merely by
 recomputing its outer hashes.
+
+The same version gives `script::hash` a fixed machine contract. It checks the
+canonical 53-byte Molecule prefix, up to 459 args bytes, the four CKB hash
+types, byte copies into a 512-byte preimage buffer, the bounded CKB Blake2b
+target, and invalid-construction error 72.
 
 Typed semantics v6 embeds `cellscript-semantic-foundation-v3`. The independent
 checker validates its hash-consed provenance DAG, artifact entry-selection
