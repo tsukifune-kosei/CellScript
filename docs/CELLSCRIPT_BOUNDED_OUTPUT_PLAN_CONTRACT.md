@@ -178,3 +178,15 @@ exactly one `bounded-output-plan-v1:verify` build/deployment row. It binds the
 stateful report's artifact path and CKB data hash to that row and validates all
 case identities, exits, ordered indexes, commits, rejected transactions, live
 outputs, and retained trigger inputs.
+
+The clean-source acceptance run on 2026-09-09 passed all 14 cases at commit
+`00f39a16`. The four accepted shapes consumed 3,687 cycles for zero outputs,
+7,784 for one output, 15,978 for three outputs, and 11,881 for two equal Plan
+values at distinct ordinals. Every negative case returned its declared stable
+error. The 3,296-byte deployed ELF has SHA-256
+`59949f7f68bb7ca1b42452066659b79620a644b68104aed5e67fd9f434542d25`
+and CKB data hash
+`08dbdb407ddc44af139a42c47718abaf8f8de15b70ddbd6bf235a6373c7a9b75`.
+The complete production report passed the independent production-evidence
+validator against fixture SHA-256
+`11abfc6ae2980ebd6a10c6a798024a4fffeb8f7603834bddf6d5a052bf7ac68c`.

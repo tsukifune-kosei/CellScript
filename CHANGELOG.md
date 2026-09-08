@@ -15,7 +15,11 @@
   the typed contract to decoder, syscall, comparison, ordinal, and error paths;
   rebound mutations fail with V2420. The shared corpus covers 14 semantic and
   adversarial cases, and a separate 101-output fixture guards the 4,084-byte
-  Plan payload boundary. Computed and dynamic templates remain fail-closed.
+  Plan payload boundary. Clean-source live CKB acceptance passed all 14 cases
+  on 2026-09-09, and full production-evidence validation binds that report to
+  the current fixture and unique deployed ELF. The required `dev`, `ci`, and
+  `backend` gates passed at `00f39a16`. Computed and dynamic templates remain
+  fail-closed.
 
 - Complete issue #7 for the accepted bounded Type-group input contract. Native
   `input BoundedCellSet<T, N>` authoring selects the current complete Type
