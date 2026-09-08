@@ -575,16 +575,21 @@ pub fn build_plan(graph: &ResolveGraph, options: &BuildPlanOptions) -> Result<Bu
     }
 
     for unit in &mut units {
-        let dependencies = graph
+        let dependency_roots = graph
             .edges
             .iter()
             .filter(|edge| edge.from == unit.package_root)
             .filter_map(|edge| edge.workspace_member_target.as_deref())
             .filter_map(|member_name| graph.roots.iter().find(|root| root.member_name == member_name))
-            .filter_map(|root| root_to_unit.get(&root.id))
-            .cloned()
+            .map(|root| root.id.clone())
             .collect::<BTreeSet<_>>();
-        unit.direct_dependencies = dependencies.into_iter().collect();
+        unit.direct_dependencies = graph
+            .build_order
+            .iter()
+            .filter(|root_id| dependency_roots.contains(*root_id))
+            .filter_map(|root_id| root_to_unit.get(root_id))
+            .cloned()
+            .collect();
     }
     let unit_order = units.iter().map(|unit| unit.id.clone()).collect();
     if units.is_empty() {
