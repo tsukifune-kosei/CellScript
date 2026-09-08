@@ -162,8 +162,11 @@ ordinary branches and cover replacement, fixed and bounded split/merge,
 creation, retirement, identity, Lock, Type, data, and capacity policy without
 requiring authors to write preview4's verbose container form.
 
-Required closure includes schema-change acknowledgements, exact Script identity
-types, complete accepted-path role accounting, multiple actions under one
+The focused v1 schema-change plan/receipt workflow is implemented for one
+explicitly selected local concrete `same except` relation, including added-field
+implicit-preservation blocking and stale receipt rejection. Required remaining
+closure includes graph-wide upgrade-plan receipt consumption, exact Script
+identity types, complete accepted-path role accounting, multiple actions under one
 persistent deployed policy, complex action/helper ABIs, formatter and recovering
 parser support, LSP and editor behavior, and direct AST/IR elaboration. The
 retained preview4 grammar remains executable reference evidence and is not the
@@ -397,7 +400,8 @@ adding an untracked general-purpose escape hatch.
 
 ### Stage 1: semantic and runtime foundations
 
-- Complete authoring relations and schema acknowledgements.
+- Complete the remaining authoring relations and graph-wide consumption of
+  focused schema acknowledgements.
 - Complete #7, #8, #12, and #23 for the admitted corpus.
 - Implement the typed CKB runtime-view issue and cryptographic capability issue.
 - Extend typed semantics, ProofPlan, source maps, lowering records, runtime

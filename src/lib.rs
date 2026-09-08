@@ -45,6 +45,8 @@ pub mod repl;
 pub mod resolve;
 pub mod runtime_errors;
 #[cfg(not(feature = "wasm"))]
+pub mod schema_acknowledgement;
+#[cfg(not(feature = "wasm"))]
 pub mod script_handle;
 mod script_handle_contract;
 #[cfg(not(feature = "wasm"))]
@@ -12536,7 +12538,7 @@ fn resource_conservation_checked_detail(
 
     if resource_conservation_updated_successor_is_checked(body, type_layouts, availability, consumed, created) {
         return Some(format!(
-            "Compiler-emitted runtime verifier checks one consumed '{}' Input is preserved into one created Output with verifier-checked field updates derived from the consumed Input; resource-conservation=checked-runtime; fields: {}",
+            "Compiler-emitted runtime verifier checks one consumed '{}' Input is preserved into one created Output with verifier-checked field updates derived from the consumed Input or fixed by explicit constants; resource-conservation=checked-runtime; fields: {}",
             type_name, fields
         ));
     }
@@ -12625,9 +12627,11 @@ fn resource_conservation_updated_successor_is_checked(
     let sources = metadata_u64_sources(body);
     let consumed_id = consumed[0].id;
     created.fields.iter().all(|(field, operand)| {
-        let ir::IrOperand::Var(var) = operand else {
-            return false;
-        };
+        // A literal initializer is checked directly against the created
+        // output. It deliberately carries no predecessor provenance: schema
+        // migrations use this shape for reviewed resets such as
+        // `approval_nonce = 0`.
+        let ir::IrOperand::Var(var) = operand else { return matches!(operand, ir::IrOperand::Const(_)) };
         // Preserved verbatim: a pure alias of the same field on the consumed
         // input.
         if aliases.get(&var.id).is_some_and(|alias| alias.root_id == consumed_id && alias.field == *field) {

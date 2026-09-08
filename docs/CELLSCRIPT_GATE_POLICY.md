@@ -423,7 +423,16 @@ authorization-only Lock scope as described in
 [`CELLSCRIPT_2027_PREVIEW_GRAMMAR.md`](CELLSCRIPT_2027_PREVIEW_GRAMMAR.md).
 Parser, formatter, LSP, checker mutation, cross-frontend identity, WASM-source,
 and syntax-combination checks are part of ordinary `dev`/`ci` closure. These
-checks do not freeze the proposed 1.0 grammar or satisfy the RFC's later
+gates also execute the focused `cellscript-schema-change-plan-v1` and
+`cellscript-schema-acknowledgement-v1` lifecycle. The fixture adds
+`approval_nonce`, rejects its implicit preservation with `SACK1001`, admits an
+explicit constant reset, rejects receipt/content and relation drift, and proves
+that canonical formatting does not alter the plan identity. The CLI test runs
+plan, receipt creation, verification, and stale verification against Edition
+2027 packages. These receipts do not satisfy state migration, interface
+compatibility, or deployment authorization.
+
+These checks do not freeze the proposed 1.0 grammar or satisfy the RFC's later
 acceptance and release gates.
 
 The bounded `cellc migrate --to 2027` path is also fail-closed. CLI tests require

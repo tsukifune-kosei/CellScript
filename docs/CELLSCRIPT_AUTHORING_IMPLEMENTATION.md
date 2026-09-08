@@ -30,9 +30,9 @@ retirement or pooled-accounting guarantee.
 The bounded native preview4 grammar remains accepted as an implementation
 reference. It is not the final authoring surface. Complete shared-policy product
 support, executable branch-alternative successors, the remaining relation
-policies, and schema acknowledgement are still required. Neither reuse of the
-2026 parser kernel nor successful scoped action ELFs satisfies those
-requirements.
+policies, and graph-wide schema-acknowledgement integration are still required.
+Neither reuse of the 2026 parser kernel nor successful scoped action ELFs
+satisfies those requirements.
 
 ## Completion requirements
 
@@ -43,11 +43,11 @@ are not implementation of a required supported feature.
 
 | Requirement | Required implementation and evidence | Current disposition |
 |---|---|---|
-| Complete authoring language | Shared declarations, expressions, statements, types, and full callable bodies; meaningful edits and readable diagnostics on the adopted corpus. | Shared kernel, optional marker and ordinary-action `replace` successor relations are implemented; remaining relation forms, acknowledgements and corpus evaluation are pending. |
+| Complete authoring language | Shared declarations, expressions, statements, types, and full callable bodies; meaningful edits and readable diagnostics on the adopted corpus. | Shared kernel, optional marker, ordinary-action `replace` successor relations, and the focused schema-acknowledgement workflow are implemented; remaining relation forms, graph-wide upgrade integration and corpus evaluation are pending. |
 | No 2026 feature regression | Positive and negative cross-edition source, typed obligation, format, artifact, and runtime checks for the feature families below. | Dedicated differential tests, the cross-edition syntax matrix and the 2026 `replace`-as-identifier boundary pass the 2026-09-06 `dev` gate; `ci` and release evidence remain pending. |
 | Direct semantic elaboration | Structured relation nodes with spans, typed schema resolution, and checked lowering; no generated preview4 text reparsing. | Implemented for `replace`: parser, AST, type checking and IR elaborate the relation directly, including concrete-schema `same except`; other constructor forms remain pending. |
 | Path-sensitive successor relations | Assigned/preserved fields, identity, lock, capacity and output correspondence compose inside ordinary `if`/`match`; every accepting path accounts for roles. | Implemented for authoring relations: source-level completeness (conditional skip, double disposal and loop disposal rejected) and relations in each branch of an `if` compile and validate after sibling arms stopped reusing non-dominating schema-field materializations. |
-| `same except` and upgrades | Concrete schema identity, exhaustive expansion, reproducible focused acknowledgement, changed/stale/missing acknowledgement rejection, no implicit repin. | `data = same except` expands against the resolved concrete schema with unknown/duplicate-field rejection; the schema acknowledgement workflow remains pending. |
+| `same except` and upgrades | Concrete schema identity, exhaustive expansion, reproducible focused acknowledgement, changed/stale/missing acknowledgement rejection, no implicit repin. | `data = same except` expands against the resolved concrete schema. `cellc schema-ack` now emits a hash-bound plan, blocks implicit preservation of added fields, creates a named-review receipt only after explicit assignment, and rejects changed/tampered/stale receipts without mutating package or deployment state. Issue #20 still owns graph-wide upgrade-plan consumption. |
 | Constructor defaults | A1-A6 policies are total under resolved context; lock omission, capacity alternatives, identity, group coverage, alias rejection and pool domains have one checked meaning. | Relations require explicit data, lock, capacity and identity treatments (omission is rejected, not defaulted); `lock = exact(address)`, `lock = exact_hash(script_hash)`, and `lock = same` are executable with checked conservation. `exact_hash` requires the dedicated `ScriptHash` domain; other constructors remain pending. |
 | Exact artifact entry | Codegen, semantic metadata, CLI execution and explicit entry scoping agree, including selected actions calling other retained actions. | Shared selection, terminal scalar/Unit helper failure and VM regressions implemented; policy Cell-bearing and complex-ABI callee closure remains pending. |
 | Resolved physical bindings | One typed per-binding source/ordinal/identity plan drives codegen, provenance, roles and independent checks; mixed Cell/read/witness/Script.args layouts cannot disagree. | Fixed-Cell runtime plan and typed projection checks implemented; full ABI and machine-dataflow closure remain pending. |
@@ -58,7 +58,7 @@ are not implementation of a required supported feature.
 | Orthogonal obligations | Compose lifecycle, identity, asset accounting, capacity and authorization without double counting; scope and authenticated external guarantees remain distinct. | Executable relation sugar produces the same typed obligation set as its spelled-out 2026 form for data, capacity, identity and exact-lock treatment. Bounded trusted-external EXEC/SPAWN now binds exact CellDep data identity and scoped guarantee claims under a separate evidence tier; broader constructor composition remains pending. |
 | Witness ABI contexts | Type input/output-only entries, Lock entries and shared witnesses have bounded, non-overlapping ownership; preserve old ABI bytes where compatible. | Empty-group fallback, canonical bounded multi-record Type envelope, independent host/adapter codecs and pre-signing placement implemented; full signed shared-policy integration remains pending. |
 | Token lifecycle | Execute generated Token Type Script under one persistent policy through authorized mint, transfer, merge and burn, with positive/negative VM and chain evidence. | Real CKB-VM coverage executes the complete issuer-authorized lifecycle under identical policy bytes, using earlier verified outputs as later inputs, across both editions and optimization levels 0-3; node admission, chain confirmation and deployment evidence remain pending. |
-| Schema-change lifecycle | Add `approval_nonce`, require reviewed reset on transfer, reject unchanged preservation and stale acknowledgement; retain old deployed-byte meaning. | Pending. |
+| Schema-change lifecycle | Add `approval_nonce`, require reviewed reset on transfer, reject unchanged preservation and stale acknowledgement; retain old deployed-byte meaning. | Implemented for one explicitly selected local concrete `same except` relation: unchanged implicit preservation yields `SACK1001`; `approval_nonce = 0` is production-executable and receipt-eligible; tampered or changed relation receipts reject. Every schema delta remains marked as requiring a separate state migration, and issue #20 integration is pending. |
 | Remaining business corpus | NFT capacity adjustment, fungible splits/merges, partial order, authenticated dependencies and interacting Script groups. | Pending. |
 | Independent artifact checking | Version and validate any new records, recompute identities, bind selected entries/relations/dispatch to machine evidence, and add adversarial mutations. | Typed policy, declaration/ABI and builder parameter projection checks implemented. Trusted-external records are independently bound to an ordered same-CellDep hash-check/delegation sequence with mutation negatives. Lowering record v7 binds the five typed HeaderDep reads to exact syscall, selector/offset, width and terminal-error machine sequences. Independent policy selector/adapter machine proof remains pending. |
 | Language services and products | Parser, recovering diagnostics, formatter, LSP, editor, native CLI, WASM, package loading, public interfaces and builders agree. | Shared parser diagnostics, formatter round-trip, syntax matrix and VS Code snippet cover `replace`; trusted external calls use ordinary call formatting plus LSP completions and package-manifest loading. Typed temporal domains now have interface, builder, editor and Playground parity, and the canonical bounded-summary WASM is 544,037 bytes gzip. Complete product closure for the remaining 0.30 workstreams remains pending. |
@@ -413,8 +413,9 @@ the retained preview AST annotation.
   separate from unique lifecycle accounting.
 - `same except` expands after concrete schema resolution and instantiation.
   Every field treatment must be explicit in the resulting semantic record.
-  Schema acknowledgement remains separate review evidence bound to the relation
-  and old/new schema identities. Existing preview envelope labels are not a
+  The v1 schema acknowledgement is separate review evidence bound to the
+  relation and old/new schema identities; a newly added implicitly preserved
+  field blocks receipt creation. Existing preview envelope labels are not a
   substitute for deriving policies from the actual relation and its checks.
 - The policy witness encoder must preserve existing single-entry CSARGv1 bytes.
   Introduce a separate bounded, versioned multi-record envelope for overlapping

@@ -94,6 +94,7 @@ pub enum Command {
     Migrate(MigrateArgs),
     Interface(InterfaceArgs),
     InterfaceDiff(InterfaceDiffArgs),
+    SchemaAck(SchemaAckArgs),
     Constraints(ConstraintsArgs),
     Abi(AbiArgs),
     SchedulerPlan(SchedulerPlanArgs),
@@ -333,6 +334,19 @@ pub struct InterfaceDiffArgs {
     pub new: PathBuf,
     pub output: Option<PathBuf>,
     pub json: bool,
+}
+
+#[derive(Debug, Default)]
+pub struct SchemaAckArgs {
+    pub old: PathBuf,
+    pub new: PathBuf,
+    pub action: String,
+    pub before: String,
+    pub after: String,
+    pub output: Option<PathBuf>,
+    pub acknowledge_by: Option<String>,
+    pub rationale: Option<String>,
+    pub verify: Option<PathBuf>,
 }
 
 #[derive(Debug, Default)]
@@ -940,6 +954,7 @@ impl CommandExecutor {
             Command::Migrate(args) => Self::migrate(args),
             Command::Interface(args) => Self::interface(args),
             Command::InterfaceDiff(args) => Self::interface_diff(args),
+            Command::SchemaAck(args) => Self::schema_ack(args),
             Command::Constraints(args) => Self::constraints(args),
             Command::Abi(args) => Self::abi(args),
             Command::SchedulerPlan(args) => Self::scheduler_plan(args),
@@ -2307,6 +2322,90 @@ impl CommandExecutor {
         }
         if !report.compatible {
             return Err(crate::error::CompileError::without_span("public interface contains breaking changes").with_code("E2501"));
+        }
+        Ok(())
+    }
+
+    fn schema_ack(args: SchemaAckArgs) -> Result<()> {
+        let compile_candidate = |path: &Path| -> Result<crate::CompileResult> {
+            let input = Utf8Path::from_path(path)
+                .ok_or_else(|| crate::error::CompileError::without_span(format!("path '{}' is not valid UTF-8", path.display())))?;
+            compile_path_with_entry_action(
+                input,
+                CompileOptions {
+                    edition: crate::CURRENT_EDITION,
+                    opt_level: 0,
+                    output: None,
+                    debug: false,
+                    target: Some("riscv64-elf".to_string()),
+                    target_profile: None,
+                    primitive_compat: None,
+                },
+                args.action.clone(),
+            )
+        };
+        let old = compile_candidate(&args.old)?;
+        let new = compile_candidate(&args.new)?;
+        let plan = crate::schema_acknowledgement::build_schema_change_plan(
+            &old,
+            &new,
+            crate::schema_acknowledgement::SchemaRelationSelector {
+                action: args.action.clone(),
+                before: args.before,
+                after: args.after,
+            },
+        )?;
+
+        let (value, label) = if let Some(receipt_path) = args.verify.as_ref() {
+            if args.acknowledge_by.is_some() || args.rationale.is_some() {
+                return Err(crate::error::CompileError::without_span(
+                    "schema-ack --verify cannot be combined with --acknowledge-by or --rationale",
+                ));
+            }
+            let bytes = std::fs::read(receipt_path)?;
+            let receipt: crate::schema_acknowledgement::SchemaAcknowledgementReceipt =
+                serde_json::from_slice(&bytes).map_err(|error| {
+                    crate::error::CompileError::without_span(format!(
+                        "failed to parse schema acknowledgement '{}': {error}",
+                        receipt_path.display()
+                    ))
+                })?;
+            crate::schema_acknowledgement::verify_schema_acknowledgement(&plan, &receipt)?;
+            (
+                serde_json::json!({
+                    "schema": "cellscript-schema-acknowledgement-verification-v1",
+                    "version": 1,
+                    "status": "verified",
+                    "plan_hash": plan.plan_hash,
+                    "acknowledgement_hash": receipt.acknowledgement_hash,
+                }),
+                "Schema acknowledgement verified",
+            )
+        } else if args.acknowledge_by.is_some() || args.rationale.is_some() {
+            let reviewer = args
+                .acknowledge_by
+                .ok_or_else(|| crate::error::CompileError::without_span("schema-ack receipt creation requires --acknowledge-by"))?;
+            let rationale = args
+                .rationale
+                .ok_or_else(|| crate::error::CompileError::without_span("schema-ack receipt creation requires --rationale"))?;
+            let receipt = crate::schema_acknowledgement::acknowledge_schema_change(&plan, reviewer, rationale)?;
+            (serde_json::to_value(receipt)?, "Schema acknowledgement created")
+        } else {
+            (serde_json::to_value(plan)?, "Schema change plan generated")
+        };
+
+        let json = serde_json::to_string_pretty(&value).map_err(|error| {
+            crate::error::CompileError::without_span(format!("failed to serialize schema acknowledgement: {error}"))
+        })?;
+        if let Some(output_path) = args.output.as_ref() {
+            if let Some(parent) = output_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(output_path, format!("{json}\n"))?;
+            println!("{label}");
+            println!("  Output: {}", output_path.display());
+        } else {
+            println!("{json}");
         }
         Ok(())
     }
@@ -15534,6 +15633,20 @@ impl CliParser {
                     .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write the compatibility report to a file")),
             )
             .subcommand(
+                ClapCommand::new("schema-ack")
+                    .display_order(33)
+                    .about("Plan, acknowledge, or verify one focused `same except` schema migration")
+                    .arg(Arg::new("old").long("old").value_name("PACKAGE").required(true).help("Previous Edition 2027 package or source"))
+                    .arg(Arg::new("new").long("new").value_name("PACKAGE").required(true).help("Candidate Edition 2027 package or source"))
+                    .arg(Arg::new("action").long("action").value_name("ACTION").required(true).help("Action containing the relation"))
+                    .arg(Arg::new("before").long("before").value_name("ROLE").required(true).help("Relation predecessor role"))
+                    .arg(Arg::new("after").long("after").value_name("ROLE").required(true).help("Relation successor role"))
+                    .arg(Arg::new("acknowledge-by").long("acknowledge-by").value_name("REVIEWER").help("Create a receipt naming the focused reviewer"))
+                    .arg(Arg::new("rationale").long("rationale").value_name("TEXT").help("Create a receipt with the review rationale"))
+                    .arg(Arg::new("verify").long("verify").value_name("RECEIPT").help("Verify a receipt against the current old/new candidates"))
+                    .arg(Arg::new("output").long("output").short('o').value_name("FILE").help("Write the plan, receipt, or verification result")),
+            )
+            .subcommand(
                 ClapCommand::new("constraints")
                     .about("Emit profile-aware production constraints for compiler, builder, CI, and acceptance gates")
                     .arg(Arg::new("input").value_name("INPUT").help("Input .cell file, package directory, or Cell.toml"))
@@ -17107,6 +17220,17 @@ impl CliParser {
                 new: m.get_one::<String>("new").map(PathBuf::from).expect("required new interface"),
                 output: m.get_one::<String>("output").map(PathBuf::from),
                 json: json_output(m),
+            }),
+            Some(("schema-ack", m)) => Command::SchemaAck(SchemaAckArgs {
+                old: m.get_one::<String>("old").map(PathBuf::from).expect("required old package"),
+                new: m.get_one::<String>("new").map(PathBuf::from).expect("required new package"),
+                action: m.get_one::<String>("action").cloned().expect("required action"),
+                before: m.get_one::<String>("before").cloned().expect("required predecessor role"),
+                after: m.get_one::<String>("after").cloned().expect("required successor role"),
+                output: m.get_one::<String>("output").map(PathBuf::from),
+                acknowledge_by: m.get_one::<String>("acknowledge-by").cloned(),
+                rationale: m.get_one::<String>("rationale").cloned(),
+                verify: m.get_one::<String>("verify").map(PathBuf::from),
             }),
             Some(("constraints", m)) => Command::Constraints(ConstraintsArgs {
                 input: m.get_one::<String>("input").map(PathBuf::from),

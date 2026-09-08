@@ -89,6 +89,9 @@ High-value active references include:
 - [CELLSCRIPT_AUTHORING_IMPLEMENTATION.md](CELLSCRIPT_AUTHORING_IMPLEMENTATION.md)
   for the complete implementation goal, 2026 parity requirements, current
   evidence, and remaining production acceptance work
+- [CELLSCRIPT_SCHEMA_ACKNOWLEDGEMENTS.md](CELLSCRIPT_SCHEMA_ACKNOWLEDGEMENTS.md)
+  for the versioned `same except` schema-change plan, explicit new-field rule,
+  review receipt, stale verification, and deployment boundary
 - [CELLSCRIPT_EXACT_SCRIPT_HANDLES.md](CELLSCRIPT_EXACT_SCRIPT_HANDLES.md) for
   the fixed exact-artifact handle layout, source API, on-chain checks, and the
   boundary before generic compatible/open handles

@@ -83,7 +83,51 @@ Read the six compatibility dimensions independently: source API, serialized
 layout, runtime ABI, effects/capabilities, builder contract, and deployment
 contract. A breaking report exits with `E2501`.
 
-## 5. Build And Verify The Typed Artifact
+## 5. Review A `same except` Schema Change
+
+An Edition 2027 schema upgrade that changes the expansion of a
+`data = same except` relation needs focused review. Generate a plan for one
+exact relation:
+
+```bash
+cellc schema-ack \
+  --old ./token-v1 \
+  --new ./token-v2 \
+  --action transfer \
+  --before token \
+  --after next \
+  --output target/token-schema-plan.json
+```
+
+If `token-v2` adds `approval_nonce`, leaving it unlisted produces `SACK1001`.
+State the new policy explicitly, such as `approval_nonce = 0`, review the plan,
+then create and verify the receipt:
+
+```bash
+cellc schema-ack \
+  --old ./token-v1 \
+  --new ./token-v2 \
+  --action transfer \
+  --before token \
+  --after next \
+  --acknowledge-by "reviewer identity" \
+  --rationale "approval_nonce resets on transfer" \
+  --output target/token-schema-ack.json
+
+cellc schema-ack \
+  --old ./token-v1 \
+  --new ./token-v2 \
+  --action transfer \
+  --before token \
+  --after next \
+  --verify target/token-schema-ack.json
+```
+
+The receipt becomes stale if the schema or relation changes. It records review
+only: every schema delta still requires a state-migration decision, and the
+receipt does not make an interface compatible or authorize deployment.
+
+## 6. Build And Verify The Typed Artifact
 
 ```bash
 cellc build --target riscv64-elf --target-profile ckb
@@ -107,7 +151,7 @@ This still does not mean the checker ran CKB-VM or observed a deployment. Keep
 compiler, independent-checker, CKB-VM, deployment, commitment, and mainnet
 evidence distinct.
 
-## 6. Inspect It In The Playground
+## 7. Inspect It In The Playground
 
 The browser compiler remains metadata-only: it emits no ELF. The Playground
 now highlights generics, abilities, visibility, bitwise/shift operations, and
@@ -118,7 +162,7 @@ substitute for those records, semantic equivalence, or CKB-VM execution. Use
 the VS Code extension for full semantic completion, hover, and definition
 support.
 
-## 7. Keep Unsupported Runtime Semantics Out Of Production
+## 8. Keep Unsupported Runtime Semantics Out Of Production
 
 Generics alone do not make a Cell-backed collection executable. 0.26 promotes
 only the fixed-width, source-qualified shapes whose runtime contracts are

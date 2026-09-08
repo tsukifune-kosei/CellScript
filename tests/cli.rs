@@ -7801,6 +7801,122 @@ fn cellc_new_subcommand_initializes_git_by_default() {
 }
 
 #[test]
+fn cellc_schema_ack_creates_and_verifies_a_focused_receipt() {
+    let temp = tempfile::tempdir().unwrap();
+    let old = temp.path().join("old");
+    let new = temp.path().join("new");
+    for root in [&old, &new] {
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+name = "schema-ack-demo"
+version = "0.1.0"
+edition = "2027"
+entry = "src/main.cell"
+
+[build]
+target_profile = "ckb"
+"#,
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        old.join("src/main.cell"),
+        r#"
+module schema_ack::token
+resource Token has store, replace, relock { owner: Address, amount: u64 }
+action transfer(input token: Token) -> next: Token {
+    replace token -> next {
+        data = same except { }
+        lock = same
+        capacity = same
+        identity = same
+    }
+}
+"#,
+    )
+    .unwrap();
+    let candidate = r#"
+module schema_ack::token
+resource Token has store, replace, relock { owner: Address, amount: u64, approval_nonce: u64 }
+action transfer(input token: Token) -> next: Token {
+    replace token -> next {
+        data = same except { approval_nonce = 0 }
+        lock = same
+        capacity = same
+        identity = same
+    }
+}
+"#;
+    std::fs::write(new.join("src/main.cell"), candidate).unwrap();
+
+    let selector_args = ["--action", "transfer", "--before", "token", "--after", "next"];
+    let plan = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .arg("schema-ack")
+        .arg("--old")
+        .arg(&old)
+        .arg("--new")
+        .arg(&new)
+        .args(selector_args)
+        .output()
+        .unwrap();
+    assert!(plan.status.success(), "stderr: {}", String::from_utf8_lossy(&plan.stderr));
+    let plan: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    assert_eq!(plan["schema"], "cellscript-schema-change-plan-v1");
+    assert_eq!(plan["requires_acknowledgement"], true);
+    assert_eq!(plan["blockers"].as_array().unwrap().len(), 0);
+
+    let receipt_path = temp.path().join("schema-ack.json");
+    let created = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .arg("schema-ack")
+        .arg("--old")
+        .arg(&old)
+        .arg("--new")
+        .arg(&new)
+        .args(selector_args)
+        .args(["--acknowledge-by", "Arthur", "--rationale", "approval nonce resets on transfer", "--output"])
+        .arg(&receipt_path)
+        .output()
+        .unwrap();
+    assert!(created.status.success(), "stderr: {}", String::from_utf8_lossy(&created.stderr));
+    let receipt: serde_json::Value = serde_json::from_slice(&std::fs::read(&receipt_path).unwrap()).unwrap();
+    assert_eq!(receipt["schema"], "cellscript-schema-acknowledgement-v1");
+    assert_eq!(receipt["reviewer"], "Arthur");
+
+    let verified = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .arg("schema-ack")
+        .arg("--old")
+        .arg(&old)
+        .arg("--new")
+        .arg(&new)
+        .args(selector_args)
+        .arg("--verify")
+        .arg(&receipt_path)
+        .output()
+        .unwrap();
+    assert!(verified.status.success(), "stderr: {}", String::from_utf8_lossy(&verified.stderr));
+    let verified: serde_json::Value = serde_json::from_slice(&verified.stdout).unwrap();
+    assert_eq!(verified["status"], "verified");
+
+    std::fs::write(new.join("src/main.cell"), candidate.replace("approval_nonce = 0", "approval_nonce = 1")).unwrap();
+    let stale = Command::new(env!("CARGO_BIN_EXE_cellc"))
+        .arg("schema-ack")
+        .arg("--old")
+        .arg(&old)
+        .arg("--new")
+        .arg(&new)
+        .args(selector_args)
+        .arg("--verify")
+        .arg(&receipt_path)
+        .output()
+        .unwrap();
+    assert!(!stale.status.success());
+    assert!(String::from_utf8_lossy(&stale.stderr).contains("stale"));
+}
+
+#[test]
 fn cellc_explain_subcommand_reports_runtime_error() {
     let output = Command::new(env!("CARGO_BIN_EXE_cellc")).arg("explain").arg("E0018").arg("--json").output().unwrap();
     assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));

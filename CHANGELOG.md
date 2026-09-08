@@ -2,6 +2,21 @@
 
 ## 0.30 - Capability closure development branch
 
+- Add focused schema-change acknowledgements for Edition 2027
+  `data = same except` relations. `cellc schema-ack` emits a canonical plan,
+  blocks a newly added implicitly preserved field with `SACK1001`, creates a
+  receipt only after the field receives an explicit policy and the reviewer
+  supplies an identity and rationale, and rejects tampered or stale receipts.
+  Plan and receipt hashes bind the module, selected action/roles, old/new
+  interface and field-layout identities, canonical relations, and changed
+  field treatments while ignoring formatting changes. The decisive
+  `approval_nonce` fixture now proves that an explicit constant reset remains
+  executable under `DenyFailClosed`; ProofPlan recognizes fixed constants as
+  verifier-checked successor assignments. Every schema delta still reports a
+  separate state-migration requirement, and the workflow does not mutate
+  `Cell.lock`, `Deployed.toml`, or deployment authorization. Graph-wide
+  upgrade-plan consumption remains under issue #20.
+
 - Introduce the first authoring-level CKB Script identity contract. Edition
   2027 successor relations now accept `lock = exact_hash(script_hash)` and
   require the expression to have the dedicated `ScriptHash` type. Typed CKB
