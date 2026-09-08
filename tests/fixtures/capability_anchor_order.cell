@@ -1,0 +1,37 @@
+module acceptance::capability_anchor_order
+
+struct Plan {
+    owner: Address
+    amount: u64
+}
+
+resource Order has store, consume, create
+with_capacity_floor(10000000000)
+{
+    amount: u64
+}
+
+action settle(
+    input orders: BoundedCellSet<Order, 2>,
+    witness plans: BoundedList<Plan, 2>,
+) -> u64 {
+    verification
+        let policy = ckb::cell_dep(0)
+        require policy.data_hash == Hash::from_bytes(b"\xe4\xce\xeb\x43\x42\x0a\x26\xba\x80\x79\x48\xa9\x36\x22\x17\xd0\xb2\x5b\x61\x4f\xbe\x2c\x23\xc5\x3d\x4b\xdf\xf8\xb8\xef\x96\x60")
+
+        let mut input_total: u64 = 0
+        consume_each order in orders {
+            require order.amount > 0
+            input_total += order.amount
+        }
+
+        let mut output_total: u64 = 0
+        create_each plan in plans {
+            require plan.amount > 0
+            output_total += plan.amount
+            create Order { amount: plan.amount } with_lock(plan.owner)
+        }
+
+        require input_total == output_total
+        return 0
+}

@@ -1,0 +1,6 @@
+module acceptance::capability_anchor_authorization
+
+lock authorize(witness credential: u64) -> bool {
+    verification
+        credential == 42
+}

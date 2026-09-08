@@ -1,0 +1,11 @@
+module acceptance::capability_anchor_token
+
+action preserve() -> u64 {
+    verification
+        let input = source::group_input(0)
+        let output = source::group_output(0)
+        require ckb::cell_data_size(input) == 8
+        require ckb::cell_data_size(output) == 8
+        require ckb::cell_data_u64_le(input, 0) == ckb::cell_data_u64_le(output, 0)
+        return 0
+}

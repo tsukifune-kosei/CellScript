@@ -1,0 +1,46 @@
+{
+  "schema": "cellscript-capability-anchor-fixture-v1",
+  "source_files": [
+    "tests/fixtures/capability_anchor_order.cell",
+    "tests/fixtures/capability_anchor_token.cell",
+    "tests/fixtures/capability_anchor_authorization.cell"
+  ],
+  "policy_data_hex": "0x63656c6c7363726970742d302e33302d616e63686f722d706f6c696379",
+  "artifacts": 3,
+  "script_groups": 4,
+  "positive_case": "settle_two_orders",
+  "adversarial_cases": [
+    {
+      "name": "wrong_authorization_credential",
+      "mutation": "authorization_credential"
+    },
+    {
+      "name": "fungible_amount_inflation",
+      "mutation": "token_amount"
+    },
+    {
+      "name": "partial_settlement_amount_mismatch",
+      "mutation": "order_amount"
+    },
+    {
+      "name": "authenticated_dependency_substitution",
+      "mutation": "dependency"
+    }
+  ],
+  "measured": {
+    "cycles": 26588,
+    "combined_elf_bytes": 9384,
+    "max_stack_frame_bytes": 5376,
+    "witness_bytes": 160,
+    "transaction_bytes": 1023,
+    "occupied_capacity_shannons": 24600000000
+  },
+  "budgets": {
+    "max_cycles": 30000,
+    "max_combined_elf_bytes": 10000,
+    "max_stack_frame_bytes": 6000,
+    "max_witness_bytes": 192,
+    "max_transaction_bytes": 1200,
+    "max_occupied_capacity_shannons": 25000000000
+  }
+}

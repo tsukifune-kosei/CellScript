@@ -213,6 +213,11 @@ check_cellscript_doc_status_freshness() {
         --root "$ROOT_DIR" check-doc-status
 }
 
+check_business_corpus() {
+    run cargo run --quiet --locked -p cellscript-tools --bin cellscript-tools -- \
+        --root "$ROOT_DIR" check-business-corpus
+}
+
 check_executable_surface_freshness() {
     run cargo run --quiet --locked -p cellscript-tools --bin cellscript-tools -- \
         --root "$ROOT_DIR" check-executable-surface
@@ -596,6 +601,7 @@ run_dev_gate() {
     run cargo run --quiet --locked -p cellscript-tools --bin cellscript-tools -- \
         --root "$ROOT_DIR" check-skill-pack
     check_cellscript_doc_status_freshness
+    check_business_corpus
     check_executable_surface_freshness
     check_markdown_local_links
     check_source_policy
@@ -640,6 +646,7 @@ run_ci_gate() {
     run cargo run --quiet --locked -p cellscript-tools --bin cellscript-tools -- \
         --root "$ROOT_DIR" check-skill-pack
     check_cellscript_doc_status_freshness
+    check_business_corpus
     check_executable_surface_freshness
     check_markdown_local_links
     check_package_contents
@@ -664,6 +671,7 @@ run_backend_gate() {
     require_cmd rg
 
     check_source_policy
+    check_business_corpus
 
     cargo_fmt_workspace --check
     run cargo check --locked -p cellscript --all-targets

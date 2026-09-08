@@ -11,6 +11,7 @@ mod acceptance_helpers;
 mod bip340_tcb;
 mod btc_anchor;
 mod btc_spv_adapter;
+mod business_corpus;
 mod ckb_acceptance;
 mod ckb_acceptance_live;
 mod ckb_adapter_live;
@@ -153,6 +154,15 @@ enum Command {
     },
     /// Validate freshness markers in CellScript documentation headers.
     CheckDocStatus,
+    /// Validate the frozen 0.30 business-capability corpus inventory.
+    CheckBusinessCorpus {
+        /// Refresh the sorted evidence inventory and its content digest.
+        #[arg(long)]
+        write: bool,
+        /// Require every release-level evidence layer to be complete.
+        #[arg(long)]
+        release: bool,
+    },
     /// Validate or regenerate the compiler-owned executable-surface matrix.
     CheckExecutableSurface {
         #[arg(long)]
@@ -416,6 +426,10 @@ fn main() -> ExitCode {
             }
         }
         Command::CheckDocStatus => match repository_checks::check_doc_status(&root) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => failure(error),
+        },
+        Command::CheckBusinessCorpus { write, release } => match business_corpus::run(&root, write, release) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => failure(error),
         },

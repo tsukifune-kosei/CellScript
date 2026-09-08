@@ -166,7 +166,7 @@ form a complete 0.30 business-capability plan.
 | Stable public value-generics surface | [#23](https://github.com/CellScript-Labs/CellScript/issues/23) | Proposal A is implemented and accepted on `0.30`: public cross-package value templates and pure functions, `fixed_value` normalization, field-derived aggregate abilities, canonical interface hashing and compatibility, Registry/checker validation, and product-surface parity. The required `dev`, `ci`, and `backend` gates passed on 2026-09-08 at `69488316`. |
 | Typed CKB transaction views and runtime adapters | [#24](https://github.com/CellScript-Labs/CellScript/issues/24) | Newly owned for 0.30. It unifies admitted Cell/input/header/witness/Script/hash/source operations without a raw syscall escape hatch. |
 | Cryptographic and authorization-domain contracts | [#25](https://github.com/CellScript-Labs/CellScript/issues/25) | Newly owned for 0.30. It separates native primitives, exact external verifiers, message domains, and Script/value identities. |
-| Rust-comparable business acceptance corpus | [#26](https://github.com/CellScript-Labs/CellScript/issues/26) | Newly owned for 0.30. It freezes the cross-feature portfolio, matched Rust fixtures, adversarial cases, and evidence layers. |
+| Rust-comparable business acceptance corpus | [#26](https://github.com/CellScript-Labs/CellScript/issues/26) | The candidate eight-family inventory, content-digest gate, matched-reference boundaries, and a real three-artifact/four-group CKB-VM settlement anchor are implemented. The anchor rejects authorization, fungible-state, settlement-output, and CellDep substitutions and gates cycles, stack frame, ELF, witness, transaction, and occupied-capacity measurements. Stateful multi-action anchor continuity, exact ProtocolBundle-to-anchor construction, selected-network node/deployment evidence, and independent review remain release blockers. See [the 0.30 business corpus](CELLSCRIPT_0_30_BUSINESS_CORPUS.md). |
 | Product, publication, and deployment closure | [#27](https://github.com/CellScript-Labs/CellScript/issues/27) | Newly owned for 0.30. It prevents compiler-only evidence or stale generated products from being presented as a complete release. |
 
 The four gaps found during the 0.30 review now have explicit issue owners:
@@ -436,6 +436,8 @@ adding an untracked general-purpose escape hatch.
 - File the four missing scoped issues identified above. Completed as #24 through
   #27 when the `0.30` implementation branch was opened.
 - Freeze the required business corpus and matched Rust reference boundaries.
+  The candidate inventory and digest gate are implemented; release evidence is
+  tracked separately and remains incomplete.
 - Resolve shared witness ownership across #8, #13, and #22.
 - Resolve the 0.30 Script identity, authorization, and source-value type
   contracts.

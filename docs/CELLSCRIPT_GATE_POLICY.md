@@ -14,7 +14,7 @@ deciding whether a change is ready.
 
 | Mode | When to run | Evidence boundary |
 |---|---|---|
-| `dev` | Local development before pushing | Native source-policy enforcement; Rust formatting; canonical CellScript example formatting; all workspace-package Rust checks (including the standalone artifact checker and `cellscript-tools`); checker mutation/Myelin handoff tests; exact-handle CKB-VM/transaction-validation tests; deployment-line receipt/value tests; simulator package scenarios; frozen/offline canonical workspace-diamond plus resolve-graph/build-plan and transactional-upgrade schema checks, including byte-identical source locks; both Registry verifiers and their compiler-dependency boundaries; reproducible Registry Type Script build and CKB-VM tests; strict backend quick audit, syntax-combination quick audit, parity-gated skill-pack freshness, README-linked CellScript doc Status freshness, local markdown link check, whitespace diff check |
+| `dev` | Local development before pushing | Native source-policy enforcement; Rust formatting; canonical CellScript example formatting; all workspace-package Rust checks (including the standalone artifact checker and `cellscript-tools`); checker mutation/Myelin handoff tests; exact-handle CKB-VM/transaction-validation tests; deployment-line receipt/value tests; frozen 0.30 business-corpus inventory and same-transaction anchor; simulator package scenarios; frozen/offline canonical workspace-diamond plus resolve-graph/build-plan and transactional-upgrade schema checks, including byte-identical source locks; both Registry verifiers and their compiler-dependency boundaries; reproducible Registry Type Script build and CKB-VM tests; strict backend quick audit, syntax-combination quick audit, parity-gated skill-pack freshness, README-linked CellScript doc Status freshness, local markdown link check, whitespace diff check |
 | `ci` | Pull requests, pushes, and routine merge readiness | Node 22 and native source-policy enforcement; all compiler/checker/adapter/tool tests and clippy; simulator plus CKB-VM package scenarios; standalone-checker dependency and mutation evidence; reproducible Registry Type Script identity plus CKB-VM tests and clippy; Registry API typecheck/tests with compiler-backed and least-privilege artifact workers, Node bundles, and dry-run Worker build; full website behavior/build regression suite; strict backend CI audit; package verification; parity-gated skill-pack/doc freshness; local-link and script syntax checks |
 | `backend` | Changes touching IR, codegen, assembler, ABI, ELF, or RISC-V behavior | Compiler, artifact-checker, and Fiber checks/tests/clippy; checker dependency boundary; simulator plus CKB-VM package scenarios; native source-policy enforcement; and strict backend full audit, including stateful CKB scenarios |
 | `release` | Nightly/stable release candidates and any production CKB claim | Clean tagged source plus `ci`, a fresh size-gated website WASM rebuild, tooling/docs and VS Code checks, pinned-CKB acceptance harnesses, public builder-contract generation, and mandatory stateful scenario/action coverage |
@@ -69,6 +69,15 @@ The native source-policy check also rejects release or version markers in every
 tracked or untracked `.cell` filename. Language examples are classified by
 semantic purpose under `examples/language/{core,ckb,ownership,verification,collections,batches}`;
 version history belongs in the changelog and release notes, not source paths.
+
+The 0.30 business-corpus check validates the exact eight-family inventory,
+separate evidence-layer statuses, the three-artifact same-transaction anchor,
+and a content digest over every referenced source, fixture, Rust boundary, and
+test owner. It runs in `dev`, `ci`, and `backend`; see
+[`CELLSCRIPT_0_30_BUSINESS_CORPUS.md`](CELLSCRIPT_0_30_BUSINESS_CORPUS.md).
+The structural check accepts an honestly marked candidate. The stricter
+`check-business-corpus --release` mode requires an accepted corpus with no
+pending release layer.
 
 Both release modes fail before doing expensive work unless the CellScript tree
 is completely clean, including untracked files. GitHub release CI additionally

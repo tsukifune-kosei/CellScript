@@ -1,0 +1,46 @@
+{
+  "schema": "cellscript-business-transaction-inventory-v1",
+  "serialization": "fixture-owner-tests-construct-canonical-ckb-molecule-transactions",
+  "families": {
+    "fungible_asset": {
+      "positive": ["authorized_mint", "transfer", "bounded_split", "bounded_merge", "burn"],
+      "adversarial": ["replay", "missing_or_extra_cell", "wrong_amount", "overflow", "wrong_identity", "wrong_authority"],
+      "fixture_owners": ["tests/entry_witness_abi.rs", "tests/bounded_group_input.rs", "tests/bounded_output_plan.rs", "tests/authoring_replace.rs"]
+    },
+    "nft_dob": {
+      "positive": ["mint_unique", "metadata_update", "ownership_transfer", "capacity_adjustment", "burn"],
+      "adversarial": ["duplicate_identity", "stale_state", "wrong_lock", "wrong_type", "unauthorized_update"],
+      "fixture_owners": ["tests/examples.rs", "tests/cost_corpus.rs"]
+    },
+    "order_amm": {
+      "positive": ["partial_fill", "cancel", "settle", "pool_merge"],
+      "adversarial": ["replay", "output_reordering", "partial_settlement", "wrong_price", "dependency_substitution"],
+      "fixture_owners": ["tests/ickb_diff.rs", "tests/cost_corpus.rs", "tests/business_corpus.rs"]
+    },
+    "temporal": {
+      "positive": ["absolute_timelock", "relative_timelock", "vesting", "epoch_timestamp_block_since"],
+      "adversarial": ["cross_domain", "missing_header", "early_release", "overflow", "one_past_boundary"],
+      "fixture_owners": ["tests/typed_runtime_views.rs", "tests/examples.rs", "tests/ickb_diff.rs"]
+    },
+    "authorization": {
+      "positive": ["standard_lock", "multisig_threshold", "issuer_authority", "exact_script_identity"],
+      "adversarial": ["post_signing_mutation", "copied_owner", "wrong_domain", "wrong_key", "partial_signature", "replay"],
+      "fixture_owners": ["tests/entry_witness_abi.rs", "tests/policy_authorization.rs", "tests/sighash_zero_lock.rs"]
+    },
+    "committed_state": {
+      "positive": ["authenticated_opening", "successor_commitment"],
+      "adversarial": ["stale", "malformed", "wrong_root", "wrong_index", "wrong_successor"],
+      "fixture_owners": ["tests/crypto_primitives.rs", "tests/examples.rs", "tests/schema_acknowledgement.rs"]
+    },
+    "multi_script_composition": {
+      "positive": ["three_artifact_same_transaction", "protocol_bundle_materialization"],
+      "adversarial": ["authorization_substitution", "type_state_substitution", "output_substitution", "cell_dep_substitution", "role_conflict"],
+      "fixture_owners": ["tests/business_corpus.rs", "tests/cli.rs"]
+    },
+    "external_verifier": {
+      "positive": ["exact_identity_exec", "exact_identity_spawn_wait"],
+      "adversarial": ["wrong_dependency", "wrong_hash", "wrong_adapter", "wrong_argument", "wrong_scope", "wrong_statement", "child_failure", "post_build_substitution"],
+      "fixture_owners": ["tests/trusted_external.rs", "tests/exact_script_handles.rs"]
+    }
+  }
+}

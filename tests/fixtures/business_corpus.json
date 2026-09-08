@@ -1,0 +1,913 @@
+{
+  "anchor": {
+    "adversarial_cases": [
+      "wrong_authorization_credential",
+      "fungible_amount_inflation",
+      "partial_settlement_amount_mismatch",
+      "authenticated_dependency_substitution"
+    ],
+    "artifacts": 3,
+    "builder_evidence": [
+      "tests/cli.rs",
+      "src/cli/commands.rs"
+    ],
+    "execution_test": "tests/business_corpus.rs",
+    "id": "authenticated-partial-settlement",
+    "positive_cases": [
+      "settle_two_orders"
+    ],
+    "protocol_bundle_evidence": [
+      "tests/cli.rs",
+      "crates/cellscript-ckb-adapter/src/protocol_bundle.rs"
+    ],
+    "required_capabilities": [
+      "authenticated_cell_dep",
+      "bounded_group_inputs",
+      "bounded_output_plan",
+      "fungible_conservation",
+      "lock_authorization",
+      "multiple_type_and_lock_groups"
+    ],
+    "script_groups": 4,
+    "sources": [
+      "tests/fixtures/capability_anchor_order.cell",
+      "tests/fixtures/capability_anchor_token.cell",
+      "tests/fixtures/capability_anchor_authorization.cell"
+    ],
+    "transaction_fixture": "tests/fixtures/capability_anchor_cases.json"
+  },
+  "claim": "Application-layer capability comparable to hand-written Rust CKB Scripts for this exact bounded eight-family portfolio; unrestricted Rust parity is excluded.",
+  "evidence_files": [
+    "Cargo.lock",
+    "crates/cellscript-ckb-adapter/src/protocol_bundle.rs",
+    "crates/cellscript-tools/src/ckb_acceptance_live.rs",
+    "examples/amm_pool.cell",
+    "examples/atomic_swap.cell",
+    "examples/multisig.cell",
+    "examples/nft.cell",
+    "examples/timelock.cell",
+    "examples/token.cell",
+    "examples/vesting.cell",
+    "src/cli/commands.rs",
+    "tests/artifact_checker.rs",
+    "tests/authoring_replace.rs",
+    "tests/benchmarks/ickb_diff/matrix.json",
+    "tests/benchmarks/ickb_diff/original_binaries/dao",
+    "tests/benchmarks/ickb_diff/original_binaries/limit_order",
+    "tests/benchmarks/ickb_specs/limit_order.cell",
+    "tests/bounded_group_input.rs",
+    "tests/bounded_output_plan.rs",
+    "tests/business_corpus.rs",
+    "tests/cli.rs",
+    "tests/cost_corpus.rs",
+    "tests/crypto_primitives.rs",
+    "tests/entry_witness_abi.rs",
+    "tests/exact_script_handles.rs",
+    "tests/examples.rs",
+    "tests/fixtures/bounded_group_input.cell",
+    "tests/fixtures/bounded_group_input_v1.json",
+    "tests/fixtures/bounded_output_plan.cell",
+    "tests/fixtures/bounded_output_plan_v1.json",
+    "tests/fixtures/business_transaction_inventory.json",
+    "tests/fixtures/capability_anchor_authorization.cell",
+    "tests/fixtures/capability_anchor_cases.json",
+    "tests/fixtures/capability_anchor_order.cell",
+    "tests/fixtures/capability_anchor_token.cell",
+    "tests/fixtures/cost_corpus/Cargo.lock",
+    "tests/fixtures/cost_corpus/nft_lock.cell",
+    "tests/fixtures/cost_corpus/schema_roll.cell",
+    "tests/fixtures/cost_corpus/src/nft_lock.rs",
+    "tests/fixtures/cost_corpus/src/pool_merge.rs",
+    "tests/fixtures/cost_corpus/src/schema_roll.rs",
+    "tests/fixtures/rust_ckb_token_transfer/Cargo.lock",
+    "tests/fixtures/rust_ckb_token_transfer/src/main.rs",
+    "tests/ickb_diff.rs",
+    "tests/policy_artifact_checker.rs",
+    "tests/policy_authorization.rs",
+    "tests/policy_lifecycle.rs",
+    "tests/schema_acknowledgement.rs",
+    "tests/sighash_zero_lock.rs",
+    "tests/trusted_external.rs",
+    "tests/typed_runtime_views.rs"
+  ],
+  "families": [
+    {
+      "adversarial_cases": [
+        "replay",
+        "missing_or_extra_cell",
+        "wrong_amount",
+        "overflow",
+        "wrong_identity",
+        "wrong_authority"
+      ],
+      "evidence_layers": {
+        "builder_signing": {
+          "paths": [
+            "tests/cli.rs",
+            "tests/entry_witness_abi.rs"
+          ],
+          "status": "passed"
+        },
+        "ckb_vm": {
+          "paths": [
+            "tests/entry_witness_abi.rs",
+            "tests/authoring_replace.rs"
+          ],
+          "status": "passed"
+        },
+        "deployment_identity": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "independent_review": {
+          "paths": [],
+          "status": "pending"
+        },
+        "measurements": {
+          "paths": [
+            "tests/cost_corpus.rs"
+          ],
+          "status": "passed"
+        },
+        "metadata_checker": {
+          "paths": [
+            "tests/artifact_checker.rs"
+          ],
+          "status": "passed"
+        },
+        "node_admission": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "parser_type_ir": {
+          "paths": [
+            "tests/examples.rs"
+          ],
+          "status": "passed"
+        },
+        "simulator": {
+          "paths": [
+            "tests/bounded_group_input.rs",
+            "tests/bounded_output_plan.rs"
+          ],
+          "status": "passed"
+        },
+        "stateful": {
+          "paths": [
+            "crates/cellscript-tools/src/ckb_acceptance_live.rs"
+          ],
+          "status": "passed"
+        }
+      },
+      "id": "fungible_asset",
+      "positive_cases": [
+        "authorized_mint",
+        "transfer",
+        "bounded_split",
+        "bounded_merge",
+        "burn"
+      ],
+      "reference": {
+        "identity": "rust_ckb_token_transfer Cargo.lock plus cost-corpus pool-merge reference",
+        "kind": "matched-rust",
+        "paths": [
+          "tests/fixtures/rust_ckb_token_transfer/Cargo.lock",
+          "tests/fixtures/rust_ckb_token_transfer/src/main.rs",
+          "tests/fixtures/cost_corpus/src/pool_merge.rs"
+        ]
+      },
+      "required_capabilities": [
+        "persistent lifecycle",
+        "bounded GroupInput",
+        "bounded output Plan",
+        "authorization",
+        "overflow checks"
+      ],
+      "scenarios": [
+        "authorized lifecycle",
+        "bounded split and merge",
+        "transaction-local conservation"
+      ],
+      "sources": [
+        "examples/token.cell",
+        "tests/fixtures/bounded_group_input.cell",
+        "tests/fixtures/bounded_output_plan.cell"
+      ],
+      "transaction_fixtures": [
+        "tests/fixtures/business_transaction_inventory.json",
+        "tests/fixtures/bounded_group_input_v1.json",
+        "tests/fixtures/bounded_output_plan_v1.json"
+      ]
+    },
+    {
+      "adversarial_cases": [
+        "duplicate_identity",
+        "stale_state",
+        "wrong_lock",
+        "wrong_type",
+        "unauthorized_update"
+      ],
+      "evidence_layers": {
+        "builder_signing": {
+          "paths": [
+            "tests/cli.rs"
+          ],
+          "status": "passed"
+        },
+        "ckb_vm": {
+          "paths": [
+            "tests/cost_corpus.rs"
+          ],
+          "status": "passed"
+        },
+        "deployment_identity": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "independent_review": {
+          "paths": [],
+          "status": "pending"
+        },
+        "measurements": {
+          "paths": [
+            "tests/cost_corpus.rs"
+          ],
+          "status": "passed"
+        },
+        "metadata_checker": {
+          "paths": [
+            "tests/artifact_checker.rs"
+          ],
+          "status": "passed"
+        },
+        "node_admission": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "parser_type_ir": {
+          "paths": [
+            "tests/examples.rs"
+          ],
+          "status": "passed"
+        },
+        "simulator": {
+          "paths": [
+            "tests/examples.rs"
+          ],
+          "status": "passed"
+        },
+        "stateful": {
+          "paths": [
+            "crates/cellscript-tools/src/ckb_acceptance_live.rs"
+          ],
+          "status": "passed"
+        }
+      },
+      "id": "nft_dob",
+      "positive_cases": [
+        "mint_unique",
+        "metadata_update",
+        "ownership_transfer",
+        "capacity_adjustment",
+        "burn"
+      ],
+      "reference": {
+        "identity": "cost-corpus NFT lock Rust reference pinned by Cargo.lock",
+        "kind": "matched-rust",
+        "paths": [
+          "tests/fixtures/cost_corpus/Cargo.lock",
+          "tests/fixtures/cost_corpus/src/nft_lock.rs"
+        ]
+      },
+      "required_capabilities": [
+        "unique identity",
+        "successor relation",
+        "Lock and Type preservation",
+        "capacity policy"
+      ],
+      "scenarios": [
+        "unique mint",
+        "metadata and ownership update",
+        "capacity change and burn"
+      ],
+      "sources": [
+        "examples/nft.cell",
+        "tests/fixtures/cost_corpus/nft_lock.cell"
+      ],
+      "transaction_fixtures": [
+        "tests/fixtures/business_transaction_inventory.json"
+      ]
+    },
+    {
+      "adversarial_cases": [
+        "replay",
+        "output_reordering",
+        "partial_settlement_amount_mismatch",
+        "wrong_price",
+        "authenticated_dependency_substitution"
+      ],
+      "evidence_layers": {
+        "builder_signing": {
+          "paths": [
+            "tests/cli.rs"
+          ],
+          "status": "passed"
+        },
+        "ckb_vm": {
+          "paths": [
+            "tests/ickb_diff.rs",
+            "tests/business_corpus.rs"
+          ],
+          "status": "passed"
+        },
+        "deployment_identity": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "independent_review": {
+          "paths": [],
+          "status": "pending"
+        },
+        "measurements": {
+          "paths": [
+            "tests/cost_corpus.rs",
+            "tests/business_corpus.rs"
+          ],
+          "status": "passed"
+        },
+        "metadata_checker": {
+          "paths": [
+            "tests/artifact_checker.rs"
+          ],
+          "status": "passed"
+        },
+        "node_admission": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "parser_type_ir": {
+          "paths": [
+            "tests/examples.rs"
+          ],
+          "status": "passed"
+        },
+        "simulator": {
+          "paths": [
+            "tests/bounded_group_input.rs",
+            "tests/bounded_output_plan.rs"
+          ],
+          "status": "passed"
+        },
+        "stateful": {
+          "paths": [
+            "tests/ickb_diff.rs"
+          ],
+          "status": "passed"
+        }
+      },
+      "id": "order_amm",
+      "positive_cases": [
+        "partial_fill",
+        "cancel",
+        "settle_two_orders",
+        "pool_merge"
+      ],
+      "reference": {
+        "identity": "iCKB limit-order source and cost-corpus pool-merge Rust reference",
+        "kind": "matched-rust",
+        "paths": [
+          "tests/fixtures/cost_corpus/src/pool_merge.rs",
+          "tests/benchmarks/ickb_diff/original_binaries/limit_order"
+        ]
+      },
+      "required_capabilities": [
+        "persistent order policy",
+        "bounded payments",
+        "output correspondence",
+        "authenticated dependency",
+        "price bounds"
+      ],
+      "scenarios": [
+        "partial fill",
+        "cancellation",
+        "multi-role settlement",
+        "reserve and price checks"
+      ],
+      "sources": [
+        "examples/amm_pool.cell",
+        "tests/benchmarks/ickb_specs/limit_order.cell",
+        "tests/fixtures/capability_anchor_order.cell"
+      ],
+      "transaction_fixtures": [
+        "tests/benchmarks/ickb_diff/matrix.json",
+        "tests/fixtures/business_transaction_inventory.json",
+        "tests/fixtures/capability_anchor_cases.json"
+      ]
+    },
+    {
+      "adversarial_cases": [
+        "cross_domain",
+        "missing_header",
+        "early_release",
+        "overflow",
+        "one_past_boundary"
+      ],
+      "evidence_layers": {
+        "builder_signing": {
+          "paths": [
+            "tests/cli.rs"
+          ],
+          "status": "passed"
+        },
+        "ckb_vm": {
+          "paths": [
+            "tests/typed_runtime_views.rs",
+            "tests/ickb_diff.rs"
+          ],
+          "status": "passed"
+        },
+        "deployment_identity": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "independent_review": {
+          "paths": [],
+          "status": "pending"
+        },
+        "measurements": {
+          "paths": [
+            "tests/ickb_diff.rs"
+          ],
+          "status": "passed"
+        },
+        "metadata_checker": {
+          "paths": [
+            "tests/artifact_checker.rs"
+          ],
+          "status": "passed"
+        },
+        "node_admission": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "parser_type_ir": {
+          "paths": [
+            "tests/examples.rs"
+          ],
+          "status": "passed"
+        },
+        "simulator": {
+          "paths": [
+            "tests/examples.rs"
+          ],
+          "status": "passed"
+        },
+        "stateful": {
+          "paths": [
+            "tests/ickb_diff.rs"
+          ],
+          "status": "passed"
+        }
+      },
+      "id": "temporal",
+      "positive_cases": [
+        "absolute_timelock",
+        "relative_timelock",
+        "vesting",
+        "epoch_timestamp_block_since"
+      ],
+      "reference": {
+        "identity": "iCKB DAO and limit-order maintained Rust binaries and matrix",
+        "kind": "matched-rust",
+        "paths": [
+          "tests/benchmarks/ickb_diff/original_binaries/dao",
+          "tests/benchmarks/ickb_diff/matrix.json"
+        ]
+      },
+      "required_capabilities": [
+        "Since",
+        "epoch",
+        "timestamp",
+        "block number",
+        "header dependencies"
+      ],
+      "scenarios": [
+        "absolute and relative timelock",
+        "vesting",
+        "typed header and Since domains"
+      ],
+      "sources": [
+        "examples/timelock.cell",
+        "examples/vesting.cell"
+      ],
+      "transaction_fixtures": [
+        "tests/fixtures/business_transaction_inventory.json",
+        "tests/benchmarks/ickb_diff/matrix.json"
+      ]
+    },
+    {
+      "adversarial_cases": [
+        "post_signing_mutation",
+        "copied_owner",
+        "wrong_domain",
+        "wrong_key",
+        "partial_signature",
+        "replay"
+      ],
+      "evidence_layers": {
+        "builder_signing": {
+          "paths": [
+            "tests/cli.rs",
+            "tests/entry_witness_abi.rs"
+          ],
+          "status": "passed"
+        },
+        "ckb_vm": {
+          "paths": [
+            "tests/entry_witness_abi.rs",
+            "tests/policy_authorization.rs",
+            "tests/sighash_zero_lock.rs"
+          ],
+          "status": "passed"
+        },
+        "deployment_identity": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "independent_review": {
+          "paths": [],
+          "status": "pending"
+        },
+        "measurements": {
+          "paths": [
+            "tests/policy_lifecycle.rs"
+          ],
+          "status": "passed"
+        },
+        "metadata_checker": {
+          "paths": [
+            "tests/policy_artifact_checker.rs"
+          ],
+          "status": "passed"
+        },
+        "node_admission": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "parser_type_ir": {
+          "paths": [
+            "tests/examples.rs"
+          ],
+          "status": "passed"
+        },
+        "simulator": {
+          "paths": [
+            "tests/examples.rs"
+          ],
+          "status": "passed"
+        },
+        "stateful": {
+          "paths": [
+            "tests/policy_lifecycle.rs"
+          ],
+          "status": "passed"
+        }
+      },
+      "id": "authorization",
+      "positive_cases": [
+        "standard_lock",
+        "multisig_threshold",
+        "issuer_authority",
+        "exact_script_identity"
+      ],
+      "reference": {
+        "identity": "ckb-system-scripts 0.6.0 bundled multisig-v2 plus ckb-sdk-rust 5.1.0 signing",
+        "kind": "pinned-standard-script",
+        "paths": [
+          "Cargo.lock",
+          "tests/entry_witness_abi.rs",
+          "tests/policy_authorization.rs"
+        ]
+      },
+      "required_capabilities": [
+        "sighash domain",
+        "multisig",
+        "post-signing immutability",
+        "exact handles"
+      ],
+      "scenarios": [
+        "standard signing",
+        "multisig lifecycle",
+        "issuer authority",
+        "exact Script identity"
+      ],
+      "sources": [
+        "examples/multisig.cell",
+        "tests/fixtures/capability_anchor_authorization.cell"
+      ],
+      "transaction_fixtures": [
+        "tests/fixtures/business_transaction_inventory.json",
+        "tests/fixtures/capability_anchor_cases.json"
+      ]
+    },
+    {
+      "adversarial_cases": [
+        "stale",
+        "malformed",
+        "wrong_root",
+        "wrong_index",
+        "wrong_successor"
+      ],
+      "evidence_layers": {
+        "builder_signing": {
+          "paths": [
+            "tests/cli.rs"
+          ],
+          "status": "passed"
+        },
+        "ckb_vm": {
+          "paths": [
+            "tests/crypto_primitives.rs",
+            "tests/cost_corpus.rs"
+          ],
+          "status": "passed"
+        },
+        "deployment_identity": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "independent_review": {
+          "paths": [],
+          "status": "pending"
+        },
+        "measurements": {
+          "paths": [
+            "tests/cost_corpus.rs"
+          ],
+          "status": "passed"
+        },
+        "metadata_checker": {
+          "paths": [
+            "tests/artifact_checker.rs"
+          ],
+          "status": "passed"
+        },
+        "node_admission": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "parser_type_ir": {
+          "paths": [
+            "tests/examples.rs"
+          ],
+          "status": "passed"
+        },
+        "simulator": {
+          "paths": [
+            "tests/examples.rs"
+          ],
+          "status": "passed"
+        },
+        "stateful": {
+          "paths": [
+            "tests/schema_acknowledgement.rs"
+          ],
+          "status": "passed"
+        }
+      },
+      "id": "committed_state",
+      "positive_cases": [
+        "authenticated_opening",
+        "successor_commitment"
+      ],
+      "reference": {
+        "identity": "cost-corpus schema-roll Rust reference pinned by Cargo.lock",
+        "kind": "matched-rust",
+        "paths": [
+          "tests/fixtures/cost_corpus/Cargo.lock",
+          "tests/fixtures/cost_corpus/src/schema_roll.rs"
+        ]
+      },
+      "required_capabilities": [
+        "Blake2b",
+        "SHA-256 Merkle",
+        "successor relation",
+        "witness ownership"
+      ],
+      "scenarios": [
+        "authenticated opening",
+        "successor commitment",
+        "shared witness envelope"
+      ],
+      "sources": [
+        "examples/atomic_swap.cell",
+        "tests/fixtures/cost_corpus/schema_roll.cell"
+      ],
+      "transaction_fixtures": [
+        "tests/fixtures/business_transaction_inventory.json"
+      ]
+    },
+    {
+      "adversarial_cases": [
+        "authorization_substitution",
+        "type_state_substitution",
+        "output_substitution",
+        "cell_dep_substitution",
+        "role_conflict"
+      ],
+      "evidence_layers": {
+        "builder_signing": {
+          "paths": [
+            "tests/cli.rs"
+          ],
+          "status": "passed"
+        },
+        "ckb_vm": {
+          "paths": [
+            "tests/business_corpus.rs"
+          ],
+          "status": "passed"
+        },
+        "deployment_identity": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "independent_review": {
+          "paths": [],
+          "status": "pending"
+        },
+        "measurements": {
+          "paths": [
+            "tests/fixtures/capability_anchor_cases.json"
+          ],
+          "status": "passed"
+        },
+        "metadata_checker": {
+          "paths": [
+            "tests/business_corpus.rs",
+            "tests/artifact_checker.rs"
+          ],
+          "status": "passed"
+        },
+        "node_admission": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "parser_type_ir": {
+          "paths": [
+            "tests/business_corpus.rs"
+          ],
+          "status": "passed"
+        },
+        "simulator": {
+          "paths": [],
+          "status": "not-applicable"
+        },
+        "stateful": {
+          "paths": [],
+          "status": "pending"
+        }
+      },
+      "id": "multi_script_composition",
+      "positive_cases": [
+        "three_artifact_same_transaction",
+        "protocol_bundle_materialization"
+      ],
+      "reference": {
+        "identity": "CKB transaction and Script-group verifier from ckb-testtool 1.1",
+        "kind": "pinned-standard-script",
+        "paths": [
+          "Cargo.lock",
+          "tests/business_corpus.rs"
+        ]
+      },
+      "required_capabilities": [
+        "ProtocolBundle",
+        "closed roles",
+        "exact receipts",
+        "same-transaction CKB-VM execution"
+      ],
+      "scenarios": [
+        "three independent artifacts",
+        "interacting Type and Lock groups",
+        "ProtocolBundle conflict resolution"
+      ],
+      "sources": [
+        "tests/fixtures/capability_anchor_order.cell",
+        "tests/fixtures/capability_anchor_token.cell",
+        "tests/fixtures/capability_anchor_authorization.cell"
+      ],
+      "transaction_fixtures": [
+        "tests/fixtures/capability_anchor_cases.json",
+        "tests/fixtures/business_transaction_inventory.json"
+      ]
+    },
+    {
+      "adversarial_cases": [
+        "wrong_dependency",
+        "wrong_hash",
+        "wrong_adapter",
+        "wrong_argument",
+        "wrong_scope",
+        "wrong_statement",
+        "child_failure",
+        "post_build_substitution"
+      ],
+      "evidence_layers": {
+        "builder_signing": {
+          "paths": [
+            "tests/cli.rs"
+          ],
+          "status": "passed"
+        },
+        "ckb_vm": {
+          "paths": [
+            "tests/trusted_external.rs",
+            "tests/exact_script_handles.rs"
+          ],
+          "status": "passed"
+        },
+        "deployment_identity": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "independent_review": {
+          "paths": [],
+          "status": "pending"
+        },
+        "measurements": {
+          "paths": [
+            "tests/trusted_external.rs"
+          ],
+          "status": "passed"
+        },
+        "metadata_checker": {
+          "paths": [
+            "tests/trusted_external.rs",
+            "tests/artifact_checker.rs"
+          ],
+          "status": "passed"
+        },
+        "node_admission": {
+          "paths": [],
+          "status": "release-candidate-required"
+        },
+        "parser_type_ir": {
+          "paths": [
+            "tests/trusted_external.rs"
+          ],
+          "status": "passed"
+        },
+        "simulator": {
+          "paths": [],
+          "status": "not-applicable"
+        },
+        "stateful": {
+          "paths": [],
+          "status": "not-applicable"
+        }
+      },
+      "id": "external_verifier",
+      "positive_cases": [
+        "exact_identity_exec",
+        "exact_identity_spawn_wait"
+      ],
+      "reference": {
+        "identity": "compiler proof ends at exact identity, adapter, statement, and zero-success enforcement",
+        "kind": "exact-trusted-external",
+        "paths": [
+          "tests/trusted_external.rs",
+          "tests/exact_script_handles.rs"
+        ]
+      },
+      "required_capabilities": [
+        "trusted external declaration",
+        "exact CellDep identity",
+        "adapter and result enforcement"
+      ],
+      "scenarios": [
+        "exact identity EXEC",
+        "exact identity SPAWN and WAIT",
+        "explicit trusted boundary"
+      ],
+      "sources": [
+        "tests/fixtures/capability_anchor_order.cell"
+      ],
+      "transaction_fixtures": [
+        "tests/fixtures/business_transaction_inventory.json"
+      ]
+    }
+  ],
+  "inventory_sha256": "0x40e59df53cc2089d7c3cd72753d2894b5b5f907800634b96f40fa6f1f00f5634",
+  "release_requirements": {
+    "backend": "pending",
+    "ci": "pending",
+    "deployment": "not-authorized",
+    "dev": "pending",
+    "independent_review": "pending",
+    "node_admission": "pending",
+    "release": "pending"
+  },
+  "schema": "cellscript-business-corpus-v1",
+  "status": "candidate"
+}
