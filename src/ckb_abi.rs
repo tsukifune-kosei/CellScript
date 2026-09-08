@@ -112,6 +112,10 @@ pub mod source_view {
 }
 
 pub mod type_id {
+    /// Built-in CKB TYPE_ID Script code hash.
+    pub const CODE_HASH: [u8; 32] =
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b'T', b'Y', b'P', b'E', b'_', b'I', b'D'];
+
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Lifecycle {
         Mint,

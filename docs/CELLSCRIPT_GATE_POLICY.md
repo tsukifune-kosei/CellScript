@@ -349,9 +349,11 @@ rejection cases. The same gates compile the distinct `ckb-type-hash` profile
 and require the standalone checker to bind it to `deployment_hash_types =
 ["type"]`, while the default `ckb` profile remains `["data2"]`. The receipt
 foundation is still off-chain evidence only. The gate must not present it as
-runtime-complete until the unique live admission Cell, ProtocolBundle/`tx
-validate` integration, independent deployment-line checker records, and real
-CKB-VM cases exist. See
+runtime-complete. `dev` and `ci` additionally check standard TYPE_ID admission
+creation/replacement, exact active admission/code Cell data, mandatory
+`ckb-type-hash` ProtocolBundle binding, and direct CellDep positions. The
+remaining release boundary is node-backed liveness, source/runtime helpers,
+independent deployment-line checker records, and real CKB-VM cases. See
 [the deployment-line handle contract](CELLSCRIPT_DEPLOYMENT_LINE_HANDLES.md).
 
 ### 0.26b semantic-foundation evidence

@@ -7,10 +7,13 @@
 
 use crate::error::{CompileError, Result};
 use crate::interface::{self, InterfaceCompatibilityReport, PackageInterface, COMPATIBILITY_SCHEMA};
-use crate::protocol_bundle::{ProtocolEntryIdentity, ProtocolNetworkIdentity, ProtocolScriptIdentity, ProtocolScriptRole};
+use crate::protocol_bundle::{
+    ProtocolCellDep, ProtocolDepType, ProtocolEntryIdentity, ProtocolNetworkIdentity, ProtocolOutPoint, ProtocolScriptIdentity,
+    ProtocolScriptRole, ProtocolTransactionSkeleton,
+};
 use crate::script_handle::{
-    exact_script_handle_value_from_receipt, exact_script_handle_value_hash, ExactCodeIdentityPolicy, ExactHandleClass,
-    ExactScriptHandleReceipt,
+    ckb_script_identity_hash, exact_script_handle_value_from_receipt, exact_script_handle_value_hash, ExactCodeIdentityPolicy,
+    ExactHandleClass, ExactScriptHandleReceipt,
 };
 use crate::script_handle_contract::{
     DEPLOYMENT_LINE_HANDLE_ADMISSION_TYPE_HASH_OFFSET, DEPLOYMENT_LINE_HANDLE_CLASS_OFFSET,
@@ -34,6 +37,8 @@ pub const DEPLOYMENT_LINE_RECEIPT_HASH_DOMAIN: &str = "cellscript-deployment-lin
 pub const DEPLOYMENT_LINE_ID_HASH_DOMAIN: &str = "cellscript-deployment-line-id-v1";
 pub const DEPLOYMENT_LINE_POLICY_HASH_DOMAIN: &str = "cellscript-deployment-line-policy-v1";
 pub const DEPLOYMENT_LINE_COMMITMENT_MAGIC: &[u8; 7] = b"CSREGv1";
+pub const DEPLOYMENT_LINE_ADMISSION_EVIDENCE_SCHEMA: &str = "cellscript-deployment-line-admission-evidence-v1";
+pub const DEPLOYMENT_LINE_ADMISSION_TRANSITION_SCHEMA: &str = "cellscript-deployment-line-admission-transition-v1";
 
 const COMPATIBILITY_DIMENSIONS: [&str; 6] =
     ["source_api", "serialized_layout", "runtime_abi", "effects_capabilities", "builder", "deployment"];
@@ -118,6 +123,61 @@ pub struct DeploymentLineHandleValue {
     pub version: u32,
     pub encoding: String,
     pub encoded: String,
+}
+
+/// One node-resolved live Cell used by a deployment-line admission check.
+///
+/// `data_hash` is the CKB default Blake2b-256 hash without a `0x` prefix. The
+/// resolver still has to prove liveness against the selected chain identity;
+/// this record binds the returned Cell contents before signing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentLineCellEvidence {
+    pub out_point: ProtocolOutPoint,
+    pub lock: ProtocolScriptIdentity,
+    pub type_script: ProtocolScriptIdentity,
+    pub data_hash: String,
+}
+
+/// Exact deployment-line state consumed by a ProtocolBundle transaction.
+///
+/// The admission Cell commits the full fixed line handle. The code Cell is a
+/// separate TYPE_ID lineage whose data hash must equal the selected checked
+/// ELF. Both are direct CellDeps at the declared transaction positions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentLineAdmissionEvidence {
+    pub schema: String,
+    pub version: u32,
+    pub artifact: String,
+    pub receipt: DeploymentLineReceipt,
+    pub handle: DeploymentLineHandleValue,
+    pub admission_cell: DeploymentLineCellEvidence,
+    pub admission_cell_data: String,
+    pub admission_cell_dep_index: u32,
+    pub code_cell: DeploymentLineCellEvidence,
+    pub code_cell_dep_index: u32,
+}
+
+/// Creation or replacement evidence for the unique admission TYPE_ID Cell.
+///
+/// Sequence zero has no previous state and validates the standard CKB TYPE_ID
+/// first-input/output-index derivation. Later sequences bind one exact input
+/// state to one exact output state and retain the checked receipt history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentLineAdmissionTransition {
+    pub schema: String,
+    pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_receipt: Option<DeploymentLineReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_handle: Option<DeploymentLineHandleValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_input_index: Option<u32>,
+    pub next_receipt: DeploymentLineReceipt,
+    pub next_handle: DeploymentLineHandleValue,
+    pub admission_output_index: u32,
 }
 
 pub fn begin_deployment_line(
@@ -405,6 +465,245 @@ pub fn validate_deployment_line_handle(receipt: &DeploymentLineReceipt, value: &
     Ok(())
 }
 
+/// Validate the exact active deployment-line state and its positions in the
+/// transaction that will consume it.
+///
+/// Liveness must be resolved by the runtime adapter against `receipt.network`
+/// immediately before this check. This function then closes substitutions in
+/// the resolver result and transaction skeleton before a signing request is
+/// emitted.
+pub fn validate_deployment_line_admission_evidence(
+    evidence: &DeploymentLineAdmissionEvidence,
+    expected_exact_receipt: &ExactScriptHandleReceipt,
+    transaction: &ProtocolTransactionSkeleton,
+) -> Result<()> {
+    if evidence.schema != DEPLOYMENT_LINE_ADMISSION_EVIDENCE_SCHEMA || evidence.version != 1 {
+        return Err(CompileError::without_span("unsupported deployment-line admission evidence schema/version"));
+    }
+    if evidence.artifact.is_empty() || evidence.artifact.len() > 512 || evidence.artifact.chars().any(char::is_control) {
+        return Err(CompileError::without_span("deployment-line admission artifact id must be a non-empty bounded string"));
+    }
+    validate_deployment_line_receipt(&evidence.receipt)?;
+    validate_deployment_line_handle(&evidence.receipt, &evidence.handle)?;
+    if evidence.receipt.status != DeploymentLineStatus::Active {
+        return Err(CompileError::without_span("a yanked deployment line cannot be selected for transaction execution"));
+    }
+    if &evidence.receipt.current_exact_receipt != expected_exact_receipt {
+        return Err(CompileError::without_span(
+            "deployment-line admission receipt does not match the independently checked ProtocolBundle artifact",
+        ));
+    }
+
+    let admission_type_hash = validate_type_id_cell(&evidence.admission_cell, "admission Cell")?;
+    let code_type_hash = validate_type_id_cell(&evidence.code_cell, "code Cell")?;
+    if admission_type_hash != evidence.receipt.admission_cell_type_hash {
+        return Err(CompileError::without_span(
+            "deployment-line admission Cell TYPE_ID hash does not match the immutable line receipt",
+        ));
+    }
+    if code_type_hash != evidence.receipt.stable_script.code_hash {
+        return Err(CompileError::without_span("deployment-line code Cell TYPE_ID hash does not match the stable Type-hash Script"));
+    }
+    if admission_type_hash == code_type_hash || evidence.admission_cell.out_point == evidence.code_cell.out_point {
+        return Err(CompileError::without_span(
+            "deployment-line admission and code state must use distinct TYPE_ID lineages and Cell out points",
+        ));
+    }
+
+    let admission_data = canonical_hex_bytes(&evidence.admission_cell_data, "admission Cell data")?;
+    let expected_admission_data = deployment_line_commitment_data(&evidence.handle)?;
+    if evidence.admission_cell_data != expected_admission_data {
+        return Err(CompileError::without_span("deployment-line admission Cell data does not commit the selected full line handle"));
+    }
+    let admission_data_hash = hex_encode(&ckb_blake2b256(&admission_data));
+    if evidence.admission_cell.data_hash != admission_data_hash {
+        return Err(CompileError::without_span("deployment-line admission Cell data hash does not match its exact data bytes"));
+    }
+    if evidence.code_cell.data_hash != evidence.receipt.current_exact_receipt.artifact_hash {
+        return Err(CompileError::without_span("deployment-line code Cell data hash does not match the selected checked ELF"));
+    }
+    if evidence.receipt.current_exact_receipt.deployment.code_cell_dep.dep_type != ProtocolDepType::Code
+        || evidence.receipt.current_exact_receipt.deployment.code_cell_dep.out_point != evidence.code_cell.out_point
+    {
+        return Err(CompileError::without_span("deployment-line exact receipt does not select the resolved direct code CellDep"));
+    }
+    if evidence.admission_cell_dep_index == evidence.code_cell_dep_index {
+        return Err(CompileError::without_span("deployment-line admission and code CellDeps must occupy distinct positions"));
+    }
+    validate_direct_cell_dep_at(
+        transaction,
+        evidence.admission_cell_dep_index,
+        &evidence.admission_cell.out_point,
+        "admission CellDep",
+    )?;
+    validate_direct_cell_dep_at(transaction, evidence.code_cell_dep_index, &evidence.code_cell.out_point, "code CellDep")?;
+    Ok(())
+}
+
+/// Validate the transaction shape that creates, advances, or yanks the unique
+/// deployment-line admission Cell.
+pub fn validate_deployment_line_admission_transition(
+    transition: &DeploymentLineAdmissionTransition,
+    transaction: &ProtocolTransactionSkeleton,
+) -> Result<()> {
+    if transition.schema != DEPLOYMENT_LINE_ADMISSION_TRANSITION_SCHEMA || transition.version != 1 {
+        return Err(CompileError::without_span("unsupported deployment-line admission transition schema/version"));
+    }
+    validate_deployment_line_receipt(&transition.next_receipt)?;
+    validate_deployment_line_handle(&transition.next_receipt, &transition.next_handle)?;
+    let output_index = usize::try_from(transition.admission_output_index)
+        .map_err(|_| CompileError::without_span("deployment-line admission output index is too large"))?;
+    let output = transaction
+        .outputs
+        .get(output_index)
+        .ok_or_else(|| CompileError::without_span("deployment-line admission output index is outside transaction outputs"))?;
+    let output_type = output
+        .r#type
+        .as_ref()
+        .ok_or_else(|| CompileError::without_span("deployment-line admission output is missing its TYPE_ID Script"))?;
+    validate_type_id_script(output_type, "admission output")?;
+    if ckb_script_identity_hash(output_type)? != transition.next_receipt.admission_cell_type_hash {
+        return Err(CompileError::without_span("deployment-line admission output TYPE_ID hash does not match the line receipt"));
+    }
+    let expected_next_data = deployment_line_commitment_data(&transition.next_handle)?;
+    if output.data.as_deref() != Some(expected_next_data.as_str()) {
+        return Err(CompileError::without_span("deployment-line admission output data does not commit the next full line handle"));
+    }
+
+    match (transition.previous_receipt.as_ref(), transition.previous_handle.as_ref(), transition.admission_input_index) {
+        (None, None, None) => {
+            if transition.next_receipt.sequence != 0 {
+                return Err(CompileError::without_span("deployment-line admission creation must publish sequence zero"));
+            }
+            require_type_id_group_counts(transaction, output_type, 0, 1)?;
+            let first_input = transaction.inputs.first().ok_or_else(|| {
+                CompileError::without_span("deployment-line admission TYPE_ID creation requires a first transaction input")
+            })?;
+            let serialized_input = serialize_protocol_cell_input(first_input)?;
+            let expected_args = crate::ckb_abi::type_id::args_from_first_input_and_output_index(
+                &serialized_input,
+                u64::from(transition.admission_output_index),
+            );
+            let actual_args = canonical_hex_bytes(&output_type.args, "admission output TYPE_ID args")?;
+            if actual_args.as_slice() != expected_args {
+                return Err(CompileError::without_span(
+                    "deployment-line admission TYPE_ID args do not match the first CellInput and output-index derivation",
+                ));
+            }
+        }
+        (Some(previous_receipt), Some(previous_handle), Some(input_index)) => {
+            validate_deployment_line_successor(previous_receipt, &transition.next_receipt)?;
+            validate_deployment_line_handle(previous_receipt, previous_handle)?;
+            let input_index = usize::try_from(input_index)
+                .map_err(|_| CompileError::without_span("deployment-line admission input index is too large"))?;
+            let input = transaction
+                .inputs
+                .get(input_index)
+                .ok_or_else(|| CompileError::without_span("deployment-line admission input index is outside transaction inputs"))?;
+            if input.out_point.is_none() || input.since.is_none() {
+                return Err(CompileError::without_span(
+                    "deployment-line admission replacement input must retain its concrete out_point and since",
+                ));
+            }
+            let input_type = input
+                .r#type
+                .as_ref()
+                .ok_or_else(|| CompileError::without_span("deployment-line admission input is missing its TYPE_ID Script"))?;
+            if input_type != output_type {
+                return Err(CompileError::without_span(
+                    "deployment-line admission replacement must preserve the exact TYPE_ID Script",
+                ));
+            }
+            let expected_previous_data = deployment_line_commitment_data(previous_handle)?;
+            if input.data.as_deref() != Some(expected_previous_data.as_str()) {
+                return Err(CompileError::without_span(
+                    "deployment-line admission input data does not commit the exact predecessor handle",
+                ));
+            }
+            require_type_id_group_counts(transaction, output_type, 1, 1)?;
+        }
+        _ => {
+            return Err(CompileError::without_span(
+                "deployment-line admission transition must provide all predecessor fields or none of them",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_type_id_script(script: &ProtocolScriptIdentity, label: &str) -> Result<()> {
+    let expected_code_hash = format!("0x{}", hex_encode(&crate::ckb_abi::type_id::CODE_HASH));
+    if script.code_hash != expected_code_hash || script.hash_type != "type" {
+        return Err(CompileError::without_span(format!(
+            "deployment-line {label} must use the built-in CKB TYPE_ID Script with hash_type type"
+        )));
+    }
+    if canonical_hex_bytes(&script.args, &format!("{label} TYPE_ID args"))?.len() != 32 {
+        return Err(CompileError::without_span(format!("deployment-line {label} TYPE_ID args must contain exactly 32 bytes")));
+    }
+    Ok(())
+}
+
+fn require_type_id_group_counts(
+    transaction: &ProtocolTransactionSkeleton,
+    type_script: &ProtocolScriptIdentity,
+    expected_inputs: usize,
+    expected_outputs: usize,
+) -> Result<()> {
+    let inputs = transaction.inputs.iter().filter(|cell| cell.r#type.as_ref() == Some(type_script)).count();
+    let outputs = transaction.outputs.iter().filter(|cell| cell.r#type.as_ref() == Some(type_script)).count();
+    if inputs != expected_inputs || outputs != expected_outputs {
+        return Err(CompileError::without_span(format!(
+            "deployment-line admission TYPE_ID group must contain {expected_inputs} input(s) and {expected_outputs} output(s); found {inputs} and {outputs}"
+        )));
+    }
+    Ok(())
+}
+
+fn serialize_protocol_cell_input(cell: &crate::protocol_bundle::ProtocolCellSlot) -> Result<Vec<u8>> {
+    let out_point = cell
+        .out_point
+        .as_ref()
+        .ok_or_else(|| CompileError::without_span("deployment-line TYPE_ID creation first input is missing its out_point"))?;
+    let since = cell
+        .since
+        .ok_or_else(|| CompileError::without_span("deployment-line TYPE_ID creation first input is missing its since value"))?;
+    let tx_hash = prefixed_hash32(&out_point.tx_hash, "TYPE_ID creation first input tx_hash")?;
+    let mut bytes = Vec::with_capacity(44);
+    bytes.extend_from_slice(&since.to_le_bytes());
+    bytes.extend_from_slice(&tx_hash);
+    bytes.extend_from_slice(&out_point.index.to_le_bytes());
+    Ok(bytes)
+}
+
+fn validate_type_id_cell(cell: &DeploymentLineCellEvidence, label: &str) -> Result<String> {
+    prefixed_hash32(&cell.out_point.tx_hash, &format!("{label} out_point tx_hash"))?;
+    raw_hash32(&cell.data_hash, &format!("{label} data_hash"))?;
+    ckb_script_identity_hash(&cell.lock).map_err(|error| {
+        CompileError::without_span(format!("deployment-line {label} has an invalid Lock Script: {}", error.message))
+    })?;
+    validate_type_id_script(&cell.type_script, label)?;
+    ckb_script_identity_hash(&cell.type_script)
+}
+
+fn validate_direct_cell_dep_at(
+    transaction: &ProtocolTransactionSkeleton,
+    index: u32,
+    out_point: &ProtocolOutPoint,
+    label: &str,
+) -> Result<()> {
+    let index =
+        usize::try_from(index).map_err(|_| CompileError::without_span(format!("deployment-line {label} index is too large")))?;
+    let expected = ProtocolCellDep { out_point: out_point.clone(), dep_type: ProtocolDepType::Code };
+    if transaction.cell_deps.get(index) != Some(&expected) {
+        return Err(CompileError::without_span(format!("deployment-line {label} does not match transaction cell_deps[{index}]")));
+    }
+    if transaction.cell_deps.iter().filter(|cell_dep| **cell_dep == expected).count() != 1 {
+        return Err(CompileError::without_span(format!("deployment-line {label} must occur exactly once in transaction CellDeps")));
+    }
+    Ok(())
+}
+
 fn encode_deployment_line_handle(receipt: &DeploymentLineReceipt) -> Result<DeploymentLineHandleValue> {
     validate_deployment_line_receipt(receipt)?;
     let receipt_hash = raw_hash32(&deployment_line_receipt_hash_unchecked(receipt)?, "deployment-line receipt hash")?;
@@ -643,7 +942,10 @@ fn canonical_hex_bytes(value: &str, label: &str) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::interface::{InterfaceCallable, InterfaceRuntimeContract};
-    use crate::protocol_bundle::{ProtocolCellDep, ProtocolDepType, ProtocolDeploymentIdentity, ProtocolEntryKind, ProtocolOutPoint};
+    use crate::protocol_bundle::{
+        ProtocolCellDep, ProtocolCellSlot, ProtocolDepType, ProtocolDeploymentIdentity, ProtocolEntryKind, ProtocolOutPoint,
+        ProtocolTransactionSkeleton,
+    };
     use crate::script_handle::{build_exact_script_handle, ExactScriptHandleReceiptInput};
 
     fn raw_hash(byte: u8) -> String {
@@ -728,6 +1030,30 @@ mod tests {
         .0
     }
 
+    fn type_id_script(args_byte: u8) -> ProtocolScriptIdentity {
+        ProtocolScriptIdentity {
+            code_hash: format!("0x{}", hex_encode(&crate::ckb_abi::type_id::CODE_HASH)),
+            hash_type: "type".to_string(),
+            args: format!("0x{}", raw_hash(args_byte)),
+        }
+    }
+
+    fn lock_script(byte: u8) -> ProtocolScriptIdentity {
+        ProtocolScriptIdentity { code_hash: format!("0x{}", raw_hash(byte)), hash_type: "data2".to_string(), args: "0x".to_string() }
+    }
+
+    fn cell_slot(byte: u8, ty: Option<ProtocolScriptIdentity>, data: Option<String>) -> ProtocolCellSlot {
+        ProtocolCellSlot {
+            cell_commitment: format!("0x{}", raw_hash(byte)),
+            capacity: 1_000,
+            lock: lock_script(byte.wrapping_add(1)),
+            r#type: ty,
+            out_point: Some(ProtocolOutPoint { tx_hash: format!("0x{}", raw_hash(byte.wrapping_add(2))), index: 0 }),
+            since: Some(0),
+            data,
+        }
+    }
+
     #[test]
     fn fixed_line_handle_binds_initial_exact_receipt_and_admission_commitment() {
         let baseline = interface(false);
@@ -804,5 +1130,166 @@ mod tests {
         exact.deployment.script.code_hash = format!("0x{}", exact.artifact_hash);
         exact.code_identity_policy = ExactCodeIdentityPolicy::DataHashExactArtifact;
         assert!(begin_deployment_line(&exact, &baseline, &format!("0x{}", raw_hash(0x72))).is_err());
+    }
+
+    #[test]
+    fn admission_evidence_binds_active_type_id_cells_and_exact_transaction_deps() {
+        let baseline = interface(false);
+        let code_type_script = type_id_script(0x81);
+        let admission_type_script = type_id_script(0x82);
+        let mut exact = exact_receipt("1.0.0", 0x83, &baseline);
+        exact.deployment.script.code_hash = ckb_script_identity_hash(&code_type_script).unwrap();
+        let admission_type_hash = ckb_script_identity_hash(&admission_type_script).unwrap();
+        let (receipt, handle) = begin_deployment_line(&exact, &baseline, &admission_type_hash).unwrap();
+        let admission_data = deployment_line_commitment_data(&handle).unwrap();
+        let admission_data_bytes = hex::decode(&admission_data[2..]).unwrap();
+        let admission_cell = DeploymentLineCellEvidence {
+            out_point: ProtocolOutPoint { tx_hash: format!("0x{}", raw_hash(0x84)), index: 0 },
+            lock: lock_script(0x85),
+            type_script: admission_type_script,
+            data_hash: hex_encode(&ckb_blake2b256(&admission_data_bytes)),
+        };
+        let code_cell = DeploymentLineCellEvidence {
+            out_point: exact.deployment.code_cell_dep.out_point.clone(),
+            lock: lock_script(0x86),
+            type_script: code_type_script,
+            data_hash: exact.artifact_hash.clone(),
+        };
+        let transaction = ProtocolTransactionSkeleton {
+            version: 0,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            witnesses: Vec::new(),
+            cell_deps: vec![
+                ProtocolCellDep { out_point: admission_cell.out_point.clone(), dep_type: ProtocolDepType::Code },
+                ProtocolCellDep { out_point: code_cell.out_point.clone(), dep_type: ProtocolDepType::Code },
+            ],
+            header_deps: Vec::new(),
+            fee_policy_hash: format!("0x{}", raw_hash(0x87)),
+            change_policy_hash: format!("0x{}", raw_hash(0x88)),
+            builder_assumption_evidence: Default::default(),
+        };
+        let evidence = DeploymentLineAdmissionEvidence {
+            schema: DEPLOYMENT_LINE_ADMISSION_EVIDENCE_SCHEMA.to_string(),
+            version: 1,
+            artifact: "token".to_string(),
+            receipt: receipt.clone(),
+            handle: handle.clone(),
+            admission_cell,
+            admission_cell_data: admission_data,
+            admission_cell_dep_index: 0,
+            code_cell,
+            code_cell_dep_index: 1,
+        };
+        validate_deployment_line_admission_evidence(&evidence, &exact, &transaction).unwrap();
+
+        let mut stale = evidence.clone();
+        stale.admission_cell_data.replace_range(2..4, "ff");
+        assert!(validate_deployment_line_admission_evidence(&stale, &exact, &transaction).is_err());
+
+        let mut substituted_code = evidence.clone();
+        substituted_code.code_cell.data_hash = raw_hash(0x89);
+        assert!(validate_deployment_line_admission_evidence(&substituted_code, &exact, &transaction).is_err());
+
+        let mut wrong_type_id = evidence.clone();
+        wrong_type_id.admission_cell.type_script.code_hash = format!("0x{}", raw_hash(0x8a));
+        assert!(validate_deployment_line_admission_evidence(&wrong_type_id, &exact, &transaction).is_err());
+
+        let mut wrong_dep = transaction.clone();
+        wrong_dep.cell_deps.swap(0, 1);
+        assert!(validate_deployment_line_admission_evidence(&evidence, &exact, &wrong_dep).is_err());
+
+        let mut duplicate_dep = transaction.clone();
+        duplicate_dep.cell_deps.push(duplicate_dep.cell_deps[0].clone());
+        assert!(validate_deployment_line_admission_evidence(&evidence, &exact, &duplicate_dep).is_err());
+
+        let (yanked_receipt, yanked_handle) = yank_deployment_line(&receipt, &baseline).unwrap();
+        let mut yanked = evidence;
+        yanked.receipt = yanked_receipt;
+        yanked.handle = yanked_handle.clone();
+        yanked.admission_cell_data = deployment_line_commitment_data(&yanked_handle).unwrap();
+        yanked.admission_cell.data_hash = hex_encode(&ckb_blake2b256(&hex::decode(&yanked.admission_cell_data[2..]).unwrap()));
+        assert!(validate_deployment_line_admission_evidence(&yanked, &exact, &transaction).is_err());
+    }
+
+    #[test]
+    fn admission_transition_recomputes_type_id_creation_and_exact_successor_state() {
+        let baseline = interface(false);
+        let first_input = cell_slot(0x91, None, Some("0x".to_string()));
+        let first_input_bytes = serialize_protocol_cell_input(&first_input).unwrap();
+        let output_index = 0u32;
+        let type_id_args =
+            crate::ckb_abi::type_id::args_from_first_input_and_output_index(&first_input_bytes, u64::from(output_index));
+        let admission_type_script = ProtocolScriptIdentity {
+            code_hash: format!("0x{}", hex_encode(&crate::ckb_abi::type_id::CODE_HASH)),
+            hash_type: "type".to_string(),
+            args: format!("0x{}", hex_encode(&type_id_args)),
+        };
+        let admission_type_hash = ckb_script_identity_hash(&admission_type_script).unwrap();
+        let first_exact = exact_receipt("1.0.0", 0x92, &baseline);
+        let (first_receipt, first_handle) = begin_deployment_line(&first_exact, &baseline, &admission_type_hash).unwrap();
+        let first_data = deployment_line_commitment_data(&first_handle).unwrap();
+        let creation = ProtocolTransactionSkeleton {
+            version: 0,
+            inputs: vec![first_input],
+            outputs: vec![cell_slot(0x93, Some(admission_type_script.clone()), Some(first_data.clone()))],
+            witnesses: Vec::new(),
+            cell_deps: Vec::new(),
+            header_deps: Vec::new(),
+            fee_policy_hash: format!("0x{}", raw_hash(0x94)),
+            change_policy_hash: format!("0x{}", raw_hash(0x95)),
+            builder_assumption_evidence: Default::default(),
+        };
+        let creation_evidence = DeploymentLineAdmissionTransition {
+            schema: DEPLOYMENT_LINE_ADMISSION_TRANSITION_SCHEMA.to_string(),
+            version: 1,
+            previous_receipt: None,
+            previous_handle: None,
+            admission_input_index: None,
+            next_receipt: first_receipt.clone(),
+            next_handle: first_handle.clone(),
+            admission_output_index: output_index,
+        };
+        validate_deployment_line_admission_transition(&creation_evidence, &creation).unwrap();
+
+        let additive = interface(true);
+        let next_exact = exact_receipt("1.1.0", 0x96, &additive);
+        let (next_receipt, next_handle) =
+            advance_deployment_line(&first_receipt, &baseline, &baseline, &next_exact, &additive).unwrap();
+        let next_data = deployment_line_commitment_data(&next_handle).unwrap();
+        let replacement = ProtocolTransactionSkeleton {
+            version: 0,
+            inputs: vec![cell_slot(0x97, Some(admission_type_script.clone()), Some(first_data))],
+            outputs: vec![cell_slot(0x98, Some(admission_type_script), Some(next_data))],
+            witnesses: Vec::new(),
+            cell_deps: Vec::new(),
+            header_deps: Vec::new(),
+            fee_policy_hash: format!("0x{}", raw_hash(0x99)),
+            change_policy_hash: format!("0x{}", raw_hash(0x9a)),
+            builder_assumption_evidence: Default::default(),
+        };
+        let replacement_evidence = DeploymentLineAdmissionTransition {
+            schema: DEPLOYMENT_LINE_ADMISSION_TRANSITION_SCHEMA.to_string(),
+            version: 1,
+            previous_receipt: Some(first_receipt.clone()),
+            previous_handle: Some(first_handle.clone()),
+            admission_input_index: Some(0),
+            next_receipt,
+            next_handle,
+            admission_output_index: 0,
+        };
+        validate_deployment_line_admission_transition(&replacement_evidence, &replacement).unwrap();
+
+        let mut stale = replacement_evidence.clone();
+        stale.previous_receipt.as_mut().unwrap().sequence = 1;
+        assert!(validate_deployment_line_admission_transition(&stale, &replacement).is_err());
+
+        let mut duplicate_group = replacement;
+        duplicate_group.outputs.push(duplicate_group.outputs[0].clone());
+        assert!(validate_deployment_line_admission_transition(&replacement_evidence, &duplicate_group).is_err());
+
+        let mut malformed_creation = creation_evidence;
+        malformed_creation.next_handle.encoded.replace_range(2..4, "ff");
+        assert!(validate_deployment_line_admission_transition(&malformed_creation, &creation).is_err());
     }
 }

@@ -8456,6 +8456,9 @@ fn typescript_builder_manifest(
             "report_schema": "cellscript-protocol-bundle-report-v1",
             "artifact_binding_schema": "cellscript-protocol-bundle-artifact-binding-v1",
             "closed_role_schema": "cellscript-protocol-closed-role-v1",
+            "deployment_line_admission_evidence_schema": "cellscript-deployment-line-admission-evidence-v1",
+            "deployment_line_admission_transition_schema": "cellscript-deployment-line-admission-transition-v1",
+            "requires_deployment_line_admission": metadata.target_profile.name == "ckb-type-hash",
             "runtime_adapter": "cellscript-ckb-adapter",
             "states": [
                 "MaterializedProtocolBundleTx",
@@ -8560,6 +8563,11 @@ export const PROTOCOL_CLOSED_ROLE_SCHEMA = "cellscript-protocol-closed-role-v1" 
 export const EXACT_SCRIPT_HANDLE_RECEIPT_SCHEMA = "cellscript-exact-script-handle-receipt-v1" as const;
 export const EXACT_SCRIPT_HANDLE_VALUE_SCHEMA = "cellscript-exact-script-handle-value-v1" as const;
 export const EXACT_SCRIPT_HANDLE_ENCODING = "CSHDLv1-fixed-202" as const;
+export const DEPLOYMENT_LINE_RECEIPT_SCHEMA = "cellscript-deployment-line-receipt-v1" as const;
+export const DEPLOYMENT_LINE_VALUE_SCHEMA = "cellscript-deployment-line-handle-value-v1" as const;
+export const DEPLOYMENT_LINE_HANDLE_ENCODING = "CSLINv1-fixed-386" as const;
+export const DEPLOYMENT_LINE_ADMISSION_EVIDENCE_SCHEMA = "cellscript-deployment-line-admission-evidence-v1" as const;
+export const DEPLOYMENT_LINE_ADMISSION_TRANSITION_SCHEMA = "cellscript-deployment-line-admission-transition-v1" as const;
 
 export type ProtocolBundleScriptRole = "lock" | "type" | "spawned-verifier";
 
@@ -8599,6 +8607,69 @@ export interface ExactScriptHandleValue {
   version: 1;
   encoding: typeof EXACT_SCRIPT_HANDLE_ENCODING;
   encoded: HexString;
+}
+
+export interface DeploymentLineReceipt {
+  schema: typeof DEPLOYMENT_LINE_RECEIPT_SCHEMA;
+  version: 1;
+  line_id: string;
+  package_line: string;
+  sequence: number;
+  status: "active" | "yanked";
+  previous_receipt_hash?: string;
+  class: "script" | "verifier";
+  script_role: ProtocolBundleScriptRole;
+  entry: { kind: "action" | "lock" | "function"; name: string };
+  network: { chain_id: string; genesis_hash: HexString };
+  stable_script: { code_hash: HexString; hash_type: "type"; args: HexString };
+  baseline_interface_hash: string;
+  previous_interface_hash: string;
+  current_interface_hash: string;
+  predecessor_compatibility: unknown;
+  baseline_compatibility: unknown;
+  policy: unknown;
+  policy_hash: string;
+  admission_cell_type_hash: HexString;
+  current_exact_receipt: ExactScriptHandleReceipt;
+  current_exact_handle_hash: string;
+}
+
+export interface DeploymentLineHandleValue {
+  schema: typeof DEPLOYMENT_LINE_VALUE_SCHEMA;
+  version: 1;
+  encoding: typeof DEPLOYMENT_LINE_HANDLE_ENCODING;
+  encoded: HexString;
+}
+
+export interface DeploymentLineCellEvidence {
+  out_point: { tx_hash: HexString; index: number };
+  lock: { code_hash: HexString; hash_type: "data" | "data1" | "data2" | "type"; args: HexString };
+  type_script: { code_hash: HexString; hash_type: "type"; args: HexString };
+  data_hash: string;
+}
+
+export interface DeploymentLineAdmissionEvidence {
+  schema: typeof DEPLOYMENT_LINE_ADMISSION_EVIDENCE_SCHEMA;
+  version: 1;
+  artifact: string;
+  receipt: DeploymentLineReceipt;
+  handle: DeploymentLineHandleValue;
+  admission_cell: DeploymentLineCellEvidence;
+  admission_cell_data: HexString;
+  admission_cell_dep_index: number;
+  code_cell: DeploymentLineCellEvidence;
+  code_cell_dep_index: number;
+}
+
+export interface DeploymentLineAdmissionTransition {
+  schema: typeof DEPLOYMENT_LINE_ADMISSION_TRANSITION_SCHEMA;
+  version: 1;
+  previous_receipt?: DeploymentLineReceipt;
+  previous_handle?: DeploymentLineHandleValue;
+  admission_input_index?: number;
+  next_receipt: DeploymentLineReceipt;
+  next_handle: DeploymentLineHandleValue;
+  admission_output_index: number;
 }
 
 export interface ProtocolBundleArtifactBinding {

@@ -383,6 +383,19 @@
   Advance the artifact cache identity to
   `project-source-set-v46-0.30-dev4-type-hash-profile`.
 
+- Add the standard Type ID deployment-line admission path. The new
+  `cellscript-deployment-line-admission-evidence-v1` record binds an active
+  `CSLINv1` receipt to distinct admission/code TYPE_ID Cells, their exact data
+  hashes and direct transaction CellDep positions. `ckb-type-hash`
+  ProtocolBundle artifacts now fail closed when that evidence is missing,
+  predecessor/data-stale, yanked, code-substituted, or position-substituted.
+  The separate
+  `cellscript-deployment-line-admission-transition-v1` validator recomputes
+  TYPE_ID creation args and checks exact one-input/one-output receipt
+  replacements for upgrades and yanks. Node liveness and on-chain consumer
+  helpers remain later closure. Advance the artifact cache identity to
+  `project-source-set-v47-0.30-dev5-deployment-line-admission`.
+
 ## 0.26b - Experimental semantic-foundation branch
 
 - Complete the 0.26 economic-backend tranche across layout, code generation,

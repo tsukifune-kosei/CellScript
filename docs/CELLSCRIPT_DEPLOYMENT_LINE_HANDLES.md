@@ -2,8 +2,10 @@
 
 Status: off-chain receipt/fixed-value foundation and the distinct
 `ckb-type-hash` generated-artifact profile are implemented on the `0.30`
-development branch. ProtocolBundle admission, source/runtime helpers, the
-unique admission Cell, and compatible open roles remain release blockers.
+development branch. Standard Type ID admission evidence, admission-state
+transitions, and ProtocolBundle binding are also implemented. Node-backed
+liveness, source/runtime helpers, and compatible open roles remain release
+blockers.
 
 ## Security boundary
 
@@ -89,22 +91,38 @@ entire line value without treating the off-chain Registry as consensus.
   `validate_deployment_line_successor`, and
   `validate_deployment_line_handle` independently recheck structural and hash
   bindings.
+- `validate_deployment_line_admission_evidence` binds the active receipt to a
+  distinct standard TYPE_ID admission Cell and TYPE_ID code Cell, verifies the
+  exact admission data and checked ELF data hashes, and requires both direct
+  CellDeps at their declared transaction positions.
+- `validate_deployment_line_admission_transition` recomputes initial TYPE_ID
+  args from the first serialized `CellInput` and output index. For upgrades and
+  yanks it requires exactly one matching TYPE_ID input and output, exact
+  predecessor data, and the checked receipt successor.
+
+`ckb-type-hash` artifacts in `cellscript-protocol-bundle-input-v1` must carry
+exactly one `cellscript-deployment-line-admission-evidence-v1` record. The
+offline checker rejects missing, duplicate, predecessor/data-stale, yanked,
+incompatible, wrong-code, wrong-Type-ID, and wrong-CellDep-position evidence.
+The generated TypeScript builder contract exports both admission schemas and marks
+`ckb-type-hash` packages as requiring this binding.
 
 ## Remaining runtime closure
 
 The default `ckb` profile remains exact-data deployment and permits only
 `data2`. The separate `ckb-type-hash` profile now emits the same CKB VM2/Zbb
 artifact ABI while permitting only `type`, and the standalone checker binds
-that choice to the artifact evidence. The current Registry Type Script still
-validates commitment shape and custody, but does not establish one unique live
-Cell per deployment line. Until a versioned unique replacement contract is
-implemented and tested, a stale active commitment could coexist with a newer
-one.
+that choice to the artifact evidence. Admission and code state use separate
+standard TYPE_ID lineages. Their input Locks authorize replacement; the
+receipt's compatibility reports independently decide whether the next code
+version may enter the line. The transition validator enforces the unique
+one-input/one-output admission group shape without making Lock authorization a
+compatibility claim.
 
-For that reason no source type or runtime helper consumes
-`DeploymentLineHandle` yet, and ProtocolBundle/`tx validate` do not accept it.
-The next phase must add the unique Type ID admission Cell, full runtime checks
-for the embedded exact version and admission commitment,
-standalone-checker mutations, real CKB-VM stale/yank/substitution cases, and
-ProtocolBundle history retention. Compatible open handles remain a later
-phase and cannot infer behavioral equivalence from interface compatibility.
+The Rust validator checks the contents returned by a resolver; it does not make
+an RPC liveness claim. The CKB adapter must still resolve both out points as
+live Cells on the receipt's exact chain immediately before signing. No source
+type or on-chain helper consumes `DeploymentLineHandle` yet. The next phase
+must add those runtime checks, standalone-checker mutations, and real CKB-VM
+stale/yank/substitution cases. Compatible open handles remain a later phase
+and cannot infer behavioral equivalence from interface compatibility.

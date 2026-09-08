@@ -275,9 +275,11 @@ baseline and predecessor across all six interface dimensions, records
 monotonic active/yanked state, and emits the fixed 386-byte `CSLINv1` value
 committed as `CSREGv1 || handle_hash`. The distinct `ckb-type-hash` target
 profile now admits only Type-hash generated-artifact deployment and the
-standalone checker preserves that profile/hash-type contract. The unique live
-admission Cell and runtime helper needed to reject stale line versions in
-consensus are not implemented. Generic
+standalone checker preserves that profile/hash-type contract. Standard TYPE_ID
+admission/code Cell evidence, exact admission transitions, and mandatory
+ProtocolBundle binding are implemented off chain. Node-backed liveness and the
+runtime helper needed to reject stale line versions in consensus are not
+implemented. Generic
 `ScriptHandle<I>` types, runtime-selected compatible construction,
 compatible-open handles, and open cross-Script roles remain open.
 

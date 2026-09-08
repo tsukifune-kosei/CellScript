@@ -230,7 +230,7 @@ fn strict_capability_name(capability: ast::Capability) -> &'static str {
 
 const DEFAULT_TARGET: &str = "riscv64-asm";
 const DEFAULT_TARGET_PROFILE: &str = "ckb";
-const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v46-0.30-dev4-type-hash-profile";
+const ARTIFACT_CACHE_VERSION: &str = "project-source-set-v47-0.30-dev5-deployment-line-admission";
 pub const METADATA_SCHEMA_VERSION: u32 = 71;
 pub const SOURCE_METADATA_SCHEMA_VERSION: u32 = 2;
 pub const ARTIFACT_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -257,8 +257,7 @@ pub const CKB_BLANK_HASH: [u8; 32] = [
     181, 99, 61, 22, 62,
 ];
 const METADATA_MUTATE_CELL_BUFFER_SIZE: usize = 512;
-const CKB_TYPE_ID_CODE_HASH: [u8; 32] =
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b'T', b'Y', b'P', b'E', b'_', b'I', b'D'];
+const CKB_TYPE_ID_CODE_HASH: [u8; 32] = ckb_abi::type_id::CODE_HASH;
 const CKB_TYPE_ID_ABI: &str = "ckb-type-id-v1";
 const CKB_TYPE_ID_HASH_TYPE: &str = "type";
 const CKB_DEFAULT_SCRIPT_HASH_TYPE: &str = "data2";

@@ -7,6 +7,7 @@
 //! Scripts.
 
 use crate::assumptions::validate_transaction_against_metadata;
+use crate::deployment_line_handle::{validate_deployment_line_admission_evidence, DeploymentLineAdmissionEvidence};
 use crate::error::{CompileError, Result};
 use crate::script_handle::{
     build_exact_script_handle, compile_metadata_abi_hash, exact_script_handle_value_hash, ExactScriptHandleReceipt,
@@ -352,6 +353,8 @@ pub struct ProtocolBundleInput {
     pub schema: String,
     pub network: ProtocolNetworkIdentity,
     pub artifacts: Vec<ProtocolArtifactInput>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deployment_lines: Vec<DeploymentLineAdmissionEvidence>,
     pub transaction: ProtocolTransactionSkeleton,
     #[serde(default)]
     pub roles: Vec<ProtocolRoleBinding>,
@@ -439,6 +442,8 @@ pub struct ResolvedProtocolBundle {
     pub schema: String,
     pub network: ProtocolNetworkIdentity,
     pub artifacts: Vec<ProtocolArtifactIdentity>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deployment_lines: Vec<DeploymentLineAdmissionEvidence>,
     pub transaction: ProtocolTransactionSkeleton,
     pub roles: Vec<ProtocolRoleBinding>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -466,6 +471,8 @@ pub struct ProtocolBundleEvidenceTemplate {
     pub structural_verification: EvidenceState,
     pub artifact_admission: BTreeMap<String, CheckerReport>,
     pub metadata_transaction_validation: BTreeMap<String, TxValidationReport>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub deployment_line_admission: BTreeMap<String, EvidenceState>,
     pub transaction_serialization: EvidenceState,
     pub ckb_vm_execution: EvidenceState,
     pub chain_evidence: EvidenceState,
@@ -503,22 +510,57 @@ pub fn check_protocol_bundle(input: &ProtocolBundleInput, base: &Path) -> Result
     let mut identities = Vec::with_capacity(input.artifacts.len());
     let mut reports = BTreeMap::new();
     let mut metadata_validation = BTreeMap::new();
+    let mut required_deployment_lines = BTreeSet::new();
     let transaction_value = serde_json::to_value(&input.transaction).map_err(|error| {
         CompileError::without_span(format!("failed to materialize ProtocolBundle transaction validation view: {error}"))
     })?;
     for artifact in &input.artifacts {
         let (identity, report, metadata) = admit_artifact(artifact, &base)?;
+        if metadata.target_profile.name == "ckb-type-hash" {
+            required_deployment_lines.insert(artifact.id.clone());
+        }
         metadata_validation.insert(artifact.id.clone(), validate_transaction_against_metadata(&metadata, &transaction_value));
         reports.insert(artifact.id.clone(), report);
         identities.push(identity);
     }
     identities.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut deployment_line_admission = BTreeMap::new();
+    let mut bound_deployment_lines = BTreeSet::new();
+    for evidence in &input.deployment_lines {
+        if !bound_deployment_lines.insert(evidence.artifact.clone()) {
+            return Err(CompileError::without_span(format!(
+                "duplicate deployment-line admission evidence for ProtocolBundle artifact '{}'",
+                evidence.artifact
+            )));
+        }
+        if !required_deployment_lines.contains(&evidence.artifact) {
+            return Err(CompileError::without_span(format!(
+                "deployment-line admission evidence targets artifact '{}' outside the ckb-type-hash profile",
+                evidence.artifact
+            )));
+        }
+        let artifact = identities.iter().find(|artifact| artifact.id == evidence.artifact).ok_or_else(|| {
+            CompileError::without_span(format!(
+                "deployment-line admission evidence references unknown ProtocolBundle artifact '{}'",
+                evidence.artifact
+            ))
+        })?;
+        validate_deployment_line_admission_evidence(evidence, &artifact.exact_handle_receipt, &input.transaction)?;
+        deployment_line_admission.insert(evidence.artifact.clone(), EvidenceState::Verified);
+    }
+    if bound_deployment_lines != required_deployment_lines {
+        let missing = required_deployment_lines.difference(&bound_deployment_lines).cloned().collect::<Vec<_>>().join(", ");
+        return Err(CompileError::without_span(format!(
+            "ckb-type-hash ProtocolBundle artifacts require exact active deployment-line admission evidence; missing: {missing}"
+        )));
+    }
     let closed_roles = resolve_closed_roles(&input.closed_roles, &identities, &input.roles, &input.witnesses)?;
 
     let mut bundle = ResolvedProtocolBundle {
         schema: PROTOCOL_BUNDLE_SCHEMA.to_string(),
         network: normalized_network(&input.network)?,
         artifacts: identities,
+        deployment_lines: input.deployment_lines.clone(),
         transaction: input.transaction.clone(),
         roles: input.roles.clone(),
         closed_roles,
@@ -559,6 +601,7 @@ pub fn check_protocol_bundle(input: &ProtocolBundleInput, base: &Path) -> Result
             structural_verification: if status == "ok" { EvidenceState::Verified } else { EvidenceState::NotProvided },
             artifact_admission: reports,
             metadata_transaction_validation: metadata_validation,
+            deployment_line_admission,
             transaction_serialization: EvidenceState::NotExecuted,
             ckb_vm_execution: EvidenceState::NotExecuted,
             chain_evidence: EvidenceState::NotExecuted,
@@ -580,6 +623,7 @@ fn validate_input_shape(input: &ProtocolBundleInput) -> Result<()> {
     if !(2..=MAX_ARTIFACTS).contains(&input.artifacts.len()) {
         return Err(CompileError::without_span(format!("ProtocolBundle must contain between 2 and {MAX_ARTIFACTS} artifacts")));
     }
+    bounded_count("deployment-line admissions", input.deployment_lines.len(), MAX_ARTIFACTS)?;
     bounded_count("role bindings", input.roles.len(), MAX_ROLE_BINDINGS)?;
     bounded_count("closed role bindings", input.closed_roles.len(), MAX_CLOSED_ROLE_BINDINGS)?;
     bounded_count("witness claims", input.witnesses.len(), MAX_WITNESS_CLAIMS)?;
@@ -956,6 +1000,9 @@ fn validate_builder_manifest(input: &ProtocolArtifactInput, metadata: &CompileMe
                 "report_schema": "cellscript-protocol-bundle-report-v1",
                 "artifact_binding_schema": "cellscript-protocol-bundle-artifact-binding-v1",
                 "closed_role_schema": "cellscript-protocol-closed-role-v1",
+                "deployment_line_admission_evidence_schema": "cellscript-deployment-line-admission-evidence-v1",
+                "deployment_line_admission_transition_schema": "cellscript-deployment-line-admission-transition-v1",
+                "requires_deployment_line_admission": metadata.target_profile.name == "ckb-type-hash",
                 "exact_handle_receipt_schema": "cellscript-exact-script-handle-receipt-v1",
                 "exact_handle_value_schema": "cellscript-exact-script-handle-value-v1",
                 "exact_handle_encoding": "CSHDLv1-fixed-202",
@@ -1186,6 +1233,7 @@ fn resolve_closed_role_participant(
 }
 
 fn canonicalize_bundle(bundle: &mut ResolvedProtocolBundle) {
+    bundle.deployment_lines.sort_by(|left, right| left.artifact.cmp(&right.artifact));
     bundle.roles.sort_by(|left, right| {
         (left.location, left.index, left.artifact.as_str(), left.name.as_str()).cmp(&(
             right.location,
@@ -1947,6 +1995,7 @@ mod tests {
             schema: PROTOCOL_BUNDLE_SCHEMA.to_string(),
             network: network.clone(),
             artifacts: vec![artifact("order", network.clone()), artifact("token", network)],
+            deployment_lines: Vec::new(),
             transaction: ProtocolTransactionSkeleton {
                 version: 0,
                 inputs: vec![ProtocolCellSlot {

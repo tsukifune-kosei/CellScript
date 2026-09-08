@@ -63,6 +63,7 @@ The top-level input contains:
 |---|---|
 | `network` | Non-empty chain ID plus canonical `0x`-prefixed 32-byte lowercase genesis hash |
 | `artifacts` | 2 to 64 independent checked ELF references |
+| `deployment_lines` | Required exact active Type ID admission/code Cell evidence for every `ckb-type-hash` artifact; forbidden for other profiles |
 | `transaction` | Version-0 transaction skeleton with exact ordered cell, witness, CellDep, HeaderDep, fee-policy, and change-policy commitments; optional concrete adapter fields are hash-bound when present |
 | `roles` | Named input/output indexes with exclusive or shared-read ownership and optional exact Script/resource/cell/capacity requirements |
 | `closed_roles` | Typed provider/consumer relations over existing Cell or witness claims, using `cellscript-protocol-closed-role-v1` |
@@ -102,6 +103,17 @@ The complete Script commitment is CKB Blake2b-256 over canonical Molecule
 explicit exact-code-Cell policy and bind the ELF and code CellDep separately.
 The handle is a copyable identity value. It does not own, create, consume,
 replace, relock, execute, or authorize a Cell.
+
+Every `ckb-type-hash` artifact additionally requires one
+`cellscript-deployment-line-admission-evidence-v1` record. It retains the full
+line receipt and `CSLINv1-fixed-386` value, a distinct standard TYPE_ID
+admission Cell and TYPE_ID code Cell, the admission Cell's exact
+`CSREGv1 || line_handle_hash` data, both data hashes, and the two direct CellDep
+positions. The checker binds the current exact receipt to the independently
+admitted artifact and rejects yanked state or any Script, data, out-point, or
+position substitution. The runtime adapter remains responsible for obtaining
+these Cell records from the selected chain and proving both out points are live
+immediately before signing.
 
 Paths must be relative, must resolve to regular files inside the input
 document's directory, and are read only after byte budgets are checked. The
@@ -318,6 +330,8 @@ uncommitted and does not imply tx-pool acceptance or chain confirmation.
 The v1 offline report retains the standalone checker report and metadata
 transaction-validation report for every artifact. Generated action-builder
 manifests are admitted and exact selected-action projections are checked.
+For Type-hash lines it also records structurally verified deployment-line
+admission bindings; this state does not replace node liveness evidence.
 `transaction_serialization`, `ckb_vm_execution`, and `chain_evidence` remain
 `not-executed`, with no exact transaction hash. This is the Phase 0
 format/threat-model contract plus the builder-contract portion of Phase 1
