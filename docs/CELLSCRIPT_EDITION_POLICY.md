@@ -180,9 +180,10 @@ Readers reject earlier versions. They do not silently fill edition/profile
 fields or rewrite old files.
 
 The 0.24 line advanced the lock carrier to version 3. The 0.30 development
-line advances it to version 4 with schema
-`cellscript-lock-v0.30-compiler-requirement-v1`, binding the root and every
+line advances it to version 5 with schema
+`cellscript-lock-v0.30-single-package-coordinate-v1`, binding the root and every
 dependency's compiler range plus the compiler release that resolved the graph.
+It also declares the `single-package-coordinate-v1` resolver model.
 This is a dependency-resolution and source-tool compatibility change, not a
 new source edition: Edition 2026, the compatibility profile, `Deployed.toml`,
 receipt, and generated-builder identities remain independently versioned.

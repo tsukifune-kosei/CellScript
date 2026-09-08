@@ -72,10 +72,10 @@ closed. Registry metadata does not prove that an artifact was actually built
 by the compiler named in `cellscript_version`; reproducible build evidence owns
 that stronger claim.
 
-## Cell.lock v4
+## Cell.lock v5
 
-Lockfile version 4 uses schema
-`cellscript-lock-v0.30-compiler-requirement-v1`. The root package and every
+Lockfile version 5 uses schema
+`cellscript-lock-v0.30-single-package-coordinate-v1`. The root package and every
 dependency node record:
 
 ```toml
@@ -94,9 +94,14 @@ against the active compiler, compare it with the locked requirement, recompute
 the requirement-bound node ID, and never select a replacement version. A
 changed requirement requires an explicit `cellc update`.
 
-Normal build, check, and test commands reject lock versions 1 through 3. An
+The v5 root also declares
+`resolver_model = "single-package-coordinate-v1"`; compiler requirements are
+therefore carried inside the same explicit one-instance-per-coordinate graph
+contract.
+
+Normal build, check, and test commands reject lock versions 1 through 4. An
 explicit `cellc lock` or `cellc update` may migrate them by resolving a fresh
-v4 graph. This is an intentional repin: it does not infer missing requirement
+v5 graph. This is an intentional repin: it does not infer missing requirement
 evidence into the old lock.
 
 ## Independent Compatibility Axes

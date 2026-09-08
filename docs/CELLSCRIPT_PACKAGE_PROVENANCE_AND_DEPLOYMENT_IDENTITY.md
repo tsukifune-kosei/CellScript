@@ -433,9 +433,10 @@ Source code references types via their full module path (e.g.,
 should be), not deployment *facts* (which specific out_point was deployed to).
 Intents are determined at compile time; facts are determined after deployment.
 
-### Cell.lock — Graph, Compiler Compatibility, And Build Identity Lock
+### Cell.lock — Graph, Package Unification, Compiler Compatibility, And Build Identity Lock
 
-`Cell.lock` v4 separates mutable resolution from compilation. It records the
+`Cell.lock` v5 separates mutable resolution from compilation. It records the
+resolver model,
 root manifest digest, root and dependency compiler requirements, the resolving
 compiler release, canonical dependency nodes and outgoing alias edges,
 runtime/test and environment roots, exact source/content identity, build
@@ -448,8 +449,9 @@ environment decision used to build its transitive dependency set.
 **Lockfile schema**:
 
 ```toml
-version = 4
-schema = "cellscript-lock-v0.30-compiler-requirement-v1"
+version = 5
+schema = "cellscript-lock-v0.30-single-package-coordinate-v1"
+resolver_model = "single-package-coordinate-v1"
 
 [package]
 edition = "2026"
@@ -500,6 +502,48 @@ record_hash = "blake2b:0x9a9a..."
 [deployment.ckb.mainnet]
 status = "undeployed"
 ```
+
+#### Package coordinates, selected instances, and unification
+
+A package coordinate is the pair `(declared namespace, declared package
+name)`. An absent namespace is a real coordinate component and does not equal
+any named namespace. Dependency keys are local edge aliases, so two aliases
+that reach the same coordinate do not create two package identities. Two
+packages with the same name under different namespaces remain distinct.
+
+Each selected runtime or test graph, including its feature root and CKB
+environment, may contain at most one instance of a coordinate. That instance
+binds one package version, one exact source identity, one manifest and source
+digest, one compiler requirement, one feature selection, and one environment
+selection. `resolver_model = "single-package-coordinate-v1"` makes this rule a
+lockfile contract rather than an implementation assumption.
+
+Resolution is deterministic and conservative:
+
+- Registry resolution chooses the newest acceptable candidate for the first
+  incoming edge. A later edge reuses it only when its version requirement is
+  satisfied and its Registry authority is identical.
+- The resolver does not backtrack. If the selected version cannot satisfy a
+  later requirement, resolution fails with `E2601` and reports the coordinate,
+  selected instance, conflict kind, and every incoming edge collected so far.
+- Path, Git, and Registry are different source authorities. A path or Git
+  checkout never silently substitutes for a Registry coordinate. Git commit,
+  Registry snapshot, manifest, or compiler-requirement drift also changes the
+  selected source identity.
+- Feature activation is exact for this resolver generation. Incoming edges for
+  one coordinate must request the same named-feature set, default-feature
+  state, and all-features state. CellScript does not implicitly union divergent
+  feature roots.
+- Environment selection must produce the same canonical chain-identity-bound
+  node identity on every incoming edge.
+
+A source change is explicit only after the owning manifests or selected
+environment overrides name the same replacement on every incoming edge and an
+explicit `cellc lock` or `cellc update` writes the new graph. Aliases do not
+authorize substitutions. Supporting multiple versions of one coordinate would
+require a new resolver model, lock schema, and package-qualified source-module
+identity; v5 rejects such graphs instead of silently introducing that future
+semantic change.
 
 #### LockedSource::Registry Extension
 
@@ -578,9 +622,9 @@ checks that it matches the actual `Deployed.toml` entry; if absent, the
 verification step is skipped with a warning. Future phases may require
 `record_hash` for production packages.
 
-**No implicit backward compatibility**: readers accept only lockfile version 4
-and schema `cellscript-lock-v0.30-compiler-requirement-v1`. Explicit
-`cellc lock`/`update` may replace a version 1, 2, or 3 lock; build/check/test
+**No implicit backward compatibility**: readers accept only lockfile version 5
+and schema `cellscript-lock-v0.30-single-package-coordinate-v1`. Explicit
+`cellc lock`/`update` may replace a version 1, 2, 3, or 4 lock; build/check/test
 never migrate or repin it.
 `[package]` is required. When `[package_build]` exists, both `edition` and
 `compatibility_profile_hash` are required fields; readers do not infer them.
@@ -1550,7 +1594,7 @@ the resolved compatibility profile; they are not derived from the edition year.
 
 ### Edition 2026 Breaking Boundary
 
-- `Cell.lock` version 4 records the package edition, compiler requirement,
+- `Cell.lock` version 5 records the package edition, compiler requirement,
   resolving compiler release, and manifest-bound source graph. A present
   `[package_build]` must use the same edition and a non-empty compatibility
   profile hash.
@@ -1604,13 +1648,14 @@ this. No code change needed; the document should reference this convention.
 **Gap**: `version = 1` and `lock_schema = "cellscript-lock-v1"` are redundant.
 No migration path is defined between lockfile schema generations.
 
-**Resolution**: `Cell.lock` version 4 with
-`cellscript-lock-v0.30-compiler-requirement-v1` is the sole accepted build-time
+**Resolution**: `Cell.lock` version 5 with
+`cellscript-lock-v0.30-single-package-coordinate-v1` is the sole accepted build-time
 lock generation. Readers reject older versions and never rewrite them
-implicitly; explicit lock/update may repin versions 1 through 3. Edition and
+implicitly; explicit lock/update may repin versions 1 through 4. Edition and
 compatibility profile remain part of build identity, while compiler
 requirements, resolver compiler releases, root/dependency manifest digests,
-and graph edges form dependency identity.
+the declared `single-package-coordinate-v1` resolver model, and graph edges
+form dependency identity.
 
 #### 3. Deployed.toml Schema — Dual Version Identifier
 
@@ -1736,24 +1781,27 @@ the lockfile is the source of truth.
 **Gap**: No defined strategy when two dependencies require different
 versions of the same package.
 
-**Resolution**: The resolver uses a conservative single-version strategy:
+**Resolution**: The resolver uses the versioned
+`single-package-coordinate-v1` strategy:
 
-- A single version of each package exists in the dependency graph.
+- The package coordinate is `(declared namespace, declared package name)`, and
+  a selected graph contains one instance of each coordinate. Aliases are edge
+  names; they do not create instances. Different namespaces are distinct.
 - If `amm` requires `token ^0.3.0` and `vesting` requires `token ^0.3.1`,
   the resolver picks `token 0.3.2` when that version is the latest version
   satisfying the first resolved constraint and also satisfies the later
   constraint.
-- If a transitive request names a version requirement that the already-selected
-  version does not satisfy, resolution **fails closed** with a
-  `version conflict for '<pkg>': already resolved to '<v>', which does not
-  satisfy requirement '<req>'` error, instead of silently keeping whichever
-  version was resolved first.
+- If a transitive request is incompatible with the selected version, source,
+  exact feature root, or environment identity, resolution **fails closed**
+  with `E2601` before a lock is written. Machine JSON includes the coordinate,
+  conflict kind, selected node, and incoming edges.
 - The current implementation does not backtrack or re-solve the whole graph
   when a later constraint would require a different still-compatible version;
   that remains future resolver work.
-- Future work may support multiple versions (like Go's `MVS` + `replace`),
-  but the current resolver keeps it simple: one version per package per graph,
-  with fail-closed conflict detection.
+- Locked and frozen materialization applies the same rule without selecting or
+  downloading a replacement and discards any partial graph on conflict.
+- Multiple versions require a new lock schema and package-qualified module
+  namespace. They cannot appear silently under this resolver model.
 
 #### 11. Discovery Index Format Version
 

@@ -44,6 +44,14 @@ pre-source diagnostics, compiler-aware Registry selection, and `Cell.lock` v4.
 Compiler compatibility remains separate from Edition, target/profile,
 metadata/checker schema, and exact reproducible compiler identity.
 
+Issue #16's package-instance prerequisite is also implemented. Package
+coordinates are namespace plus declared name, aliases are edges, and each
+selected graph admits one exact version/source/feature/environment instance per
+coordinate. Conflicts fail during resolution with E2601, while `Cell.lock` v5
+declares the `single-package-coordinate-v1` model and applies it unchanged in
+locked and frozen materialization. Supporting multiple versions remains a
+future schema and package-qualified module-identity change.
+
 Until this branch passes those criteria, treat it as development work, use
 `0.26b` only as its experimental implementation baseline, and retain 0.25 as
 the predecessor release contract. Do not publish a 0.26 tag solely to preserve

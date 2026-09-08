@@ -758,12 +758,12 @@ fn e2e_multi_package_dependency_chain() {
 }
 
 // ===========================================================================
-// SCENARIO 2b: Diamond dependency — canonical multi-version graph
+// SCENARIO 2b: Diamond dependency — single package-coordinate graph
 // ===========================================================================
 //
 // Compatible consumers reuse one canonical node. Incompatible requirements
-// remain distinct graph nodes so the lockfile records the complete decision;
-// compiler-level module and type identity collisions still fail closed.
+// fail during resolution instead of introducing multiple unqualified package
+// instances.
 
 /// Rewrite the `version = "..."` line in a package's Cell.toml in place.
 fn bump_manifest_version(repo_dir: &Path, new_version: &str) {
@@ -844,7 +844,7 @@ fn e2e_diamond_dependency_compatible_versions_unify() {
     let token_snapshot_032 = source_snapshot_fixture(&token_repo, "cellscript", "token", "0.3.2", &hash_032);
     publish_version_with_deps(&token_repo, "token", "cellscript", "0.3.2", &hash_032, &[]);
 
-    // ── 2. amm depends on token ^0.3.0, vesting depends on token ^0.3.0 ──
+    // ── 2. The two parents declare overlapping token requirements ──
     // Both requirements are satisfiable by a single version (0.3.2 is the
     // latest in the 0.3.x line), so the diamond must resolve cleanly.
     // The dependency is declared both in Cell.toml (so the resolver picks it up
@@ -863,7 +863,7 @@ fn e2e_diamond_dependency_compatible_versions_unify() {
     );
 
     let vesting_repo = temp.path().join("source-repos/cellscript-vesting");
-    create_package_with_dep(&vesting_repo, "vesting", "0.1.0", Some("cellscript"), "token", "0.3.0", Some("cellscript"));
+    create_package_with_dep(&vesting_repo, "vesting", "0.1.0", Some("cellscript"), "token", ">=0.3.1, <0.4.0", Some("cellscript"));
     let vesting_hash = compute_source_hash(&vesting_repo).unwrap();
     let vesting_snapshot = source_snapshot_fixture(&vesting_repo, "cellscript", "vesting", "0.1.0", &vesting_hash);
     publish_version_with_deps(
@@ -872,7 +872,7 @@ fn e2e_diamond_dependency_compatible_versions_unify() {
         "cellscript",
         "0.1.0",
         &vesting_hash,
-        &[("token".into(), "cellscript".into(), "0.3.0".into())],
+        &[("token".into(), "cellscript".into(), ">=0.3.1, <0.4.0".into())],
     );
 
     // ── 3. Public artifact API with immutable source snapshots ──
@@ -894,8 +894,7 @@ fn e2e_diamond_dependency_compatible_versions_unify() {
     let _env = RegistryEnvGuard::new(&api.origin);
 
     let mut pm = PackageManager::new(&app_dir);
-    // Resolution should succeed: both amm and vesting require token ^0.3.0,
-    // and token 0.3.2 (the latest non-yanked 0.3.x) satisfies both.
+    // Resolution should succeed: token 0.3.2 satisfies both incoming ranges.
     pm.resolve_dependencies().expect("compatible diamond must resolve to a single token version");
 
     let resolved = pm.get_resolved();
@@ -907,7 +906,7 @@ fn e2e_diamond_dependency_compatible_versions_unify() {
 }
 
 #[test]
-fn e2e_diamond_dependency_incompatible_versions_use_distinct_nodes() {
+fn e2e_diamond_dependency_incompatible_versions_fail_during_resolution() {
     let temp = tempfile::tempdir().unwrap();
 
     // ── 1. Shared package "token" with 0.3.x and 0.4.x lines ──
@@ -921,9 +920,9 @@ fn e2e_diamond_dependency_incompatible_versions_use_distinct_nodes() {
     publish_version_with_deps(&token_repo, "token", "cellscript", "0.4.0", &hash_040, &[]);
 
     // ── 2. amm pins token to ^0.3.0, vesting pins token to ^0.4.0 ──
-    // No single token version can satisfy both "^0.3.0" and "^0.4.0". The v3
-    // graph therefore retains two canonical nodes; compilation still fails
-    // closed later if their exported module/type identities collide.
+    // No single token version can satisfy both "^0.3.0" and "^0.4.0". The
+    // resolver must reject the package-coordinate conflict before source
+    // loading instead of retaining two unqualified token instances.
     let amm_repo = temp.path().join("source-repos/cellscript-amm");
     create_package_with_dep(&amm_repo, "amm", "0.1.0", Some("cellscript"), "token", "0.3.0", Some("cellscript"));
     let amm_hash = compute_source_hash(&amm_repo).unwrap();
@@ -969,15 +968,69 @@ fn e2e_diamond_dependency_incompatible_versions_use_distinct_nodes() {
     let _env = RegistryEnvGuard::new(&api.origin);
 
     let mut pm = PackageManager::new(&app_dir);
-    pm.resolve_dependencies().expect("incompatible requirements should resolve to distinct graph nodes");
-    let mut token_versions = pm
-        .get_resolved()
-        .values()
-        .filter(|package| package.name == "token")
-        .map(|package| package.version.as_str())
-        .collect::<Vec<_>>();
-    token_versions.sort_unstable();
-    assert_eq!(token_versions, ["0.3.0", "0.4.0"]);
+    let error = pm.resolve_dependencies().expect_err("incompatible requirements must fail before source loading");
+    assert_eq!(error.code.as_deref(), Some("E2601"));
+    let details = error.details.as_ref().unwrap();
+    assert_eq!(details["coordinate"]["namespace"], "cellscript");
+    assert_eq!(details["coordinate"]["name"], "token");
+    assert_eq!(details["conflict_kind"], "version");
+    let incoming = details["incoming_edges"].as_array().unwrap();
+    assert_eq!(incoming.len(), 2);
+    assert_eq!(incoming[0]["from_package"], "amm");
+    assert_eq!(incoming[0]["version_requirement"], "0.3.0");
+    assert_eq!(incoming[1]["from_package"], "vesting");
+    assert_eq!(incoming[1]["version_requirement"], "0.4.0");
+    assert!(pm.get_resolved().is_empty(), "failed resolution retained a partial graph");
+}
+
+#[test]
+fn e2e_transitive_registry_dependency_inherits_the_consuming_package_namespace() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let token_repo = temp.path().join("source-repos/parentns-token");
+    let token_hash = init_source_repo(&token_repo, "token", "1.0.0", "parentns");
+    let token_snapshot = source_snapshot_fixture(&token_repo, "parentns", "token", "1.0.0", &token_hash);
+
+    let parent_repo = temp.path().join("source-repos/parentns-parent");
+    create_package_with_dep(&parent_repo, "parent", "1.0.0", Some("parentns"), "token", "1.0.0", None);
+    let parent_hash = compute_source_hash(&parent_repo).unwrap();
+    let parent_snapshot = source_snapshot_fixture(&parent_repo, "parentns", "parent", "1.0.0", &parent_hash);
+    publish_version_with_deps(
+        &parent_repo,
+        "parent",
+        "parentns",
+        "1.0.0",
+        &parent_hash,
+        &[("token".into(), "parentns".into(), "1.0.0".into())],
+    );
+
+    let api = start_artifact_api(vec![
+        artifact_package_fixture(&token_repo, vec![token_snapshot]),
+        artifact_package_fixture(&parent_repo, vec![parent_snapshot]),
+    ]);
+    let app_dir = temp.path().join("consumer-app");
+    std::fs::create_dir_all(app_dir.join("src")).unwrap();
+    std::fs::write(
+        app_dir.join("Cell.toml"),
+        r#"[package]
+edition = "2026"
+name = "app"
+version = "1.0.0"
+namespace = "rootns"
+
+[dependencies.parent]
+version = "1.0.0"
+namespace = "parentns"
+"#,
+    )
+    .unwrap();
+    std::fs::write(app_dir.join("src/main.cell"), "module app;\n").unwrap();
+
+    let _env = RegistryEnvGuard::new(&api.origin);
+    let mut manager = PackageManager::new(&app_dir);
+    manager.resolve_dependencies().unwrap();
+    let token = manager.get_resolved().values().find(|package| package.name == "token").unwrap();
+    assert_eq!(token.namespace.as_deref(), Some("parentns"));
 }
 
 #[test]

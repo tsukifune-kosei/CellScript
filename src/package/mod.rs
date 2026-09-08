@@ -387,7 +387,7 @@ pub enum DependencyScope {
     Test,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolutionOptions {
     pub scope: DependencyScope,
     pub features: BTreeSet<String>,
@@ -468,6 +468,7 @@ pub struct PackageManager {
     root: PathBuf,
     resolved: BTreeMap<String, ResolvedPackage>,
     root_dependencies: BTreeMap<String, String>,
+    selected_coordinates: BTreeMap<PackageCoordinate, SelectedPackageInstance>,
 }
 
 #[derive(Debug, Clone)]
@@ -482,6 +483,72 @@ pub struct ResolvedPackage {
     pub source_hash: Option<String>,
     pub manifest_digest: String,
     pub compiler_requirement: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct PackageCoordinate {
+    namespace: Option<String>,
+    name: String,
+}
+
+impl PackageCoordinate {
+    fn from_package(package: &ResolvedPackage) -> Self {
+        Self { namespace: package.namespace.clone(), name: package.name.clone() }
+    }
+
+    fn display(&self) -> String {
+        self.namespace.as_deref().map_or_else(|| self.name.clone(), |namespace| format!("{namespace}/{}", self.name))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FeatureSelection {
+    features: BTreeSet<String>,
+    all_features: bool,
+    default_features: bool,
+}
+
+impl FeatureSelection {
+    fn from_options(options: &ResolutionOptions) -> Self {
+        Self { features: options.features.clone(), all_features: options.all_features, default_features: !options.no_default_features }
+    }
+
+    fn labels(&self) -> Vec<String> {
+        let mut labels = self.features.iter().cloned().collect::<Vec<_>>();
+        if self.all_features {
+            labels.push("*".to_string());
+        }
+        if self.default_features {
+            labels.push("default".to_string());
+        }
+        labels.sort();
+        labels
+    }
+}
+
+#[derive(Debug, Clone)]
+struct IncomingPackageRequest {
+    parent_package: String,
+    alias: String,
+    version_requirement: Option<String>,
+    candidate_version: String,
+    candidate_source: String,
+    features: FeatureSelection,
+    environment: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SelectedPackageInstance {
+    node_id: String,
+    version: String,
+    manifest_digest: String,
+    compiler_requirement: String,
+    source_authority: String,
+    source_identity: String,
+    source_is_registry: bool,
+    features: FeatureSelection,
+    environment: Option<String>,
+    incoming: Vec<IncomingPackageRequest>,
 }
 
 /// Emit yank-related notices to stderr during registry resolution.
@@ -566,6 +633,44 @@ pub enum PackageSource {
     Local(PathBuf),
     Git { url: String, revision: String },
     Registry { registry: String, url: String, revision: String, namespace: String, version: String },
+}
+
+fn package_source_authority(package: &ResolvedPackage) -> String {
+    match &package.source {
+        PackageSource::Local(path) => format!("path:{}", path.to_string_lossy().replace('\\', "/")),
+        PackageSource::Git { url, .. } => format!("git:{url}"),
+        PackageSource::Registry { registry, namespace, .. } => format!("registry:{registry}:{namespace}/{}", package.name),
+    }
+}
+
+fn package_source_identity(package: &ResolvedPackage) -> String {
+    match &package.source {
+        PackageSource::Local(path) => format!("path:{}", path.to_string_lossy().replace('\\', "/")),
+        PackageSource::Git { url, revision } => format!("git:{url}#{revision}"),
+        PackageSource::Registry { registry, url, revision, namespace, version } => {
+            format!("registry:{registry}:{namespace}/{}@{version}#{revision}:{url}", package.name)
+        }
+    }
+}
+
+fn dependency_requirement_for_diagnostic(dependency: &Dependency) -> Option<String> {
+    match dependency {
+        Dependency::Simple(requirement) => Some(requirement.clone()),
+        Dependency::Detailed(detail) if !detail.version.trim().is_empty() => Some(detail.version.clone()),
+        Dependency::Detailed(_) => None,
+    }
+}
+
+fn incoming_package_request_json(request: &IncomingPackageRequest) -> serde_json::Value {
+    serde_json::json!({
+        "from_package": request.parent_package,
+        "alias": request.alias,
+        "version_requirement": request.version_requirement,
+        "candidate_version": request.candidate_version,
+        "candidate_source": request.candidate_source,
+        "features": request.features.labels(),
+        "environment": request.environment,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -999,7 +1104,7 @@ impl PackageManager {
     pub fn new(root: impl AsRef<Path>) -> Self {
         let root = root.as_ref().to_path_buf();
 
-        Self { root, resolved: BTreeMap::new(), root_dependencies: BTreeMap::new() }
+        Self { root, resolved: BTreeMap::new(), root_dependencies: BTreeMap::new(), selected_coordinates: BTreeMap::new() }
     }
 
     pub fn read_manifest(&self) -> Result<PackageManifest> {
@@ -1122,41 +1227,59 @@ dist/
         let root_environment = root_environment_context(&manifest, options)?;
         self.resolved.clear();
         self.root_dependencies.clear();
+        self.selected_coordinates.clear();
 
-        let dependencies = self.selected_dependencies(&manifest, options, true)?;
-        let mut compiler_errors = Vec::new();
-        for (alias, dep) in dependencies {
-            let node_id = self.resolve_dependency_from_root(
-                &alias,
-                &dep,
-                &manifest.package.name,
-                &self.root.clone(),
-                options,
-                root_environment.as_ref(),
-                &mut Vec::new(),
-                &mut Vec::new(),
-                &mut compiler_errors,
-            )?;
-            if let Some(node_id) = node_id {
-                self.root_dependencies.insert(alias, node_id);
+        let result = (|| {
+            let dependencies = self.selected_dependencies(&manifest, options, true)?;
+            let mut compiler_errors = Vec::new();
+            for (alias, dep) in dependencies {
+                let node_id = self.resolve_dependency_from_root(
+                    &alias,
+                    &dep,
+                    &manifest.package.name,
+                    manifest.package.namespace.as_deref(),
+                    &self.root.clone(),
+                    options,
+                    root_environment.as_ref(),
+                    &mut Vec::new(),
+                    &mut Vec::new(),
+                    &mut compiler_errors,
+                )?;
+                if let Some(node_id) = node_id {
+                    self.root_dependencies.insert(alias, node_id);
+                }
             }
-        }
-        if !compiler_errors.is_empty() {
+            if !compiler_errors.is_empty() {
+                return Err(aggregate_compiler_incompatibilities(compiler_errors));
+            }
+            Ok(())
+        })();
+        if result.is_err() {
             self.resolved.clear();
             self.root_dependencies.clear();
-            return Err(aggregate_compiler_incompatibilities(compiler_errors));
+            self.selected_coordinates.clear();
         }
-
-        Ok(())
+        result
     }
 
     pub fn resolve_locked_dependencies(&mut self, options: &ResolutionOptions) -> Result<()> {
+        self.resolved.clear();
+        self.root_dependencies.clear();
+        self.selected_coordinates.clear();
+        let result = self.resolve_locked_dependencies_inner(options);
+        if result.is_err() {
+            self.resolved.clear();
+            self.root_dependencies.clear();
+            self.selected_coordinates.clear();
+        }
+        result
+    }
+
+    fn resolve_locked_dependencies_inner(&mut self, options: &ResolutionOptions) -> Result<()> {
         let manifest = self.read_manifest()?;
         self.validate_manifest_package_contract(&manifest)?;
         let root_environment = root_environment_context(&manifest, options)?;
         let selected = self.selected_dependencies(&manifest, options, true)?;
-        self.resolved.clear();
-        self.root_dependencies.clear();
         if selected.is_empty() {
             if let Some(lockfile) = Lockfile::read_from_root(&self.root)? {
                 validate_locked_root_compiler_contract(&lockfile, &manifest)?;
@@ -1361,6 +1484,28 @@ dist/
                 "Cell.lock dependency edge '{}' records node '{}' but its chain-identity-safe environment selection requires '{}'; run 'cellc update' explicitly",
                 edge_alias, node_id, expected_node_id
             )));
+        }
+        let parent_package = stack
+            .last()
+            .and_then(|parent| lockfile.dependencies.get(parent))
+            .map(|parent| parent.name.as_str())
+            .unwrap_or(lockfile.package.name.as_str());
+        let selected_node = self.register_package_instance(
+            &locked_package,
+            node_id,
+            &node_options,
+            node_environment.as_ref(),
+            parent_package,
+            edge_alias,
+            edge_dependency,
+            true,
+        )?;
+        if selected_node != node_id {
+            return Err(CompileError::without_span(format!(
+                "Cell.lock edge '{}' selected non-canonical duplicate package node '{}' instead of '{}'",
+                edge_alias, node_id, selected_node
+            ))
+            .with_code("E2601"));
         }
         if self.resolved.contains_key(node_id) {
             return Ok(());
@@ -1625,11 +1770,112 @@ dist/
         }
     }
 
+    fn register_package_instance(
+        &mut self,
+        package: &ResolvedPackage,
+        node_id: &str,
+        options: &ResolutionOptions,
+        environment: Option<&SelectedEnvironmentContext>,
+        parent_package: &str,
+        alias: &str,
+        dependency: &Dependency,
+        locked: bool,
+    ) -> Result<String> {
+        let coordinate = PackageCoordinate::from_package(package);
+        let features = FeatureSelection::from_options(options);
+        let environment = environment.map(environment_node_identity);
+        let source_authority = package_source_authority(package);
+        let source_identity = package_source_identity(package);
+        let reusable_requirement =
+            self.version_requirement_of(dependency).and_then(|requirement| version::parse_version_req(&requirement).ok());
+        let current = IncomingPackageRequest {
+            parent_package: parent_package.to_string(),
+            alias: alias.to_string(),
+            version_requirement: dependency_requirement_for_diagnostic(dependency),
+            candidate_version: package.version.clone(),
+            candidate_source: source_identity.clone(),
+            features: features.clone(),
+            environment: environment.clone(),
+        };
+        let Some(selected) = self.selected_coordinates.get_mut(&coordinate) else {
+            self.selected_coordinates.insert(
+                coordinate,
+                SelectedPackageInstance {
+                    node_id: node_id.to_string(),
+                    version: package.version.clone(),
+                    manifest_digest: package.manifest_digest.clone(),
+                    compiler_requirement: package.compiler_requirement.clone(),
+                    source_authority,
+                    source_identity,
+                    source_is_registry: matches!(package.source, PackageSource::Registry { .. }),
+                    features,
+                    environment,
+                    incoming: vec![current],
+                },
+            );
+            return Ok(node_id.to_string());
+        };
+
+        let conflict_kind = if selected.environment != environment {
+            Some("environment")
+        } else if selected.features != features {
+            Some("feature")
+        } else if selected.version == package.version {
+            (selected.source_identity != source_identity
+                || selected.manifest_digest != package.manifest_digest
+                || selected.compiler_requirement != package.compiler_requirement)
+                .then_some("source")
+        } else if locked || !selected.source_is_registry || !matches!(package.source, PackageSource::Registry { .. }) {
+            Some(if selected.source_authority == source_authority { "version" } else { "source" })
+        } else if selected.source_authority != source_authority {
+            Some("source")
+        } else if reusable_requirement.is_some_and(|requirement| !version::satisfies(&selected.version, &requirement)) {
+            Some("version")
+        } else {
+            None
+        };
+
+        if let Some(conflict_kind) = conflict_kind {
+            let mut incoming = selected.incoming.clone();
+            incoming.push(current);
+            let selected_json = serde_json::json!({
+                "node_id": selected.node_id,
+                "version": selected.version,
+                "source": selected.source_identity,
+                "features": selected.features.labels(),
+                "environment": selected.environment,
+            });
+            return Err(CompileError::without_span(format!(
+                "package instance conflict for '{}': selected {} cannot satisfy incoming dependency '{} -> {}' ({conflict_kind}); align every incoming dependency declaration on one explicit package instance",
+                coordinate.display(),
+                selected.node_id,
+                parent_package,
+                alias,
+            ))
+            .with_code("E2601")
+            .with_details(serde_json::json!({
+                "coordinate": {
+                    "namespace": coordinate.namespace,
+                    "name": coordinate.name,
+                },
+                "conflict_kind": conflict_kind,
+                "selected": selected_json,
+                "incoming_edges": incoming.iter().map(incoming_package_request_json).collect::<Vec<_>>(),
+                "locked": locked,
+                "phase": if locked { "locked-package-unification" } else { "package-unification" },
+            })));
+        }
+
+        selected.incoming.push(current);
+        Ok(selected.node_id.clone())
+    }
+
     fn resolve_dependency_from_root(
         &mut self,
         alias: &str,
         dep: &Dependency,
         parent_package: &str,
+        parent_namespace: Option<&str>,
         base_root: &Path,
         parent_options: &ResolutionOptions,
         parent_environment: Option<&SelectedEnvironmentContext>,
@@ -1639,9 +1885,13 @@ dist/
     ) -> Result<Option<String>> {
         let package_name = dependency_package_name(alias, dep);
         let resolution: Result<(ResolvedPackage, PackageManifest)> = (|| match dep {
-            Dependency::Simple(version) => {
-                self.resolve_from_registry_with_manifest(&package_name, version, None, registry::RegistryResolutionPolicy::default())
-            }
+            Dependency::Simple(version) => self.resolve_from_registry_with_manifest(
+                &package_name,
+                version,
+                None,
+                parent_namespace,
+                registry::RegistryResolutionPolicy::default(),
+            ),
             Dependency::Detailed(detailed) => {
                 if detailed.resolver.is_some() {
                     let normalized = self.resolve_external_dependency(
@@ -1659,6 +1909,7 @@ dist/
                             &package_name,
                             &normalized.version,
                             normalized.namespace.as_deref(),
+                            parent_namespace,
                             registry::RegistryResolutionPolicy::default(),
                         )?
                     };
@@ -1680,6 +1931,7 @@ dist/
                         &package_name,
                         &detailed.version,
                         ns,
+                        parent_namespace,
                         registry::RegistryResolutionPolicy {
                             allow_unverified: detailed.allow_unverified,
                             allow_quarantined: detailed.allow_quarantined,
@@ -1712,7 +1964,7 @@ dist/
         }
         let child_environment = dependency_environment_context(alias, dep, &manifest, parent_environment)?;
         let child_options = dependency_resolution_options(dep, parent_options, child_environment.as_ref());
-        let node_id = package_node_id(&resolved, &child_options, child_environment.as_ref());
+        let candidate_node_id = package_node_id(&resolved, &child_options, child_environment.as_ref());
         if let Some(requirement) = self.version_requirement_of(dep) {
             let requirement = version::parse_version_req(&requirement)?;
             if !version::satisfies(&resolved.version, &requirement) {
@@ -1722,19 +1974,31 @@ dist/
                 )));
             }
         }
-        if let Some(existing) = self.resolved.get(&node_id) {
-            if existing.manifest_digest != resolved.manifest_digest || existing.source_hash != resolved.source_hash {
-                return Err(CompileError::without_span(format!(
-                    "dependency node '{}' resolved with conflicting manifest or source identity",
-                    node_id
-                )));
-            }
-            return Ok(Some(node_id));
-        }
+        let node_id = self.register_package_instance(
+            &resolved,
+            &candidate_node_id,
+            &child_options,
+            child_environment.as_ref(),
+            parent_package,
+            alias,
+            dep,
+            false,
+        )?;
         if let Some(position) = stack_ids.iter().position(|item| item == &node_id) {
             let mut cycle = stack_labels[position..].to_vec();
             cycle.push(alias.to_string());
             return Err(CompileError::without_span(format!("Circular dependency detected: {}", cycle.join(" -> "))));
+        }
+        if let Some(existing) = self.resolved.get(&node_id) {
+            if existing.manifest_digest != resolved.manifest_digest || existing.source_hash != resolved.source_hash {
+                if node_id == candidate_node_id {
+                    return Err(CompileError::without_span(format!(
+                        "dependency node '{}' resolved with conflicting manifest or source identity",
+                        node_id
+                    )));
+                }
+            }
+            return Ok(Some(node_id));
         }
 
         stack_ids.push(node_id.clone());
@@ -1746,6 +2010,7 @@ dist/
                 &child_alias,
                 &child_dep,
                 &manifest.package.name,
+                manifest.package.namespace.as_deref(),
                 &resolved.path,
                 &child_options,
                 child_environment.as_ref(),
@@ -1973,7 +2238,7 @@ dist/
 
     pub fn resolve_from_registry_with_namespace(&self, name: &str, version: &str, namespace: Option<&str>) -> Result<ResolvedPackage> {
         let (resolved, _) =
-            self.resolve_from_registry_with_manifest(name, version, namespace, registry::RegistryResolutionPolicy::default())?;
+            self.resolve_from_registry_with_manifest(name, version, namespace, None, registry::RegistryResolutionPolicy::default())?;
         Ok(resolved)
     }
 
@@ -1984,7 +2249,7 @@ dist/
         namespace: Option<&str>,
         policy: registry::RegistryResolutionPolicy,
     ) -> Result<ResolvedPackage> {
-        let (resolved, _) = self.resolve_from_registry_with_manifest(name, version, namespace, policy)?;
+        let (resolved, _) = self.resolve_from_registry_with_manifest(name, version, namespace, None, policy)?;
         Ok(resolved)
     }
 
@@ -1993,11 +2258,13 @@ dist/
         name: &str,
         version: &str,
         namespace: Option<&str>,
+        consuming_namespace: Option<&str>,
         policy: registry::RegistryResolutionPolicy,
     ) -> Result<(ResolvedPackage, PackageManifest)> {
         // 1. Determine namespace: explicit > consuming package namespace > error
         let resolved_namespace = namespace
             .map(str::to_string)
+            .or_else(|| consuming_namespace.map(str::to_string))
             .or_else(|| {
                 // Try to use consuming package's namespace
                 self.read_manifest().ok().and_then(|m| m.package.namespace)
@@ -2631,6 +2898,8 @@ fn simple_hash(s: &str) -> u64 {
 pub struct Lockfile {
     pub version: u32,
     pub schema: String,
+    #[serde(default)]
+    pub resolver_model: String,
     pub package: LockfilePackageInfo,
     pub root: LockedRootGraph,
     pub dependencies: BTreeMap<String, LockedDependency>,
@@ -2699,13 +2968,15 @@ pub struct LockfileDeploymentRef {
 }
 
 impl Lockfile {
-    pub const CURRENT_VERSION: u32 = 4;
-    pub const CURRENT_SCHEMA: &'static str = "cellscript-lock-v0.30-compiler-requirement-v1";
+    pub const CURRENT_VERSION: u32 = 5;
+    pub const CURRENT_SCHEMA: &'static str = "cellscript-lock-v0.30-single-package-coordinate-v1";
+    pub const CURRENT_RESOLVER_MODEL: &'static str = "single-package-coordinate-v1";
 
     pub fn new() -> Self {
         Self {
             version: Self::CURRENT_VERSION,
             schema: Self::CURRENT_SCHEMA.to_string(),
+            resolver_model: Self::CURRENT_RESOLVER_MODEL.to_string(),
             package: LockfilePackageInfo {
                 compiler_requirement: "*".to_string(),
                 resolver_compiler_version: crate::VERSION.to_string(),
@@ -2755,9 +3026,17 @@ impl Lockfile {
                 Self::CURRENT_SCHEMA
             )));
         }
+        if self.resolver_model != Self::CURRENT_RESOLVER_MODEL {
+            return Err(CompileError::without_span(format!(
+                "unsupported Cell.lock resolver model '{}'; expected '{}'",
+                self.resolver_model,
+                Self::CURRENT_RESOLVER_MODEL
+            ))
+            .with_code("E2601"));
+        }
         if self.package.compiler_requirement.is_empty() || self.package.resolver_compiler_version.is_empty() {
             return Err(CompileError::without_span(
-                "Cell.lock v4 package requires compiler_requirement and resolver_compiler_version; run 'cellc lock' or 'cellc update' explicitly",
+                "Cell.lock v5 package requires compiler_requirement and resolver_compiler_version; run 'cellc lock' or 'cellc update' explicitly",
             )
             .with_code("E2600"));
         }
@@ -2776,7 +3055,7 @@ impl Lockfile {
                 )));
             }
             if build.compatibility_profile_hash.is_empty() {
-                return Err(CompileError::without_span("Cell.lock v4 package_build requires compatibility_profile_hash"));
+                return Err(CompileError::without_span("Cell.lock v5 package_build requires compatibility_profile_hash"));
             }
         }
         self.validate_graph()?;
@@ -3901,6 +4180,281 @@ path = "deps/future_b"
     }
 
     #[test]
+    fn aliases_reuse_one_package_coordinate_but_distinct_paths_fail_closed() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        write_path_package(root, "deps/shared", "shared", "1.0.0");
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+edition = "2026"
+name = "app"
+version = "1.0.0"
+
+[dependencies.first]
+package = "shared"
+path = "deps/shared"
+
+[dependencies.second]
+package = "shared"
+path = "deps/shared"
+"#,
+        )
+        .unwrap();
+        let mut manager = PackageManager::new(root);
+        manager.resolve_dependencies().unwrap();
+        assert_eq!(manager.root_dependencies()["first"], manager.root_dependencies()["second"]);
+        assert_eq!(manager.get_resolved().values().filter(|package| package.name == "shared").count(), 1);
+
+        write_path_package(root, "deps/substitute", "shared", "1.0.0");
+        let manifest = std::fs::read_to_string(root.join("Cell.toml")).unwrap().replace(
+            "[dependencies.second]\npackage = \"shared\"\npath = \"deps/shared\"",
+            "[dependencies.second]\npackage = \"shared\"\npath = \"deps/substitute\"",
+        );
+        std::fs::write(root.join("Cell.toml"), manifest).unwrap();
+        let error = manager.resolve_dependencies().unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("E2601"));
+        assert_eq!(error.details.as_ref().unwrap()["conflict_kind"], "source");
+        assert_eq!(error.details.as_ref().unwrap()["incoming_edges"].as_array().unwrap().len(), 2);
+        assert!(manager.get_resolved().is_empty());
+    }
+
+    #[test]
+    fn locked_resolution_rejects_duplicate_coordinate_nodes_and_discards_the_partial_graph() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        for (path, version) in [("deps/first", "1.0.0"), ("deps/second", "2.0.0")] {
+            write_path_package(root, path, "shared", version);
+            let manifest_path = root.join(path).join("Cell.toml");
+            let manifest = std::fs::read_to_string(&manifest_path)
+                .unwrap()
+                .replace(&format!("version = \"{version}\""), &format!("version = \"{version}\"\nnamespace = \"cellscript\""));
+            std::fs::write(manifest_path, manifest).unwrap();
+        }
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+edition = "2026"
+name = "app"
+version = "1.0.0"
+
+[dependencies.first]
+package = "shared"
+path = "deps/first"
+
+[dependencies.second]
+package = "shared"
+path = "deps/second"
+"#,
+        )
+        .unwrap();
+
+        let mut lockfile = Lockfile::new();
+        lockfile.package = LockfilePackageInfo {
+            edition: CURRENT_EDITION,
+            name: "app".to_string(),
+            version: "1.0.0".to_string(),
+            namespace: None,
+            source_hash: Some(registry::compute_source_hash(root).unwrap()),
+            compiler_source_hash: None,
+            compiler_requirement: "*".to_string(),
+            resolver_compiler_version: crate::VERSION.to_string(),
+        };
+        lockfile.root.manifest_digest = compute_manifest_digest(root).unwrap();
+        for (alias, path, version) in [("first", "deps/first", "1.0.0"), ("second", "deps/second", "2.0.0")] {
+            let package_root = root.join(path);
+            let manifest = std::fs::read(package_root.join("Cell.toml")).unwrap();
+            let package = ResolvedPackage {
+                node_id: String::new(),
+                name: "shared".to_string(),
+                version: version.to_string(),
+                path: package_root.clone(),
+                source: PackageSource::Local(PathBuf::from(path)),
+                dependencies: BTreeMap::new(),
+                namespace: Some("cellscript".to_string()),
+                source_hash: Some(registry::compute_source_hash(&package_root).unwrap()),
+                manifest_digest: manifest_digest(&manifest),
+                compiler_requirement: "*".to_string(),
+            };
+            let node_id = package_node_id(&package, &ResolutionOptions::default(), None);
+            lockfile.root.dependencies.insert(alias.to_string(), node_id.clone());
+            lockfile.dependencies.insert(
+                node_id,
+                LockedDependency {
+                    name: package.name,
+                    namespace: package.namespace,
+                    version: package.version,
+                    source: LockedSource::Path { path: path.to_string() },
+                    source_hash: package.source_hash,
+                    manifest_digest: package.manifest_digest,
+                    compiler_requirement: package.compiler_requirement,
+                    resolver_compiler_version: crate::VERSION.to_string(),
+                    dependencies: BTreeMap::new(),
+                    build: None,
+                },
+            );
+        }
+        lockfile.write_to_root(root).unwrap();
+
+        let mut manager = PackageManager::new(root);
+        let error = manager.resolve_locked_dependencies(&ResolutionOptions::default()).unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("E2601"));
+        assert_eq!(error.details.as_ref().unwrap()["conflict_kind"], "source");
+        assert_eq!(error.details.as_ref().unwrap()["locked"], true);
+        assert!(manager.get_resolved().is_empty());
+        assert!(manager.root_dependencies().is_empty());
+    }
+
+    #[test]
+    fn package_coordinates_keep_namespaces_distinct() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        for (path, namespace) in [("deps/alpha", "alpha"), ("deps/beta", "beta")] {
+            write_path_package(root, path, "shared", "1.0.0");
+            let manifest_path = root.join(path).join("Cell.toml");
+            let manifest = std::fs::read_to_string(&manifest_path)
+                .unwrap()
+                .replace("version = \"1.0.0\"", &format!("version = \"1.0.0\"\nnamespace = \"{namespace}\""));
+            std::fs::write(manifest_path, manifest).unwrap();
+        }
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+edition = "2026"
+name = "app"
+version = "1.0.0"
+
+[dependencies.alpha]
+package = "shared"
+path = "deps/alpha"
+
+[dependencies.beta]
+package = "shared"
+path = "deps/beta"
+"#,
+        )
+        .unwrap();
+        let mut manager = PackageManager::new(root);
+        manager.resolve_dependencies().unwrap();
+        assert_ne!(manager.root_dependencies()["alpha"], manager.root_dependencies()["beta"]);
+        assert_eq!(manager.get_resolved().values().filter(|package| package.name == "shared").count(), 2);
+    }
+
+    #[test]
+    fn path_and_git_cannot_substitute_for_a_registry_coordinate_implicitly() {
+        let temp = tempdir().unwrap();
+        let registry_package = ResolvedPackage {
+            node_id: String::new(),
+            name: "token".to_string(),
+            version: "1.0.0".to_string(),
+            path: temp.path().join("registry"),
+            source: PackageSource::Registry {
+                registry: "https://registry.example".to_string(),
+                url: "https://registry.example/token.snapshot".to_string(),
+                revision: format!("sha256:{}", "11".repeat(32)),
+                namespace: "cellscript".to_string(),
+                version: "1.0.0".to_string(),
+            },
+            dependencies: BTreeMap::new(),
+            namespace: Some("cellscript".to_string()),
+            source_hash: Some("registry-hash".to_string()),
+            manifest_digest: "registry-manifest".to_string(),
+            compiler_requirement: "*".to_string(),
+        };
+        let dependency = Dependency::Simple("1.0.0".to_string());
+        for alternate_source in [
+            PackageSource::Local(PathBuf::from("deps/token")),
+            PackageSource::Git { url: "https://git.example/token".to_string(), revision: "22".repeat(20) },
+        ] {
+            let alternate = ResolvedPackage {
+                source: alternate_source,
+                path: temp.path().join("alternate"),
+                source_hash: Some("alternate-hash".to_string()),
+                manifest_digest: "alternate-manifest".to_string(),
+                ..registry_package.clone()
+            };
+            let mut manager = PackageManager::new(temp.path());
+            let registry_node = package_node_id(&registry_package, &ResolutionOptions::default(), None);
+            manager
+                .register_package_instance(
+                    &registry_package,
+                    &registry_node,
+                    &ResolutionOptions::default(),
+                    None,
+                    "app",
+                    "published",
+                    &dependency,
+                    false,
+                )
+                .unwrap();
+            let alternate_node = package_node_id(&alternate, &ResolutionOptions::default(), None);
+            let error = manager
+                .register_package_instance(
+                    &alternate,
+                    &alternate_node,
+                    &ResolutionOptions::default(),
+                    None,
+                    "app",
+                    "override",
+                    &dependency,
+                    false,
+                )
+                .unwrap_err();
+            assert_eq!(error.code.as_deref(), Some("E2601"));
+            assert_eq!(error.details.as_ref().unwrap()["conflict_kind"], "source");
+            assert_eq!(error.details.as_ref().unwrap()["incoming_edges"].as_array().unwrap().len(), 2);
+        }
+    }
+
+    #[test]
+    fn feature_variants_for_one_coordinate_fail_before_source_loading() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        for (path, name) in [("deps/left", "left"), ("deps/right", "right"), ("deps/shared", "shared")] {
+            write_path_package(root, path, name, "1.0.0");
+        }
+        let shared_manifest = root.join("deps/shared/Cell.toml");
+        let manifest = format!("{}\n[features]\nleft = []\nright = []\n", std::fs::read_to_string(&shared_manifest).unwrap());
+        std::fs::write(shared_manifest, manifest).unwrap();
+        for (parent, feature) in [("left", "left"), ("right", "right")] {
+            let parent_manifest = root.join("deps").join(parent).join("Cell.toml");
+            let manifest = format!(
+                "{}\n[dependencies.shared]\npath = \"../shared\"\ndefault_features = false\nfeatures = [\"{feature}\"]\n",
+                std::fs::read_to_string(&parent_manifest).unwrap()
+            );
+            std::fs::write(parent_manifest, manifest).unwrap();
+        }
+        std::fs::write(
+            root.join("Cell.toml"),
+            r#"
+[package]
+edition = "2026"
+name = "app"
+version = "1.0.0"
+
+[dependencies.left]
+path = "deps/left"
+
+[dependencies.right]
+path = "deps/right"
+"#,
+        )
+        .unwrap();
+
+        let mut manager = PackageManager::new(root);
+        let error = manager.resolve_dependencies().unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("E2601"));
+        assert_eq!(error.details.as_ref().unwrap()["coordinate"]["name"], "shared");
+        assert_eq!(error.details.as_ref().unwrap()["conflict_kind"], "feature");
+        assert_eq!(error.details.as_ref().unwrap()["incoming_edges"][0]["features"], serde_json::json!(["left"]));
+        assert_eq!(error.details.as_ref().unwrap()["incoming_edges"][1]["features"], serde_json::json!(["right"]));
+        assert!(manager.get_resolved().is_empty());
+    }
+
+    #[test]
     fn lockfile_binds_root_and_transitive_compiler_requirements() {
         let temp = tempdir().unwrap();
         let root = temp.path();
@@ -4996,11 +5550,24 @@ path = "deps/math"
     }
 
     #[test]
+    fn lockfile_requires_the_single_package_coordinate_resolver_model() {
+        let mut lockfile = Lockfile::new();
+        assert_eq!(lockfile.version, 5);
+        assert_eq!(lockfile.resolver_model, Lockfile::CURRENT_RESOLVER_MODEL);
+
+        lockfile.resolver_model = "multi-package-coordinate-v1".to_string();
+        let error = lockfile.validate_schema().unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("E2601"));
+        assert!(error.message.contains("unsupported Cell.lock resolver model"), "{}", error.message);
+    }
+
+    #[test]
     fn lockfile_requires_package_and_build_profile_identity() {
         let missing_package = toml::from_str::<Lockfile>(
             r#"
 version = 3
 schema = "cellscript-lock-v0.24-graph-v1"
+resolver_model = "legacy"
 
 [root]
 
@@ -5014,6 +5581,7 @@ schema = "cellscript-lock-v0.24-graph-v1"
             r#"
 version = 3
 schema = "cellscript-lock-v0.24-graph-v1"
+resolver_model = "legacy"
 
 [package]
 edition = "2026"

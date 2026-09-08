@@ -5140,6 +5140,61 @@ path = "future_b"
 }
 
 #[test]
+fn cellc_json_reports_package_instance_conflicts_before_writing_a_lock() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    for path in ["published", "substitute"] {
+        let package_root = root.join(path);
+        std::fs::create_dir_all(package_root.join("src")).unwrap();
+        std::fs::write(
+            package_root.join("Cell.toml"),
+            r#"
+[package]
+edition = "2026"
+name = "shared"
+version = "1.0.0"
+namespace = "cellscript"
+"#,
+        )
+        .unwrap();
+        std::fs::write(package_root.join("src/lib.cell"), format!("module {path};\n")).unwrap();
+    }
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+edition = "2026"
+name = "app"
+version = "1.0.0"
+
+[dependencies.first]
+package = "shared"
+path = "published"
+
+[dependencies.second]
+package = "shared"
+path = "substitute"
+"#,
+    )
+    .unwrap();
+
+    let output = cellc_command().current_dir(root).args(["lock", "--json"]).output().unwrap();
+
+    assert!(!output.status.success(), "unexpected success: {}", String::from_utf8_lossy(&output.stdout));
+    assert!(output.stderr.is_empty(), "unexpected stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["diagnostics"][0]["code"], "E2601");
+    assert_eq!(report["coordinate"]["namespace"], "cellscript");
+    assert_eq!(report["coordinate"]["name"], "shared");
+    assert_eq!(report["conflict_kind"], "source");
+    let incoming = report["incoming_edges"].as_array().unwrap();
+    assert_eq!(incoming.len(), 2);
+    assert_eq!(incoming[0]["alias"], "first");
+    assert_eq!(incoming[1]["alias"], "second");
+    assert!(!root.join("Cell.lock").exists());
+}
+
+#[test]
 fn cellc_check_all_targets_checks_asm_and_elf_without_writing_artifacts() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
@@ -8068,6 +8123,20 @@ fn cellc_explain_subcommand_reports_package_compiler_error() {
 }
 
 #[test]
+fn cellc_explain_subcommand_reports_package_instance_conflict() {
+    let output = Command::new(env!("CARGO_BIN_EXE_cellc")).args(["explain", "E2601", "--json"]).output().unwrap();
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["status"], "ok");
+    assert_eq!(summary["domain"], "compiler");
+    assert_eq!(summary["code"], "E2601");
+    assert_eq!(summary["name"], "package-instance-conflict");
+    assert!(summary["description"].as_str().unwrap().contains("package coordinate"));
+    assert!(summary["hint"].as_str().unwrap().contains("repin the lockfile"));
+}
+
+#[test]
 fn cellc_explain_profile_reports_ckb_v0_14_contract() {
     let output = Command::new(env!("CARGO_BIN_EXE_cellc")).args(["explain", "profile", "ckb", "--json"]).output().unwrap();
     assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
@@ -8690,6 +8759,7 @@ version = "1.2.3"
     assert!(lock.status.success(), "stderr: {}", String::from_utf8_lossy(&lock.stderr));
     let summary: serde_json::Value = serde_json::from_slice(&lock.stdout).unwrap();
     assert_eq!(summary["schema"], cellscript::package::Lockfile::CURRENT_SCHEMA);
+    assert_eq!(summary["resolver_model"], cellscript::package::Lockfile::CURRENT_RESOLVER_MODEL);
     assert_eq!(summary["dependency_nodes"], 1);
 
     let build = Command::new(env!("CARGO_BIN_EXE_cellc")).current_dir(root).arg("build").arg("--locked").output().unwrap();
@@ -8733,6 +8803,7 @@ cellscript_version = ">=0.20"
         root.join("Cell.lock"),
         r#"version = 3
 schema = "cellscript-lock-v0.24-graph-v1"
+resolver_model = "legacy"
 
 [package]
 edition = "2026"
@@ -8758,6 +8829,62 @@ manifest_digest = "legacy"
     assert_eq!(lockfile.schema, cellscript::package::Lockfile::CURRENT_SCHEMA);
     assert_eq!(lockfile.package.compiler_requirement, ">=0.20");
     assert_eq!(lockfile.package.resolver_compiler_version, cellscript::VERSION);
+
+    let frozen = cellc_command().current_dir(root).args(["check", "--frozen", "--offline"]).output().unwrap();
+    assert!(frozen.status.success(), "stderr: {}", String::from_utf8_lossy(&frozen.stderr));
+}
+
+#[test]
+fn cellc_explicit_lock_migrates_v4_to_the_declared_resolver_model() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cell.toml"),
+        r#"
+[package]
+edition = "2026"
+name = "v4-lock"
+version = "1.0.0"
+cellscript_version = ">=0.20"
+"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("src/main.cell"), "module v4_lock;\n\naction ping() -> u64 {\n    verification\n        1\n}\n").unwrap();
+    std::fs::write(
+        root.join("Cell.lock"),
+        format!(
+            r#"version = 4
+schema = "cellscript-lock-v0.30-compiler-requirement-v1"
+
+[package]
+edition = "2026"
+name = "v4-lock"
+version = "1.0.0"
+compiler_requirement = ">=0.20"
+resolver_compiler_version = "{}"
+
+[root]
+manifest_digest = "legacy"
+
+[dependencies]
+"#,
+            cellscript::VERSION
+        ),
+    )
+    .unwrap();
+
+    let frozen = cellc_command().current_dir(root).args(["check", "--frozen", "--offline"]).output().unwrap();
+    assert!(!frozen.status.success(), "v4 lock unexpectedly admitted");
+    assert!(String::from_utf8_lossy(&frozen.stderr).contains("unsupported Cell.lock version 4"));
+
+    let migrated = cellc_command().current_dir(root).args(["lock", "--json"]).output().unwrap();
+    assert!(migrated.status.success(), "stderr: {}", String::from_utf8_lossy(&migrated.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&migrated.stdout).unwrap();
+    assert_eq!(report["resolver_model"], cellscript::package::Lockfile::CURRENT_RESOLVER_MODEL);
+    let lockfile: cellscript::package::Lockfile = toml::from_str(&std::fs::read_to_string(root.join("Cell.lock")).unwrap()).unwrap();
+    assert_eq!(lockfile.version, 5);
+    assert_eq!(lockfile.resolver_model, "single-package-coordinate-v1");
 
     let frozen = cellc_command().current_dir(root).args(["check", "--frozen", "--offline"]).output().unwrap();
     assert!(frozen.status.success(), "stderr: {}", String::from_utf8_lossy(&frozen.stderr));
@@ -8853,7 +8980,7 @@ fn bundled_package_graph_exercises_alias_features_test_scope_and_ckb_environment
     let lock_before = std::fs::read(root.join("Cell.lock")).expect("package graph example must carry a tracked lockfile");
     let lock_text = String::from_utf8(lock_before.clone()).unwrap();
     for needle in [
-        "schema = \"cellscript-lock-v0.30-compiler-requirement-v1\"",
+        "schema = \"cellscript-lock-v0.30-single-package-coordinate-v1\"",
         "compiler_requirement = \"*\"",
         "[environments.mainnet.dependencies]",
         "[environments.mainnet.dev_dependencies]",
@@ -11045,6 +11172,7 @@ action mint(amount: u64, owner: Address) -> Token {
     let mut lockfile = cellscript::package::Lockfile {
         version: cellscript::package::Lockfile::CURRENT_VERSION,
         schema: cellscript::package::Lockfile::CURRENT_SCHEMA.to_string(),
+        resolver_model: cellscript::package::Lockfile::CURRENT_RESOLVER_MODEL.to_string(),
         package: cellscript::package::LockfilePackageInfo {
             edition: cellscript::CURRENT_EDITION,
             name: "demo".to_string(),
@@ -11163,6 +11291,7 @@ action mint(amount: u64, owner: Address) -> Token {
 
     let index_ts = std::fs::read_to_string(output_dir.join("src").join("index.ts")).unwrap();
     assert!(index_ts.contains("validateCellScriptLockfile"), "{index_ts}");
+    assert!(index_ts.contains("single-package-coordinate-v1"), "{index_ts}");
     assert!(index_ts.contains("validateCellScriptDeployment"), "{index_ts}");
     assert!(index_ts.contains("assertCellScriptLockfile(options.lockfile)"), "{index_ts}");
     assert!(

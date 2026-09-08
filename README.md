@@ -667,7 +667,7 @@ CKB cycle/capacity estimates.
 
 | Module | What it does |
 |---|---|
-| **Package workflow** (`package/`) | `Cell.toml` parsing, enforced compiler SemVer requirements, path/git/registry source resolution, manifest-bound `Cell.lock` v4 graphs, aliases, features/dev modes, genesis-bound environments, and bounded update-time resolvers; `cellc init`/`add`/`remove`/`lock`/`install`/`update`/`info`. Builds consume exact immutable Git/Registry pins and verified source hashes without mutable discovery; the Registry profile catalog keeps non-CellScript artifacts non-resolving. |
+| **Package workflow** (`package/`) | `Cell.toml` parsing, enforced compiler SemVer requirements, single-instance package-coordinate unification, path/git/registry source resolution, manifest-bound `Cell.lock` v5 graphs, aliases, features/dev modes, genesis-bound environments, and bounded update-time resolvers; `cellc init`/`add`/`remove`/`lock`/`install`/`update`/`info`. Builds consume exact immutable Git/Registry pins and verified source hashes without mutable discovery; the Registry profile catalog keeps non-CellScript artifacts non-resolving. |
 | **Incremental compiler** (`incremental/`) | Dependency-graph-aware build cache — skips recompilation when inputs are unchanged and retains the 32 most recently used identities per cache root. |
 | **Build integration** (`lib.rs`) | Resolves `Cell.toml` → `CellBuildConfig`, merges CLI + manifest options, selects entry scope, runs policy gates, writes artifacts + metadata. |
 
@@ -799,7 +799,7 @@ Non-CellScript artifact profiles still fail closed.
   directories, or `Cell.toml` manifests where the command supports an input
 - `cellc add --path` — records local path dependencies in `Cell.toml`
 - `cellc lock` — explicitly resolve the complete runtime/test/feature and CKB
-  environment graph and write `Cell.lock` v4
+  environment graph and write `Cell.lock` v5
 - `cellc install --path` and `cellc update` — resolve local path dependency
   graphs and refresh `Cell.lock`
 - `cellc install cellscript/pkg@1.2.0` — resolve a registry source-package
@@ -808,7 +808,7 @@ Non-CellScript artifact profiles still fail closed.
   verification
 - Local path dependencies are resolved recursively and included in module
   loading, source hashing, and metadata
-- `Cell.lock` v4 — binds the root manifest digest, root/dependency compiler
+- `Cell.lock` v5 — declares `single-package-coordinate-v1` and binds the root manifest digest, root/dependency compiler
   requirements, resolving compiler releases, canonical dependency nodes,
   outgoing alias edges, dependency manifests, whole-tree hashes, exact Git or
   Registry pins, feature/test modes, and genesis-bound CKB environments
@@ -825,6 +825,11 @@ Non-CellScript artifact profiles still fail closed.
   dependency edges can use `use_environment = "local-name"` or
   `environment_independent = true`, and equal display names carry no authority;
   `[build.dependencies]` remains fail-closed pending isolated execution
+- A package coordinate is `(declared namespace, declared package name)`.
+  Every selected graph has one version/source/feature/environment instance per
+  coordinate. Aliases reuse that instance, distinct namespaces remain distinct,
+  and incompatible incoming edges fail with `E2601`; features are not silently
+  unioned and path/Git sources do not silently replace Registry sources
 - `[resolvers.<name>]` — optional absolute-path/SHA-256-bound, time/output
   bounded update-time resolver; its versioned response must normalize to an
   exact Registry version or Git commit and is never executed by locked builds

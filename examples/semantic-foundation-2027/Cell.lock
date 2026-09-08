@@ -1,5 +1,6 @@
-version = 4
-schema = "cellscript-lock-v0.30-compiler-requirement-v1"
+version = 5
+schema = "cellscript-lock-v0.30-single-package-coordinate-v1"
+resolver_model = "single-package-coordinate-v1"
 
 [package]
 edition = "2027"

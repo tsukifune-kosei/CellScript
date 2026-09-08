@@ -9,11 +9,22 @@
   incompatible path/Git/Registry package and incoming edge in machine JSON;
   Registry selection deterministically chooses the newest compiler-compatible
   package version while keeping the exact build compiler as separate evidence.
-  Advance `Cell.lock` to version 4 and
-  `cellscript-lock-v0.30-compiler-requirement-v1`: the root, every dependency,
+  Carry the compiler requirement evidence into `Cell.lock` version 5 and
+  `cellscript-lock-v0.30-single-package-coordinate-v1`: the root, every dependency,
   and canonical node identity bind the declared requirement and resolving
   compiler release. Frozen builds revalidate without selecting replacements,
-  while explicit `cellc lock`/`update` may repin version 1-3 locks.
+  while explicit `cellc lock`/`update` may repin version 1-4 locks.
+
+- Define the package coordinate as `(declared namespace, declared package
+  name)` and enforce one selected version/source/feature/environment instance
+  per coordinate in each runtime or test graph. Compatible Registry diamond
+  edges reuse the selected candidate; incompatible ranges, implicit
+  Path/Git/Registry substitutions, divergent exact feature roots, and
+  environment mismatches fail during resolution with structured `E2601`
+  incoming-edge evidence. Locked and frozen materialization applies the same
+  fail-closed rule and discards partial graphs. `Cell.lock` v5 declares
+  `resolver_model = "single-package-coordinate-v1"`; multi-version graphs
+  require a future lock and package-qualified module-identity contract.
 
 - Rebind the CKB acceptance transaction recipes to the typed timelock
   contract. `request_release`, `execute_release`, and `can_unlock_lock` now

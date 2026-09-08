@@ -192,6 +192,12 @@ pub const COMPILER_ERROR_INFOS: &[CompilerErrorInfo] = &[
         hint: "Select a package version supported by this cellc release, or use a compiler satisfying the package's CellScript SemVer requirement.",
     },
     CompilerErrorInfo {
+        code: "E2601",
+        name: "package-instance-conflict",
+        description: "One selected dependency graph contains incompatible versions, sources, feature roots, or environments for the same package coordinate.",
+        hint: "Align every incoming dependency edge on one explicit package version, source authority, feature root, and environment, then repin the lockfile.",
+    },
+    CompilerErrorInfo {
         code: "E2900",
         name: "backend-invariant",
         description: "A backend invariant was violated after semantic checking.",

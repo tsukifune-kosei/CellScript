@@ -101,6 +101,32 @@ understood?”, and the resolved compatibility profile answers “which complete
 source/target/ABI/schema contract was used?”. See
 [Package Compiler Requirements](../CELLSCRIPT_COMPILER_REQUIREMENTS.md).
 
+## Understand Package Identity And Unification
+
+CellScript identifies a package by its declared namespace and package name.
+The local dependency key is only an alias. Two aliases may point to the same
+package instance, while `alpha/shared` and `beta/shared` are different package
+coordinates.
+
+One selected runtime or test graph has one instance per coordinate. Every
+incoming edge must agree on the selected version, exact Path/Git/Registry
+source, feature root, and chain-identity-bound environment. Compatible Registry
+ranges reuse the first selected candidate. Incompatible ranges, source
+substitution, divergent features, or divergent environments fail during
+resolution with `E2601` before `Cell.lock` is written.
+
+Feature roots are exact in the current resolver: it does not merge `features =
+["audit"]` from one parent with `features = ["metrics"]` from another. Align
+the declarations deliberately. Likewise, changing a Registry dependency to a
+path checkout requires every incoming edge to name that path and an explicit
+`cellc lock` or `cellc update`; an alias alone is not an override.
+
+`Cell.lock` v5 records
+`resolver_model = "single-package-coordinate-v1"`. Locked and frozen commands
+apply that same model without choosing replacements. Multiple versions of one
+coordinate are rejected because source imports do not yet carry a
+package-instance qualifier.
+
 ## Multi-file Packages
 
 Package builds are entry-driven, but the frontend loads the full package source
@@ -412,13 +438,14 @@ cellc remove my_lib
 `add`, `install`, `update`, and normal dependency removal refresh the lockfile so
 direct and transitive local path dependencies stay consistent.
 
-`Cell.lock` v4 is a graph rather than a flat list. It binds the exact root
+`Cell.lock` v5 is a graph rather than a flat list. It declares the
+`single-package-coordinate-v1` resolver model and binds the exact root
 manifest digest, each dependency manifest and whole source tree, package
 compiler requirements, the compiler release that resolved the graph, outgoing
 alias-to-node edges, feature/test modes, and named CKB environments. Local
 projects should commit it to version control: the lockfile is reviewed build
 input, not a local cache, and normal build/check/test commands do not silently
-repin it. Locks from versions 1 through 3 require an explicit `cellc lock` or
+repin it. Locks from versions 1 through 4 require an explicit `cellc lock` or
 `cellc update` migration. Dependency aliases can differ from declared package
 names:
 

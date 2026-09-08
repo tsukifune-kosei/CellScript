@@ -4815,6 +4815,7 @@ impl CommandExecutor {
                 "status": "ok",
                 "lockfile": "Cell.lock",
                 "schema": lockfile.schema,
+                "resolver_model": lockfile.resolver_model,
                 "dependency_nodes": lockfile.dependencies.len(),
                 "environments": lockfile.environments.keys().collect::<Vec<_>>(),
             }),
@@ -9306,6 +9307,8 @@ fn typescript_builder_index(
            namespace?: string | null;\n\
            source_hash?: string | null;\n\
            compiler_source_hash?: string | null;\n\
+           compiler_requirement: string;\n\
+           resolver_compiler_version: string;\n\
          }\n\n\
          export interface CellScriptLockfileBuild {\n\
            edition: \"2026\";\n\
@@ -9327,6 +9330,9 @@ fn typescript_builder_index(
            data_hash?: string | null;\n\
          }\n\n\
          export interface CellScriptLockfile {\n\
+           version: 5;\n\
+           schema: \"cellscript-lock-v0.30-single-package-coordinate-v1\";\n\
+           resolver_model: \"single-package-coordinate-v1\";\n\
            package?: CellScriptLockfilePackage;\n\
            package_build?: CellScriptLockfileBuild | null;\n\
            deployment?: Record<string, CellScriptLockfileDeployment | null | undefined>;\n\
@@ -9628,6 +9634,11 @@ fn typescript_builder_index(
          }\n\n\
          export function validateCellScriptLockfile(lockfile: CellScriptLockfile): string[] {\n\
            const violations: string[] = [];\n\
+           if (lockfile.version !== 5) {\n\
+             violations.push(`Cell.lock version: expected 5, got ${String(lockfile.version)}`);\n\
+           }\n\
+           compareRequiredIdentity(\"schema\", lockfile.schema, \"cellscript-lock-v0.30-single-package-coordinate-v1\", violations);\n\
+           compareRequiredIdentity(\"resolver_model\", lockfile.resolver_model, \"single-package-coordinate-v1\", violations);\n\
            const pkg = lockfile.package;\n\
            if (!pkg) {\n\
              violations.push(\"Cell.lock has no [package]\");\n\
@@ -13100,7 +13111,7 @@ fn read_lockfile_for_explicit_repin(root: &Path) -> Result<Lockfile> {
             let path = root.join("Cell.lock");
             let source = std::fs::read_to_string(&path).map_err(|_| error.clone())?;
             let value: toml::Value = toml::from_str(&source).map_err(|_| error.clone())?;
-            if value.get("version").and_then(toml::Value::as_integer).is_some_and(|version| matches!(version, 1 | 2 | 3)) {
+            if value.get("version").and_then(toml::Value::as_integer).is_some_and(|version| matches!(version, 1 | 2 | 3 | 4)) {
                 Ok(Lockfile::new())
             } else {
                 Err(error)
