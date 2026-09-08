@@ -151,6 +151,8 @@ than an implicit change to the accepted type set.
 The syntax-combination seed, cross-package resolver fixture, metadata and
 interface tests, CKB-VM generic value fixture, Registry tests, independent
 checker mutation, WASM Playground compile test, LSP hover/completion, and VS
-Code grammar/snippet validation exercise the same profile. The `dev`, `ci`, and
-`backend` gates are required before this decision is treated as closed for the
-0.30 branch.
+Code grammar/snippet validation exercise the same profile. The required `dev`,
+`ci`, and `backend` gates passed on 2026-09-08 at `69488316`; the full backend
+audit included the clean-source CKB production/stateful acceptance harness.
+This closes the issue #23 decision and implementation boundary on the 0.30
+branch.

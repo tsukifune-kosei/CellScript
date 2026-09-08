@@ -10,7 +10,9 @@
   defaults to a concise human view while `--json` and `--output` retain the
   complete record; compatibility analysis, Registry admission, the independent
   artifact checker, LSP, VS Code, and the browser metadata compiler validate the
-  same generic parameter contract.
+  same generic parameter contract. The required `dev`, `ci`, and `backend`
+  gates, including clean-source CKB production/stateful acceptance, passed on
+  2026-09-08 at `69488316`.
 
 - Add transactional package and workspace upgrades through
   `cellscript-upgrade-plan-v1`. `cellc update-plan` and the default `cellc

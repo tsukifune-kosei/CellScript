@@ -27,6 +27,10 @@ editor, and browser metadata path share one canonical interface model. This
 closes one language-design slice; it does not close the remaining 0.30
 business-capability workstreams.
 
+The issue #23 acceptance boundary passed `dev`, `ci`, and `backend` on
+2026-09-08 at `69488316`. The backend evidence includes the clean-source CKB
+production/stateful acceptance harness.
+
 The first implementation step restores familiar authoring over the shared
 declaration, type, value, and statement grammar. Ordinary action/lock bodies
 may omit `verification`; the formatter currently emits the established explicit
