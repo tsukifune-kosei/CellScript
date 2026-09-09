@@ -2,6 +2,15 @@
 
 ## 0.30 - Capability closure development branch
 
+- Freeze a machine-validated cryptographic and authorization matrix for the
+  eight-family business corpus. Ten admitted capabilities and twelve value
+  domains now distinguish native hashing and Script identity, bounded signing
+  messages, exact standard Locks, exact Script handles, committed openings,
+  and trusted external verification. `check-business-corpus` requires the
+  complete matrix and content-binds all cited CKB-VM, checker, measurement, and
+  dependency evidence while retaining maximum-bound measurements, deployment,
+  release, and independent review as explicit candidate requirements.
+
 - Freeze the candidate eight-family business corpus and execute its canonical
   settlement anchor with four independently checked CellScript artifacts and
   five actual Script groups. The anchor combines fungible conservation, Lock

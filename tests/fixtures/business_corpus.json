@@ -45,10 +45,13 @@
     "transaction_fixture": "tests/fixtures/capability_anchor_cases.json"
   },
   "claim": "Application-layer capability comparable to hand-written Rust CKB Scripts for this exact bounded eight-family portfolio; unrestricted Rust parity is excluded.",
+  "cryptographic_capability_matrix": "tests/fixtures/cryptographic_capability_matrix.json",
   "evidence_files": [
     "Cargo.lock",
     "crates/cellscript-ckb-adapter/src/protocol_bundle.rs",
     "crates/cellscript-tools/src/ckb_acceptance_live.rs",
+    "docs/CELLSCRIPT_0_30_CRYPTOGRAPHIC_CAPABILITY_MATRIX.md",
+    "docs/CELLSCRIPT_SIGNATURE_VERIFIER_ABI.md",
     "examples/amm_pool.cell",
     "examples/atomic_swap.cell",
     "examples/multisig.cell",
@@ -58,6 +61,8 @@
     "examples/vesting.cell",
     "src/cli/commands.rs",
     "src/protocol_bundle.rs",
+    "src/script_handle.rs",
+    "src/types/mod.rs",
     "tests/artifact_checker.rs",
     "tests/authoring_replace.rs",
     "tests/benchmarks/ickb_diff/matrix.json",
@@ -89,6 +94,7 @@
     "tests/fixtures/cost_corpus/src/nft_lock.rs",
     "tests/fixtures/cost_corpus/src/pool_merge.rs",
     "tests/fixtures/cost_corpus/src/schema_roll.rs",
+    "tests/fixtures/cryptographic_capability_matrix.json",
     "tests/fixtures/rust_ckb_token_transfer/Cargo.lock",
     "tests/fixtures/rust_ckb_token_transfer/src/main.rs",
     "tests/ickb_diff.rs",
@@ -96,9 +102,11 @@
     "tests/policy_authorization.rs",
     "tests/policy_lifecycle.rs",
     "tests/schema_acknowledgement.rs",
+    "tests/script_hash.rs",
     "tests/sighash_zero_lock.rs",
     "tests/trusted_external.rs",
-    "tests/typed_runtime_views.rs"
+    "tests/typed_runtime_views.rs",
+    "tests/verifier_failure.rs"
   ],
   "families": [
     {
@@ -914,7 +922,7 @@
       ]
     }
   ],
-  "inventory_sha256": "0x197b859e59d798ba4a48a62f2ad6b17169e9ec71eca5960352ca1fe0b948b3c0",
+  "inventory_sha256": "0x6cb3224e02eb19df8787bd5a89279d7900e3353e679295fe7eb55926a602e357",
   "release_requirements": {
     "backend": "passed",
     "ci": "passed",

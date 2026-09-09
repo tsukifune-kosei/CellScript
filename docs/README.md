@@ -86,6 +86,9 @@ High-value active references include:
 - [CELLSCRIPT_0_30_CKB_RUNTIME_VIEW_MATRIX.md](CELLSCRIPT_0_30_CKB_RUNTIME_VIEW_MATRIX.md)
   for typed CKB transaction-view fields, bounded syscall families, stable
   failures, executable evidence, and the remaining issue #24 work
+- [CELLSCRIPT_0_30_CRYPTOGRAPHIC_CAPABILITY_MATRIX.md](CELLSCRIPT_0_30_CRYPTOGRAPHIC_CAPABILITY_MATRIX.md)
+  for the native, standard-Lock, exact-identity, and trusted-external
+  cryptographic capabilities used by the frozen eight-family business corpus
 - [CELLSCRIPT_COMPILER_REQUIREMENTS.md](CELLSCRIPT_COMPILER_REQUIREMENTS.md)
   for the enforced package SemVer range, dependency preflight diagnostics,
   Registry selection, and `Cell.lock` v5 evidence

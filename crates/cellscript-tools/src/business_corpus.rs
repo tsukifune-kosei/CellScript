@@ -12,6 +12,9 @@ use sha2::{Digest, Sha256};
 
 const MANIFEST: &str = "tests/fixtures/business_corpus.json";
 const SCHEMA: &str = "cellscript-business-corpus-v1";
+const CRYPTO_MATRIX: &str = "tests/fixtures/cryptographic_capability_matrix.json";
+const CRYPTO_MATRIX_SCHEMA: &str = "cellscript-cryptographic-capability-matrix-v1";
+const CRYPTO_MATRIX_DOCUMENTATION: &str = "docs/CELLSCRIPT_0_30_CRYPTOGRAPHIC_CAPABILITY_MATRIX.md";
 const REQUIRED_FAMILIES: [&str; 8] = [
     "authorization",
     "committed_state",
@@ -44,6 +47,33 @@ const REQUIRED_ANCHOR_CAPABILITIES: [&str; 7] = [
     "persistent_multi_action_policy",
 ];
 const REQUIRED_RELEASE_GATES: [&str; 7] = ["backend", "ci", "deployment", "dev", "independent_review", "node_admission", "release"];
+const REQUIRED_CRYPTO_CAPABILITIES: [&str; 10] = [
+    "canonical-script-hash",
+    "ckb-blake2b-256",
+    "exact-bip340-verifier",
+    "exact-script-handle",
+    "raw-transaction-hash",
+    "sha256-and-sha256d",
+    "sha256d-merkle-opening",
+    "standard-multisig-lock",
+    "trusted-external-delegation",
+    "zero-lock-sighash-all",
+];
+const REQUIRED_CRYPTO_DOMAINS: [&str; 12] = [
+    "address",
+    "authenticated-opening",
+    "bip340-public-key-encoding",
+    "bip340-signature-encoding",
+    "bounded-witness-bytes",
+    "commitment-root",
+    "exact-script-handle",
+    "raw-hash",
+    "script",
+    "script-hash",
+    "sighash-all-digest",
+    "verification-result",
+];
+const REQUIRED_CRYPTO_RELEASE_GATES: [&str; 3] = ["independent_review", "release_gate", "selected_network_deployment"];
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -53,11 +83,57 @@ struct Corpus {
     claim: String,
     families: Vec<Family>,
     anchor: Anchor,
+    cryptographic_capability_matrix: String,
     release_requirements: BTreeMap<String, String>,
     #[serde(default)]
     evidence_files: Vec<String>,
     #[serde(default)]
     inventory_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CryptographicCapabilityMatrix {
+    schema: String,
+    status: String,
+    scope: String,
+    claim: String,
+    documentation: String,
+    domains: Vec<CryptographicDomain>,
+    capabilities: Vec<CryptographicCapability>,
+    deferred: Vec<String>,
+    release_requirements: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CryptographicDomain {
+    id: String,
+    source_type: String,
+    enforcement: String,
+    evidence: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CryptographicCapability {
+    id: String,
+    classification: String,
+    status: String,
+    apis: Vec<String>,
+    algorithms: Vec<String>,
+    input_domains: Vec<String>,
+    output_domain: String,
+    bounds: Vec<String>,
+    failure_codes: Vec<u16>,
+    witness_owner: String,
+    families: Vec<String>,
+    ckb_vm_evidence: Vec<String>,
+    checker_evidence: Vec<String>,
+    measurement_status: String,
+    measurement_evidence: Vec<String>,
+    dependency_identity_evidence: Vec<String>,
+    boundary: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,7 +181,7 @@ struct Anchor {
     script_groups: u64,
 }
 
-fn collect_evidence(corpus: &Corpus) -> BTreeSet<String> {
+fn collect_evidence(corpus: &Corpus, matrix: &CryptographicCapabilityMatrix) -> BTreeSet<String> {
     let mut paths = BTreeSet::new();
     for family in &corpus.families {
         paths.extend(family.sources.iter().cloned());
@@ -120,7 +196,125 @@ fn collect_evidence(corpus: &Corpus) -> BTreeSet<String> {
     paths.insert(corpus.anchor.execution_test.clone());
     paths.extend(corpus.anchor.protocol_bundle_evidence.iter().cloned());
     paths.extend(corpus.anchor.builder_evidence.iter().cloned());
+    paths.insert(corpus.cryptographic_capability_matrix.clone());
+    paths.insert(matrix.documentation.clone());
+    for domain in &matrix.domains {
+        paths.extend(domain.evidence.iter().cloned());
+    }
+    for capability in &matrix.capabilities {
+        paths.extend(capability.ckb_vm_evidence.iter().cloned());
+        paths.extend(capability.checker_evidence.iter().cloned());
+        paths.extend(capability.measurement_evidence.iter().cloned());
+        paths.extend(capability.dependency_identity_evidence.iter().cloned());
+    }
     paths
+}
+
+fn load_crypto_matrix(root: &Path, corpus: &Corpus) -> Result<CryptographicCapabilityMatrix> {
+    if corpus.cryptographic_capability_matrix != CRYPTO_MATRIX {
+        bail!("business corpus cryptographic capability matrix must be {CRYPTO_MATRIX}");
+    }
+    let bytes = fs::read(root.join(CRYPTO_MATRIX)).with_context(|| format!("failed to read {CRYPTO_MATRIX}"))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("invalid {CRYPTO_MATRIX}"))
+}
+
+fn validate_crypto_matrix(matrix: &CryptographicCapabilityMatrix, release: bool) -> Result<()> {
+    if matrix.schema != CRYPTO_MATRIX_SCHEMA {
+        bail!("cryptographic capability matrix schema must be {CRYPTO_MATRIX_SCHEMA}");
+    }
+    if !matches!(matrix.status.as_str(), "candidate" | "accepted") {
+        bail!("cryptographic capability matrix status must be candidate or accepted");
+    }
+    if matrix.scope.trim().is_empty() || matrix.claim.trim().is_empty() {
+        bail!("cryptographic capability matrix scope and claim must be explicit");
+    }
+    if matrix.documentation != CRYPTO_MATRIX_DOCUMENTATION {
+        bail!("cryptographic capability matrix documentation must be {CRYPTO_MATRIX_DOCUMENTATION}");
+    }
+    validate_nonempty(&matrix.deferred, "cryptographic capability matrix deferred boundaries")?;
+
+    let domain_ids = matrix.domains.iter().map(|domain| domain.id.as_str()).collect::<BTreeSet<_>>();
+    if domain_ids != REQUIRED_CRYPTO_DOMAINS.into_iter().collect() || matrix.domains.len() != REQUIRED_CRYPTO_DOMAINS.len() {
+        bail!("cryptographic capability matrix must contain each required value domain exactly once");
+    }
+    for domain in &matrix.domains {
+        if domain.source_type.trim().is_empty() || domain.enforcement.trim().is_empty() {
+            bail!("cryptographic value domain {} must define its source type and enforcement", domain.id);
+        }
+        validate_nonempty(&domain.evidence, &format!("cryptographic value domain {} evidence", domain.id))?;
+    }
+
+    let capability_ids = matrix.capabilities.iter().map(|capability| capability.id.as_str()).collect::<BTreeSet<_>>();
+    if capability_ids != REQUIRED_CRYPTO_CAPABILITIES.into_iter().collect()
+        || matrix.capabilities.len() != REQUIRED_CRYPTO_CAPABILITIES.len()
+    {
+        bail!("cryptographic capability matrix must contain each required portfolio capability exactly once");
+    }
+    let family_ids = REQUIRED_FAMILIES.into_iter().collect::<BTreeSet<_>>();
+    let mut covered_families = BTreeSet::new();
+    for capability in &matrix.capabilities {
+        if !matches!(capability.classification.as_str(), "native" | "checked-identity" | "exact-standard-lock" | "trusted-external") {
+            bail!("cryptographic capability {} has an invalid classification", capability.id);
+        }
+        if !matches!(capability.status.as_str(), "executable" | "composition-boundary") {
+            bail!("cryptographic capability {} has an invalid status", capability.id);
+        }
+        validate_nonempty(&capability.apis, &format!("cryptographic capability {} APIs", capability.id))?;
+        validate_nonempty(&capability.algorithms, &format!("cryptographic capability {} algorithms", capability.id))?;
+        validate_nonempty(&capability.input_domains, &format!("cryptographic capability {} input domains", capability.id))?;
+        validate_nonempty(&capability.bounds, &format!("cryptographic capability {} bounds", capability.id))?;
+        validate_nonempty(&capability.families, &format!("cryptographic capability {} families", capability.id))?;
+        validate_nonempty(&capability.ckb_vm_evidence, &format!("cryptographic capability {} CKB-VM evidence", capability.id))?;
+        validate_nonempty(&capability.checker_evidence, &format!("cryptographic capability {} checker evidence", capability.id))?;
+        if !matches!(capability.measurement_status.as_str(), "passed" | "release-candidate-required") {
+            bail!("cryptographic capability {} has an invalid measurement status", capability.id);
+        }
+        validate_nonempty(
+            &capability.measurement_evidence,
+            &format!("cryptographic capability {} measurement evidence", capability.id),
+        )?;
+        validate_nonempty(
+            &capability.dependency_identity_evidence,
+            &format!("cryptographic capability {} dependency identity evidence", capability.id),
+        )?;
+        if capability.failure_codes.is_empty() || capability.witness_owner.trim().is_empty() || capability.boundary.trim().is_empty() {
+            bail!("cryptographic capability {} must define failures, witness ownership, and its proof boundary", capability.id);
+        }
+        if !capability.input_domains.iter().all(|domain| domain_ids.contains(domain.as_str()))
+            || !domain_ids.contains(capability.output_domain.as_str())
+        {
+            bail!("cryptographic capability {} references an unknown value domain", capability.id);
+        }
+        for family in &capability.families {
+            if !family_ids.contains(family.as_str()) {
+                bail!("cryptographic capability {} references unknown business family {family}", capability.id);
+            }
+            covered_families.insert(family.as_str());
+        }
+        if release && capability.measurement_status != "passed" {
+            bail!("release cryptographic capability {} still requires maximum-bound measurements", capability.id);
+        }
+    }
+    if covered_families != family_ids {
+        bail!("cryptographic capability matrix does not cover every business family");
+    }
+
+    let release_gates = matrix.release_requirements.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    if release_gates != REQUIRED_CRYPTO_RELEASE_GATES.into_iter().collect() {
+        bail!("cryptographic capability matrix must classify every release requirement");
+    }
+    for (gate, status) in &matrix.release_requirements {
+        if !matches!(status.as_str(), "passed" | "pending" | "not-authorized") {
+            bail!("cryptographic capability matrix release requirement {gate} has an invalid status");
+        }
+        if release && status != "passed" {
+            bail!("release cryptographic capability matrix is incomplete: {gate} is {status}");
+        }
+    }
+    if release && matrix.status != "accepted" {
+        bail!("release cryptographic capability matrix status must be accepted");
+    }
+    Ok(())
 }
 
 fn inventory_digest(root: &Path, paths: &BTreeSet<String>) -> Result<String> {
@@ -183,7 +377,7 @@ fn validate_nonempty(values: &[String], label: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate(root: &Path, corpus: &Corpus, release: bool) -> Result<()> {
+fn validate(root: &Path, corpus: &Corpus, matrix: &CryptographicCapabilityMatrix, release: bool) -> Result<()> {
     if corpus.schema != SCHEMA {
         bail!("business corpus schema must be {SCHEMA}");
     }
@@ -193,6 +387,7 @@ fn validate(root: &Path, corpus: &Corpus, release: bool) -> Result<()> {
     if corpus.claim.trim().is_empty() {
         bail!("business corpus claim must be explicit");
     }
+    validate_crypto_matrix(matrix, release)?;
     let family_ids = corpus.families.iter().map(|family| family.id.as_str()).collect::<BTreeSet<_>>();
     if family_ids != REQUIRED_FAMILIES.into_iter().collect() || corpus.families.len() != REQUIRED_FAMILIES.len() {
         bail!("business corpus must contain each required family exactly once");
@@ -259,7 +454,7 @@ fn validate(root: &Path, corpus: &Corpus, release: bool) -> Result<()> {
         bail!("release corpus status must be accepted");
     }
 
-    let evidence = collect_evidence(corpus);
+    let evidence = collect_evidence(corpus, matrix);
     let declared = corpus.evidence_files.iter().cloned().collect::<BTreeSet<_>>();
     if declared.len() != corpus.evidence_files.len() || declared != evidence {
         bail!("business corpus evidence_files is stale; run check-business-corpus --write");
@@ -294,8 +489,9 @@ pub fn run(root: &Path, write: bool, release: bool) -> Result<()> {
     let bytes = fs::read(&path).with_context(|| format!("failed to read {MANIFEST}"))?;
     let mut value: Value = serde_json::from_slice(&bytes).with_context(|| format!("failed to parse {MANIFEST}"))?;
     let mut corpus: Corpus = serde_json::from_value(value.clone()).with_context(|| format!("invalid {MANIFEST}"))?;
+    let matrix = load_crypto_matrix(root, &corpus)?;
     if write {
-        let evidence = collect_evidence(&corpus);
+        let evidence = collect_evidence(&corpus, &matrix);
         value["evidence_files"] = serde_json::to_value(evidence.iter().collect::<Vec<_>>())?;
         value["inventory_sha256"] = Value::String(inventory_digest(root, &evidence)?);
         let mut output = serde_json::to_vec_pretty(&value)?;
@@ -303,5 +499,29 @@ pub fn run(root: &Path, write: bool, release: bool) -> Result<()> {
         fs::write(&path, output).with_context(|| format!("failed to update {MANIFEST}"))?;
         corpus = serde_json::from_value(value)?;
     }
-    validate(root, &corpus, release)
+    validate(root, &corpus, &matrix, release)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn matrix() -> CryptographicCapabilityMatrix {
+        serde_json::from_str(include_str!("../../../tests/fixtures/cryptographic_capability_matrix.json"))
+            .expect("checked-in cryptographic capability matrix")
+    }
+
+    #[test]
+    fn cryptographic_matrix_rejects_removed_rows_unknown_domains_and_premature_release() {
+        let mut missing = matrix();
+        missing.capabilities.pop();
+        assert!(validate_crypto_matrix(&missing, false).unwrap_err().to_string().contains("each required portfolio capability"));
+
+        let mut unknown_domain = matrix();
+        unknown_domain.capabilities[0].output_domain = "unclassified-bytes".to_string();
+        assert!(validate_crypto_matrix(&unknown_domain, false).unwrap_err().to_string().contains("unknown value domain"));
+
+        let candidate = matrix();
+        assert!(validate_crypto_matrix(&candidate, true).unwrap_err().to_string().contains("maximum-bound measurements"));
+    }
 }

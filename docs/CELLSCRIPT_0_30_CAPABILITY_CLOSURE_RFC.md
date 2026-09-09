@@ -26,10 +26,12 @@ Script-construction slice also adds `script::args`, `script::new`, and
 `script::hash`: fixed args up
 to 459 bytes are serialized as canonical Molecule Script data and hashed with
 CKB Blake2b-256. CKB-VM differentials cover all four hash types and the exact
-upper bound; invalid dynamic hash types return error 72. This closes complete
-Script hashing for the admitted fixed source shape, while address decoding,
-dynamic Script args, signature verification, and broader cryptographic
-capability contracts remain open.
+upper bound; invalid dynamic hash types return error 72. The frozen
+[cryptographic and authorization capability matrix](CELLSCRIPT_0_30_CRYPTOGRAPHIC_CAPABILITY_MATRIX.md)
+now classifies all ten portfolio capabilities and twelve value domains and is
+validated as part of the business-corpus digest. Address decoding, dynamic
+Script args, unrestricted native signature algorithms, and unbounded
+cryptographic surfaces remain outside the admitted portfolio.
 The slice has the development source identity
 `cellscript-source-semantics-2027-0.30-dev1`; it does not reuse or redefine the
 recorded `authoring1` identity and is not the final 0.30 grammar identity.
@@ -165,7 +167,7 @@ form a complete 0.30 business-capability plan.
 | Typed zero-knowledge verifier contracts | [#22](https://github.com/CellScript-Labs/CellScript/issues/22) | Covered as research and typed external-verifier composition. A circuit DSL is outside the 0.30 core. |
 | Stable public value-generics surface | [#23](https://github.com/CellScript-Labs/CellScript/issues/23) | Proposal A is implemented and accepted on `0.30`: public cross-package value templates and pure functions, `fixed_value` normalization, field-derived aggregate abilities, canonical interface hashing and compatibility, Registry/checker validation, and product-surface parity. The required `dev`, `ci`, and `backend` gates passed on 2026-09-08 at `69488316`. |
 | Typed CKB transaction views and runtime adapters | [#24](https://github.com/CellScript-Labs/CellScript/issues/24) | Newly owned for 0.30. It unifies admitted Cell/input/header/witness/Script/hash/source operations without a raw syscall escape hatch. |
-| Cryptographic and authorization-domain contracts | [#25](https://github.com/CellScript-Labs/CellScript/issues/25) | Newly owned for 0.30. It separates native primitives, exact external verifiers, message domains, and Script/value identities. |
+| Cryptographic and authorization-domain contracts | [#25](https://github.com/CellScript-Labs/CellScript/issues/25) | The candidate matrix freezes ten capabilities and twelve value domains across native hashing, complete Script identity, raw transaction identity, bounded zero-Lock SighashAll, standard multisig, exact handles, committed openings, BIP340, and general trusted delegation. It binds CKB-VM/checker/product evidence and keeps external internals, maximum-bound release measurements, selected-network deployment, and independent review separate. See [the capability matrix](CELLSCRIPT_0_30_CRYPTOGRAPHIC_CAPABILITY_MATRIX.md). |
 | Rust-comparable business acceptance corpus | [#26](https://github.com/CellScript-Labs/CellScript/issues/26) | The candidate eight-family inventory, content-digest gate, matched-reference boundaries, and a real four-artifact/five-group CKB-VM settlement anchor are implemented. The anchor rejects authorization, fungible-state, settlement-output, persistent-policy-state, and CellDep substitutions and gates cycles, stack frame, ELF, witness, transaction, and occupied-capacity measurements. Its persistent `partial_fill`/`settle`/`cancel` policy consumes prior verified outputs across transactions. ProtocolBundle now admits the anchor's exact artifacts, builders, Plan evidence, roles, witnesses, and CellDeps, materializes the identical executed transaction bytes, and binds aggregate VM evidence to each direct CellScript group. Selected-network node/deployment evidence and independent review remain release blockers. See [the 0.30 business corpus](CELLSCRIPT_0_30_BUSINESS_CORPUS.md). |
 | Product, publication, and deployment closure | [#27](https://github.com/CellScript-Labs/CellScript/issues/27) | Newly owned for 0.30. It prevents compiler-only evidence or stale generated products from being presented as a complete release. |
 
