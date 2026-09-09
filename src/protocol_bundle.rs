@@ -334,6 +334,20 @@ pub struct ProtocolWitnessSlot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ProtocolBoundedOutputPlanEvidence {
+    pub schema: String,
+    pub version: u32,
+    pub action: String,
+    pub binding: String,
+    pub witness_index: u32,
+    pub witness_field: ProtocolWitnessField,
+    pub plan_payload: String,
+    pub current_script_hash: String,
+    pub group_output_indexes: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProtocolTransactionSkeleton {
     pub version: u32,
     pub inputs: Vec<ProtocolCellSlot>,
@@ -343,6 +357,8 @@ pub struct ProtocolTransactionSkeleton {
     pub header_deps: Vec<String>,
     pub fee_policy_hash: String,
     pub change_policy_hash: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bounded_output_plan_evidence: Vec<ProtocolBoundedOutputPlanEvidence>,
     #[serde(default)]
     pub builder_assumption_evidence: BTreeMap<String, serde_json::Value>,
 }
@@ -512,14 +528,12 @@ pub fn check_protocol_bundle(input: &ProtocolBundleInput, base: &Path) -> Result
     let mut reports = BTreeMap::new();
     let mut metadata_validation = BTreeMap::new();
     let mut required_deployment_lines = BTreeSet::new();
-    let transaction_value = serde_json::to_value(&input.transaction).map_err(|error| {
-        CompileError::without_span(format!("failed to materialize ProtocolBundle transaction validation view: {error}"))
-    })?;
     for artifact in &input.artifacts {
         let (identity, report, metadata) = admit_artifact(artifact, &base)?;
         if metadata.target_profile.name == "ckb-type-hash" {
             required_deployment_lines.insert(artifact.id.clone());
         }
+        let transaction_value = transaction_validation_view(&input.transaction, &artifact.deployment.script)?;
         metadata_validation.insert(artifact.id.clone(), validate_transaction_against_metadata(&metadata, &transaction_value));
         reports.insert(artifact.id.clone(), report);
         identities.push(identity);
@@ -611,6 +625,59 @@ pub fn check_protocol_bundle(input: &ProtocolBundleInput, base: &Path) -> Result
                 .to_string(),
         },
     })
+}
+
+fn transaction_validation_view(
+    transaction: &ProtocolTransactionSkeleton,
+    current_script: &ProtocolScriptIdentity,
+) -> Result<serde_json::Value> {
+    let mut value = serde_json::to_value(transaction).map_err(|error| {
+        CompileError::without_span(format!("failed to materialize ProtocolBundle transaction validation view: {error}"))
+    })?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| CompileError::without_span("ProtocolBundle transaction validation view is not an object"))?;
+    object
+        .insert("current_script_hash".to_string(), serde_json::json!(crate::script_handle::ckb_script_identity_hash(current_script)?));
+    for field in ["inputs", "outputs"] {
+        let cells = object
+            .get_mut(field)
+            .and_then(serde_json::Value::as_array_mut)
+            .ok_or_else(|| CompileError::without_span(format!("ProtocolBundle transaction validation view has no {field} array")))?;
+        for cell in cells {
+            let cell = cell.as_object_mut().ok_or_else(|| {
+                CompileError::without_span(format!("ProtocolBundle transaction validation view {field} item is not an object"))
+            })?;
+            let capacity = cell.get("capacity").cloned().unwrap_or(serde_json::Value::Null);
+            cell.insert("capacity_shannons".to_string(), capacity);
+            let lock: ProtocolScriptIdentity = serde_json::from_value(cell.get("lock").cloned().unwrap_or(serde_json::Value::Null))
+                .map_err(|error| {
+                    CompileError::without_span(format!("ProtocolBundle transaction validation lock is invalid: {error}"))
+                })?;
+            cell.insert("lock_hash".to_string(), serde_json::json!(crate::script_handle::ckb_script_identity_hash(&lock)?));
+            if let Some(type_script) = cell.get("type").filter(|value| !value.is_null()).cloned() {
+                let type_script: ProtocolScriptIdentity = serde_json::from_value(type_script).map_err(|error| {
+                    CompileError::without_span(format!("ProtocolBundle transaction validation Type Script is invalid: {error}"))
+                })?;
+                cell.insert("type_hash".to_string(), serde_json::json!(crate::script_handle::ckb_script_identity_hash(&type_script)?));
+            }
+        }
+    }
+    let witnesses = object
+        .get_mut("witnesses")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(|| CompileError::without_span("ProtocolBundle transaction validation view has no witnesses array"))?;
+    for witness in witnesses {
+        let witness = witness
+            .as_object_mut()
+            .ok_or_else(|| CompileError::without_span("ProtocolBundle transaction validation witness is not an object"))?;
+        for field in ["lock", "input_type", "output_type"] {
+            if let Some(bytes) = witness.get(&format!("{field}_bytes")).cloned() {
+                witness.insert(field.to_string(), bytes);
+            }
+        }
+    }
+    Ok(value)
 }
 
 fn validate_input_shape(input: &ProtocolBundleInput) -> Result<()> {
@@ -723,6 +790,40 @@ fn validate_transaction(transaction: &ProtocolTransactionSkeleton) -> Result<()>
             ("output_type", witness.output_type.as_deref(), witness.output_type_bytes.as_deref()),
         ] {
             validate_witness_materialization(index, field, commitment, bytes)?;
+        }
+    }
+    bounded_count("bounded output plan evidence", transaction.bounded_output_plan_evidence.len(), MAX_WITNESS_CLAIMS)?;
+    let mut bounded_plan_bindings = BTreeSet::new();
+    for evidence in &transaction.bounded_output_plan_evidence {
+        if evidence.schema != "cellscript-bounded-output-plan-evidence-v1" || evidence.version != 1 {
+            return Err(CompileError::without_span(
+                "ProtocolBundle bounded output plan evidence has an unsupported schema or version",
+            ));
+        }
+        validate_name(&evidence.action, "bounded output plan action")?;
+        validate_name(&evidence.binding, "bounded output plan binding")?;
+        if evidence.witness_field != ProtocolWitnessField::InputType {
+            return Err(CompileError::without_span("ProtocolBundle bounded output plan evidence must bind WitnessArgs.input_type"));
+        }
+        if evidence.witness_index as usize >= transaction.witnesses.len() {
+            return Err(CompileError::without_span(
+                "ProtocolBundle bounded output plan evidence witness index is outside the transaction skeleton",
+            ));
+        }
+        canonical_hex_bytes(&evidence.plan_payload, "bounded output plan payload")?;
+        canonical_hash32(&evidence.current_script_hash, "bounded output plan current_script_hash")?;
+        if evidence.group_output_indexes.is_empty()
+            || evidence.group_output_indexes.windows(2).any(|pair| pair[0] >= pair[1])
+            || evidence.group_output_indexes.iter().any(|index| *index as usize >= transaction.outputs.len())
+        {
+            return Err(CompileError::without_span(
+                "ProtocolBundle bounded output plan indexes must be non-empty, strictly ordered, unique, and in range",
+            ));
+        }
+        if !bounded_plan_bindings.insert((evidence.action.as_str(), evidence.binding.as_str())) {
+            return Err(CompileError::without_span(
+                "ProtocolBundle contains duplicate bounded output plan evidence for one action binding",
+            ));
         }
     }
     for (index, cell_dep) in transaction.cell_deps.iter().enumerate() {
@@ -1002,6 +1103,7 @@ fn validate_builder_manifest(input: &ProtocolArtifactInput, metadata: &CompileMe
                 "report_schema": "cellscript-protocol-bundle-report-v1",
                 "artifact_binding_schema": "cellscript-protocol-bundle-artifact-binding-v1",
                 "closed_role_schema": "cellscript-protocol-closed-role-v1",
+                "bounded_output_plan_evidence_schema": "cellscript-bounded-output-plan-evidence-v1",
                 "deployment_line_admission_evidence_schema": "cellscript-deployment-line-admission-evidence-v1",
                 "deployment_line_admission_transition_schema": "cellscript-deployment-line-admission-transition-v1",
                 "requires_deployment_line_admission": metadata.target_profile.name == "ckb-type-hash",
@@ -2031,6 +2133,7 @@ mod tests {
                 header_deps: vec![hash("9")],
                 fee_policy_hash: hash("a"),
                 change_policy_hash: hash("b"),
+                bounded_output_plan_evidence: Vec::new(),
                 builder_assumption_evidence: BTreeMap::new(),
             },
             roles: Vec::new(),
@@ -2040,6 +2143,36 @@ mod tests {
             header_deps: Vec::new(),
             policies: Vec::new(),
         }
+    }
+
+    #[test]
+    fn bounded_output_plan_evidence_is_hash_bound_and_projects_the_runtime_validation_view() {
+        let mut transaction = bundle().transaction;
+        transaction.witnesses[0].input_type = Some(format!("0x{}", hex_encode(&ckb_blake2b256(&[1_u8, 2]))));
+        transaction.witnesses[0].input_type_bytes = Some("0x0102".to_string());
+        transaction.bounded_output_plan_evidence.push(ProtocolBoundedOutputPlanEvidence {
+            schema: "cellscript-bounded-output-plan-evidence-v1".to_string(),
+            version: 1,
+            action: "settle".to_string(),
+            binding: "plans".to_string(),
+            witness_index: 0,
+            witness_field: ProtocolWitnessField::InputType,
+            plan_payload: "0x0102".to_string(),
+            current_script_hash: crate::script_handle::ckb_script_identity_hash(&script("c")).unwrap(),
+            group_output_indexes: vec![0],
+        });
+        validate_transaction(&transaction).unwrap();
+
+        let view = transaction_validation_view(&transaction, &script("c")).unwrap();
+        assert_eq!(view["witnesses"][0]["input_type"], "0x0102");
+        assert_eq!(view["outputs"][0]["capacity_shannons"], 900);
+        assert_eq!(view["outputs"][0]["type_hash"], crate::script_handle::ckb_script_identity_hash(&script("5")).unwrap());
+        assert_eq!(view["current_script_hash"], crate::script_handle::ckb_script_identity_hash(&script("c")).unwrap());
+
+        let original = serde_json::to_value(&transaction).unwrap();
+        transaction.bounded_output_plan_evidence[0].group_output_indexes = vec![0, 0];
+        assert!(validate_transaction(&transaction).unwrap_err().message.contains("strictly ordered"));
+        assert_ne!(serde_json::to_value(&transaction).unwrap(), original);
     }
 
     #[test]

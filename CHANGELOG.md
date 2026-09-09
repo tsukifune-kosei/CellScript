@@ -2,6 +2,19 @@
 
 ## 0.30 - Capability closure development branch
 
+- Freeze the candidate eight-family business corpus and execute its canonical
+  settlement anchor with four independently checked CellScript artifacts and
+  five actual Script groups. The anchor combines fungible conservation, Lock
+  authorization, two bounded GroupInput orders, exact GroupOutput Plan
+  correspondence, a persistent `partial_fill`/`settle`/`cancel` policy, and an
+  authenticated CellDep. ProtocolBundle now hash-binds the bounded Plan
+  evidence, projects concrete witness bytes, Script hashes, and capacities into
+  per-artifact validation, and materializes the exact Molecule bytes executed
+  in CKB-VM. The fixture pins transaction and bundle hashes plus cycle, ELF,
+  stack, witness, transaction-size, and occupied-capacity budgets. Network
+  admission, deployment, and independent review remain release-candidate
+  evidence.
+
 - Complete issue #8 for the admitted bounded output plan contract. Native
   `create_each` accepts a fixed-width witness `BoundedList<Plan, N>` when one
   complete output template maps every data field and the Lock directly from

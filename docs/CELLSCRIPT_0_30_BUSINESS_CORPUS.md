@@ -52,7 +52,7 @@ The CKB-VM test rejects a wrong authorization credential, fungible inflation,
 partial-settlement mismatch, persistent-state substitution, and dependency
 substitution. Its pinned resource
 record is 40,412 cycles, 15,560 combined ELF bytes, a 5,376-byte largest checked
-stack frame, 305 witness bytes, a 1,407-byte transaction, and 32.8 CKB occupied
+stack frame, 321 witness bytes, a 1,423-byte transaction, and 32.8 CKB occupied
 capacity. Budgets in
 [`tests/fixtures/capability_anchor_cases.json`](../tests/fixtures/capability_anchor_cases.json)
 fail on regression.
@@ -61,12 +61,14 @@ The stateful companion test verifies `partial_fill`, registers its output under
 the exact transaction OutPoint, then consumes that output with `settle`; it also
 executes `cancel` and rejects an invalid full fill. The anchor therefore
 establishes both same-transaction Script interaction and prior-output
-continuity. The existing
-ProtocolBundle and generated-builder suites independently cover artifact
-admission, role/index/witness/CellDep conflict handling, canonical transaction
-materialization, signing handoff, and exact transaction identity. A later
-candidate change must join those paths to the anchor transaction before the
-multi-Script row can be marked release-complete.
+continuity. The anchor now writes the four exact artifact bundles and generated
+builders, admits their roles, witnesses, dependencies, and bounded output Plan
+through ProtocolBundle, and requires adapter materialization to reproduce the
+executed Molecule transaction byte for byte. The pinned raw transaction,
+serialized transaction, and canonical bundle hashes make accidental fixture or
+construction drift fail the test. Aggregate CKB-VM cycles are bound back to all
+four direct CellScript Script-group records without inventing per-group cycle
+attribution.
 
 ## Evidence state
 
@@ -76,10 +78,10 @@ layers separately. `passed`, `not-applicable`, `pending`, and
 `release-candidate-required` retain their literal meanings. A lower layer is
 never treated as evidence for a higher layer.
 
-The inventory remains `candidate` because selected-network node admission and
-deployment identities, exact ProtocolBundle-to-anchor construction, and
-independent review are still pending. `check-business-corpus --release` rejects
-that state. Stable versioning, tags, package publication, editor/browser
+The inventory remains `candidate` because selected-network node admission,
+deployment identities, and independent review are still pending.
+`check-business-corpus --release` rejects that state. Stable versioning, tags,
+package publication, editor/browser
 publication, and network deployment remain outside this candidate record.
 
 ## Updating the corpus

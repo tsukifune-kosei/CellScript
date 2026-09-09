@@ -170,6 +170,12 @@ width, RawHeader offset, return-code branch, and errors 44/45/4 in the final
 RISC-V instructions. Lowering record v8 rejects those rebound record or machine
 mutations. Generated
 TypeScript builder tests retain the same dynamic parameter bound.
+The four-artifact business anchor additionally passes its exact
+`WitnessArgs.input_type` Plan bytes, current Type Script hash, ordered
+GroupOutput indexes, Cell scripts, and capacities through ProtocolBundle's
+per-artifact metadata validation. Adapter materialization must then reproduce
+the CKB-VM transaction byte for byte before aggregate cycle evidence is bound
+to its direct CellScript groups.
 `tests/authoring_replace.rs` exercises the
 `ScriptHash` domain against real output Lock Script hashes. Existing
 `tests/ickb_diff.rs`, `tests/crypto_primitives.rs`, and artifact-checker mutation

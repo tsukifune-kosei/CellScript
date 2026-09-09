@@ -64,7 +64,7 @@ The top-level input contains:
 | `network` | Non-empty chain ID plus canonical `0x`-prefixed 32-byte lowercase genesis hash |
 | `artifacts` | 2 to 64 independent checked ELF references |
 | `deployment_lines` | Required exact active Type ID admission/code Cell evidence for every `ckb-type-hash` artifact; forbidden for other profiles |
-| `transaction` | Version-0 transaction skeleton with exact ordered cell, witness, CellDep, HeaderDep, fee-policy, and change-policy commitments; optional concrete adapter fields are hash-bound when present |
+| `transaction` | Version-0 transaction skeleton with exact ordered cell, witness, CellDep, HeaderDep, fee-policy, and change-policy commitments; optional concrete adapter fields and bounded-output-plan evidence are hash-bound when present |
 | `roles` | Named input/output indexes with exclusive or shared-read ownership and optional exact Script/resource/cell/capacity requirements |
 | `closed_roles` | Typed provider/consumer relations over existing Cell or witness claims, using `cellscript-protocol-closed-role-v1` |
 | `witnesses` | Exact `WitnessArgs` index/field, ABI, commitment, signing domain, and write/read ownership |
@@ -141,6 +141,16 @@ commitment, and signing domain agree. Optional `lock_bytes`,
 the corresponding commitment is present, it must equal CKB Blake2b-256 of
 those bytes. This records ownership and materialization; it does not
 manufacture a signature or canonical signing message.
+
+An action that uses the admitted bounded output Plan contract adds one
+`cellscript-bounded-output-plan-evidence-v1` record to the transaction
+skeleton. The record binds the action and parameter, `WitnessArgs.input_type`
+index, exact inner Plan bytes, current Type Script hash, and the strictly
+ordered GroupOutput indexes. ProtocolBundle projects the committed witness
+bytes plus each Cell's Script hashes and capacity into the per-artifact
+metadata validator. This lets `PB212` validate the same Plan-to-output
+correspondence before materialization while retaining the canonical skeleton
+as the bundle hash input.
 
 ## Closed typed roles
 
@@ -231,6 +241,8 @@ JSON report emitted by `cellc protocol bundle check`. It independently:
   output;
 - verifies committed witness bytes and preserves ordered inputs, outputs,
   witnesses, CellDeps, and HeaderDeps in a Molecule `TransactionView`;
+- retains bounded-output-plan evidence in the canonical bundle while excluding
+  it from Molecule transaction serialization;
 - checks occupied output capacity and computes the capacity remainder as the
   candidate fee; and
 - resolves each selected Lock or Type artifact to global and group-relative

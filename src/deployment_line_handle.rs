@@ -1167,6 +1167,7 @@ mod tests {
             header_deps: Vec::new(),
             fee_policy_hash: format!("0x{}", raw_hash(0x87)),
             change_policy_hash: format!("0x{}", raw_hash(0x88)),
+            bounded_output_plan_evidence: Vec::new(),
             builder_assumption_evidence: Default::default(),
         };
         let evidence = DeploymentLineAdmissionEvidence {
@@ -1238,6 +1239,7 @@ mod tests {
             header_deps: Vec::new(),
             fee_policy_hash: format!("0x{}", raw_hash(0x94)),
             change_policy_hash: format!("0x{}", raw_hash(0x95)),
+            bounded_output_plan_evidence: Vec::new(),
             builder_assumption_evidence: Default::default(),
         };
         let creation_evidence = DeploymentLineAdmissionTransition {
@@ -1266,6 +1268,7 @@ mod tests {
             header_deps: Vec::new(),
             fee_policy_hash: format!("0x{}", raw_hash(0x99)),
             change_policy_hash: format!("0x{}", raw_hash(0x9a)),
+            bounded_output_plan_evidence: Vec::new(),
             builder_assumption_evidence: Default::default(),
         };
         let replacement_evidence = DeploymentLineAdmissionTransition {

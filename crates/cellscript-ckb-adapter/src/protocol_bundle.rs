@@ -453,6 +453,8 @@ struct TransactionWire {
     fee_policy_hash: String,
     change_policy_hash: String,
     #[serde(default)]
+    bounded_output_plan_evidence: Value,
+    #[serde(default)]
     builder_assumption_evidence: Value,
 }
 
@@ -1508,6 +1510,7 @@ fn materialize_transaction(transaction: &TransactionWire) -> Result<(Transaction
     let _policy_bindings = (
         require_hash32("fee_policy_hash", &transaction.fee_policy_hash)?,
         require_hash32("change_policy_hash", &transaction.change_policy_hash)?,
+        &transaction.bounded_output_plan_evidence,
         &transaction.builder_assumption_evidence,
     );
     if transaction.inputs.is_empty() {

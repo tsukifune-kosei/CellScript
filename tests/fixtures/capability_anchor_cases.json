@@ -36,15 +36,18 @@
     "cycles": 40412,
     "combined_elf_bytes": 15560,
     "max_stack_frame_bytes": 5376,
-    "witness_bytes": 305,
-    "transaction_bytes": 1407,
-    "occupied_capacity_shannons": 32800000000
+    "witness_bytes": 321,
+    "transaction_bytes": 1423,
+    "occupied_capacity_shannons": 32800000000,
+    "raw_transaction_hash": "0x0991ec77b29b6d04b02afde1f8315cf549a6c466da151c5dd70838f6e60c6acd",
+    "serialized_transaction_hash": "0x4828bc62108ca171ba82670dbe8bd9479d6bb6ba2c1ab6f82291f4c302b7b01c",
+    "protocol_bundle_hash": "41fe6830a8c417e610505c6067f35389ceec720edf713c13cfb9554842d8aa3b"
   },
   "budgets": {
     "max_cycles": 45000,
     "max_combined_elf_bytes": 16000,
     "max_stack_frame_bytes": 6000,
-    "max_witness_bytes": 320,
+    "max_witness_bytes": 336,
     "max_transaction_bytes": 1500,
     "max_occupied_capacity_shannons": 33000000000
   }

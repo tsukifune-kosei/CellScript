@@ -9,8 +9,9 @@
     ],
     "artifacts": 4,
     "builder_evidence": [
-      "tests/cli.rs",
-      "src/cli/commands.rs"
+      "src/cli/commands.rs",
+      "tests/business_corpus.rs",
+      "tests/cli.rs"
     ],
     "execution_test": "tests/business_corpus.rs",
     "id": "authenticated-partial-settlement",
@@ -20,8 +21,10 @@
       "cancel_live_order"
     ],
     "protocol_bundle_evidence": [
-      "tests/cli.rs",
-      "crates/cellscript-ckb-adapter/src/protocol_bundle.rs"
+      "crates/cellscript-ckb-adapter/src/protocol_bundle.rs",
+      "src/protocol_bundle.rs",
+      "tests/business_corpus.rs",
+      "tests/cli.rs"
     ],
     "required_capabilities": [
       "authenticated_cell_dep",
@@ -54,6 +57,7 @@
     "examples/token.cell",
     "examples/vesting.cell",
     "src/cli/commands.rs",
+    "src/protocol_bundle.rs",
     "tests/artifact_checker.rs",
     "tests/authoring_replace.rs",
     "tests/benchmarks/ickb_diff/matrix.json",
@@ -910,7 +914,7 @@
       ]
     }
   ],
-  "inventory_sha256": "0x278901a74599382e48e935b85ab262fc4688bf4dcd9c4ea78be84a28a470009f",
+  "inventory_sha256": "0x197b859e59d798ba4a48a62f2ad6b17169e9ec71eca5960352ca1fe0b948b3c0",
   "release_requirements": {
     "backend": "pending",
     "ci": "pending",

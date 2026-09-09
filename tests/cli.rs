@@ -10973,6 +10973,11 @@ target_profile = "ckb"
     assert!(index_ts.contains("encodeBoundedOutputPlanV1"), "{index_ts}");
     assert!(index_ts.contains("materializeBoundedOutputPlanV1"), "{index_ts}");
     assert!(index_ts.contains("boundedOutputPlans"), "{index_ts}");
+    assert!(index_ts.contains("ProtocolBundleBoundedOutputPlanEvidence"), "{index_ts}");
+    assert_eq!(
+        manifest["protocol_bundle_contract"]["bounded_output_plan_evidence_schema"],
+        "cellscript-bounded-output-plan-evidence-v1"
+    );
     let builder_test = std::fs::read_to_string(output_dir.join("test/builder.test.mjs")).unwrap();
     assert!(builder_test.contains("encodes and materializes bounded output plans with exact order and length"), "{builder_test}");
     assert!(builder_test.contains("wrongMagic"), "{builder_test}");

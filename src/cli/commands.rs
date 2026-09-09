@@ -9009,6 +9009,7 @@ fn typescript_builder_manifest(
             "report_schema": "cellscript-protocol-bundle-report-v1",
             "artifact_binding_schema": "cellscript-protocol-bundle-artifact-binding-v1",
             "closed_role_schema": "cellscript-protocol-closed-role-v1",
+            "bounded_output_plan_evidence_schema": "cellscript-bounded-output-plan-evidence-v1",
             "deployment_line_admission_evidence_schema": "cellscript-deployment-line-admission-evidence-v1",
             "deployment_line_admission_transition_schema": "cellscript-deployment-line-admission-transition-v1",
             "requires_deployment_line_admission": metadata.target_profile.name == "ckb-type-hash",
@@ -9126,6 +9127,7 @@ export const PROTOCOL_BUNDLE_SCHEMA = "cellscript-protocol-bundle-v1" as const;
 export const PROTOCOL_BUNDLE_REPORT_SCHEMA = "cellscript-protocol-bundle-report-v1" as const;
 export const PROTOCOL_BUNDLE_ARTIFACT_BINDING_SCHEMA = "cellscript-protocol-bundle-artifact-binding-v1" as const;
 export const PROTOCOL_CLOSED_ROLE_SCHEMA = "cellscript-protocol-closed-role-v1" as const;
+export const PROTOCOL_BUNDLE_BOUNDED_OUTPUT_PLAN_EVIDENCE_SCHEMA = "cellscript-bounded-output-plan-evidence-v1" as const;
 export const EXACT_SCRIPT_HANDLE_RECEIPT_SCHEMA = "cellscript-exact-script-handle-receipt-v1" as const;
 export const EXACT_SCRIPT_HANDLE_VALUE_SCHEMA = "cellscript-exact-script-handle-value-v1" as const;
 export const EXACT_SCRIPT_HANDLE_ENCODING = "CSHDLv1-fixed-202" as const;
@@ -9136,6 +9138,18 @@ export const DEPLOYMENT_LINE_ADMISSION_EVIDENCE_SCHEMA = "cellscript-deployment-
 export const DEPLOYMENT_LINE_ADMISSION_TRANSITION_SCHEMA = "cellscript-deployment-line-admission-transition-v1" as const;
 
 export type ProtocolBundleScriptRole = "lock" | "type" | "spawned-verifier";
+
+export interface ProtocolBundleBoundedOutputPlanEvidence {
+  schema: typeof PROTOCOL_BUNDLE_BOUNDED_OUTPUT_PLAN_EVIDENCE_SCHEMA;
+  version: 1;
+  action: string;
+  binding: string;
+  witness_index: number;
+  witness_field: "input_type";
+  plan_payload: HexString;
+  current_script_hash: HexString;
+  group_output_indexes: readonly number[];
+}
 
 export interface ProtocolBundleDeploymentBinding {
   network: { chainId: string; genesisHash: HexString };
