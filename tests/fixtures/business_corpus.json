@@ -916,10 +916,10 @@
   ],
   "inventory_sha256": "0x197b859e59d798ba4a48a62f2ad6b17169e9ec71eca5960352ca1fe0b948b3c0",
   "release_requirements": {
-    "backend": "pending",
-    "ci": "pending",
+    "backend": "passed",
+    "ci": "passed",
     "deployment": "not-authorized",
-    "dev": "pending",
+    "dev": "passed",
     "independent_review": "pending",
     "node_admission": "pending",
     "release": "pending"
